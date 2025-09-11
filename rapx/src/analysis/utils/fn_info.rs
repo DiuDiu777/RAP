@@ -1,3 +1,4 @@
+use crate::analysis::senryx::contracts::property;
 #[allow(unused)]
 use crate::analysis::senryx::contracts::property::PropertyContract;
 use crate::analysis::senryx::matcher::parse_unsafe_api;
@@ -536,14 +537,11 @@ pub fn generate_contract_from_annotation_without_field_types(
 
 /// Filter the function which contains "rapx::proof"
 pub fn is_verify_target_func(tcx: TyCtxt, def_id: DefId) -> bool {
-    const REGISTER_TOOL: &str = "rapx";
     for attr in tcx.get_all_attrs(def_id).into_iter() {
-        if let Attribute::Unparsed(tool_attr) = attr {
-            if tool_attr.path.segments[0].as_str() == REGISTER_TOOL
-                && tool_attr.path.segments[1].as_str() == "proof"
-            {
-                return true;
-            }
+        let attr_str = rustc_hir_pretty::attribute_to_string(&tcx, attr);
+        // Find proof placeholder
+        if attr_str.contains("#[rapx::proof(proof)]") {
+            return true;
         }
     }
     false
@@ -560,9 +558,7 @@ pub fn generate_contract_from_annotation(
     const REGISTER_TOOL: &str = "rapx";
     let tool_attrs = tcx.get_all_attrs(def_id).into_iter().filter(|attr| {
         if let Attribute::Unparsed(tool_attr) = attr {
-            if tool_attr.path.segments[0].as_str() == REGISTER_TOOL
-                && tool_attr.path.segments[1].as_str() != "proof"
-            {
+            if tool_attr.path.segments[0].as_str() == REGISTER_TOOL {
                 return true;
             }
         }
@@ -571,13 +567,21 @@ pub fn generate_contract_from_annotation(
     let mut results = Vec::new();
     for attr in tool_attrs {
         let attr_str = rustc_hir_pretty::attribute_to_string(&tcx, attr);
-        let safety_attr =
-            safety_parser::property_attr::parse_inner_attr_from_str(attr_str.as_str()).unwrap();
-        let attr_name = safety_attr.name;
-        let attr_kind = safety_attr.kind;
-        let contract = PropertyContract::new(tcx, def_id, attr_kind, attr_name, &safety_attr.expr);
-        let (local, fields) = parse_cis_local(tcx, def_id, safety_attr.expr);
-        results.push((local, fields, contract));
+        // Find proof placeholder, skip it
+        if attr_str.contains("#[rapx::proof(proof)]") {
+            continue;
+        }
+        rap_debug!("{:?}", attr_str);
+        let safety_attr = safety_parser::safety::parse_attr_and_get_properties(attr_str.as_str());
+        for par in safety_attr.iter() {
+            for property in par.tags.iter() {
+                let tag_name = property.tag.name();
+                let exprs = property.args.clone().into_vec();
+                let contract = PropertyContract::new(tcx, def_id, tag_name, &exprs);
+                let (local, fields) = parse_cis_local(tcx, def_id, exprs);
+                results.push((local, fields, contract));
+            }
+        }
     }
     // if results.len() > 0 {
     //     rap_warn!("results:\n{:?}", results);
