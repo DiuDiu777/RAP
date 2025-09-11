@@ -15,7 +15,8 @@ use rustc_hir::{
 };
 use rustc_middle::{
     mir::{
-        pretty::{self, MirWriter, PrettyPrintMirOptions},
+        pretty::{self, write_mir_fn, PrettyPrintMirOptions},
+        //pretty::{self, MirWriter, PrettyPrintMirOptions},
         *,
     },
     ty::TyCtxt,
@@ -133,8 +134,10 @@ pub fn print_diff<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId) {
     write_mir_pretty(tcx, None, &mut w).unwrap();
     let mut file2 = File::create(&phi_mir_file_path).unwrap();
     let mut w2 = io::BufWriter::new(&mut file2);
-    let writer = pretty::MirWriter::new(tcx);
-    writer.write_mir_fn(body, &mut w2).unwrap();
+    let options = PrettyPrintMirOptions::from_cli(tcx);
+    write_mir_fn(tcx, body, &mut |_, _| Ok(()), &mut w2, options).unwrap();
+    //let writer = pretty::MirWriter::new(tcx);
+    //writer.write_mir_fn(body, &mut w2).unwrap();
 }
 pub fn print_mir_graph<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, def_id: DefId) {
     let dir_path = PathBuf::from("passrunner_mir_dot");
@@ -206,8 +209,10 @@ impl<'tcx> PassRunner<'tcx> {
 
     pub fn get_final_ssa_as_string(&self, body: &Body<'tcx>) -> String {
         let mut buffer2 = Cursor::new(Vec::new());
-        let writer = pretty::MirWriter::new(self.tcx);
-        writer.write_mir_fn(body, &mut buffer2).unwrap();
+        //let writer = pretty::MirWriter::new(self.tcx);
+        //writer.write_mir_fn(body, &mut buffer2).unwrap();
+        let options = PrettyPrintMirOptions::from_cli(self.tcx);
+        write_mir_fn(self.tcx, body, &mut |_, _| Ok(()), &mut buffer2, options).unwrap();
         let after_mir = String::from_utf8(buffer2.into_inner()).unwrap();
         after_mir
     }
