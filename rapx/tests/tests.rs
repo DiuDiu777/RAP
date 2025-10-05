@@ -306,7 +306,7 @@ fn test_interprocedual_range_analysis() {
 fn test_gen_input() {
     let output = running_tests_with_arg("testgen/gen_input", "-testgen");
     assert!(
-        output.contains("miri run completed with return code: 0"),
+        output.contains("`cargo miri run` success"),
         "Miri did not complete successfully.\nFull output:\n{}",
         output
     );

@@ -16,7 +16,7 @@ pub fn get_path_resolver<'tcx>(tcx: TyCtxt<'tcx>) -> PathResolver<'tcx> {
     resolver
 }
 
-fn path_str(current_path: &str, ident: Ident) -> String {
+fn join_path_with_ident(current_path: &str, ident: Ident) -> String {
     if current_path.is_empty() {
         ident.as_str().to_owned()
     } else {
@@ -44,7 +44,7 @@ impl<'tcx> PathResolver<'tcx> {
                 continue;
             }
             if let Some(did) = child.res.opt_def_id() {
-                let path = path_str(&current_path, child.ident);
+                let path = join_path_with_ident(&current_path, child.ident);
                 self.path_map.entry(did).or_insert(path.clone());
                 if self.tcx.def_kind(did).is_module_like() {
                     self.build(did, path);
@@ -53,7 +53,7 @@ impl<'tcx> PathResolver<'tcx> {
         }
     }
 
-    pub fn path_str(&self, def_id: DefId) -> String {
+    pub fn non_assoc_path_str(&self, def_id: DefId) -> String {
         match self.path_map.get(&def_id) {
             Some(path) => path.clone(),
             None => {
@@ -90,28 +90,13 @@ impl<'tcx> PathResolver<'tcx> {
         }
     }
 
+    pub fn path_str(&self, def_id: DefId) -> String {
+        self.path_str_with_args(def_id, ty::GenericArgs::identity_for_item(self.tcx, def_id))
+    }
+
     pub fn path_str_with_args(&self, def_id: DefId, args: ty::GenericArgsRef<'tcx>) -> String {
         let mut iter = args.iter();
         self.path_str_with_iter(def_id, &mut iter)
-    }
-
-    fn generic_arg_iter_str(
-        &self,
-        iter: impl Iterator<Item = ty::GenericArg<'tcx>>,
-    ) -> Option<String> {
-        let mut args: Vec<String> = Vec::new();
-        for arg in iter {
-            args.push(match arg.kind() {
-                ty::GenericArgKind::Lifetime(re) => re.to_string(),
-                ty::GenericArgKind::Type(ty) => self.ty_str(ty),
-                ty::GenericArgKind::Const(const_) => format!("{}", const_),
-            });
-        }
-        if !args.is_empty() {
-            Some(format!("{}", args.join(", ")))
-        } else {
-            None
-        }
     }
 
     fn path_str_with_iter(
@@ -137,7 +122,7 @@ impl<'tcx> PathResolver<'tcx> {
                         .instantiate(self.tcx, parent_args.as_slice());
 
                     let self_ty_str = self.ty_str(trait_ref.self_ty());
-                    let trait_str = self.path_str(trait_ref.def_id);
+                    let trait_str = self.non_assoc_path_str(trait_ref.def_id);
                     path_str += match self.generic_arg_iter_str(trait_ref.args.iter().skip(1)) {
                         Some(args) => format!("<{} as {}<{}>>", self_ty_str, trait_str, args),
                         None => format!("<{} as {}>", self_ty_str, trait_str),
@@ -161,7 +146,7 @@ impl<'tcx> PathResolver<'tcx> {
             path_str += "::";
             path_str += self.tcx.item_name(def_id).as_str();
         } else {
-            path_str = self.path_str(def_id);
+            path_str = self.non_assoc_path_str(def_id);
         }
 
         let num_generic = self.tcx.generics_of(def_id).own_params.len();
@@ -169,6 +154,25 @@ impl<'tcx> PathResolver<'tcx> {
         match self.generic_arg_iter_str(iter.take(num_generic)) {
             Some(arg_str) => format!("{}::<{}>", path_str, arg_str),
             None => path_str,
+        }
+    }
+
+    fn generic_arg_iter_str(
+        &self,
+        iter: impl Iterator<Item = ty::GenericArg<'tcx>>,
+    ) -> Option<String> {
+        let mut args: Vec<String> = Vec::new();
+        for arg in iter {
+            args.push(match arg.kind() {
+                ty::GenericArgKind::Lifetime(re) => re.to_string(),
+                ty::GenericArgKind::Type(ty) => self.ty_str(ty),
+                ty::GenericArgKind::Const(const_) => format!("{}", const_),
+            });
+        }
+        if !args.is_empty() {
+            Some(format!("{}", args.join(", ")))
+        } else {
+            None
         }
     }
 }
