@@ -14,7 +14,7 @@ use rustc_middle::ty::TyCtxt;
 use serde::Deserialize;
 use std::io::Write;
 use std::path::Path;
-use std::{fs, io};
+use std::{fs, io, thread};
 use toml;
 
 #[derive(Deserialize, Debug)]
@@ -107,7 +107,7 @@ pub fn dump_alias_map(
     Ok(())
 }
 
-fn miri_env_vars() -> &'static [(&'static str, &'static str)] {
+pub fn miri_env_vars() -> &'static [(&'static str, &'static str)] {
     &[
         (
             "MIRIFLAGS",
@@ -128,6 +128,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
     rap_info!("run on crate: {}", local_crate_name);
 
     let workspace_dir = std::env::current_dir()?.join("testgen");
+    let poc_path = workspace_dir.join("poc");
 
     if config.can_override() && fs::exists(&workspace_dir)? {
         rap_info!(
@@ -137,7 +138,9 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         fs::remove_dir_all(&workspace_dir)?;
     }
 
+    // create workspace structure
     fs::create_dir_all(&workspace_dir)?;
+    fs::create_dir_all(&poc_path)?;
 
     let mut run_count = 0;
 
@@ -199,17 +202,17 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
 
         // 3. Build cargo project
         let project_name = format!("case{}", run_count);
-        let project_path = workspace_dir.join(&project_name);
+        let project_path = workspace_dir.join("tests").join(&project_name);
         let debug_path = project_path.as_path().join("region_graph.dot");
 
-        let fuzz_config = RsProjectOption {
+        let project_option = RsProjectOption {
             tested_crate_name: (&package_name).into(),
             tested_crate_path: (&package_dir).into(),
             project_name: project_name.clone(),
             project_path: project_path.clone(),
         };
 
-        let project_builder = CargoProjectBuilder::new(fuzz_config);
+        let project_builder = CargoProjectBuilder::new(project_option);
         let project = project_builder.build()?;
         project.create_src_file("main.rs", &rs_str)?;
         // output debug file
@@ -221,11 +224,11 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         let delimeter = "=".repeat(40);
         writeln!(&mut report_file, "{}", delimeter)?;
 
-        if let Err(err) = check_and_evaluate(&project, &mut report_file, &config) {
+        if let Err(err) = check_and_evaluate(&project, &mut report_file, &config, &poc_path) {
             rap_error!("evaluate project {} fail: {}", project_path.display(), err);
             writeln!(
                 &mut report_file,
-                "evaluate project {} fail: {}",
+                "[Evaluate Fail] project {}: {}",
                 project_path.display(),
                 err
             )?;
@@ -258,6 +261,7 @@ fn check_and_evaluate(
     project: &PocProject,
     log: &mut impl Write,
     config: &LtGenConfig,
+    poc_path: &Path,
 ) -> io::Result<()> {
     let project_path = &project.option().project_path;
 
@@ -285,7 +289,16 @@ fn check_and_evaluate(
     } else {
         rap_warn!("miri return {:?}", result.retcode);
         match result.retcode {
-            Some(1) => rap_warn!("this may indicate a UB bug detected"),
+            Some(1) => {
+                // if return Some(1), copy this project to poc directory, and automately reduce
+                rap_warn!("this may indicate a UB bug detected");
+                let new_project = project.copy_to(poc_path)?;
+                rap_warn!(
+                    "copy project to {} and reduce",
+                    new_project.option().project_path.display()
+                );
+                new_project.reduce()?;
+            }
             None => rap_warn!("this may indicate the program is timeout"),
             _ => {}
         }

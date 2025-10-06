@@ -150,7 +150,10 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
     }
 
     fn header_str(&self) -> String {
-        format!("use {}::*;", self.option.crate_name)
+        format!(
+            "#![feature(allocator_api)]\nuse {}::*;",
+            self.option.crate_name
+        )
     }
 
     fn main_str(&mut self, cx: &Context<'tcx>) -> String {

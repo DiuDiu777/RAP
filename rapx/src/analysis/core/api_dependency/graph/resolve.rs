@@ -360,7 +360,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
             }
 
             if reserved[node.index()] {
-                rap_info!(
+                rap_debug!(
                     "[propagate_reserved] reserve: {:?}",
                     self.graph.node_weight(node).unwrap()
                 );

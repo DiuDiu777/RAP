@@ -1,12 +1,13 @@
-use wait_timeout::ChildExt;
-
 use crate::rap_info;
+use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
+use wait_timeout::ChildExt;
 
+#[derive(Clone, Debug)]
 pub struct RsProjectOption {
     pub tested_crate_path: PathBuf,
     pub tested_crate_name: String,
@@ -140,6 +141,22 @@ impl PocProject {
         &self.option
     }
 
+    pub fn copy_to<P: AsRef<Path>>(&self, path: P) -> io::Result<PocProject> {
+        let path = path.as_ref();
+        let options = fs_extra::dir::CopyOptions::new();
+        // fs::create_dir_all(path)?;
+        match fs_extra::dir::copy(&self.option.project_path, path, &options) {
+            Err(err) => return Err(io::Error::new(io::ErrorKind::Other, err.to_string())),
+            Ok(_) => {}
+        }
+
+        let mut new_project = PocProject {
+            option: self.option.clone(),
+        };
+        new_project.option.project_path = path.join(&self.option.project_name).to_path_buf();
+        Ok(new_project)
+    }
+
     pub fn create_src_file(&self, file_name: &str, content: &str) -> io::Result<()> {
         let src_path = self.option.project_path.join("src").join(file_name);
         let mut file = File::create(src_path)?;
@@ -167,8 +184,6 @@ impl PocProject {
         timeout: usize,
     ) -> io::Result<CmdRecord> {
         let project_path = self.option.project_path.as_path();
-        rap_info!("Running `cargo {}`", args.join(" "));
-
         // first run `cargo check` to ensure the code can be compiled
         let mut command = Command::new("cargo");
         command
