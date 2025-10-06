@@ -18,18 +18,40 @@ use std::{fs, io};
 use toml;
 
 #[derive(Deserialize, Debug)]
-pub struct LtGenConfig {
+struct LtGenConfig {
     pub max_complexity: usize,
     pub max_iteration: usize,
     pub max_run: usize,
     #[serde(default = "default_mode")]
-    pub mode: String,
+    pub mode: Mode,
     #[serde(rename = "override")]
     pub override_: bool,
+    #[serde(default = "default_timeout")]
+    pub timeout: usize,
 }
 
-fn default_mode() -> String {
-    "nodebug".into()
+#[derive(Copy, Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+enum Mode {
+    Normal,
+    Dryrun,
+}
+
+impl Mode {
+    pub fn is_normal(&self) -> bool {
+        matches!(self, Mode::Normal)
+    }
+    pub fn is_dryrun(&self) -> bool {
+        matches!(self, Mode::Dryrun)
+    }
+}
+
+fn default_timeout() -> usize {
+    10
+}
+
+fn default_mode() -> Mode {
+    Mode::Normal
 }
 
 impl LtGenConfig {
@@ -60,9 +82,6 @@ impl LtGenConfig {
         Ok(config)
     }
 
-    pub fn is_debug_mode(&self) -> bool {
-        self.mode == "debug"
-    }
     pub fn can_override(&self) -> bool {
         self.override_
     }
@@ -104,17 +123,13 @@ fn asan_env_vars() -> &'static [(&'static str, &'static str)] {
 }
 
 pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    let mut config = LtGenConfig::load()?;
+    let config = LtGenConfig::load()?;
     let local_crate_name = tcx.crate_name(LOCAL_CRATE);
     rap_info!("run on crate: {}", local_crate_name);
 
     let workspace_dir = std::env::current_dir()?.join("testgen");
 
-    if config.is_debug_mode() {
-        config.max_run = 1;
-    }
-
-    if (config.is_debug_mode() || config.can_override()) && fs::exists(&workspace_dir)? {
+    if config.can_override() && fs::exists(&workspace_dir)? {
         rap_info!(
             "removing existing workspace directory: {}",
             workspace_dir.display()
@@ -206,7 +221,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         let delimeter = "=".repeat(40);
         writeln!(&mut report_file, "{}", delimeter)?;
 
-        if let Err(err) = check_and_evaluate(&project, &mut report_file) {
+        if let Err(err) = check_and_evaluate(&project, &mut report_file, &config) {
             rap_error!("evaluate project {} fail: {}", project_path.display(), err);
             writeln!(
                 &mut report_file,
@@ -239,20 +254,31 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-pub fn check_and_evaluate(project: &PocProject, log: &mut impl Write) -> io::Result<()> {
+fn check_and_evaluate(
+    project: &PocProject,
+    log: &mut impl Write,
+    config: &LtGenConfig,
+) -> io::Result<()> {
     let project_path = &project.option().project_path;
 
     // run `cargo check`
-    let result = project.run_cargo_cmd(&["check"], &[])?;
+    let result = project.run_cargo_cmd(&["check"], &[], 0)?;
     if !result.success() {
         rap_error!("running `cargo check` fail: {:?}", result.retcode);
         rap_error!("project {} compile fail", project_path.display());
         writeln!(log, "{}", result.brief())?;
         return Ok(());
+    } else {
+        rap_info!("`cargo check` success");
+    }
+
+    // if this is dryrun, skip evaluataion
+    if config.mode.is_dryrun() {
+        return Ok(());
     }
 
     // run `cargo miri run`
-    let result = project.run_cargo_cmd(&["miri", "run"], miri_env_vars())?;
+    let result = project.run_cargo_cmd(&["miri", "run"], miri_env_vars(), config.timeout)?;
     writeln!(log, "{}", result.brief())?;
     if result.success() {
         rap_info!("`cargo miri run` success, nothing interested happen");

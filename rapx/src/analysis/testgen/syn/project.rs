@@ -160,7 +160,12 @@ impl PocProject {
         Ok(())
     }
 
-    pub fn run_cargo_cmd(&self, args: &[&str], env_vars: &[(&str, &str)]) -> io::Result<CmdRecord> {
+    pub fn run_cargo_cmd(
+        &self,
+        args: &[&str],
+        env_vars: &[(&str, &str)],
+        timeout: usize,
+    ) -> io::Result<CmdRecord> {
         let project_path = self.option.project_path.as_path();
         rap_info!("Running `cargo {}`", args.join(" "));
 
@@ -176,9 +181,14 @@ impl PocProject {
 
         let timer = std::time::Instant::now();
         let mut child = command.spawn()?;
-        // 10s timeout
 
-        match child.wait_timeout(Duration::from_secs(10))? {
+        let opt_status = if timeout == 0 {
+            Some(child.wait()?)
+        } else {
+            child.wait_timeout(Duration::from_secs(timeout as u64))?
+        };
+
+        match opt_status {
             Some(_) => {
                 let output = child.wait_with_output()?;
                 let elapsed = timer.elapsed();

@@ -1,5 +1,6 @@
 max_complexity = 10
 max_iteration = 1000
 max_run = 1
-mode = "debug"
+mode = "dryrun"
 override = true
+timeout = 0
