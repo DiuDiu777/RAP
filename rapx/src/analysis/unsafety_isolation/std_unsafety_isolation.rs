@@ -2,8 +2,11 @@ use super::{
     generate_dot::{NodeType, UigUnit},
     UnsafetyIsolationCheck,
 };
-use crate::analysis::unsafety_isolation::draw_dot::render_dot_graphs;
 use crate::analysis::utils::fn_info::*;
+use crate::{
+    analysis::{unsafety_isolation::draw_dot::render_dot_graphs, utils::show_mir::display_mir},
+    def_id,
+};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Local;
@@ -14,33 +17,66 @@ use std::collections::HashSet;
 
 impl<'tcx> UnsafetyIsolationCheck<'tcx> {
     pub fn handle_std_unsafe(&mut self) {
-        self.get_all_std_unsafe_def_id_by_treat_std_as_local_crate(self.tcx);
-        // self.get_units_data(self.tcx);
-        let mut dot_strs = Vec::new();
-        for uig in &self.uigs {
-            // let dot_str = uig.generate_dot_str();
-            if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
-                && check_visibility(self.tcx, uig.caller.0)
-            {
-                let dot_str = uig.generate_dot_str();
-                dot_strs.push(dot_str);
-                // uig.print_self(self.tcx);
-            }
-        }
-        for uig in &self.single {
-            // let dot_str = uig.generate_dot_str();
-            if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
-                && check_visibility(self.tcx, uig.caller.0)
-            {
-                let dot_str = uig.generate_dot_str();
-                dot_strs.push(dot_str);
-                // uig.print_self(self.tcx);
-            }
-        }
-        // println!("single {:?}",self.uigs.len());
-        // println!("single {:?}",self.single.len());
-        render_dot_graphs(dot_strs);
+        self.get_chains();
+        // self.get_all_std_unsafe_def_id_by_treat_std_as_local_crate(self.tcx);
+        // // self.get_units_data(self.tcx);
+        // let mut dot_strs = Vec::new();
+        // for uig in &self.uigs {
+        //     // let dot_str = uig.generate_dot_str();
+        //     if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
+        //         && check_visibility(self.tcx, uig.caller.0)
+        //     {
+        //         let dot_str = uig.generate_dot_str();
+        //         dot_strs.push(dot_str);
+        //         // uig.print_self(self.tcx);
+        //     }
+        // }
+        // for uig in &self.single {
+        //     // let dot_str = uig.generate_dot_str();
+        //     if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
+        //         && check_visibility(self.tcx, uig.caller.0)
+        //     {
+        //         let dot_str = uig.generate_dot_str();
+        //         dot_strs.push(dot_str);
+        //         // uig.print_self(self.tcx);
+        //     }
+        // }
+        // // println!("single {:?}",self.uigs.len());
+        // // println!("single {:?}",self.single.len());
+        // render_dot_graphs(dot_strs);
         // println!("{:?}", dot_strs);
+    }
+
+    pub fn get_chains(&mut self) {
+        println!("1");
+        let v_fn_def = self.tcx.mir_keys(());
+
+        for local_def_id in v_fn_def {
+            let def_id = local_def_id.to_def_id();
+            if !check_visibility(self.tcx, def_id) {
+                continue;
+            }
+            if get_cleaned_def_path_name(self.tcx, def_id) == "std::boxed::Box::<T>::from_raw" {
+                let body = self.tcx.mir_built(local_def_id).steal();
+                display_mir(def_id, &body);
+            }
+            let chains = get_all_std_unsafe_chains(self.tcx, def_id);
+            let valid_chains: Vec<Vec<String>> = chains
+                .into_iter()
+                .filter(|chain| {
+                    if chain.len() > 1 {
+                        return true;
+                    }
+                    if chain.len() == 1 {
+                        let is_unsafe = check_safety(self.tcx, def_id);
+                        return is_unsafe;
+                    }
+                    false
+                })
+                .collect();
+
+            print_unsafe_chains(&valid_chains);
+        }
     }
 
     pub fn get_all_std_unsafe_def_id_by_treat_std_as_local_crate(
@@ -318,26 +354,26 @@ impl<'tcx> UnsafetyIsolationCheck<'tcx> {
             // println!("Enum:{:?}", struct_name);
         }
 
-        // println!("Safe Cons: {}", safe_constructors.len());
-        // for safe_cons in safe_constructors {
-        //     println!(" {:?}", get_cleaned_def_path_name(tcx, safe_cons));
-        // }
-        // println!("Unsafe Cons: {}", unsafe_constructors.len());
-        // for unsafe_cons in unsafe_constructors {
-        //     println!(" {:?}", get_cleaned_def_path_name(tcx, unsafe_cons));
-        // }
-        // println!("Unsafe Methods: {}", unsafe_methods.len());
-        // for method in unsafe_methods {
-        //     println!(" {:?}", get_cleaned_def_path_name(tcx, method));
-        // }
-        // println!("Safe Methods with unsafe callee: {}", safe_methods.len());
-        // for method in safe_methods {
-        //     println!(" {:?}", get_cleaned_def_path_name(tcx, method));
-        // }
-        // println!("Mut self Methods: {}", mut_methods.len());
-        // for method in mut_methods {
-        //     println!(" {:?}", get_cleaned_def_path_name(tcx, method));
-        // }
+        println!("Safe Cons: {}", safe_constructors.len());
+        for safe_cons in safe_constructors {
+            println!(" {:?}", get_cleaned_def_path_name(tcx, safe_cons));
+        }
+        println!("Unsafe Cons: {}", unsafe_constructors.len());
+        for unsafe_cons in unsafe_constructors {
+            println!(" {:?}", get_cleaned_def_path_name(tcx, unsafe_cons));
+        }
+        println!("Unsafe Methods: {}", unsafe_methods.len());
+        for method in unsafe_methods {
+            println!(" {:?}", get_cleaned_def_path_name(tcx, method));
+        }
+        println!("Safe Methods with unsafe callee: {}", safe_methods.len());
+        for method in safe_methods {
+            println!(" {:?}", get_cleaned_def_path_name(tcx, method));
+        }
+        println!("Mut self Methods: {}", mut_methods.len());
+        for method in mut_methods {
+            println!(" {:?}", get_cleaned_def_path_name(tcx, method));
+        }
     }
 
     pub fn get_units_data(&mut self, tcx: TyCtxt<'tcx>) {

@@ -162,9 +162,7 @@ impl<'tcx> BodyVisitor<'tcx> {
         let paths = self.get_all_paths();
         // self.paths = paths.clone();
         let body = self.tcx.optimized_mir(self.def_id);
-        // if self.visit_time == 0 {
-        //     display_mir(self.def_id, body);
-        // }
+        let target_name = get_cleaned_def_path_name(self.tcx, self.def_id);
         // initialize local vars' types
         let locals = body.local_decls.clone();
         for (idx, local) in locals.iter().enumerate() {
@@ -207,6 +205,10 @@ impl<'tcx> BodyVisitor<'tcx> {
             let curr_path_inter_return_value =
                 InterResultNode::construct_from_var_node(self.chains.clone(), 0);
             inter_return_value.merge(curr_path_inter_return_value);
+        }
+        if self.visit_time == 0 && target_name.contains("into_raw_parts_with_alloc") {
+            display_mir(self.def_id, body);
+            display_hashmap(&self.chains.variables, 1);
         }
 
         inter_return_value
