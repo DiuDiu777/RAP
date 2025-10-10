@@ -305,7 +305,7 @@ fn check_and_evaluate(
     }
 
     // run `cargo run`, with sanitizer flag (currenly only ASAN)
-    // let result = project.run_cargo_cmd(&["run"], asan_env_vars())?;
+    // let result = project.run_cargo_cmd(&["run"], asan_env_vars(), config.timeout)?;
     // writeln!(log, "{}", result.brief())?;
     // if result.success() {
     //     rap_info!("`cargo run` with sanitizer success, nothing interested happen");

@@ -5,6 +5,9 @@ use super::LtContext;
 use crate::analysis::core::alias_analysis::AAFact;
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::{rap_debug, rap_trace};
+use rand::rngs::ThreadRng;
+use rand::seq::IndexedRandom;
+use rand::Rng;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind};
 use std::collections::{HashMap, HashSet};
 
@@ -164,24 +167,34 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
 
         let mut success = false;
 
-        if let Some(vec) = self.detect_vulnerable_paths(&stmt) {
-            for (var, rids) in vec {
-                // we should prove `rid_of(var) -> rid` in the region graph for each rid
-                let unproved = rids
-                    .iter()
-                    .filter(|rid| !self.region_graph.prove(self.rid_of(var), **rid))
-                    .copied()
-                    .collect::<Vec<_>>();
+        if !utils::is_env_var_exist("TESTGEN_DISABLE_ALIAS") {
+            if let Some(vec) = self.detect_vulnerable_paths(&stmt) {
+                for (var, rids) in vec {
+                    // we should prove `rid_of(var) -> rid` in the region graph for each rid
+                    let unproved = rids
+                        .iter()
+                        .filter(|rid| !self.region_graph.prove(self.rid_of(var), **rid))
+                        .copied()
+                        .collect::<Vec<_>>();
 
-                if unproved.is_empty() {
-                    continue;
+                    if unproved.is_empty() {
+                        continue;
+                    }
+
+                    rap_debug!("[unsafe] variable {} lack of binding with {:?}", var, rids);
+
+                    unproved.iter().for_each(|rid| {
+                        success |= self.drop_source_from_rids(*rid);
+                    });
                 }
+            }
+        } else {
+            let region_graph = self.region_graph.inner();
+            let rid_nodes: Vec<_> = region_graph.node_indices().collect();
+            let mut rng = rand::rng();
 
-                rap_debug!("[unsafe] variable {} lack of binding with {:?}", var, rids);
-
-                unproved.iter().for_each(|rid| {
-                    success |= self.drop_source_from_rids(*rid);
-                });
+            if let Some(index) = rid_nodes.choose(&mut rng) {
+                success |= self.drop_source_from_rids(index.index().into());
             }
         }
 

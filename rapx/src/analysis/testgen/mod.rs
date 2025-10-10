@@ -24,6 +24,13 @@ impl<'tcx> Testgen<'tcx> {
     }
 
     pub fn start(&self) {
+        for env_var in [
+            "TESTGEN_DISABLE_ALIAS",
+            "TESTGEN_DISABLE_WEIGHT",
+            "TESTGEN_DISABLE_INJECT",
+        ] {
+            rap_info!("env:{} = {}", env_var, utils::is_env_var_exist(env_var));
+        }
         match driver_main(self.tcx) {
             Ok(_) => rap_info!("testgen completed successfully"),
             Err(e) => rap_error!("testgen failed:\n{}", e),

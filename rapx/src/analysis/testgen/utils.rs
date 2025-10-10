@@ -121,6 +121,13 @@ pub fn ty_check_ptr<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> PtrCheckResult {
     }
 }
 
+pub fn is_env_var_exist(var_name: &str) -> bool {
+    match std::env::var(var_name) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
 pub fn visit_ty_fields_while<'tcx>(
     ty: Ty<'tcx>,
     tcx: TyCtxt<'tcx>,

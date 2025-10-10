@@ -158,7 +158,14 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             return None;
         }
 
-        let weights = self.weight_of_nodes(&nodes);
+        let weights;
+
+        if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
+            weights = self.weight_of_nodes(&nodes);
+        } else {
+            weights = vec![1.0f32; nodes.len()];
+        }
+
         let dist = WeightedIndex::new(&weights).unwrap();
         rap_debug!(
             "weights: {}",
@@ -204,10 +211,14 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                             "[next] select API call: {}",
                             self.tcx.def_path_str_with_args(fn_did, args)
                         );
+
                         if let Some(call) = self.get_eligable_call(fn_did, args, &mut cx) {
                             self.covered_api.insert(call.fn_did());
                             cx.add_call_stmt(call);
-                            if self.rng.borrow_mut().random_ratio(1, 2) && cx.try_inject_drop() {
+                            if self.rng.borrow_mut().random_ratio(1, 2)
+                                && cx.try_inject_drop()
+                                && !utils::is_env_var_exist("TESTGEN_DISABLE_INJECT")
+                            {
                                 num_drop_inject += 1;
                                 rap_debug!("successfully inject drop");
                             }
