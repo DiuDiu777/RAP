@@ -4,7 +4,9 @@ use crate::analysis::senryx::contracts::property;
 #[allow(unused)]
 use crate::analysis::senryx::contracts::property::PropertyContract;
 use crate::analysis::senryx::matcher::parse_unsafe_api;
+use crate::analysis::unsafety_isolation::draw_dot::render_dot_graphs;
 use crate::analysis::unsafety_isolation::generate_dot::NodeType;
+use crate::analysis::unsafety_isolation::UnsafetyIsolationCheck;
 use crate::rap_debug;
 use crate::rap_warn;
 use rustc_data_structures::fx::FxHashMap;
@@ -277,13 +279,8 @@ pub fn get_callees(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<DefId> {
             if let TerminatorKind::Call { func, .. } = &bb.terminator().kind {
                 if let Operand::Constant(func_constant) = func {
                     if let ty::FnDef(ref callee_def_id, _) = func_constant.const_.ty().kind() {
-                        if check_safety(tcx, *callee_def_id)
-                        // && check_visibility(tcx, *callee_def_id)
-                        {
-                            let sp_set = get_sp(tcx, *callee_def_id);
-                            if sp_set.len() != 0 {
-                                callees.insert(*callee_def_id);
-                            }
+                        if check_safety(tcx, *callee_def_id) {
+                            callees.insert(*callee_def_id);
                         }
                     }
                 }
@@ -1137,3 +1134,57 @@ pub fn print_unsafe_chains(chains: &[Vec<String>]) {
         println!();
     }
 }
+
+pub fn get_all_std_fns_by_rustc_public(tcx: TyCtxt) -> Vec<DefId> {
+    let mut all_std_fn_def = Vec::new();
+    let mut results = Vec::new();
+    let mut core_fn_def: Vec<_> = rustc_public::find_crates("core")
+        .iter()
+        .flat_map(|krate| krate.fn_defs())
+        .collect();
+    let mut std_fn_def: Vec<_> = rustc_public::find_crates("std")
+        .iter()
+        .flat_map(|krate| krate.fn_defs())
+        .collect();
+    let mut alloc_fn_def: Vec<_> = rustc_public::find_crates("alloc")
+        .iter()
+        .flat_map(|krate| krate.fn_defs())
+        .collect();
+    all_std_fn_def.append(&mut core_fn_def);
+    all_std_fn_def.append(&mut std_fn_def);
+    all_std_fn_def.append(&mut alloc_fn_def);
+
+    for fn_def in &all_std_fn_def {
+        let def_id = crate::def_id::to_internal(fn_def, tcx);
+        results.push(def_id);
+    }
+    results
+}
+
+// pub fn generate_uig_for_one_struct(tcx: TyCtxt, def_id: DefId, adt_def_id: DefId) {
+//     let adt_def = get_adt_def_id_by_adt_method(tcx, def_id);
+//     let mut uig_entrance = UnsafetyIsolationCheck::new(tcx);
+//     let impls = tcx.inherent_impls(adt_def.unwrap());
+//     let impl_results = get_impl_items_of_struct(tcx, adt_def.unwrap());
+//     println!("impls {:?}", impl_results);
+//     for impl_def_id in impls {
+//         // println!("impls {:?}", tcx.associated_item_def_ids(impl_def_id));
+//         for item in tcx.associated_item_def_ids(impl_def_id) {
+//             if tcx.def_kind(item) == DefKind::Fn || tcx.def_kind(item) == DefKind::AssocFn {
+//                 println!("item {:?}", item);
+//                 uig_entrance.insert_uig(*item, get_callees(tcx, *item), get_cons(tcx, *item));
+//             }
+//         }
+//     }
+
+//     let mut dot_strs = Vec::new();
+//     for uig in &uig_entrance.uigs {
+//         let dot_str = uig.generate_dot_str();
+//         dot_strs.push(dot_str);
+//     }
+//     for uig in &uig_entrance.single {
+//         let dot_str = uig.generate_dot_str();
+//         dot_strs.push(dot_str);
+//     }
+//     render_dot_graphs(dot_strs);
+// }

@@ -18,32 +18,30 @@ use std::collections::HashSet;
 impl<'tcx> UnsafetyIsolationCheck<'tcx> {
     pub fn handle_std_unsafe(&mut self) {
         self.get_chains();
-        // self.get_all_std_unsafe_def_id_by_treat_std_as_local_crate(self.tcx);
-        // // self.get_units_data(self.tcx);
-        // let mut dot_strs = Vec::new();
-        // for uig in &self.uigs {
-        //     // let dot_str = uig.generate_dot_str();
-        //     if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
-        //         && check_visibility(self.tcx, uig.caller.0)
-        //     {
-        //         let dot_str = uig.generate_dot_str();
-        //         dot_strs.push(dot_str);
-        //         // uig.print_self(self.tcx);
-        //     }
-        // }
-        // for uig in &self.single {
-        //     // let dot_str = uig.generate_dot_str();
-        //     if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
-        //         && check_visibility(self.tcx, uig.caller.0)
-        //     {
-        //         let dot_str = uig.generate_dot_str();
-        //         dot_strs.push(dot_str);
-        //         // uig.print_self(self.tcx);
-        //     }
-        // }
-        // // println!("single {:?}",self.uigs.len());
-        // // println!("single {:?}",self.single.len());
-        // render_dot_graphs(dot_strs);
+        self.get_all_std_unsafe_def_id_by_treat_std_as_local_crate(self.tcx);
+        // self.get_units_data(self.tcx);
+        let mut dot_strs = Vec::new();
+        for uig in &self.uigs {
+            // let dot_str = uig.generate_dot_str();
+            if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
+                && check_visibility(self.tcx, uig.caller.0)
+            {
+                let dot_str = uig.generate_dot_str();
+                dot_strs.push(dot_str);
+                // uig.print_self(self.tcx);
+            }
+        }
+        for uig in &self.single {
+            // let dot_str = uig.generate_dot_str();
+            if get_cleaned_def_path_name(self.tcx, uig.caller.0).contains("core::slice::")
+                && check_visibility(self.tcx, uig.caller.0)
+            {
+                let dot_str = uig.generate_dot_str();
+                dot_strs.push(dot_str);
+                // uig.print_self(self.tcx);
+            }
+        }
+        render_dot_graphs(dot_strs);
         // println!("{:?}", dot_strs);
     }
 
@@ -478,12 +476,6 @@ impl<'tcx> UnsafetyIsolationCheck<'tcx> {
         if !check_safety(self.tcx, caller) && callee_set.is_empty() {
             return;
         }
-        // if check_safety(self.tcx, caller)
-        // && get_sp(self.tcx, caller).len() == 0
-        // {
-        //     println!("{:?}",get_cleaned_def_path_name(self.tcx, caller));
-        //     return;
-        // }
         let uig = UigUnit::new_by_pair(generate_node_ty(self.tcx, caller), caller_cons, pairs);
         if !callee_set.is_empty() {
             self.uigs.push(uig);

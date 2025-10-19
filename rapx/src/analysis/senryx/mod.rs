@@ -17,6 +17,7 @@ use rustc_middle::{
     mir::{BasicBlock, Operand, TerminatorKind},
     ty::{self, TyCtxt},
 };
+use rustc_span::Symbol;
 use std::collections::{HashMap, HashSet};
 use visitor::{BodyVisitor, CheckResult};
 
@@ -24,13 +25,14 @@ use crate::{
     analysis::{
         core::alias_analysis::{default::AliasAnalyzer, AAResult, AliasAnalysis},
         unsafety_isolation::{
+            draw_dot::render_dot_graphs,
             hir_visitor::{ContainsUnsafe, RelatedFnCollector},
             UnsafetyIsolationCheck,
         },
         utils::{fn_info::*, show_mir::display_mir},
         Analysis,
     },
-    rap_info, rap_warn,
+    def_id, rap_info, rap_warn,
 };
 
 macro_rules! cond_print {
@@ -105,28 +107,39 @@ impl<'tcx> SenryxCheck<'tcx> {
     //     }
     // }
 
+    pub fn generate_uig_by_def_id(&mut self) {
+        let all_std_fn_def = get_all_std_fns_by_rustc_public(self.tcx);
+        let symbol = Symbol::intern("Vec");
+        let vec_def_id = self.tcx.get_diagnostic_item(symbol).unwrap();
+        println!("vec_def_id {:?}", vec_def_id);
+        let mut uig_entrance = UnsafetyIsolationCheck::new(self.tcx);
+        for &def_id in &all_std_fn_def {
+            let adt_def = get_adt_def_id_by_adt_method(self.tcx, def_id);
+            if adt_def.is_some() && adt_def.unwrap() == vec_def_id {
+                println!("def_id {:?}", def_id);
+                uig_entrance.insert_uig(
+                    def_id,
+                    get_callees(self.tcx, def_id),
+                    get_cons(self.tcx, def_id),
+                );
+            }
+        }
+        let mut dot_strs = Vec::new();
+        for uig in &uig_entrance.uigs {
+            let dot_str = uig.generate_dot_str();
+            dot_strs.push(dot_str);
+        }
+        for uig in &uig_entrance.single {
+            let dot_str = uig.generate_dot_str();
+            dot_strs.push(dot_str);
+        }
+        render_dot_graphs(dot_strs);
+    }
+
     pub fn start_analyze_std_func(&mut self) {
-        let mut all_std_fn_def = Vec::new();
-        let mut core_fn_def: Vec<_> = rustc_public::find_crates("core")
-            .iter()
-            .flat_map(|krate| krate.fn_defs())
-            .collect();
-        let mut std_fn_def: Vec<_> = rustc_public::find_crates("std")
-            .iter()
-            .flat_map(|krate| krate.fn_defs())
-            .collect();
-        let mut alloc_fn_def: Vec<_> = rustc_public::find_crates("alloc")
-            .iter()
-            .flat_map(|krate| krate.fn_defs())
-            .collect();
-        all_std_fn_def.append(&mut core_fn_def);
-        all_std_fn_def.append(&mut std_fn_def);
-        all_std_fn_def.append(&mut alloc_fn_def);
-
+        let all_std_fn_def = get_all_std_fns_by_rustc_public(self.tcx);
         let mut last_nodes = HashSet::new();
-
-        for fn_def in &all_std_fn_def {
-            let def_id = crate::def_id::to_internal(fn_def, self.tcx);
+        for &def_id in &all_std_fn_def {
             if !check_visibility(self.tcx, def_id) {
                 continue;
             }
