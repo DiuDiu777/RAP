@@ -377,7 +377,7 @@ pub fn has_mut_self_param(tcx: TyCtxt, def_id: DefId) -> bool {
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         match assoc_item.kind {
             AssocKind::Fn { has_self, .. } => {
-                if has_self {
+                if has_self && tcx.is_mir_available(def_id) {
                     let body = tcx.optimized_mir(def_id);
                     let fst_arg = body.local_decls[Local::from_usize(1)].clone();
                     let ty = fst_arg.ty;
@@ -394,11 +394,27 @@ pub fn has_mut_self_param(tcx: TyCtxt, def_id: DefId) -> bool {
 
 // Input the adt def id
 // Return set of (mutable method def_id, fields can be modified)
-pub fn get_all_mutable_methods(tcx: TyCtxt, def_id: DefId) -> HashMap<DefId, HashSet<usize>> {
+pub fn get_all_mutable_methods(tcx: TyCtxt, src_def_id: DefId) -> HashMap<DefId, HashSet<usize>> {
     let mut results = HashMap::new();
-    let adt_def = get_adt_def_id_by_adt_method(tcx, def_id);
-    let public_fields = adt_def.map_or_else(HashSet::new, |def| get_public_fields(tcx, def));
-    let impl_vec = adt_def.map_or_else(Vec::new, |def| get_impl_items_of_struct(tcx, def));
+    let all_std_fn_def = get_all_std_fns_by_rustc_public(tcx);
+    let target_adt_def = get_adt_def_id_by_adt_method(tcx, src_def_id);
+    let mut uig_entrance = UnsafetyIsolationCheck::new(tcx);
+    let mut is_std = false;
+    for &def_id in &all_std_fn_def {
+        let adt_def = get_adt_def_id_by_adt_method(tcx, def_id);
+        if adt_def.is_some() && adt_def == target_adt_def && src_def_id != def_id {
+            if has_mut_self_param(tcx, def_id) {
+                results.insert(def_id, HashSet::new());
+            }
+            is_std = true;
+        }
+    }
+    if is_std {
+        return results;
+    }
+
+    let public_fields = target_adt_def.map_or_else(HashSet::new, |def| get_public_fields(tcx, def));
+    let impl_vec = target_adt_def.map_or_else(Vec::new, |def| get_impl_items_of_struct(tcx, def));
     for item in impl_vec {
         if let rustc_hir::ImplItemKind::Fn(fnsig, body) = item.kind {
             let item_def_id = item.owner_id.to_def_id();

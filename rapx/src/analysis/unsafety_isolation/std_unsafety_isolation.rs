@@ -470,13 +470,20 @@ impl<'tcx> UnsafetyIsolationCheck<'tcx> {
     ) {
         let mut pairs = HashSet::new();
         for callee in &callee_set {
-            let callee_cons = get_cons(self.tcx, *callee);
+            let callee_cons = Vec::new();
             pairs.insert((generate_node_ty(self.tcx, *callee), callee_cons));
         }
         if !check_safety(self.tcx, caller) && callee_set.is_empty() {
             return;
         }
-        let uig = UigUnit::new_by_pair(generate_node_ty(self.tcx, caller), caller_cons, pairs);
+        let mut_methods_set = get_all_mutable_methods(self.tcx, caller);
+        let mut_methods = mut_methods_set.keys().copied().collect();
+        let uig = UigUnit::new_by_pair(
+            generate_node_ty(self.tcx, caller),
+            caller_cons,
+            pairs,
+            mut_methods,
+        );
         if !callee_set.is_empty() {
             self.uigs.push(uig);
         } else {
