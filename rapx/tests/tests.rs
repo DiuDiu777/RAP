@@ -209,7 +209,7 @@ fn test_alias_sub_scc1() {
 #[test]
 fn test_alias_sub_scc2() {
     let output = running_tests_with_arg("alias/alias_sub_scc2", "-alias");
-    //assert_eq!(output.contains("foo\": (0,1) (0,2)"), true);
+    assert_eq!(output.contains("foo\": (0,1) (0,2)"), true);
 }
 
 #[test]
