@@ -86,6 +86,8 @@ impl<'tcx> MopGraph<'tcx> {
 
         /* Handle cases if the current block is a merged scc block with sub block */
         rap_debug!("Find paths in scc: {:?}, {:?}", bb_idx, cur_block.scc);
+        let scc_tree = self.sort_scc_tree(&cur_block.scc);
+        rap_debug!("scc_tree: {:?}", scc_tree);
         self.find_scc_paths(
             bb_idx,
             bb_idx,
@@ -347,29 +349,6 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
-    /// This function performs a DFS traversal across the SCC, extracting all possible orderings
-    /// that respect the control-flow structure and SwitchInt branching, taking into account
-    /// enum discriminants and constant branches.
-    pub fn find_scc_paths(
-        &mut self,
-        start: usize,
-        cur: usize,
-        scc: &SccInfo,
-        path: &mut Vec<usize>,
-        path_constants: &mut FxHashMap<usize, usize>,
-        visited: &mut FxHashSet<usize>,
-        paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
-    ) {
-        if scc.nodes.is_empty() {
-            path.push(start);
-            paths_in_scc.push((path.clone(), path_constants.clone()));
-            return;
-        }
-        //let scc_tree = self.sort_scc_tree(&scc);
-        //rap_info!("scc_tree: {:?}", scc_tree);
-        self.find_loop_paths(start, cur, scc, path, path_constants, visited, paths_in_scc);
-    }
-
     fn sort_scc_tree(&mut self, scc: &SccInfo) -> SccTree {
         // child_enter -> SccInfo
         let mut child_sccs: FxHashMap<usize, SccInfo> = FxHashMap::default();
@@ -396,7 +375,10 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
-    fn find_loop_paths(
+    /// This function performs a DFS traversal across the SCC, extracting all possible orderings
+    /// that respect the control-flow structure and SwitchInt branching, taking into account
+    /// enum discriminants and constant branches.
+    pub fn find_scc_paths(
         &mut self,
         start: usize,
         cur: usize,
@@ -406,6 +388,11 @@ impl<'tcx> MopGraph<'tcx> {
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
     ) {
+        if scc.nodes.is_empty() {
+            path.push(start);
+            paths_in_scc.push((path.clone(), path_constants.clone()));
+            return;
+        }
         if path.is_empty() {
             path.push(start);
         }
