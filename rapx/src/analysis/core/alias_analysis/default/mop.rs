@@ -84,11 +84,11 @@ impl<'tcx> MopGraph<'tcx> {
         let cur_block = self.blocks[bb_idx].clone();
 
         /* Handle cases if the current block is a merged scc block with sub block */
-        rap_debug!("Find paths in scc: {:?}, {:?}", bb_idx, cur_block.scc);
+        rap_debug!("Searchng paths in scc: {:?}, {:?}", bb_idx, cur_block.scc);
         let scc_tree = self.sort_scc_tree(&cur_block.scc);
         rap_debug!("scc_tree: {:?}", scc_tree);
         let paths_in_scc = self.find_scc_paths(bb_idx, &scc_tree);
-        rap_debug!("Paths in scc: {:?}", paths_in_scc);
+        rap_info!("Paths found in scc: {:?}", paths_in_scc);
 
         let backup_values = self.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.constants.clone();
@@ -441,10 +441,10 @@ impl<'tcx> MopGraph<'tcx> {
             let child_enter = child_tree.scc.enter;
             if cur == child_enter {
                 let sub_paths = self.find_scc_paths(child_enter, child_tree);
-                self.find_scc_paths(child_enter, child_tree);
+                rap_info!("paths in sub scc: {}, {:?}", child_enter, sub_paths);
                 for (subp, subconst) in sub_paths {
                     let mut new_path = path.clone();
-                    new_path.extend(subp.iter());
+                    new_path.extend(&subp[1..]);
                     let mut new_const = path_constants.clone();
                     new_const.extend(subconst.iter());
                     paths_in_scc.push((new_path, new_const));
