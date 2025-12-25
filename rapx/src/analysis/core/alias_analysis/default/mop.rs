@@ -10,6 +10,8 @@ use rustc_middle::{
 use rustc_data_structures::fx::FxHashSet;
 use std::collections::HashSet;
 
+use crate::analysis::graphs::scc::{SccInfo, SccTree};
+
 use super::{block::Term, graph::*, *};
 
 impl<'tcx> MopGraph<'tcx> {
@@ -84,10 +86,10 @@ impl<'tcx> MopGraph<'tcx> {
 
         /* Handle cases if the current block is a merged scc block with sub block */
         rap_debug!("Find paths in scc: {:?}, {:?}", bb_idx, cur_block.scc);
-        self.calculate_scc_order(
+        self.find_scc_paths(
             bb_idx,
             bb_idx,
-            &mut cur_block.scc.clone().nodes,
+            &cur_block.scc,
             &mut vec![],
             &mut FxHashMap::default(),
             &mut FxHashSet::default(),
@@ -348,21 +350,62 @@ impl<'tcx> MopGraph<'tcx> {
     /// This function performs a DFS traversal across the SCC, extracting all possible orderings
     /// that respect the control-flow structure and SwitchInt branching, taking into account
     /// enum discriminants and constant branches.
-    pub fn calculate_scc_order(
+    pub fn find_scc_paths(
         &mut self,
         start: usize,
         cur: usize,
-        scc: &FxHashSet<usize>,
+        scc: &SccInfo,
         path: &mut Vec<usize>,
         path_constants: &mut FxHashMap<usize, usize>,
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
     ) {
-        if scc.is_empty() {
+        if scc.nodes.is_empty() {
             path.push(start);
             paths_in_scc.push((path.clone(), path_constants.clone()));
             return;
         }
+        //let scc_tree = self.sort_scc_tree(&scc);
+        //rap_info!("scc_tree: {:?}", scc_tree);
+        self.find_loop_paths(start, cur, scc, path, path_constants, visited, paths_in_scc);
+    }
+
+    fn sort_scc_tree(&mut self, scc: &SccInfo) -> SccTree {
+        // child_enter -> SccInfo
+        let mut child_sccs: FxHashMap<usize, SccInfo> = FxHashMap::default();
+
+        // find all sub sccs
+        for &node in scc.nodes.iter() {
+            let node_scc = &self.blocks[node].scc;
+            if node_scc.enter != scc.enter && !node_scc.nodes.is_empty() {
+                child_sccs
+                    .entry(node_scc.enter)
+                    .or_insert_with(|| node_scc.clone());
+            }
+        }
+
+        // recursively sort children
+        let children = child_sccs
+            .into_values()
+            .map(|child_scc| self.sort_scc_tree(&child_scc))
+            .collect();
+
+        SccTree {
+            scc: scc.clone(),
+            children,
+        }
+    }
+
+    fn find_loop_paths(
+        &mut self,
+        start: usize,
+        cur: usize,
+        scc: &SccInfo,
+        path: &mut Vec<usize>,
+        path_constants: &mut FxHashMap<usize, usize>,
+        visited: &mut FxHashSet<usize>,
+        paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
+    ) {
         if path.is_empty() {
             path.push(start);
         }
@@ -371,7 +414,7 @@ impl<'tcx> MopGraph<'tcx> {
                 paths_in_scc.push((path.clone(), path_constants.clone()));
                 return;
             }
-            if !scc.contains(&cur) {
+            if !scc.nodes.contains(&cur) {
                 path.pop();
                 paths_in_scc.push((path.clone(), path_constants.clone()));
                 return;
@@ -402,8 +445,8 @@ impl<'tcx> MopGraph<'tcx> {
                 for next in self.blocks[cur].next.clone() {
                     // next does not belong to the scc; or we return to the start.
                     // report a new path.
-                    if !scc.contains(&next) || next == start {
-                        self.calculate_scc_order(
+                    if !scc.nodes.contains(&next) || next == start {
+                        self.find_scc_paths(
                             start,
                             next,
                             scc,
@@ -414,7 +457,7 @@ impl<'tcx> MopGraph<'tcx> {
                         );
                     } else {
                         path.push(next);
-                        self.calculate_scc_order(
+                        self.find_scc_paths(
                             start,
                             next,
                             scc,
@@ -436,7 +479,7 @@ impl<'tcx> MopGraph<'tcx> {
         start: usize,
         _cur: usize,
         path: &mut Vec<usize>,
-        scc: &FxHashSet<usize>,
+        scc: &SccInfo,
         path_constants: &mut FxHashMap<usize, usize>,
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
@@ -464,7 +507,7 @@ impl<'tcx> MopGraph<'tcx> {
                         let target = branch.1.as_usize();
                         if !path.contains(&target) {
                             path.push(target);
-                            self.calculate_scc_order(
+                            self.find_scc_paths(
                                 start,
                                 target,
                                 scc,
@@ -484,7 +527,7 @@ impl<'tcx> MopGraph<'tcx> {
                     if !path.contains(&target) {
                         path.push(target);
                         path_constants.insert(discr_local, constant);
-                        self.calculate_scc_order(
+                        self.find_scc_paths(
                             start,
                             target,
                             scc,
@@ -502,7 +545,7 @@ impl<'tcx> MopGraph<'tcx> {
                 if !path.contains(&target) {
                     path.push(target);
                     path_constants.insert(discr_local, targets.iter().len());
-                    self.calculate_scc_order(
+                    self.find_scc_paths(
                         start,
                         target,
                         scc,

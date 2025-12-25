@@ -15,10 +15,10 @@ impl SccExit {
 
 #[derive(Debug, Clone)]
 pub struct SccInfo {
-    pub enter: usize,
-    pub nodes: FxHashSet<usize>,
-    pub exits: FxHashSet<SccExit>,
-    pub backnodes: FxHashSet<usize>, // The nodes with a backedge
+    pub enter: usize,                // In Rust CFG, each scc has exactly one enter.
+    pub nodes: FxHashSet<usize>,     // Other nodes of the scc except the enter.
+    pub exits: FxHashSet<SccExit>,   // Exit information of the scc.
+    pub backnodes: FxHashSet<usize>, // The nodes with a backedge.
 }
 
 impl SccInfo {
@@ -81,4 +81,10 @@ pub trait Scc {
             self.on_scc_found(index, &component);
         }
     }
+}
+
+#[derive(Debug)]
+pub struct SccTree {
+    pub scc: SccInfo,
+    pub children: Vec<SccTree>,
 }
