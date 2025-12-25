@@ -436,15 +436,11 @@ impl<'tcx> MopGraph<'tcx> {
                 return;
             }
         }
-        // To fix
-        if !visited.insert(cur) {
-            return;
-        }
 
         for child_tree in &scc_tree.children {
             let child_enter = child_tree.scc.enter;
             if cur == child_enter {
-                let sub_paths = Vec::<(Vec<usize>, FxHashMap<usize, usize>)>::new();
+                let sub_paths = self.find_scc_paths(child_enter, child_tree);
                 self.find_scc_paths(child_enter, child_tree);
                 for (subp, subconst) in sub_paths {
                     let mut new_path = path.clone();
