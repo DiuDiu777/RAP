@@ -13,8 +13,9 @@ use rustc_middle::{
     ty::{self, TyCtxt, TypingEnv},
 };
 use rustc_span::{Span, def_id::DefId};
-use std::{fmt, vec::Vec};
+use std::{fmt::{self, Display}, vec::Vec};
 
+#[derive(Clone)]
 pub struct MopGraph<'tcx> {
     pub def_id: DefId,
     pub tcx: TyCtxt<'tcx>,
@@ -533,58 +534,38 @@ impl<'tcx> MopGraph<'tcx> {
 
         expanded_path
     }
-
-    pub fn get_switch_conds(&mut self, bb_idx: usize) -> Option<usize> {
-        let term = &self.blocks[bb_idx].terminator;
-        let switch = match term {
-            Term::Switch(s) => s,
-            _ => return None,
-        };
-        let discr = match &switch.kind {
-            TerminatorKind::SwitchInt { discr, .. } => discr,
-            _ => return None,
-        };
-        match discr {
-            Operand::Copy(p) | Operand::Move(p) => Some(self.projection(false, *p)),
-            _ => None,
-        }
-    }
 }
 
 pub trait SccHelper<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx>;
+    fn defid(&self) -> DefId; 
     fn blocks(&self) -> &Vec<Block<'tcx>>; // or whatever the actual type is
     fn blocks_mut(&mut self) -> &mut Vec<Block<'tcx>>;
-    fn switch_conds(&mut self, node: usize) -> Option<usize>;
 }
 
 impl<'tcx> SccHelper<'tcx> for MopGraph<'tcx> {
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
+    fn defid(&self) -> DefId {
+        self.def_id
+    }
     fn blocks(&self) -> &Vec<Block<'tcx>> {
         &self.blocks
     }
     fn blocks_mut(&mut self) -> &mut Vec<Block<'tcx>> {
         &mut self.blocks
     }
-    fn switch_conds(&mut self, node: usize) -> Option<usize> {
-        self.get_switch_conds(node)
-    }
 }
 
-pub fn scc_handler<'tcx, T: SccHelper<'tcx>>(graph: &mut T, root: usize, scc_components: &[usize]) {
-    for &node in &scc_components[1..] {
-        graph.blocks_mut()[root].scc.nodes.insert(node);
-        graph.blocks_mut()[node].scc.enter = root;
-        let nexts = graph.blocks_mut()[node].next.clone();
-        for next in nexts {
-            if !&scc_components.contains(&next) {
-                let scc_exit = SccExit::new(node, next);
-                graph.blocks_mut()[root].scc.exits.insert(scc_exit);
-            }
-            if next == root {
-                graph.blocks_mut()[root].scc.backnodes.insert(node);
-            }
-        }
+pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(graph: &mut T, root: usize, scc_components: &[usize]) {
+    rap_debug!("Scc found: root = {}, components = {:?}", root, scc_components);
+    graph.blocks_mut()[root].scc.enter = root;
+    if scc_components.len() <= 1 {
+        return ;
     }
 
+    // If the scc enter is also an exit of the scc; add it to the scc exit;
     let nexts = graph.blocks_mut()[root].next.clone();
     for next in nexts {
         if !&scc_components.contains(&next) {
@@ -592,13 +573,57 @@ pub fn scc_handler<'tcx, T: SccHelper<'tcx>>(graph: &mut T, root: usize, scc_com
             graph.blocks_mut()[root].scc.exits.insert(scc_exit);
         }
     }
-    // This is to ensure the next node should not in the current SCC.
-    /*
-    let scc_nodes = graph.blocks_mut()[root].scc.nodes.clone();
-    graph.blocks_mut()[root]
-        .next
-        .retain(|i| !scc_nodes.contains(i));
-    */
+    // Handle other nodes of the scc; 
+    for &node in &scc_components[1..] {
+        graph.blocks_mut()[root].scc.nodes.insert(node);
+        graph.blocks_mut()[node].scc.enter = root;
+        let nexts = graph.blocks_mut()[node].next.clone();
+        for next in nexts {
+            // The node is an scc exit.
+            if !&scc_components.contains(&next) {
+                let scc_exit = SccExit::new(node, next);
+                graph.blocks_mut()[root].scc.exits.insert(scc_exit);
+            }
+            // The node initiates a back edge to the scc enter.
+            if next == root {
+                graph.blocks_mut()[root].scc.backnodes.insert(node);
+            }
+        }
+    }
+
+    rap_info!("Scc Info: {:?}", graph.blocks_mut()[root].scc);
+    // Recursively detect sub sccs within the scc.
+    // This is performed on a modified graph with the starting node and scc components only;
+    // Before modification, we have to backup corresponding information.
+    let mut backups: Vec<(usize, FxHashSet<usize>)> = Vec::new();
+
+    let block0 = &mut graph.blocks_mut()[0];
+    backups.push((0, block0.next.clone()));
+
+    block0.next.clear();
+    block0.next.insert(root);
+
+    let scc_exits = graph.blocks()[root].scc.exits.clone();
+    let backnodes = graph.blocks()[root].scc.backnodes.clone();
+
+    for &node in scc_components.iter() {
+        let block = &mut graph.blocks_mut()[node];
+        backups.push((node, block.next.clone()));
+        if backnodes.contains(&node) {
+            block.next.remove(&root);
+        }
+        // remove exit
+        for exit in &scc_exits {
+            if node == exit.exit {
+                block.next.remove(&exit.to);
+            }
+        }
+    }
+    graph.find_scc();
+
+    for backup in &backups {
+        graph.blocks_mut()[backup.0].next = backup.1.clone();
+    }
 }
 
 impl<'tcx> Scc for MopGraph<'tcx> {

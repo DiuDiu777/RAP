@@ -231,7 +231,6 @@ impl<'tcx> AliasAnalyzer<'tcx> {
 
         if self.tcx.is_mir_available(def_id) {
             let mut mop_graph = MopGraph::new(self.tcx, def_id);
-            rap_trace!("{}", mop_graph);
             mop_graph.find_scc();
             rap_trace!("{}", mop_graph);
             let mut recursion_set = HashSet::default();

@@ -358,9 +358,7 @@ impl<'tcx> MopGraph<'tcx> {
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
     ) {
-        rap_debug!("calculate_scc_order");
         if scc.is_empty() {
-            rap_debug!("scc is empty");
             path.push(start);
             paths_in_scc.push((path.clone(), path_constants.clone()));
             return;
@@ -388,7 +386,6 @@ impl<'tcx> MopGraph<'tcx> {
         rap_debug!("term: {:?}", term);
         match term {
             TerminatorKind::SwitchInt { discr, targets } => {
-                rap_debug!("handle_switch_int_case: {:?}, {:?}", discr, targets);
                 self.handle_switch_int_case(
                     start,
                     cur,
@@ -402,12 +399,6 @@ impl<'tcx> MopGraph<'tcx> {
                 );
             }
             _ => {
-                rap_debug!("not switchInt");
-                rap_debug!(
-                    "handle nexts of bb {:?}: {:?}",
-                    cur,
-                    self.blocks[cur].next.clone()
-                );
                 for next in self.blocks[cur].next.clone() {
                     // next does not belong to the scc; or we return to the start.
                     // report a new path.
