@@ -8,7 +8,6 @@ use rustc_middle::{
     },
     ty::{TyKind, TypingEnv},
 };
-use std::vec;
 
 pub const VISIT_LIMIT: usize = 1000;
 
@@ -150,18 +149,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
     pub fn check_scc(&mut self, bb_idx: usize, fn_map: &MopAAResultMap) {
         let cur_block = self.mop_graph.blocks[bb_idx].clone();
-        let mut paths_in_scc = vec![];
         /* Handle cases if the current block is a merged scc block with sub block */
         let scc_tree = self.mop_graph.sort_scc_tree(&cur_block.scc);
-        self.mop_graph.find_scc_paths(
-            bb_idx,
-            bb_idx,
-            &scc_tree,
-            &mut vec![],
-            &mut FxHashMap::default(),
-            &mut FxHashSet::default(),
-            &mut paths_in_scc,
-        );
+        let paths_in_scc = self.mop_graph.find_scc_paths(bb_idx, &scc_tree);
         rap_debug!("Paths in scc: {:?}", paths_in_scc);
 
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;

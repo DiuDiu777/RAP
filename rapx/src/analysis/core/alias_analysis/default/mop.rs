@@ -82,21 +82,12 @@ impl<'tcx> MopGraph<'tcx> {
         recursion_set: &mut HashSet<DefId>,
     ) {
         let cur_block = self.blocks[bb_idx].clone();
-        let mut paths_in_scc = vec![];
 
         /* Handle cases if the current block is a merged scc block with sub block */
         rap_debug!("Find paths in scc: {:?}, {:?}", bb_idx, cur_block.scc);
         let scc_tree = self.sort_scc_tree(&cur_block.scc);
         rap_debug!("scc_tree: {:?}", scc_tree);
-        self.find_scc_paths(
-            bb_idx,
-            bb_idx,
-            &scc_tree,
-            &mut vec![],
-            &mut FxHashMap::default(),
-            &mut FxHashSet::default(),
-            &mut paths_in_scc,
-        );
+        let paths_in_scc = self.find_scc_paths(bb_idx, &scc_tree);
         rap_debug!("Paths in scc: {:?}", paths_in_scc);
 
         let backup_values = self.values.clone(); // duplicate the status when visiteding different paths;
@@ -375,10 +366,47 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
-    /// This function performs a DFS traversal across the SCC, extracting all possible orderings
-    /// that respect the control-flow structure and SwitchInt branching, taking into account
-    /// enum discriminants and constant branches.
     pub fn find_scc_paths(
+        &mut self,
+        start: usize,
+        scc_tree: &SccTree,
+    ) -> Vec<(Vec<usize>, FxHashMap<usize, usize>)> {
+        use rustc_data_structures::fx::FxHashSet;
+
+        let mut stabilized = false;
+        let mut all_paths = Vec::new();
+        let mut unique_path_sets: FxHashSet<Vec<usize>> = FxHashSet::default();
+
+        while !stabilized {
+            stabilized = true;
+            let mut round_paths = Vec::new();
+
+            self.find_scc_paths_one_round(
+                start,
+                start,
+                scc_tree,
+                &mut vec![],
+                &mut FxHashMap::default(),
+                &mut FxHashSet::default(),
+                &mut round_paths,
+                0,
+            );
+
+            for (path, constants) in round_paths {
+                let mut path_nodes: Vec<usize> = path.iter().cloned().collect();
+                path_nodes.sort();
+                path_nodes.dedup(); // deduplication
+                if !unique_path_sets.contains(&path_nodes) {
+                    unique_path_sets.insert(path_nodes.clone());
+                    all_paths.push((path.clone(), constants.clone()));
+                    stabilized = false;
+                }
+            }
+        }
+        all_paths
+    }
+
+    fn find_scc_paths_one_round(
         &mut self,
         start: usize,
         cur: usize,
@@ -387,7 +415,11 @@ impl<'tcx> MopGraph<'tcx> {
         path_constants: &mut FxHashMap<usize, usize>,
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
+        depth: usize,
     ) {
+        if depth > 1000 {
+            return;
+        }
         let scc = &scc_tree.scc;
         if scc.nodes.is_empty() {
             path.push(start);
@@ -412,19 +444,8 @@ impl<'tcx> MopGraph<'tcx> {
         for child_tree in &scc_tree.children {
             let child_enter = child_tree.scc.enter;
             if cur == child_enter {
-                let mut sub_paths = Vec::new();
-                let mut sub_path = Vec::new();
-                let mut sub_constants = path_constants.clone();
-                let mut sub_visited = FxHashSet::default();
-                self.find_scc_paths(
-                    child_enter,
-                    child_enter,
-                    child_tree,
-                    &mut sub_path,
-                    &mut sub_constants,
-                    &mut sub_visited,
-                    &mut sub_paths,
-                );
+                let sub_paths = Vec::<(Vec<usize>, FxHashMap<usize, usize>)>::new();
+                self.find_scc_paths(child_enter, child_tree);
                 for (subp, subconst) in sub_paths {
                     let mut new_path = path.clone();
                     new_path.extend(subp.iter());
@@ -452,6 +473,7 @@ impl<'tcx> MopGraph<'tcx> {
                     paths_in_scc,
                     discr,
                     targets,
+                    depth,
                 );
             }
             _ => {
@@ -459,7 +481,7 @@ impl<'tcx> MopGraph<'tcx> {
                     // next does not belong to the scc; or we return to the start.
                     // report a new path.
                     if !scc.nodes.contains(&next) || next == start {
-                        self.find_scc_paths(
+                        self.find_scc_paths_one_round(
                             start,
                             next,
                             scc_tree,
@@ -467,10 +489,11 @@ impl<'tcx> MopGraph<'tcx> {
                             path_constants,
                             visited,
                             paths_in_scc,
+                            depth + 1,
                         );
                     } else {
                         path.push(next);
-                        self.find_scc_paths(
+                        self.find_scc_paths_one_round(
                             start,
                             next,
                             scc_tree,
@@ -478,6 +501,7 @@ impl<'tcx> MopGraph<'tcx> {
                             path_constants,
                             visited,
                             paths_in_scc,
+                            depth + 1,
                         );
                         path.pop();
                     }
@@ -498,6 +522,7 @@ impl<'tcx> MopGraph<'tcx> {
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
         discr: &Operand<'tcx>,
         targets: &SwitchTargets,
+        depth: usize,
     ) {
         let place = match discr {
             Copy(p) | Move(p) => Some(self.projection(false, *p)),
@@ -520,7 +545,7 @@ impl<'tcx> MopGraph<'tcx> {
                         let target = branch.1.as_usize();
                         if !path.contains(&target) {
                             path.push(target);
-                            self.find_scc_paths(
+                            self.find_scc_paths_one_round(
                                 start,
                                 target,
                                 scc_tree,
@@ -528,6 +553,7 @@ impl<'tcx> MopGraph<'tcx> {
                                 path_constants,
                                 visited,
                                 paths_in_scc,
+                                depth + 1,
                             );
                             path.pop();
                         }
@@ -540,7 +566,7 @@ impl<'tcx> MopGraph<'tcx> {
                     if !path.contains(&target) {
                         path.push(target);
                         path_constants.insert(discr_local, constant);
-                        self.find_scc_paths(
+                        self.find_scc_paths_one_round(
                             start,
                             target,
                             scc_tree,
@@ -548,6 +574,7 @@ impl<'tcx> MopGraph<'tcx> {
                             path_constants,
                             visited,
                             paths_in_scc,
+                            depth + 1,
                         );
                         path_constants.remove(&discr_local);
                         path.pop();
@@ -558,7 +585,7 @@ impl<'tcx> MopGraph<'tcx> {
                 if !path.contains(&target) {
                     path.push(target);
                     path_constants.insert(discr_local, targets.iter().len());
-                    self.find_scc_paths(
+                    self.find_scc_paths_one_round(
                         start,
                         target,
                         scc_tree,
@@ -566,6 +593,7 @@ impl<'tcx> MopGraph<'tcx> {
                         path_constants,
                         visited,
                         paths_in_scc,
+                        depth + 1,
                     );
                     path_constants.remove(&discr_local);
                     path.pop();
