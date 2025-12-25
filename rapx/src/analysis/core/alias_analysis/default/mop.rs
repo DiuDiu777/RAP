@@ -91,7 +91,7 @@ impl<'tcx> MopGraph<'tcx> {
         self.find_scc_paths(
             bb_idx,
             bb_idx,
-            &cur_block.scc,
+            &scc_tree,
             &mut vec![],
             &mut FxHashMap::default(),
             &mut FxHashSet::default(),
@@ -349,7 +349,7 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
-    fn sort_scc_tree(&mut self, scc: &SccInfo) -> SccTree {
+    pub fn sort_scc_tree(&mut self, scc: &SccInfo) -> SccTree {
         // child_enter -> SccInfo
         let mut child_sccs: FxHashMap<usize, SccInfo> = FxHashMap::default();
 
@@ -382,12 +382,13 @@ impl<'tcx> MopGraph<'tcx> {
         &mut self,
         start: usize,
         cur: usize,
-        scc: &SccInfo,
+        scc_tree: &SccTree,
         path: &mut Vec<usize>,
         path_constants: &mut FxHashMap<usize, usize>,
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
     ) {
+        let scc = &scc_tree.scc;
         if scc.nodes.is_empty() {
             path.push(start);
             paths_in_scc.push((path.clone(), path_constants.clone()));
@@ -397,19 +398,44 @@ impl<'tcx> MopGraph<'tcx> {
             path.push(start);
         }
         if path.len() > 1 {
-            if cur == start {
-                paths_in_scc.push((path.clone(), path_constants.clone()));
-                return;
-            }
             if !scc.nodes.contains(&cur) {
                 path.pop();
                 paths_in_scc.push((path.clone(), path_constants.clone()));
                 return;
             }
         }
+        // To fix
         if !visited.insert(cur) {
             return;
-        } // already visited, avoid cycle
+        }
+
+        for child_tree in &scc_tree.children {
+            let child_enter = child_tree.scc.enter;
+            if cur == child_enter {
+                let mut sub_paths = Vec::new();
+                let mut sub_path = Vec::new();
+                let mut sub_constants = path_constants.clone();
+                let mut sub_visited = FxHashSet::default();
+                self.find_scc_paths(
+                    child_enter,
+                    child_enter,
+                    child_tree,
+                    &mut sub_path,
+                    &mut sub_constants,
+                    &mut sub_visited,
+                    &mut sub_paths,
+                );
+                for (subp, subconst) in sub_paths {
+                    let mut new_path = path.clone();
+                    new_path.extend(subp.iter());
+                    let mut new_const = path_constants.clone();
+                    new_const.extend(subconst.iter());
+                    paths_in_scc.push((new_path, new_const));
+                }
+                visited.remove(&cur);
+                return;
+            }
+        }
 
         let term = &self.terminators[cur].clone();
 
@@ -420,7 +446,7 @@ impl<'tcx> MopGraph<'tcx> {
                     start,
                     cur,
                     path,
-                    scc,
+                    scc_tree,
                     path_constants,
                     visited,
                     paths_in_scc,
@@ -436,7 +462,7 @@ impl<'tcx> MopGraph<'tcx> {
                         self.find_scc_paths(
                             start,
                             next,
-                            scc,
+                            scc_tree,
                             path,
                             path_constants,
                             visited,
@@ -447,7 +473,7 @@ impl<'tcx> MopGraph<'tcx> {
                         self.find_scc_paths(
                             start,
                             next,
-                            scc,
+                            scc_tree,
                             path,
                             path_constants,
                             visited,
@@ -466,7 +492,7 @@ impl<'tcx> MopGraph<'tcx> {
         start: usize,
         _cur: usize,
         path: &mut Vec<usize>,
-        scc: &SccInfo,
+        scc_tree: &SccTree,
         path_constants: &mut FxHashMap<usize, usize>,
         visited: &mut FxHashSet<usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
@@ -497,7 +523,7 @@ impl<'tcx> MopGraph<'tcx> {
                             self.find_scc_paths(
                                 start,
                                 target,
-                                scc,
+                                scc_tree,
                                 path,
                                 path_constants,
                                 visited,
@@ -517,7 +543,7 @@ impl<'tcx> MopGraph<'tcx> {
                         self.find_scc_paths(
                             start,
                             target,
-                            scc,
+                            scc_tree,
                             path,
                             path_constants,
                             visited,
@@ -535,7 +561,7 @@ impl<'tcx> MopGraph<'tcx> {
                     self.find_scc_paths(
                         start,
                         target,
-                        scc,
+                        scc_tree,
                         path,
                         path_constants,
                         visited,
