@@ -13,7 +13,10 @@ use rustc_middle::{
     ty::{self, TyCtxt, TypingEnv},
 };
 use rustc_span::{Span, def_id::DefId};
-use std::{fmt::{self, Display}, vec::Vec};
+use std::{
+    fmt::{self, Display},
+    vec::Vec,
+};
 
 #[derive(Clone)]
 pub struct MopGraph<'tcx> {
@@ -538,7 +541,7 @@ impl<'tcx> MopGraph<'tcx> {
 
 pub trait SccHelper<'tcx> {
     fn tcx(&self) -> TyCtxt<'tcx>;
-    fn defid(&self) -> DefId; 
+    fn defid(&self) -> DefId;
     fn blocks(&self) -> &Vec<Block<'tcx>>; // or whatever the actual type is
     fn blocks_mut(&mut self) -> &mut Vec<Block<'tcx>>;
 }
@@ -558,11 +561,19 @@ impl<'tcx> SccHelper<'tcx> for MopGraph<'tcx> {
     }
 }
 
-pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(graph: &mut T, root: usize, scc_components: &[usize]) {
-    rap_debug!("Scc found: root = {}, components = {:?}", root, scc_components);
+pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(
+    graph: &mut T,
+    root: usize,
+    scc_components: &[usize],
+) {
+    rap_debug!(
+        "Scc found: root = {}, components = {:?}",
+        root,
+        scc_components
+    );
     graph.blocks_mut()[root].scc.enter = root;
     if scc_components.len() <= 1 {
-        return ;
+        return;
     }
 
     // If the scc enter is also an exit of the scc; add it to the scc exit;
@@ -573,7 +584,7 @@ pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(graph: &mut
             graph.blocks_mut()[root].scc.exits.insert(scc_exit);
         }
     }
-    // Handle other nodes of the scc; 
+    // Handle other nodes of the scc;
     for &node in &scc_components[1..] {
         graph.blocks_mut()[root].scc.nodes.insert(node);
         graph.blocks_mut()[node].scc.enter = root;
@@ -608,19 +619,20 @@ pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(graph: &mut
 
     for &node in scc_components.iter() {
         let block = &mut graph.blocks_mut()[node];
-        backups.push((node, block.next.clone()));
         if backnodes.contains(&node) {
+            backups.push((node, block.next.clone()));
             block.next.remove(&root);
         }
-        // remove exit
-        for exit in &scc_exits {
-            if node == exit.exit {
-                block.next.remove(&exit.to);
-            }
-        }
+    }
+    // isolate the scc components from other parts of the graph.
+    for exit in &scc_exits {
+        let block_to = &mut graph.blocks_mut()[exit.to];
+        backups.push((exit.to, block_to.next.clone()));
+        block_to.next.clear();
     }
     graph.find_scc();
 
+    // Restore the original graph.
     for backup in &backups {
         graph.blocks_mut()[backup.0].next = backup.1.clone();
     }
