@@ -611,6 +611,7 @@ pub fn scc_handler<'tcx, T: SccHelper<'tcx> + Scc + Clone + Display>(
     let block0 = &mut graph.blocks_mut()[0];
     backups.push((0, block0.next.clone()));
 
+    // Change the next of block0 to the scc enter.
     block0.next.clear();
     block0.next.insert(root);
 

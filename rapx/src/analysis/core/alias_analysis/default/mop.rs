@@ -105,32 +105,15 @@ impl<'tcx> MopGraph<'tcx> {
             let path = raw_path.0;
             let path_constants = &raw_path.1;
             if !path.is_empty() {
-                for idx in &path {
+                for idx in &path[..path.len() - 1] {
                     self.alias_bb(*idx);
                     self.alias_bbcall(*idx, fn_map, recursion_set);
                 }
             }
+            // The last node is already ouside the scc.
             if let Some(&last_node) = path.last() {
-                let exit_points: Vec<usize> = cur_block
-                    .scc
-                    .exits
-                    .iter()
-                    .filter(|exit_struct| exit_struct.exit == last_node)
-                    .map(|exit_struct| exit_struct.to)
-                    .collect();
-
-                for next in exit_points {
-                    self.check(next, fn_map, recursion_set);
-                }
-                if cur_block.scc.backnodes.contains(&last_node) {
-                    self.handle_nexts(
-                        bb_idx,
-                        fn_map,
-                        Some(&cur_block.scc.nodes),
-                        Some(path_constants),
-                        recursion_set,
-                    );
-                }
+                self.check_single_node(last_node, fn_map, recursion_set);
+                self.handle_nexts(last_node, fn_map, None, Some(path_constants), recursion_set);
             }
         }
     }
@@ -397,8 +380,17 @@ impl<'tcx> MopGraph<'tcx> {
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
         scc_path_set: &mut HashSet<Vec<usize>>,
     ) {
+        rap_info!("cur = {}", cur);
         let scc = &scc_tree.scc;
         if scc.nodes.is_empty() {
+            paths_in_scc.push((path.clone(), path_constants.clone()));
+            return;
+        }
+
+        if !scc.nodes.contains(&cur) && start != cur {
+            rap_info!("1: new path: {:?}", path.clone());
+            // we add the next node into the scc path to speedup the traveral outside
+            // the scc.
             paths_in_scc.push((path.clone(), path_constants.clone()));
             return;
         }
@@ -410,8 +402,9 @@ impl<'tcx> MopGraph<'tcx> {
                 .map(|i| i)
                 .unwrap_or(0);
             let slice = &path[last_index..];
-            rap_debug!("path: {:?}", path);
-            rap_debug!("slice: {:?}", slice);
+            rap_info!("path: {:?}", path);
+            rap_info!("slice: {:?}", slice);
+            rap_info!("set: {:?}", scc_path_set);
             if scc_path_set.contains(slice) {
                 return;
             } else {
@@ -421,7 +414,7 @@ impl<'tcx> MopGraph<'tcx> {
             // Otherwise, it cannot reach other branches.
             for node in path.clone() {
                 for local in &self.blocks[node].assigned_locals {
-                    self.constants.remove(&local);
+                    path_constants.remove(&local);
                 }
             }
         }
@@ -436,7 +429,15 @@ impl<'tcx> MopGraph<'tcx> {
                     new_path.extend(&subp[1..]);
                     let mut new_const = path_constants.clone();
                     new_const.extend(subconst.iter());
-                    paths_in_scc.push((new_path, new_const));
+                    self.find_scc_paths_inner(
+                        start,
+                        *new_path.last().unwrap(),
+                        scc_tree,
+                        &mut new_path,
+                        &mut new_const,
+                        paths_in_scc,
+                        scc_path_set,
+                    );
                 }
                 return;
             }
@@ -461,23 +462,18 @@ impl<'tcx> MopGraph<'tcx> {
             }
             _ => {
                 for next in self.blocks[cur].next.clone() {
-                    // The next node does not belong to the scc; report a new path.
-                    if !scc.nodes.contains(&next) && start != next {
-                        paths_in_scc.push((path.clone(), path_constants.clone()));
-                        continue;
-                    } else {
-                        path.push(next);
-                        self.find_scc_paths_inner(
-                            start,
-                            next,
-                            scc_tree,
-                            path,
-                            path_constants,
-                            paths_in_scc,
-                            scc_path_set,
-                        );
-                        path.pop();
-                    }
+                    path.push(next);
+                    self.find_scc_paths_inner(
+                        start,
+                        next,
+                        scc_tree,
+                        path,
+                        path_constants,
+                        paths_in_scc,
+                        scc_path_set,
+                    );
+                    rap_info!("1 pop: {:?}", path.last());
+                    path.pop();
                 }
             }
         }
@@ -524,6 +520,8 @@ impl<'tcx> MopGraph<'tcx> {
                             paths_in_scc,
                             scc_path_set,
                         );
+                        rap_info!("2 pop: {:?}", path.last());
+                        path.pop();
                     });
             } else {
                 // No restriction, try each branch
@@ -542,6 +540,7 @@ impl<'tcx> MopGraph<'tcx> {
                         scc_path_set,
                     );
                     path_constants.remove(&discr_local);
+                    rap_info!("pop 3: {:?}", path.last());
                     path.pop();
                 }
                 // Handle default branch
@@ -558,6 +557,7 @@ impl<'tcx> MopGraph<'tcx> {
                     scc_path_set,
                 );
                 path_constants.remove(&discr_local);
+                rap_info!("pop 4: {:?}", path.last());
                 path.pop();
             }
         }
