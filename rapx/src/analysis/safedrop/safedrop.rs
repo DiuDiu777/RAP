@@ -166,33 +166,19 @@ impl<'tcx> SafeDropGraph<'tcx> {
             let path_constants = &raw_path.1;
 
             if !path.is_empty() {
-                for idx in path {
+                for idx in &path[..path.len() - 1] {
                     self.alias_bb(*idx);
                     self.alias_bbcall(*idx, fn_map);
                     self.drop_check(*idx);
                 }
             }
+            // The last node is already ouside the scc.
             if let Some(&last_node) = path.last() {
-                let exit_points: Vec<usize> = cur_block
-                    .scc
-                    .exits
-                    .iter()
-                    .filter(|exit_struct| exit_struct.exit == last_node)
-                    .map(|exit_struct| exit_struct.to)
-                    .collect();
-                for next in exit_points {
-                    self.check(next, fn_map);
-                }
-
-                // The scc enter can also have exits;
-                // Handle backedges;
-                if cur_block.scc.backnodes.contains(&last_node) {
-                    self.handle_nexts(
-                        bb_idx,
-                        &fn_map,
-                        Some(&cur_block.scc.nodes),
-                        Some(path_constants),
-                    );
+                if self.mop_graph.blocks[last_node].scc.nodes.is_empty() {
+                    self.check_single_node(last_node, fn_map);
+                    self.handle_nexts(last_node, fn_map, None, Some(path_constants));
+                } else {
+                    // TODO
                 }
             }
         }
