@@ -59,7 +59,10 @@ pub fn query_safedrop(
     adt_owner: OHAResultMap,
 ) {
     let fn_name = get_fn_name(tcx, def_id);
-    if fn_name.as_deref() == Some("__raw_ptr_deref_dummy") {
+    if fn_name
+        .as_ref()
+        .map_or(false, |s| s.contains("__raw_ptr_deref_dummy"))
+    {
         return;
     }
     rap_trace!("query_safedrop: {:?}", fn_name);

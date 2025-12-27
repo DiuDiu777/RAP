@@ -223,8 +223,10 @@ impl<'tcx> AliasAnalyzer<'tcx> {
 
     fn query_mop(&mut self, def_id: DefId) {
         let fn_name = get_fn_name(self.tcx, def_id);
-        if fn_name.as_deref() == Some("__raw_ptr_deref_dummy") {
-            rap_trace!("Skip __raw_ptr_deref_dummy");
+        if fn_name
+            .as_ref()
+            .map_or(false, |s| s.contains("__raw_ptr_deref_dummy"))
+        {
             return;
         }
         rap_trace!("query_mop: {:?}", fn_name);
