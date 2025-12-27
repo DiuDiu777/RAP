@@ -73,7 +73,7 @@ impl<'tcx> MopGraph<'tcx> {
             self.check_scc(bb_idx, fn_map, recursion_set);
         } else {
             self.check_single_node(bb_idx, fn_map, recursion_set);
-            self.handle_nexts(bb_idx, fn_map,  None, recursion_set);
+            self.handle_nexts(bb_idx, fn_map, None, recursion_set);
         }
     }
 
@@ -89,7 +89,7 @@ impl<'tcx> MopGraph<'tcx> {
         rap_debug!("Searchng paths in scc: {:?}, {:?}", bb_idx, cur_block.scc);
         let scc_tree = self.sort_scc_tree(&cur_block.scc);
         rap_debug!("scc_tree: {:?}", scc_tree);
-        let paths_in_scc = self.find_scc_paths(bb_idx, &scc_tree);
+        let paths_in_scc = self.find_scc_paths(bb_idx, &scc_tree, &mut FxHashMap::default());
         rap_info!("Paths found in scc: {:?}", paths_in_scc);
 
         let backup_values = self.values.clone(); // duplicate the status when visiteding different paths;
@@ -105,7 +105,8 @@ impl<'tcx> MopGraph<'tcx> {
             *recursion_set = backup_recursion_set.clone();
 
             let path = raw_path.0;
-            let path_constants = &raw_path.1;
+            let path_constraints = &raw_path.1;
+            rap_info!("checking path: {:?}", path);
             if !path.is_empty() {
                 for idx in &path[..path.len() - 1] {
                     self.alias_bb(*idx);
@@ -117,7 +118,7 @@ impl<'tcx> MopGraph<'tcx> {
                 rap_debug!("Handle the last node in an scc path: {:?}", last_node);
                 if self.blocks[last_node].scc.nodes.is_empty() {
                     self.check_single_node(last_node, fn_map, recursion_set);
-                    self.handle_nexts(last_node, fn_map, Some(path_constants), recursion_set);
+                    self.handle_nexts(last_node, fn_map, Some(path_constraints), recursion_set);
                 } else {
                     // If the exit is an scc, we should handle it like check_scc;
                 }
@@ -157,8 +158,8 @@ impl<'tcx> MopGraph<'tcx> {
             bb_idx
         );
         // Extra path contraints are introduced during scc handling.
-        if let Some(path_constants) = path_constraints {
-            self.constants.extend(path_constants);
+        if let Some(path_constraints) = path_constraints {
+            self.constants.extend(path_constraints);
         }
         /* Begin: handle the SwitchInt statement. */
         let mut single_target = false;
@@ -318,6 +319,7 @@ impl<'tcx> MopGraph<'tcx> {
         &mut self,
         start: usize,
         scc_tree: &SccTree,
+        path_constraints: &mut FxHashMap<usize, usize>,
     ) -> Vec<(Vec<usize>, FxHashMap<usize, usize>)> {
         let mut all_paths = Vec::new();
         let mut scc_path_set: HashSet<Vec<usize>> = HashSet::new();
@@ -327,7 +329,7 @@ impl<'tcx> MopGraph<'tcx> {
             start,
             scc_tree,
             &mut vec![start],
-            &mut FxHashMap::default(),
+            path_constraints,
             &mut all_paths,
             &mut scc_path_set,
         );
@@ -341,14 +343,14 @@ impl<'tcx> MopGraph<'tcx> {
         cur: usize,
         scc_tree: &SccTree,
         path: &mut Vec<usize>,
-        path_constants: &mut FxHashMap<usize, usize>,
+        path_constraints: &mut FxHashMap<usize, usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
         scc_path_set: &mut HashSet<Vec<usize>>,
     ) {
         rap_debug!("cur = {}", cur);
         let scc = &scc_tree.scc;
         if scc.nodes.is_empty() {
-            paths_in_scc.push((path.clone(), path_constants.clone()));
+            paths_in_scc.push((path.clone(), path_constraints.clone()));
             return;
         }
         // FIX ME: a temp complexity control;
@@ -359,7 +361,7 @@ impl<'tcx> MopGraph<'tcx> {
             rap_debug!("new path: {:?}", path.clone());
             // we add the next node into the scc path to speedup the traveral outside
             // the scc.
-            paths_in_scc.push((path.clone(), path_constants.clone()));
+            paths_in_scc.push((path.clone(), path_constraints.clone()));
             return;
         }
 
@@ -384,22 +386,22 @@ impl<'tcx> MopGraph<'tcx> {
         // Otherwise, it cannot reach other branches.
         for local in &self.blocks[cur].assigned_locals {
             rap_debug!(
-                "Remove path_constants {:?}, because it has been reassigned.",
+                "Remove path_constraints {:?}, because it has been reassigned.",
                 local
             );
-            path_constants.remove(&local);
+            path_constraints.remove(&local);
         }
 
         // Find the pathes of inner scc recursively;
         for child_tree in &scc_tree.children {
             let child_enter = child_tree.scc.enter;
             if cur == child_enter {
-                let sub_paths = self.find_scc_paths(child_enter, child_tree);
+                let sub_paths = self.find_scc_paths(child_enter, child_tree, path_constraints);
                 rap_debug!("paths in sub scc: {}, {:?}", child_enter, sub_paths);
                 for (subp, subconst) in sub_paths {
                     let mut new_path = path.clone();
                     new_path.extend(&subp[1..]);
-                    let mut new_const = path_constants.clone();
+                    let mut new_const = path_constraints.clone();
                     new_const.extend(subconst.iter());
                     self.find_scc_paths_inner(
                         start,
@@ -425,7 +427,7 @@ impl<'tcx> MopGraph<'tcx> {
                     cur,
                     path,
                     scc_tree,
-                    path_constants,
+                    path_constraints,
                     paths_in_scc,
                     discr,
                     targets,
@@ -440,7 +442,7 @@ impl<'tcx> MopGraph<'tcx> {
                         next,
                         scc_tree,
                         path,
-                        path_constants,
+                        path_constraints,
                         paths_in_scc,
                         scc_path_set,
                     );
@@ -457,7 +459,7 @@ impl<'tcx> MopGraph<'tcx> {
         _cur: usize,
         path: &mut Vec<usize>,
         scc_tree: &SccTree,
-        path_constants: &mut FxHashMap<usize, usize>,
+        path_constraints: &mut FxHashMap<usize, usize>,
         paths_in_scc: &mut Vec<(Vec<usize>, FxHashMap<usize, usize>)>,
         discr: &Operand<'tcx>,
         targets: &SwitchTargets,
@@ -480,7 +482,7 @@ impl<'tcx> MopGraph<'tcx> {
                 discr,
                 discr_local
             );
-            if let Some(&constant) = path_constants.get(&discr_local) {
+            if let Some(&constant) = path_constraints.get(&discr_local) {
                 rap_debug!("constant = {:?}", constant);
                 rap_debug!("targets = {:?}", targets);
                 let mut otherwise = true;
@@ -496,7 +498,7 @@ impl<'tcx> MopGraph<'tcx> {
                             target,
                             scc_tree,
                             path,
-                            path_constants,
+                            path_constraints,
                             paths_in_scc,
                             scc_path_set,
                         );
@@ -507,17 +509,17 @@ impl<'tcx> MopGraph<'tcx> {
                 if otherwise {
                     let target = targets.otherwise().as_usize();
                     path.push(target);
-                    path_constants.insert(discr_local, targets.iter().len());
+                    path_constraints.insert(discr_local, targets.iter().len());
                     self.find_scc_paths_inner(
                         start,
                         target,
                         scc_tree,
                         path,
-                        path_constants,
+                        path_constraints,
                         paths_in_scc,
                         scc_path_set,
                     );
-                    path_constants.remove(&discr_local);
+                    path_constraints.remove(&discr_local);
                     rap_debug!("pop 3: {:?}", path.last());
                     path.pop();
                 }
@@ -527,34 +529,34 @@ impl<'tcx> MopGraph<'tcx> {
                     let constant = branch.0 as usize;
                     let target = branch.1.as_usize();
                     path.push(target);
-                    path_constants.insert(discr_local, constant);
+                    path_constraints.insert(discr_local, constant);
                     self.find_scc_paths_inner(
                         start,
                         target,
                         scc_tree,
                         path,
-                        path_constants,
+                        path_constraints,
                         paths_in_scc,
                         scc_path_set,
                     );
-                    path_constants.remove(&discr_local);
+                    path_constraints.remove(&discr_local);
                     rap_debug!("pop 4: {:?}", path.last());
                     path.pop();
                 }
                 // Handle default branch
                 let target = targets.otherwise().as_usize();
                 path.push(target);
-                path_constants.insert(discr_local, targets.iter().len());
+                path_constraints.insert(discr_local, targets.iter().len());
                 self.find_scc_paths_inner(
                     start,
                     target,
                     scc_tree,
                     path,
-                    path_constants,
+                    path_constraints,
                     paths_in_scc,
                     scc_path_set,
                 );
-                path_constants.remove(&discr_local);
+                path_constraints.remove(&discr_local);
                 rap_debug!("pop 5: {:?}", path.last());
                 path.pop();
             }

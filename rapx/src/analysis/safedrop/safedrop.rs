@@ -151,7 +151,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let cur_block = self.mop_graph.blocks[bb_idx].clone();
         /* Handle cases if the current block is a merged scc block with sub block */
         let scc_tree = self.mop_graph.sort_scc_tree(&cur_block.scc);
-        let paths_in_scc = self.mop_graph.find_scc_paths(bb_idx, &scc_tree);
+        let paths_in_scc =
+            self.mop_graph
+                .find_scc_paths(bb_idx, &scc_tree, &mut FxHashMap::default());
         rap_debug!("Paths in scc: {:?}", paths_in_scc);
 
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;

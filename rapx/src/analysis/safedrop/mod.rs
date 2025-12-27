@@ -8,12 +8,15 @@ pub mod safedrop;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
-use crate::analysis::{
-    core::{
-        alias_analysis::default::{AliasAnalyzer, MopAAResultMap},
-        ownedheap_analysis::{OHAResultMap, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
+use crate::{
+    analysis::{
+        core::{
+            alias_analysis::default::{AliasAnalyzer, MopAAResultMap},
+            ownedheap_analysis::{OHAResultMap, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
+        },
+        graphs::scc::Scc,
     },
-    graphs::scc::Scc,
+    utils::source::get_fn_name,
 };
 use graph::SafeDropGraph;
 use safedrop::*;
@@ -55,6 +58,13 @@ pub fn query_safedrop(
     def_id: DefId,
     adt_owner: OHAResultMap,
 ) {
+    let fn_name = get_fn_name(tcx, def_id);
+    if fn_name.as_deref() == Some("__raw_ptr_deref_dummy") {
+        return;
+    }
+    rap_trace!("query_safedrop: {:?}", fn_name);
+    /* filter const mir */
+
     /* filter const mir */
     if let Some(_other) = tcx.hir_body_const_context(def_id.expect_local()) {
         return;
