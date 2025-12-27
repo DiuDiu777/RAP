@@ -157,11 +157,8 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.mop_graph.constants.clone();
         let backup_alias_set = self.mop_graph.alias_set.clone();
+        let backup_drop_record = self.drop_record.clone();
         for raw_path in &paths_in_scc {
-            self.mop_graph.alias_set = backup_alias_set.clone();
-            self.mop_graph.values = backup_values.clone();
-            self.mop_graph.constants = backup_constant.clone();
-
             let path = &raw_path.0;
             let path_constants = &raw_path.1;
 
@@ -181,6 +178,10 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     // TODO
                 }
             }
+            self.mop_graph.alias_set = backup_alias_set.clone();
+            self.mop_graph.values = backup_values.clone();
+            self.mop_graph.constants = backup_constant.clone();
+            self.drop_record = backup_drop_record.clone();
         }
     }
 
@@ -213,12 +214,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
         // Extra path contraints are introduced during scc handling.
         if let Some(path_constants) = path_constraints {
             self.mop_graph.constants.extend(path_constants);
-            // We should reset the constant introduced when entering the scc, so that it can go out the scc.
-            // This can be achieved by removing the constant entries related to the locals assigned in
-            // the scc enter node.
-            for local in &self.mop_graph.blocks[bb_idx].assigned_locals {
-                self.mop_graph.constants.remove(&local);
-            }
         }
 
         /* Begin: handle the SwitchInt statement. */
