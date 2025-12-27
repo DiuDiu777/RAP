@@ -7,7 +7,6 @@ use rustc_middle::{
     ty::{TyKind, TypingEnv},
 };
 
-use rustc_data_structures::fx::FxHashSet;
 use std::collections::HashSet;
 
 use crate::analysis::graphs::scc::{SccInfo, SccTree};
@@ -21,6 +20,7 @@ impl<'tcx> MopGraph<'tcx> {
         fn_map: &mut MopAAResultMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
+        rap_debug!("split check: {:?}", bb_idx);
         /* duplicate the status before visiting a path; */
         let backup_values = self.values.clone(); // duplicate the status when visiting different paths;
         let backup_constant = self.constants.clone();
@@ -39,6 +39,7 @@ impl<'tcx> MopGraph<'tcx> {
         fn_map: &mut MopAAResultMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
+        rap_debug!("split check with cond: {:?}", bb_idx);
         /* duplicate the status before visiting a path; */
         let backup_values = self.values.clone(); // duplicate the status when visiting different paths;
         let backup_constant = self.constants.clone();
@@ -66,12 +67,13 @@ impl<'tcx> MopGraph<'tcx> {
         let scc_idx = self.blocks[bb_idx].scc.enter;
         let cur_block = self.blocks[bb_idx].clone();
 
+        rap_debug!("check {:?}", bb_idx);
         if bb_idx == scc_idx && !cur_block.scc.nodes.is_empty() {
             rap_debug!("check {:?} as a scc", bb_idx);
             self.check_scc(bb_idx, fn_map, recursion_set);
         } else {
             self.check_single_node(bb_idx, fn_map, recursion_set);
-            self.handle_nexts(bb_idx, fn_map, None, None, recursion_set);
+            self.handle_nexts(bb_idx, fn_map,  None, recursion_set);
         }
     }
 
@@ -112,9 +114,10 @@ impl<'tcx> MopGraph<'tcx> {
             }
             // The last node is already ouside the scc.
             if let Some(&last_node) = path.last() {
+                rap_debug!("Handle the last node in an scc path: {:?}", last_node);
                 if self.blocks[last_node].scc.nodes.is_empty() {
                     self.check_single_node(last_node, fn_map, recursion_set);
-                    self.handle_nexts(last_node, fn_map, None, Some(path_constants), recursion_set);
+                    self.handle_nexts(last_node, fn_map, Some(path_constants), recursion_set);
                 } else {
                     // If the exit is an scc, we should handle it like check_scc;
                 }
@@ -142,7 +145,6 @@ impl<'tcx> MopGraph<'tcx> {
         &mut self,
         bb_idx: usize,
         fn_map: &mut MopAAResultMap,
-        exclusive_nodes: Option<&FxHashSet<usize>>,
         path_constraints: Option<&FxHashMap<usize, usize>>,
         recursion_set: &mut HashSet<DefId>,
     ) {
@@ -220,6 +222,7 @@ impl<'tcx> MopGraph<'tcx> {
                          * Since sw_val is a const, only one target is reachable.
                          * Filed 0 is the value; field 1 is the real target.
                          */
+                        rap_debug!("targets: {:?}; sw_val = {:?}", targets, sw_val);
                         for iter in targets.iter() {
                             if iter.0 as usize == sw_val {
                                 sw_target = iter.1.as_usize();
@@ -239,34 +242,14 @@ impl<'tcx> MopGraph<'tcx> {
             }
             _ => {
                 // Not SwitchInt
-                rap_debug!("not a switchInt: {:?}", cur_block.next);
-                for next in &cur_block.next {
-                    match exclusive_nodes {
-                        Some(exclusive) => {
-                            if !exclusive.contains(next) {
-                                self.check(*next, fn_map, recursion_set);
-                            }
-                        }
-                        None => {
-                            self.check(*next, fn_map, recursion_set);
-                        }
-                    }
-                }
+                rap_debug!("not a switchInt: {:?}, we do nothing", cur_block.next);
             }
         }
         /* End: finish handling SwitchInt */
         // fixed path since a constant switchInt value
         if single_target {
-            match exclusive_nodes {
-                Some(exclusive) => {
-                    if !exclusive.contains(&sw_target) {
-                        self.check(sw_target, fn_map, recursion_set);
-                    }
-                }
-                None => {
-                    self.check(sw_target, fn_map, recursion_set);
-                }
-            }
+            rap_debug!("visit a single target: {:?}", sw_target);
+            self.check(sw_target, fn_map, recursion_set);
         } else {
             // Other cases in switchInt terminators
             if let Some(targets) = sw_targets {
@@ -275,14 +258,6 @@ impl<'tcx> MopGraph<'tcx> {
                         continue;
                     }
                     let next = iter.1.as_usize();
-                    match exclusive_nodes {
-                        Some(exclusive) => {
-                            if exclusive.contains(&next) {
-                                continue;
-                            }
-                        }
-                        None => {}
-                    }
                     let path_discr_val = iter.0 as usize;
                     self.split_check_with_cond(
                         next,
@@ -306,14 +281,6 @@ impl<'tcx> MopGraph<'tcx> {
                 for next in cur_block.next {
                     if self.visit_times > VISIT_LIMIT {
                         continue;
-                    }
-                    match exclusive_nodes {
-                        Some(exclusive) => {
-                            if exclusive.contains(&next) {
-                                continue;
-                            }
-                        }
-                        None => {}
                     }
                     self.split_check(next, fn_map, recursion_set);
                 }
@@ -385,7 +352,7 @@ impl<'tcx> MopGraph<'tcx> {
             return;
         }
         // FIX ME: a temp complexity control;
-        if path.len() > 100 || paths_in_scc.len() > 100 {
+        if path.len() > 100 || paths_in_scc.len() > 200 {
             return;
         }
         if !scc.nodes.contains(&cur) && start != cur {

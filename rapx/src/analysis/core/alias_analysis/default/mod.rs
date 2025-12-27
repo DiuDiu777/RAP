@@ -231,8 +231,10 @@ impl<'tcx> AliasAnalyzer<'tcx> {
 
         if self.tcx.is_mir_available(def_id) {
             let mut mop_graph = MopGraph::new(self.tcx, def_id);
+            rap_info!("Mop graph crated: {}", mop_graph);
+            rap_debug!("Search scc components in the graph.");
             mop_graph.find_scc();
-            rap_trace!("{}", mop_graph);
+            rap_trace!("After searching scc: {}", mop_graph);
             let mut recursion_set = HashSet::default();
             mop_graph.check(0, &mut self.fn_map, &mut recursion_set);
             if mop_graph.visit_times > VISIT_LIMIT {
