@@ -358,18 +358,36 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     #[inline(always)]
-    // merge only if the two elements belongs to sets.
     pub fn union_merge(&mut self, e1: usize, e2: usize) {
-        let s1 = self.union_find(e1);
-        let s2 = self.union_find(e2);
-        if let (Some(idx1), Some(idx2)) = (s1, s2) {
-            if idx1 == idx2 {
-                return;
-            }
+        let mut s1 = self.union_find(e1);
+        let mut s2 = self.union_find(e2);
 
-            let set2 = self.alias_sets.remove(idx2);
-            self.alias_sets[idx1].extend(set2);
+        // Create set for e1 if needed
+        if s1.is_none() {
+            self.alias_sets
+                .push([e1].into_iter().collect::<FxHashSet<usize>>());
+            s1 = Some(self.alias_sets.len() - 1);
         }
+
+        // Create set for e2 if needed
+        if s2.is_none() {
+            self.alias_sets
+                .push([e2].into_iter().collect::<FxHashSet<usize>>());
+            s2 = Some(self.alias_sets.len() - 1);
+        }
+
+        // After creation, fetch indices (unwrap OK)
+        let idx1 = s1.unwrap();
+        let idx2 = s2.unwrap();
+
+        if idx1 == idx2 {
+            return;
+        }
+
+        let set2 = self.alias_sets.remove(idx2);
+        // If idx2 < idx1, removing idx2 shifts idx1 down by one
+        let idx1 = if idx2 < idx1 { idx1 - 1 } else { idx1 };
+        self.alias_sets[idx1].extend(set2);
     }
 
     #[inline(always)]
