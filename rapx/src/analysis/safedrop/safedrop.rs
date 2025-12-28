@@ -190,9 +190,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
     pub fn check_single_node(&mut self, bb_idx: usize, fn_map: &MopAAResultMap) {
         let cur_block = self.mop_graph.blocks[bb_idx].clone();
         rap_debug!("check {:?} as a node", bb_idx);
-        self.alias_bb(self.mop_graph.blocks[bb_idx].scc.enter);
-        self.alias_bbcall(self.mop_graph.blocks[bb_idx].scc.enter, fn_map);
-        self.drop_check(self.mop_graph.blocks[bb_idx].scc.enter);
+        self.alias_bb(bb_idx);
+        self.alias_bbcall(bb_idx, fn_map);
+        self.drop_check(bb_idx);
 
         // For dangling pointer check;
         // Since a node within an SCC cannot be an exit, we only check for non-scc nodes;

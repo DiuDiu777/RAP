@@ -1,6 +1,4 @@
-use super::{
-    MopAAFact, MopAAResultMap, block::Term, corner_case::*, graph::*, types::*, value::*,
-};
+use super::{MopAAFact, MopAAResultMap, block::Term, corner_case::*, graph::*, types::*, value::*};
 use crate::analysis::graphs::scc::Scc;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
@@ -18,24 +16,11 @@ impl<'tcx> MopGraph<'tcx> {
         }
         let cur_block = self.blocks[bb_index].clone();
         for assign in cur_block.assignments {
-            rap_info!("assign: {:?}", assign);
+            rap_debug!("assign: {:?}", assign);
             let lv_idx = self.projection(false, assign.lv);
             let rv_idx = self.projection(true, assign.rv);
-            rap_info!("{:?} = {:?}", lv_idx, rv_idx);
             self.assign_alias(lv_idx, rv_idx);
-            /*
-            match assign.atype {
-                AssignType::Variant => {
-                    self.assign_alias(lv_idx, rv_idx);
-                    continue;
-                }
-                AssignType::InitBox => {
-                    lv_idx = *self.values[lv_idx].fields.get(&0).unwrap();
-                }
-                _ => {} // Copy or Move
-            }
-            */
-            rap_info!("Alias sets: {:?}", self.alias_sets)
+            rap_debug!("Alias sets: {:?}", self.alias_sets)
         }
     }
 
@@ -89,6 +74,7 @@ impl<'tcx> MopGraph<'tcx> {
                             rap_debug!("target_id {:?}", target_id);
                             if fn_map.contains_key(&target_id) {
                                 let fn_aliases = fn_map.get(&target_id).unwrap();
+                                rap_debug!("fn_aliases {:?}", fn_aliases);
                                 for alias in fn_aliases.aliases().iter() {
                                     if !alias.valuable() {
                                         continue;
@@ -105,6 +91,7 @@ impl<'tcx> MopGraph<'tcx> {
                                 mop_graph.find_scc();
                                 mop_graph.check(0, fn_map, recursion_set);
                                 let ret_alias = mop_graph.ret_alias.clone();
+                                rap_debug!("ret_alias of {:?}: {:?}", target_id, ret_alias);
                                 for alias_pair in ret_alias.aliases().iter() {
                                     if !alias_pair.valuable() {
                                         continue;
@@ -145,31 +132,24 @@ impl<'tcx> MopGraph<'tcx> {
         for proj in place.projection {
             let new_value_idx = self.values.len();
             match proj {
-                ProjectionElem::Deref => { }
+                ProjectionElem::Deref => {}
                 /*
                  * Objective: 2 = 1.0; 0 = 2.0; => 0 = 1.0.0
                  */
                 ProjectionElem::Field(field, ty) => {
                     let field_idx = field.as_usize();
-                    if !self.values[local]
-                        .fields
-                        .contains_key(&field_idx)
-                    {
+                    if !self.values[local].fields.contains_key(&field_idx) {
                         let ty_env = ty::TypingEnv::post_analysis(self.tcx, self.def_id);
                         let need_drop = ty.needs_drop(self.tcx, ty_env);
                         let may_drop = !is_not_drop(self.tcx, ty);
-                        let mut node = Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
+                        let mut node =
+                            Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
                         node.kind = kind(ty);
                         node.field_id = field_idx;
-                        self.values[local]
-                            .fields
-                            .insert(field_idx, node.index);
+                        self.values[local].fields.insert(field_idx, node.index);
                         self.values.push(node);
                     }
-                    value_idx = *self.values[local]
-                        .fields
-                        .get(&field_idx)
-                        .unwrap();
+                    value_idx = *self.values[local].fields.get(&field_idx).unwrap();
                 }
                 _ => {}
             }
@@ -336,7 +316,7 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
-        rap_info!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
+        rap_debug!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
         let r_set_idx = if let Some(idx) = self.union_find(rv_idx) {
             idx
         } else {
@@ -352,7 +332,7 @@ impl<'tcx> MopGraph<'tcx> {
             self.alias_sets[l_set_idx].remove(&lv_idx);
         }
         self.alias_sets[r_set_idx].insert(lv_idx);
-        rap_info!("alias_sets: {:?}", self.alias_sets);
+        rap_debug!("alias_sets: {:?}", self.alias_sets);
     }
 
     pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {

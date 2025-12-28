@@ -237,7 +237,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
 
         if self.tcx.is_mir_available(def_id) {
             let mut mop_graph = MopGraph::new(self.tcx, def_id);
-            rap_info!("Mop graph crated: {}", mop_graph);
+            rap_debug!("Mop graph crated: {}", mop_graph);
             rap_debug!("Search scc components in the graph.");
             mop_graph.find_scc();
             rap_trace!("After searching scc: {}", mop_graph);

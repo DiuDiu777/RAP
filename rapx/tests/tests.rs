@@ -173,6 +173,12 @@ fn test_reference() {
 
 // ===============Alias Analysis Test==============
 #[test]
+fn test_alias_from_raw_parts() {
+    let output = running_tests_with_arg("alias/from_raw_parts", "-alias");
+    assert_eq!(output.contains("from_raw_parts\": (0,1)"), true);
+}
+
+#[test]
 fn test_alias_not_alias_iter() {
     let output = running_tests_with_arg("alias/not_alias_iter", "-alias");
     assert_eq!(output.contains("foo\": null"), true);
@@ -209,7 +215,7 @@ fn test_alias_sub_scc1() {
 #[test]
 fn test_alias_sub_scc2() {
     let output = running_tests_with_arg("alias/alias_sub_scc2", "-alias");
-    assert_eq!(output.contains("foo\": (0,1) (0,2)"), true);
+    assert_eq!(output.contains("foo\": (0,1),(0,2)"), true);
 }
 
 #[test]
