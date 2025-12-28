@@ -2,7 +2,7 @@ use super::{bug_records::TyBug, graph::*};
 use crate::{
     analysis::{
         core::alias_analysis::default::{types::TyKind, value::*},
-        utils::fn_info::{convert_alias_to_sets, generate_mir_cfg_dot},
+        utils::fn_info::generate_mir_cfg_dot,
     },
     utils::source::*,
 };
@@ -42,12 +42,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let _ = generate_mir_cfg_dot(
             self.mop_graph.tcx,
             self.mop_graph.def_id,
-            &self.mop_graph.alias_set,
+            &self.mop_graph.alias_sets,
         );
-        rap_debug!(
-            "Alias: {:?}",
-            convert_alias_to_sets(self.mop_graph.alias_set.clone())
-        );
+        rap_debug!("Alias: {:?}", &self.mop_graph.alias_sets);
     }
 
     pub fn uaf_check(&mut self, bb_idx: usize, idx: usize, span: Span, is_fncall: bool) {
@@ -111,11 +108,12 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if self.drop_record[local].is_dropped {
             self.drop_record[idx] = self.drop_record[local];
         }
-        let aliases = self.mop_graph.get_alias_set(local);
-        for i in aliases {
-            if self.drop_record[i].is_dropped {
-                self.drop_record[idx] = self.drop_record[i];
-                return;
+        if let Some(aliases) = self.mop_graph.get_alias_set(local) {
+            for i in aliases.iter() {
+                if self.drop_record[*i].is_dropped {
+                    self.drop_record[idx] = self.drop_record[*i];
+                    return;
+                }
             }
         }
     }

@@ -89,13 +89,13 @@ impl<'tcx> SafeDropGraph<'tcx> {
         /* duplicate the status before visiteding a path; */
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.mop_graph.constants.clone();
-        let backup_alias_set = self.mop_graph.alias_set.clone();
+        let backup_alias_sets = self.mop_graph.alias_sets.clone();
         let backup_drop_record = self.drop_record.clone();
         self.check(bb_idx, fn_map);
         /* restore after visited */
         self.mop_graph.values = backup_values;
         self.mop_graph.constants = backup_constant;
-        self.mop_graph.alias_set = backup_alias_set;
+        self.mop_graph.alias_sets = backup_alias_sets;
         self.drop_record = backup_drop_record;
     }
 
@@ -109,7 +109,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         /* duplicate the status before visiteding a path; */
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.mop_graph.constants.clone();
-        let backup_alias_set = self.mop_graph.alias_set.clone();
+        let backup_alias_sets = self.mop_graph.alias_sets.clone();
         let backup_drop_record = self.drop_record.clone();
         /* add control-sensitive indicator to the path status */
         self.mop_graph
@@ -119,7 +119,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         /* restore after visited */
         self.mop_graph.values = backup_values;
         self.mop_graph.constants = backup_constant;
-        self.mop_graph.alias_set = backup_alias_set;
+        self.mop_graph.alias_sets = backup_alias_sets;
         self.drop_record = backup_drop_record;
     }
 
@@ -158,7 +158,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.mop_graph.constants.clone();
-        let backup_alias_set = self.mop_graph.alias_set.clone();
+        let backup_alias_sets = self.mop_graph.alias_sets.clone();
         let backup_drop_record = self.drop_record.clone();
         for raw_path in &paths_in_scc {
             let path = &raw_path.0;
@@ -180,7 +180,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     // TODO
                 }
             }
-            self.mop_graph.alias_set = backup_alias_set.clone();
+            self.mop_graph.alias_sets = backup_alias_sets.clone();
             self.mop_graph.values = backup_values.clone();
             self.mop_graph.constants = backup_constant.clone();
             self.drop_record = backup_drop_record.clone();

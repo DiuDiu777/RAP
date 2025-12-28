@@ -24,10 +24,10 @@ impl<'tcx> MopGraph<'tcx> {
         /* duplicate the status before visiting a path; */
         let backup_values = self.values.clone(); // duplicate the status when visiting different paths;
         let backup_constant = self.constants.clone();
-        let backup_alias_set = self.alias_set.clone();
+        let backup_alias_sets = self.alias_sets.clone();
         self.check(bb_idx, fn_map, recursion_set);
         /* restore after visit */
-        self.alias_set = backup_alias_set;
+        self.alias_sets = backup_alias_sets;
         self.values = backup_values;
         self.constants = backup_constant;
     }
@@ -43,12 +43,12 @@ impl<'tcx> MopGraph<'tcx> {
         /* duplicate the status before visiting a path; */
         let backup_values = self.values.clone(); // duplicate the status when visiting different paths;
         let backup_constant = self.constants.clone();
-        let backup_alias_set = self.alias_set.clone();
+        let backup_alias_sets = self.alias_sets.clone();
         /* add control-sensitive indicator to the path status */
         self.constants.insert(path_discr_id, path_discr_val);
         self.check(bb_idx, fn_map, recursion_set);
         /* restore after visit */
-        self.alias_set = backup_alias_set;
+        self.alias_sets = backup_alias_sets;
         self.values = backup_values;
         self.constants = backup_constant;
     }
@@ -94,11 +94,11 @@ impl<'tcx> MopGraph<'tcx> {
 
         let backup_values = self.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.constants.clone();
-        let backup_alias_set = self.alias_set.clone();
+        let backup_alias_sets = self.alias_sets.clone();
         let backup_fn_map = fn_map.clone();
         let backup_recursion_set = recursion_set.clone();
         for raw_path in paths_in_scc {
-            self.alias_set = backup_alias_set.clone();
+            self.alias_sets = backup_alias_sets.clone();
             self.values = backup_values.clone();
             self.constants = backup_constant.clone();
             *fn_map = backup_fn_map.clone();

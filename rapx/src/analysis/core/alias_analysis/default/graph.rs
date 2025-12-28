@@ -39,7 +39,7 @@ pub struct MopGraph<'tcx> {
     pub discriminants: FxHashMap<usize, usize>,
     // a threhold to avoid path explosion.
     pub visit_times: usize,
-    pub alias_set: Vec<usize>,
+    pub alias_sets: Vec<FxHashSet<usize>>,
     // contains the return results for inter-procedure analysis.
     pub ret_alias: MopAAResult,
     pub terminators: Vec<TerminatorKind<'tcx>>,
@@ -54,7 +54,6 @@ impl<'tcx> MopGraph<'tcx> {
         let locals = &body.local_decls;
         let arg_size = body.arg_count;
         let mut values = Vec::<Value>::new();
-        let mut alias = Vec::<usize>::new();
         let ty_env = TypingEnv::post_analysis(tcx, def_id);
         for (local, local_decl) in locals.iter_enumerated() {
             let need_drop = local_decl.ty.needs_drop(tcx, ty_env); // the type is drop
@@ -66,7 +65,6 @@ impl<'tcx> MopGraph<'tcx> {
                 need_drop || may_drop,
             );
             node.kind = kind(local_decl.ty);
-            alias.push(alias.len());
             values.push(node);
         }
 
@@ -168,8 +166,6 @@ impl<'tcx> MopGraph<'tcx> {
                                     lvl0.birth = values[lv_local].birth;
                                     lvl0.field_id = 0;
                                     values[lv_local].fields.insert(0, lvl0.index);
-                                    alias.push(alias.len());
-                                    //drop_record.push(drop_record[lv_local]);
                                     values.push(lvl0);
                                 }
                                 match operand {
@@ -451,7 +447,7 @@ impl<'tcx> MopGraph<'tcx> {
             blocks,
             values,
             arg_size,
-            alias_set: alias,
+            alias_sets: Vec::<FxHashSet<usize>>::new(),
             constants: FxHashMap::default(),
             ret_alias: MopAAResult::new(arg_size),
             visit_times: 0,

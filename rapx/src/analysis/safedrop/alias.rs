@@ -1,14 +1,11 @@
 use rustc_middle::{
     mir::{Operand, Place, ProjectionElem, TerminatorKind},
-    ty::{self, TypingEnv},
+    ty::{self},
 };
 
 use super::graph::*;
-use crate::analysis::{
-    core::alias_analysis::default::{
-        MopAAFact, MopAAResultMap, assign::*, block::Term, corner_case::*, types::*, value::*,
-    },
-    utils::fn_info::convert_alias_to_sets,
+use crate::analysis::core::alias_analysis::default::{
+    MopAAFact, MopAAResultMap, assign::*, block::Term, corner_case::*, types::*, value::*,
 };
 
 impl<'tcx> SafeDropGraph<'tcx> {
@@ -29,7 +26,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             self.uaf_check(bb_index, rv_idx, assign.span, false);
             match assign.atype {
                 AssignType::Variant => {
-                    self.mop_graph.alias_set[lv_idx] = rv_idx;
+                    self.mop_graph.assign_alias(lv_idx, rv_idx);
                     continue;
                 }
                 AssignType::InitBox => {
@@ -47,11 +44,8 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     self.mop_graph.values[rv_idx].local,
                     assign.atype
                 );
-                self.merge_alias(lv_idx, rv_idx, 0);
-                rap_debug!(
-                    "Alias sets: {:?}",
-                    convert_alias_to_sets(self.mop_graph.alias_set.clone())
-                );
+                self.mop_graph.assign_alias(lv_idx, rv_idx);
+                rap_debug!("Alias sets: {:?}", self.mop_graph.alias_sets.clone());
             }
             // If the left value is dangling while the right value is not,
             // The left vaule is no more danling after this assignment.
@@ -170,52 +164,41 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     /*
-     * This is the function for field sensitivity
-     * If the projection is a deref, we directly return its head alias or alias[0].
-     * If the id is not a ref, we further make the id and its first element an alias, i.e., level-insensitive
+     * This is the function for field sensitivity.
+     * If the projection is a deref, we directly return its local;
+     * If the id is not a ref (e.g., 1.0), we project it to the value index.
      *
-     */
-    pub fn projection(&mut self, is_right: bool, place: Place<'tcx>) -> usize {
-        let mut local = place.local.as_usize();
-        let mut proj_id = local;
+     */    
+    pub fn projection(&mut self, _is_right: bool, place: Place<'tcx>) -> usize {
+        let local = place.local.as_usize();
+        let mut value_idx = local;
         for proj in place.projection {
-            let new_id = self.mop_graph.values.len();
+            let new_value_idx = self.mop_graph.values.len();
             match proj {
-                ProjectionElem::Deref => {
-                    //proj_id = self.mop_graph.values[proj_id].alias[0];
-                    proj_id = self.mop_graph.alias_set[proj_id];
-                }
+                ProjectionElem::Deref => { }
                 /*
                  * Objective: 2 = 1.0; 0 = 2.0; => 0 = 1.0.0
                  */
                 ProjectionElem::Field(field, ty) => {
-                    if is_right && self.mop_graph.alias_set[proj_id] != proj_id {
-                        proj_id = self.mop_graph.alias_set[proj_id];
-                        local = self.mop_graph.values[proj_id].local;
-                    }
                     let field_idx = field.as_usize();
-                    if !self.mop_graph.values[proj_id]
+                    if !self.mop_graph.values[local]
                         .fields
                         .contains_key(&field_idx)
                     {
-                        let ty_env =
-                            TypingEnv::post_analysis(self.mop_graph.tcx, self.mop_graph.def_id);
+                        let ty_env = ty::TypingEnv::post_analysis(self.mop_graph.tcx, self.mop_graph.def_id);
                         let need_drop = ty.needs_drop(self.mop_graph.tcx, ty_env);
                         let may_drop = !is_not_drop(self.mop_graph.tcx, ty);
-                        let mut node = Value::new(new_id, local, need_drop, need_drop || may_drop);
+                        let mut node = Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
+                        node.birth = self.mop_graph.values[local].birth;
                         node.kind = kind(ty);
-                        node.birth = self.mop_graph.values[proj_id].birth;
                         node.field_id = field_idx;
-                        self.mop_graph.values[proj_id]
+                        self.mop_graph.values[local]
                             .fields
                             .insert(field_idx, node.index);
-                        self.mop_graph
-                            .alias_set
-                            .push(self.mop_graph.alias_set.len());
-                        self.drop_record.push(self.drop_record[proj_id]);
                         self.mop_graph.values.push(node);
+                        self.drop_record.push(self.drop_record[local]);
                     }
-                    proj_id = *self.mop_graph.values[proj_id]
+                    value_idx = *self.mop_graph.values[local]
                         .fields
                         .get(&field_idx)
                         .unwrap();
@@ -223,7 +206,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 _ => {}
             }
         }
-        return proj_id;
+        value_idx
     }
 
     //instruction to assign alias for a variable.
@@ -231,7 +214,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if lv >= self.mop_graph.values.len() || rv >= self.mop_graph.values.len() {
             return;
         }
-        self.mop_graph.union_merge(lv, rv);
+        self.mop_graph.assign_alias(lv, rv);
 
         let max_field_depth = match std::env::var_os("SAFEDROP") {
             Some(val) if val == "0" => 10,
@@ -257,9 +240,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 node.birth = self.mop_graph.values[lv].birth;
                 node.field_id = field.0;
                 self.mop_graph.values[lv].fields.insert(field.0, node.index);
-                self.mop_graph
-                    .alias_set
-                    .push(self.mop_graph.alias_set.len());
                 self.drop_record.push(DropRecord::false_record());
                 self.mop_graph.values.push(node);
             }
@@ -288,28 +268,24 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 node.birth = self.mop_graph.values[lv].birth;
                 node.field_id = *index;
                 self.mop_graph.values[lv].fields.insert(*index, node.index);
-                self.mop_graph
-                    .alias_set
-                    .push(self.mop_graph.alias_set.len());
                 self.drop_record.push(self.drop_record[lv]);
                 self.mop_graph.values.push(node);
             }
             lv = *self.mop_graph.values[lv].fields.get(&index).unwrap();
         }
         for index in ret_alias.rhs_fields().iter() {
-            // if self.mop_graph.values[rv].alias[0] != rv {
+            /*
             if self
                 .mop_graph
-                .union_is_same(rv, self.mop_graph.alias_set[rv])
-            {
-                rv = self.mop_graph.values[rv].index;
-                right_init = self.mop_graph.values[rv].local;
-            }
+                .union_is_same(rv, self.mop_graph.alias_sets[rv])
+            {*/
+            rv = self.mop_graph.values[rv].index;
+            right_init = self.mop_graph.values[rv].local;
             if !self.mop_graph.values[rv].fields.contains_key(&index) {
                 let need_drop = ret_alias.rhs_need_drop;
                 let may_drop = ret_alias.rhs_may_drop;
                 let mut node = Value::new(
-                    self.mop_graph.alias_set.len(),
+                    self.mop_graph.alias_sets.len(),
                     right_init,
                     need_drop,
                     may_drop,
@@ -318,7 +294,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 node.birth = self.mop_graph.values[rv].birth;
                 node.field_id = *index;
                 self.mop_graph.values[rv].fields.insert(*index, node.index);
-                self.mop_graph.alias_set.push(self.mop_graph.values.len());
                 self.drop_record.push(self.drop_record[rv]);
                 self.mop_graph.values.push(node);
             }

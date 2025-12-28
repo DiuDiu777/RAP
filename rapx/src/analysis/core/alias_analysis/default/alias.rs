@@ -1,7 +1,8 @@
 use super::{
-    MopAAFact, MopAAResultMap, assign::*, block::Term, corner_case::*, graph::*, types::*, value::*,
+    MopAAFact, MopAAResultMap, block::Term, corner_case::*, graph::*, types::*, value::*,
 };
 use crate::analysis::graphs::scc::Scc;
+use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{Operand, Place, ProjectionElem, TerminatorKind},
@@ -17,22 +18,24 @@ impl<'tcx> MopGraph<'tcx> {
         }
         let cur_block = self.blocks[bb_index].clone();
         for assign in cur_block.assignments {
-            let mut lv_aliaset_idx = self.projection(false, assign.lv);
-            let rv_aliaset_idx = self.projection(true, assign.rv);
-            rap_debug!("{:?} = {:?}", lv_aliaset_idx, rv_aliaset_idx);
+            rap_info!("assign: {:?}", assign);
+            let lv_idx = self.projection(false, assign.lv);
+            let rv_idx = self.projection(true, assign.rv);
+            rap_info!("{:?} = {:?}", lv_idx, rv_idx);
+            self.assign_alias(lv_idx, rv_idx);
+            /*
             match assign.atype {
                 AssignType::Variant => {
-                    self.alias_set[lv_aliaset_idx] = rv_aliaset_idx;
+                    self.assign_alias(lv_idx, rv_idx);
                     continue;
                 }
                 AssignType::InitBox => {
-                    lv_aliaset_idx = *self.values[lv_aliaset_idx].fields.get(&0).unwrap();
+                    lv_idx = *self.values[lv_idx].fields.get(&0).unwrap();
                 }
                 _ => {} // Copy or Move
             }
-            if self.values[lv_aliaset_idx].local != self.values[rv_aliaset_idx].local {
-                self.merge_alias(lv_aliaset_idx, rv_aliaset_idx, 0);
-            }
+            */
+            rap_info!("Alias sets: {:?}", self.alias_sets)
         }
     }
 
@@ -64,14 +67,7 @@ impl<'tcx> MopGraph<'tcx> {
                 }
                 for arg in args {
                     match arg.node {
-                        Operand::Copy(ref p) => {
-                            let rv = self.projection(true, *p);
-                            merge_vec.push(rv);
-                            if self.values[rv].may_drop {
-                                may_drop_flag += 1;
-                            }
-                        }
-                        Operand::Move(ref p) => {
+                        Operand::Copy(ref p) | Operand::Move(ref p) => {
                             let rv = self.projection(true, *p);
                             merge_vec.push(rv);
                             if self.values[rv].may_drop {
@@ -92,12 +88,12 @@ impl<'tcx> MopGraph<'tcx> {
                         if self.tcx.is_mir_available(target_id) {
                             rap_debug!("target_id {:?}", target_id);
                             if fn_map.contains_key(&target_id) {
-                                let assignments = fn_map.get(&target_id).unwrap();
-                                for assign in assignments.aliases().iter() {
-                                    if !assign.valuable() {
+                                let fn_aliases = fn_map.get(&target_id).unwrap();
+                                for alias in fn_aliases.aliases().iter() {
+                                    if !alias.valuable() {
                                         continue;
                                     }
-                                    self.merge(assign, &merge_vec);
+                                    self.merge(alias, &merge_vec);
                                 }
                             } else {
                                 /* Fixed-point iteration: this is not perfect */
@@ -109,11 +105,11 @@ impl<'tcx> MopGraph<'tcx> {
                                 mop_graph.find_scc();
                                 mop_graph.check(0, fn_map, recursion_set);
                                 let ret_alias = mop_graph.ret_alias.clone();
-                                for assign in ret_alias.aliases().iter() {
-                                    if !assign.valuable() {
+                                for alias_pair in ret_alias.aliases().iter() {
+                                    if !alias_pair.valuable() {
                                         continue;
                                     }
-                                    self.merge(assign, &merge_vec);
+                                    self.merge(alias_pair, &merge_vec);
                                 }
                                 fn_map.insert(target_id, ret_alias);
                                 recursion_set.remove(&target_id);
@@ -140,52 +136,50 @@ impl<'tcx> MopGraph<'tcx> {
 
     /*
      * This is the function for field sensitivity
-     * If the projection is a deref, we directly return its head alias or alias[0].
-     * If the id is not a ref, we further make the id and its first element an alias, i.e., level-insensitive
-     *
+     * If the projection is a deref, we directly return its local;
+     * If the id is not a ref, we further make the id and its first element an alias.
      */
-    pub fn projection(&mut self, is_right: bool, place: Place<'tcx>) -> usize {
-        let mut local = place.local.as_usize();
-        let mut proj_id: usize = local;
+    pub fn projection(&mut self, _is_right: bool, place: Place<'tcx>) -> usize {
+        let local = place.local.as_usize();
+        let mut value_idx = local;
         for proj in place.projection {
-            let new_id = self.values.len();
+            let new_value_idx = self.values.len();
             match proj {
-                ProjectionElem::Deref => {
-                    proj_id = self.values[proj_id].index;
-                }
+                ProjectionElem::Deref => { }
                 /*
                  * Objective: 2 = 1.0; 0 = 2.0; => 0 = 1.0.0
                  */
                 ProjectionElem::Field(field, ty) => {
-                    if is_right && self.values[proj_id].index != proj_id {
-                        proj_id = self.values[proj_id].index;
-                        local = self.values[proj_id].local;
-                    }
                     let field_idx = field.as_usize();
-                    if let std::collections::hash_map::Entry::Vacant(e) =
-                        self.values[proj_id].fields.entry(field_idx)
+                    if !self.values[local]
+                        .fields
+                        .contains_key(&field_idx)
                     {
                         let ty_env = ty::TypingEnv::post_analysis(self.tcx, self.def_id);
                         let need_drop = ty.needs_drop(self.tcx, ty_env);
                         let may_drop = !is_not_drop(self.tcx, ty);
-                        let mut node = Value::new(new_id, local, need_drop, need_drop || may_drop);
+                        let mut node = Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
                         node.kind = kind(ty);
                         node.field_id = field_idx;
-                        e.insert(node.index);
-                        self.alias_set.push(self.values.len());
+                        self.values[local]
+                            .fields
+                            .insert(field_idx, node.index);
                         self.values.push(node);
                     }
-                    proj_id = *self.values[proj_id].fields.get(&field_idx).unwrap();
+                    value_idx = *self.values[local]
+                        .fields
+                        .get(&field_idx)
+                        .unwrap();
                 }
                 _ => {}
             }
         }
-        proj_id
+        value_idx
     }
 
     //assign alias for a variable.
     pub fn merge_alias(&mut self, lv: usize, rv: usize, depth: usize) {
-        rap_debug!("Alias set before merge: {:?}", self.alias_set);
+        rap_debug!("Alias set before merge: {:?}", self.alias_sets);
         // println!("A:{:?} V:{:?}", self.alias_set, self.values.len());
         self.union_merge(lv, rv);
         // println!("Li:{} Ri:{} L:{:?} R:{:?} A:{:?} V:{:?}", self.values[lv].index, self.values[rv].index, self.values[lv].alias ,self.values[rv].alias, self.alias_set, self.values.len());
@@ -193,7 +187,7 @@ impl<'tcx> MopGraph<'tcx> {
             "update the alias set for lv:{} rv:{} set:{:?}",
             lv,
             rv,
-            self.alias_set
+            self.alias_sets
         );
 
         let max_field_depth = match std::env::var_os("MOP") {
@@ -219,7 +213,6 @@ impl<'tcx> MopGraph<'tcx> {
                 node.kind = self.values[field.1].kind;
                 node.field_id = field.0;
                 self.values[lv].fields.insert(field.0, node.index);
-                self.alias_set.push(self.values.len());
                 self.values.push(node);
             }
             let lv_field = *(self.values[lv].fields.get(&field.0).unwrap());
@@ -231,7 +224,6 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn merge(&mut self, ret_alias: &MopAAFact, arg_vec: &[usize]) {
         rap_debug!("{:?}", ret_alias);
         if ret_alias.lhs_no() >= arg_vec.len() || ret_alias.rhs_no() >= arg_vec.len() {
-            rap_debug!("Vector error!");
             return;
         }
         let left_init = arg_vec[ret_alias.lhs_no()];
@@ -246,15 +238,13 @@ impl<'tcx> MopGraph<'tcx> {
                 node.kind = TyKind::RawPtr;
                 node.field_id = *index;
                 self.values[lv].fields.insert(*index, node.index);
-                self.alias_set.push(self.values.len());
                 self.values.push(node);
             }
             lv = *self.values[lv].fields.get(index).unwrap();
         }
         for index in ret_alias.rhs_fields().iter() {
-            if self.union_is_same(rv, self.alias_set[rv]) {
-                right_init = self.values[rv].local;
-            }
+            //if self.union_is_same(rv, self.alias_sets[rv]) {
+            right_init = self.values[rv].local;
             if !self.values[rv].fields.contains_key(index) {
                 let need_drop = ret_alias.rhs_need_drop;
                 let may_drop = ret_alias.rhs_may_drop;
@@ -262,20 +252,19 @@ impl<'tcx> MopGraph<'tcx> {
                 node.kind = TyKind::RawPtr;
                 node.field_id = *index;
                 self.values[rv].fields.insert(*index, node.index);
-                self.alias_set.push(self.values.len());
                 self.values.push(node);
             }
             rv = *self.values[rv].fields.get(index).unwrap();
         }
-        self.merge_alias(lv, rv, 0);
+        self.assign_alias(lv, rv);
     }
 
     //merge the result of current path to the final result.
     pub fn merge_results(&mut self, results_nodes: Vec<Value>) {
         for node in results_nodes.iter() {
             if node.local <= self.arg_size
-                && (self.union_is_same(node.index, self.alias_set[node.index])
-                    || self.alias_set[node.index] != node.index)
+            //&& (self.union_is_same(node.index, self.alias_sets[node.index])
+            //   || self.alias_sets[node.index] != node.index)
             {
                 if self.values.len() == 1 {
                     return;
@@ -346,6 +335,26 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
+    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
+        rap_info!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
+        let r_set_idx = if let Some(idx) = self.union_find(rv_idx) {
+            idx
+        } else {
+            self.alias_sets
+                .push([rv_idx].into_iter().collect::<FxHashSet<usize>>());
+            self.alias_sets.len() - 1
+        };
+
+        if let Some(l_set_idx) = self.union_find(lv_idx) {
+            if l_set_idx == r_set_idx {
+                return;
+            }
+            self.alias_sets[l_set_idx].remove(&lv_idx);
+        }
+        self.alias_sets[r_set_idx].insert(lv_idx);
+        rap_info!("alias_sets: {:?}", self.alias_sets);
+    }
+
     pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
         let mut field_id_seq = vec![];
         let mut node_ref = value;
@@ -357,62 +366,38 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     #[inline(always)]
-    pub fn union_find(&mut self, e: usize) -> usize {
-        let mut r = e;
-        while self.alias_set[r] != r {
-            r = self.alias_set[r];
-        }
-        r
-    }
-
-    #[inline(always)]
-    pub fn union_merge(&mut self, e1: usize, e2: usize) {
-        let f1 = self.union_find(e1);
-        let f2 = self.union_find(e2);
-
-        if f1 < f2 {
-            self.alias_set[f2] = f1;
-        }
-        if f1 > f2 {
-            self.alias_set[f1] = f2;
-        }
-
-        for member in 0..self.alias_set.len() {
-            self.alias_set[member] = self.union_find(self.alias_set[member]);
-        }
+    pub fn union_find(&self, e: usize) -> Option<usize> {
+        self.alias_sets.iter().position(|set| set.contains(&e))
     }
 
     #[inline(always)]
     pub fn union_is_same(&mut self, e1: usize, e2: usize) -> bool {
-        let f1 = self.union_find(e1);
-        let f2 = self.union_find(e2);
-        f1 == f2
+        let s1 = self.union_find(e1);
+        let s2 = self.union_find(e2);
+        s1.is_some() && s1 == s2
     }
 
     #[inline(always)]
-    pub fn get_alias_set(&mut self, e: usize) -> HashSet<usize> {
-        let mut alias_set = HashSet::new();
-        for i in 0..self.alias_set.len() {
-            if i == e {
-                continue;
+    // merge only if the two elements belongs to sets.
+    pub fn union_merge(&mut self, e1: usize, e2: usize) {
+        let s1 = self.union_find(e1);
+        let s2 = self.union_find(e2);
+        if let (Some(idx1), Some(idx2)) = (s1, s2) {
+            if idx1 == idx2 {
+                return;
             }
-            if self.union_is_same(e, i) {
-                alias_set.insert(i);
-            }
+
+            let set2 = self.alias_sets.remove(idx2);
+            self.alias_sets[idx1].extend(set2);
         }
-        alias_set
     }
 
     #[inline(always)]
-    pub fn union_has_alias(&mut self, e: usize) -> bool {
-        for i in 0..self.alias_set.len() {
-            if i == e {
-                continue;
-            }
-            if self.union_is_same(e, i) {
-                return true;
-            }
+    pub fn get_alias_set(&mut self, e: usize) -> Option<FxHashSet<usize>> {
+        if let Some(idx) = self.union_find(e) {
+            Some(self.alias_sets[idx].clone())
+        } else {
+            None
         }
-        false
     }
 }
