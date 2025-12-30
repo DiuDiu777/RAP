@@ -192,6 +192,10 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     // Update the aliases of fields.
+    // Case 1, lv = 1; rv = 2; field of rv: 1;
+    // Expected result: [1,2] [1.1,2.1];
+    // Case 2, lv = 0.0, rv = 7, field of rv: 0;
+    // Expected result: [0.0,7] [0.0.0,7.0]
     pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
         rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
 
@@ -207,8 +211,14 @@ impl<'tcx> MopGraph<'tcx> {
             return;
         }
 
-        // For example, lv = 1; rv = 2; field of rv: 1;
-        // Expected result: 1.1 = 2.1;
+        // For the fields of lv; we should remove them from the alias sets;
+        //
+        for lv_field in self.values[lv].fields.clone().into_iter() {
+            if let Some(alias_set_idx) = self.find_alias_set(lv_field.1) {
+                self.alias_sets[alias_set_idx].remove(&lv_field.1);
+            }
+        }
+
         for rv_field in self.values[rv].fields.clone().into_iter() {
             rap_debug!("rv_field: {:?}", rv_field);
             if !self.values[lv].fields.contains_key(&rv_field.0) {
@@ -224,15 +234,13 @@ impl<'tcx> MopGraph<'tcx> {
                 self.values.push(node);
             }
             let lv_field_value_idx = *(self.values[lv].fields.get(&rv_field.0).unwrap());
-            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
-        }
 
-        // For the fields of lv; we should remove them from the alias sets;
-        //
-        for lv_field in self.values[lv].fields.clone().into_iter() {
-            if let Some(alias_set_idx) = self.find_alias_set(lv_field.1) {
-                self.alias_sets[alias_set_idx].remove(&lv_field.1);
+            rap_debug!("alias_set_id of rv_field {:?}", self.find_alias_set(rv_field.1));
+            if let Some(alias_set_idx) = self.find_alias_set(rv_field.1) {
+                self.alias_sets[alias_set_idx].insert(lv_field_value_idx);
             }
+            rap_debug!("alias sets: {:?}", self.alias_sets);
+            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
         }
     }
 
@@ -325,74 +333,81 @@ impl<'tcx> MopGraph<'tcx> {
     //merge the result of current path to the final result.
     pub fn merge_results(&mut self, results_nodes: Vec<Value>) {
         for node in results_nodes.iter() {
-            if node.local <= self.arg_size {
-                let f_node: Vec<usize> = results_nodes.iter().map(|v| v.father).collect();
-                for idx in 1..self.values.len() {
-                    if !self.union_is_same(idx, node.index) {
-                        continue;
-                    }
+            if node.local > self.arg_size {
+                continue;
+            }
+            let f_node: Vec<usize> = results_nodes.iter().map(|v| v.father).collect();
+            for idx in 1..self.values.len() {
+                if !self.is_aliasing(idx, node.index) {
+                    continue;
+                }
 
-                    let mut replace = None;
-                    if results_nodes[idx].local > self.arg_size {
-                        for (i, &fidx) in f_node.iter().enumerate() {
-                            if i != idx && i != node.index && fidx == f_node[idx] {
-                                for (j, v) in results_nodes.iter().enumerate() {
-                                    if j != idx
-                                        && j != node.index
-                                        && self.union_is_same(j, fidx)
-                                        && v.local <= self.arg_size
-                                    {
-                                        replace = Some(&results_nodes[j]);
-                                    }
+                let mut replace = None;
+                if results_nodes[idx].local > self.arg_size {
+                    for (i, &fidx) in f_node.iter().enumerate() {
+                        if i != idx && i != node.index && fidx == f_node[idx] {
+                            for (j, v) in results_nodes.iter().enumerate() {
+                                if j != idx
+                                    && j != node.index
+                                    && self.is_aliasing(j, fidx)
+                                    && v.local <= self.arg_size
+                                {
+                                    replace = Some(&results_nodes[j]);
                                 }
                             }
                         }
                     }
+                }
 
-                    if (results_nodes[idx].local <= self.arg_size || replace.is_some())
-                        && idx != node.index
-                        && node.local != results_nodes[idx].local
-                    {
-                        let left_node;
-                        let right_node;
-                        match results_nodes[idx].local {
-                            0 => {
-                                left_node = match replace {
-                                    Some(replace_node) => replace_node,
-                                    None => &results_nodes[idx],
-                                };
-                                right_node = node;
-                            }
-                            _ => {
-                                left_node = node;
-                                right_node = match replace {
-                                    Some(replace_node) => replace_node,
-                                    None => &results_nodes[idx],
-                                };
-                            }
+                if (results_nodes[idx].local <= self.arg_size || replace.is_some())
+                    && idx != node.index
+                    && node.local != results_nodes[idx].local
+                {
+                    let left_node;
+                    let right_node;
+                    match results_nodes[idx].local {
+                        0 => {
+                            left_node = match replace {
+                                Some(replace_node) => replace_node,
+                                None => &results_nodes[idx],
+                            };
+                            right_node = node;
                         }
-                        let mut new_alias = MopAAFact::new(
-                            left_node.local,
-                            left_node.may_drop,
-                            left_node.need_drop,
-                            right_node.local,
-                            right_node.may_drop,
-                            right_node.need_drop,
-                        );
-                        new_alias.fact.lhs_fields = self.get_field_seq(left_node);
-                        new_alias.fact.rhs_fields = self.get_field_seq(right_node);
-                        if new_alias.lhs_no() == 0 && new_alias.rhs_no() == 0 {
-                            return;
+                        _ => {
+                            left_node = node;
+                            right_node = match replace {
+                                Some(replace_node) => replace_node,
+                                None => &results_nodes[idx],
+                            };
                         }
-                        rap_info!("new_alias.lhs_no = {:?}, rhs_no = {:?}, lhs_fields = {:?}, rhs_fields = {:?}", new_alias.lhs_no(), new_alias.rhs_no(), new_alias.lhs_fields(), new_alias.rhs_fields());
-                        if new_alias.lhs_no() == new_alias.rhs_no()
-                            && new_alias.lhs_fields() == new_alias.rhs_fields()
-                        {
-                            continue;
-                        }
-                        rap_info!("new_alias: {:?}", new_alias);
-                        self.ret_alias.add_alias(new_alias);
                     }
+                    let mut new_alias = MopAAFact::new(
+                        left_node.local,
+                        left_node.may_drop,
+                        left_node.need_drop,
+                        right_node.local,
+                        right_node.may_drop,
+                        right_node.need_drop,
+                    );
+                    new_alias.fact.lhs_fields = self.get_field_seq(left_node);
+                    new_alias.fact.rhs_fields = self.get_field_seq(right_node);
+                    if new_alias.lhs_no() == 0 && new_alias.rhs_no() == 0 {
+                        return;
+                    }
+                    rap_info!(
+                        "new_alias.lhs_no = {:?}, rhs_no = {:?}, lhs_fields = {:?}, rhs_fields = {:?}",
+                        new_alias.lhs_no(),
+                        new_alias.rhs_no(),
+                        new_alias.lhs_fields(),
+                        new_alias.rhs_fields()
+                    );
+                    if new_alias.lhs_no() == new_alias.rhs_no()
+                        && new_alias.lhs_fields() == new_alias.rhs_fields()
+                    {
+                        continue;
+                    }
+                    rap_info!("new_alias: {:?}", new_alias);
+                    self.ret_alias.add_alias(new_alias);
                 }
             }
         }
@@ -404,14 +419,14 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     #[inline(always)]
-    pub fn union_is_same(&mut self, e1: usize, e2: usize) -> bool {
+    pub fn is_aliasing(&mut self, e1: usize, e2: usize) -> bool {
         let s1 = self.find_alias_set(e1);
         let s2 = self.find_alias_set(e2);
         s1.is_some() && s1 == s2
     }
 
     #[inline(always)]
-    pub fn union_merge(&mut self, e1: usize, e2: usize) {
+    pub fn merge_alias_sets(&mut self, e1: usize, e2: usize) {
         let mut s1 = self.find_alias_set(e1);
         let mut s2 = self.find_alias_set(e2);
 

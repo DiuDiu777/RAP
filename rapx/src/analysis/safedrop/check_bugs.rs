@@ -257,7 +257,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             );
             //drop their alias
             for i in 0..self.mop_graph.values.len() {
-                if !self.mop_graph.union_is_same(idx, i)
+                if !self.mop_graph.is_aliasing(idx, i)
                     || i == idx
                     || self.mop_graph.values[i].is_ref()
                 {

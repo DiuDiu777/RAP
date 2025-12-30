@@ -55,7 +55,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 self.drop_record[lv_idx] = DropRecord::false_record();
                 // Synchronize the status of its aliases as not dropped.
                 for i in 0..self.mop_graph.values.len() {
-                    if self.mop_graph.union_is_same(lv_idx, i) {
+                    if self.mop_graph.is_aliasing(lv_idx, i) {
                         self.drop_record[i] = DropRecord::false_record();
                     }
                 }
@@ -146,7 +146,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     pub fn fill_birth(&mut self, node: usize, birth: isize) {
         self.mop_graph.values[node].birth = birth;
         for i in 0..self.mop_graph.values.len() {
-            if self.mop_graph.union_is_same(i, node) && self.mop_graph.values[i].birth == -1 {
+            if self.mop_graph.is_aliasing(i, node) && self.mop_graph.values[i].birth == -1 {
                 self.mop_graph.values[i].birth = birth;
             }
         }
