@@ -25,7 +25,7 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
-    /* Check the aliases introduced by the terminators (function call) of a scc block */
+    /* Check the aliases introduced by the terminator of a basic block, i.e., a function call */
     pub fn alias_bbcall(
         &mut self,
         bb_index: usize,
@@ -45,77 +45,69 @@ impl<'tcx> MopGraph<'tcx> {
             } = call.kind
             {
                 let lv = self.projection(*destination);
+                let mut may_drop = false;
+                if self.values[lv].may_drop {
+                    may_drop = true;
+                }
+
                 let mut merge_vec = Vec::new();
                 merge_vec.push(lv);
-                let mut may_drop_flag = 0;
-                if self.values[lv].may_drop {
-                    may_drop_flag += 1;
-                }
+
                 for arg in args {
                     match arg.node {
                         Operand::Copy(ref p) | Operand::Move(ref p) => {
                             let rv = self.projection(*p);
                             merge_vec.push(rv);
                             if self.values[rv].may_drop {
-                                may_drop_flag += 1;
+                                may_drop = true;
                             }
                         }
+                        //
                         Operand::Constant(_) => {
                             merge_vec.push(0);
                         }
                     }
                 }
                 if let &ty::FnDef(target_id, _) = constant.const_.ty().kind() {
-                    if may_drop_flag > 0 {
-                        // This function does not introduce new aliases.
-                        if is_corner_case(target_id) {
+                    if may_drop == false {
+                        return;
+                    }
+                    // This function does not introduce new aliases.
+                    if is_corner_case(target_id) {
+                        return;
+                    }
+                    if !self.tcx.is_mir_available(target_id) {
+                        return;
+                    }
+                    rap_debug!("Sync aliases for function call: {:?}", target_id);
+                    let fn_aliases = if fn_map.contains_key(&target_id) {
+                        rap_debug!("Aliases existed");
+                        fn_map.get(&target_id).unwrap()
+                    } else {
+                        /* Fixed-point iteration: this is not perfect */
+                        if recursion_set.contains(&target_id) {
                             return;
                         }
-                        if self.tcx.is_mir_available(target_id) {
-                            rap_debug!("target_id {:?}", target_id);
-                            if fn_map.contains_key(&target_id) {
-                                let fn_aliases = fn_map.get(&target_id).unwrap();
-                                rap_debug!("fn_aliases {:?}", fn_aliases);
-                                for alias in fn_aliases.aliases().iter() {
-                                    if !alias.valuable() {
-                                        continue;
-                                    }
-                                    self.merge(alias, &merge_vec);
-                                }
-                            } else {
-                                /* Fixed-point iteration: this is not perfect */
-                                if recursion_set.contains(&target_id) {
-                                    return;
-                                }
-                                recursion_set.insert(target_id);
-                                let mut mop_graph = MopGraph::new(self.tcx, target_id);
-                                mop_graph.find_scc();
-                                mop_graph.check(0, fn_map, recursion_set);
-                                let ret_alias = mop_graph.ret_alias.clone();
-                                rap_info!("Alias of {:?}: {:?}", target_id, ret_alias);
-                                for alias_pair in ret_alias.aliases().iter() {
-                                    if !alias_pair.valuable() {
-                                        continue;
-                                    }
-                                    self.merge(alias_pair, &merge_vec);
-                                }
-                                fn_map.insert(target_id, ret_alias);
-                                recursion_set.remove(&target_id);
-                            }
-                        } else if self.values[lv].may_drop {
-                            let mut right_set = Vec::new();
-                            for rv in &merge_vec {
-                                if self.values[*rv].may_drop
-                                    && lv != *rv
-                                    && self.values[lv].is_ptr()
-                                {
-                                    right_set.push(*rv);
-                                }
-                            }
-                            if right_set.len() == 1 {
-                                // TO FIX
-                                self.sync_field_alias(lv, right_set[0], 0);
-                            }
+                        recursion_set.insert(target_id);
+                        let mut mop_graph = MopGraph::new(self.tcx, target_id);
+                        mop_graph.find_scc();
+                        mop_graph.check(0, fn_map, recursion_set);
+                        let ret_alias = mop_graph.ret_alias.clone();
+                        rap_info!("Find aliases of {:?}: {:?}", target_id, ret_alias);
+                        fn_map.insert(target_id, ret_alias);
+                        recursion_set.remove(&target_id);
+                        fn_map.get(&target_id).unwrap()
+                    };
+                    for alias in fn_aliases.aliases().iter() {
+                        if !alias.valuable() {
+                            continue;
+                        }
+                        self.merge(alias, &merge_vec);
+                    }
+                } else if self.values[lv].may_drop {
+                    for rv in &merge_vec {
+                        if self.values[*rv].may_drop && lv != *rv && self.values[lv].is_ptr() {
+                            self.assign_alias(lv, *rv);
                         }
                     }
                 }
@@ -339,7 +331,8 @@ impl<'tcx> MopGraph<'tcx> {
             if node.local > self.arg_size {
                 continue;
             }
-            let f_node: Vec<Option<FatherInfo>> = results_nodes.iter().map(|v| v.father.clone()).collect();
+            let f_node: Vec<Option<FatherInfo>> =
+                results_nodes.iter().map(|v| v.father.clone()).collect();
             for idx in 1..self.values.len() {
                 if !self.is_aliasing(idx, node.index) {
                     continue;
@@ -349,17 +342,18 @@ impl<'tcx> MopGraph<'tcx> {
                 if results_nodes[idx].local > self.arg_size {
                     for (i, fidx) in f_node.iter().enumerate() {
                         if let Some(father_info) = fidx {
-                        if i != idx && i != node.index { // && father_info.father_value_id == f_node[idx] {
-                            for (j, v) in results_nodes.iter().enumerate() {
-                                if j != idx
-                                    && j != node.index
-                                    && self.is_aliasing(j, father_info.father_value_id)
-                                    && v.local <= self.arg_size
-                                {
-                                    replace = Some(&results_nodes[j]);
+                            if i != idx && i != node.index {
+                                // && father_info.father_value_id == f_node[idx] {
+                                for (j, v) in results_nodes.iter().enumerate() {
+                                    if j != idx
+                                        && j != node.index
+                                        && self.is_aliasing(j, father_info.father_value_id)
+                                        && v.local <= self.arg_size
+                                    {
+                                        replace = Some(&results_nodes[j]);
+                                    }
                                 }
                             }
-                        }
                         }
                     }
                 }
@@ -396,8 +390,8 @@ impl<'tcx> MopGraph<'tcx> {
                     );
                     new_alias.fact.lhs_fields = self.get_field_seq(left_node);
                     new_alias.fact.rhs_fields = self.get_field_seq(right_node);
-                    if new_alias.lhs_no() == 0 && new_alias.rhs_no() == 0 {
-                        return;
+                    if new_alias.lhs_no() == new_alias.rhs_no() {
+                        continue;
                     }
                     rap_info!(
                         "new_alias.lhs_no = {:?}, rhs_no = {:?}, lhs_fields = {:?}, rhs_fields = {:?}",
@@ -406,11 +400,6 @@ impl<'tcx> MopGraph<'tcx> {
                         new_alias.lhs_fields(),
                         new_alias.rhs_fields()
                     );
-                    if new_alias.lhs_no() == new_alias.rhs_no()
-                        && new_alias.lhs_fields() == new_alias.rhs_fields()
-                    {
-                        continue;
-                    }
                     rap_info!("new_alias: {:?}", new_alias);
                     self.ret_alias.add_alias(new_alias);
                 }

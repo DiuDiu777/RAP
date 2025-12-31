@@ -1,8 +1,5 @@
 use super::{bug_records::TyBug, graph::*};
-use crate::{
-    analysis::core::alias_analysis::default::types::TyKind,
-    utils::source::*,
-};
+use crate::{analysis::core::alias_analysis::default::types::TyKind, utils::source::*};
 use rustc_middle::mir::SourceInfo;
 use rustc_span::{Span, symbol::Symbol};
 

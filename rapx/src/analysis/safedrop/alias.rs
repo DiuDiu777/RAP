@@ -114,7 +114,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                                     }
                                 }
                                 if right_set.len() == 1 {
-                                    self.sync_field_alias(lv, right_set[0], 0);
+                                    self.assign_alias(lv, right_set[0]);
                                 }
                             }
                         }
