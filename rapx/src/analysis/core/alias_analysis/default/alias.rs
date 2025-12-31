@@ -158,6 +158,15 @@ impl<'tcx> MopGraph<'tcx> {
 
     pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
         rap_debug!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
+
+        if let Some(l_set_idx) = self.find_alias_set(lv_idx) {
+            self.alias_sets[l_set_idx].remove(&lv_idx);
+        }
+        self.assign_alias_without_remove(lv_idx, rv_idx);
+    }
+
+    pub fn assign_alias_without_remove(&mut self, lv_idx: usize, rv_idx: usize) {
+        rap_debug!("assign_alias without remove: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
         let r_set_idx = if let Some(idx) = self.find_alias_set(rv_idx) {
             idx
         } else {
@@ -166,12 +175,6 @@ impl<'tcx> MopGraph<'tcx> {
             self.alias_sets.len() - 1
         };
 
-        if let Some(l_set_idx) = self.find_alias_set(lv_idx) {
-            if l_set_idx == r_set_idx {
-                return;
-            }
-            self.alias_sets[l_set_idx].remove(&lv_idx);
-        }
         self.alias_sets[r_set_idx].insert(lv_idx);
 
         if self.values[lv_idx].fields.len() > 0 || self.values[rv_idx].fields.len() > 0 {
@@ -315,7 +318,7 @@ impl<'tcx> MopGraph<'tcx> {
             }
             rv = *self.values[rv].fields.get(index).unwrap();
         }
-        self.assign_alias(lv, rv);
+        self.assign_alias_without_remove(lv, rv);
     }
 
     pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
