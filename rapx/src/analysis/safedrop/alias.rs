@@ -25,7 +25,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             // Example: *1 = 4; when *1 is dangling.
             // Perfoming alias analysis first would introduce false positives.
             self.uaf_check(bb_index, rv_idx, assign.span, false);
-            self.assign_alias(lv_idx, rv_idx);
+            self.assign_alias(lv_idx, rv_idx, true);
             self.fill_birth(lv_idx, self.mop_graph.blocks[bb_index].scc.enter as isize);
 
             rap_debug!("Alias sets: {:?}", self.mop_graph.alias_sets.clone());
@@ -99,22 +99,18 @@ impl<'tcx> SafeDropGraph<'tcx> {
                                     if !alias.valuable() {
                                         continue;
                                     }
-                                    self.merge(alias, &merge_vec);
+                                    self.handle_fn_alias(alias, &merge_vec);
                                 }
                             }
                         } else {
                             if self.mop_graph.values[lv].may_drop {
-                                let mut right_set = Vec::new();
                                 for rv in &merge_vec {
                                     if self.mop_graph.values[*rv].may_drop
                                         && lv != *rv
                                         && self.mop_graph.values[lv].is_ptr()
                                     {
-                                        right_set.push(*rv);
+                                        self.assign_alias(lv, *rv, false);
                                     }
-                                }
-                                if right_set.len() == 1 {
-                                    self.assign_alias(lv, right_set[0]);
                                 }
                             }
                         }
@@ -124,7 +120,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
+    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize, clear_left: bool) {
         rap_debug!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
         let r_set_idx = if let Some(idx) = self.mop_graph.find_alias_set(rv_idx) {
             idx
@@ -135,18 +131,20 @@ impl<'tcx> SafeDropGraph<'tcx> {
             self.mop_graph.alias_sets.len() - 1
         };
 
-        if let Some(l_set_idx) = self.mop_graph.find_alias_set(lv_idx) {
-            if l_set_idx == r_set_idx {
-                return;
+        if clear_left {
+            if let Some(l_set_idx) = self.mop_graph.find_alias_set(lv_idx) {
+                if l_set_idx == r_set_idx {
+                    return;
+                }
+                self.mop_graph.alias_sets[l_set_idx].remove(&lv_idx);
             }
-            self.mop_graph.alias_sets[l_set_idx].remove(&lv_idx);
         }
         self.mop_graph.alias_sets[r_set_idx].insert(lv_idx);
 
         if self.mop_graph.values[lv_idx].fields.len() > 0
             || self.mop_graph.values[rv_idx].fields.len() > 0
         {
-            self.sync_field_alias(lv_idx, rv_idx, 0);
+            self.sync_field_alias(lv_idx, rv_idx, 0, clear_left);
         }
         if self.mop_graph.values[rv_idx].father != None {
             self.sync_father_alias(lv_idx, rv_idx, r_set_idx);
@@ -158,7 +156,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     // Expected result: [1,2] [1.1,2.1];
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
-    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
+    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
         rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         let max_field_depth = match std::env::var_os("MOP") {
@@ -174,13 +172,13 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
 
         // For the fields of lv; we should remove them from the alias sets;
-        //
-        for lv_field in self.mop_graph.values[lv].fields.clone().into_iter() {
-            if let Some(alias_set_idx) = self.mop_graph.find_alias_set(lv_field.1) {
-                self.mop_graph.alias_sets[alias_set_idx].remove(&lv_field.1);
+        if clear_left {
+            for lv_field in self.mop_graph.values[lv].fields.clone().into_iter() {
+                if let Some(alias_set_idx) = self.mop_graph.find_alias_set(lv_field.1) {
+                    self.mop_graph.alias_sets[alias_set_idx].remove(&lv_field.1);
+                }
             }
         }
-
         for rv_field in self.mop_graph.values[rv].fields.clone().into_iter() {
             rap_debug!("rv_field: {:?}", rv_field);
             if !self.mop_graph.values[lv].fields.contains_key(&rv_field.0) {
@@ -208,7 +206,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 self.mop_graph.alias_sets[alias_set_idx].insert(lv_field_value_idx);
             }
             rap_debug!("alias sets: {:?}", self.mop_graph.alias_sets);
-            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
+            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1, clear_left);
         }
     }
 
@@ -321,7 +319,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     //inter-procedure instruction to merge alias.
-    pub fn merge(&mut self, ret_alias: &MopAAFact, arg_vec: &Vec<usize>) {
+    pub fn handle_fn_alias(&mut self, ret_alias: &MopAAFact, arg_vec: &Vec<usize>) {
         rap_debug!("ret_alias: {:?}", ret_alias);
         if ret_alias.lhs_no() >= arg_vec.len() || ret_alias.rhs_no() >= arg_vec.len() {
             return;
@@ -366,6 +364,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
             }
             rv = *self.mop_graph.values[rv].fields.get(&index).unwrap();
         }
-        self.mop_graph.assign_alias(lv, rv);
+        self.mop_graph.assign_alias(lv, rv, false);
     }
 }
