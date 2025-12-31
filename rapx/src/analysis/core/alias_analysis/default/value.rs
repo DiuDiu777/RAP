@@ -8,10 +8,24 @@ pub struct Value {
     pub need_drop: bool,
     pub may_drop: bool,
     pub kind: TyKind,
-    pub father: usize,
-    pub field_id: usize, // the field id of its father node.
     pub birth: isize,
-    pub fields: FxHashMap<usize, usize>,
+    pub father: Option<FatherInfo>, // Use to indicate whether the value is a field of its father node:
+    pub fields: FxHashMap<usize, usize>, // 1: field_id; 2: field_value_id;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct FatherInfo {
+    pub father_value_id: usize,
+    pub field_id: usize,
+}
+
+impl FatherInfo {
+    pub fn new(father_value_id: usize, field_id: usize) -> Self {
+        FatherInfo {
+            father_value_id,
+            field_id,
+        }
+    }
 }
 
 impl Value {
@@ -20,11 +34,10 @@ impl Value {
             index,
             local,
             need_drop,
-            father: local,
-            field_id: usize::MAX,
             birth: 0,
             may_drop,
             kind: TyKind::Adt,
+            father: None,
             fields: FxHashMap::default(),
         }
     }

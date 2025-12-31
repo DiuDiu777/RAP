@@ -7,6 +7,7 @@ use super::graph::*;
 use crate::analysis::core::alias_analysis::default::{
     MopAAFact, MopAAResultMap, block::Term, corner_case::*, types::*, value::*,
 };
+use rustc_data_structures::fx::FxHashSet;
 
 impl<'tcx> SafeDropGraph<'tcx> {
     /* alias analysis for a single block */
@@ -24,26 +25,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             // Example: *1 = 4; when *1 is dangling.
             // Perfoming alias analysis first would introduce false positives.
             self.uaf_check(bb_index, rv_idx, assign.span, false);
-
-            let lv_local = assign.lv.local.as_usize();
-            let rv_local = assign.rv.local.as_usize();
-
-            // This is a field assignment, we should also add the father to the alias set.
-            // A temp solution; should be fixed;
-            if lv_idx != lv_local {
-                if self.mop_graph.values[lv_idx].field_id != 0 {
-                    continue;
-                }
-                self.mop_graph.assign_alias(lv_local, rv_idx);
-            }
-
-            if rv_idx != rv_local {
-                if self.mop_graph.values[rv_idx].field_id != 0 {
-                    continue;
-                }
-                self.mop_graph.assign_alias(rv_local, lv_idx);
-            }
-            self.mop_graph.assign_alias(lv_idx, rv_idx);
+            self.assign_alias(lv_idx, rv_idx);
             self.fill_birth(lv_idx, self.mop_graph.blocks[bb_index].scc.enter as isize);
 
             rap_debug!("Alias sets: {:?}", self.mop_graph.alias_sets.clone());
@@ -132,13 +114,149 @@ impl<'tcx> SafeDropGraph<'tcx> {
                                     }
                                 }
                                 if right_set.len() == 1 {
-                                    self.merge_alias(lv, right_set[0], 0);
+                                    self.sync_field_alias(lv, right_set[0], 0);
                                 }
                             }
                         }
                     }
                 }
             }
+        }
+    }
+
+    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
+        rap_debug!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
+        let r_set_idx = if let Some(idx) = self.mop_graph.find_alias_set(rv_idx) {
+            idx
+        } else {
+            self.mop_graph
+                .alias_sets
+                .push([rv_idx].into_iter().collect::<FxHashSet<usize>>());
+            self.mop_graph.alias_sets.len() - 1
+        };
+
+        if let Some(l_set_idx) = self.mop_graph.find_alias_set(lv_idx) {
+            if l_set_idx == r_set_idx {
+                return;
+            }
+            self.mop_graph.alias_sets[l_set_idx].remove(&lv_idx);
+        }
+        self.mop_graph.alias_sets[r_set_idx].insert(lv_idx);
+
+        if self.mop_graph.values[lv_idx].fields.len() > 0
+            || self.mop_graph.values[rv_idx].fields.len() > 0
+        {
+            self.sync_field_alias(lv_idx, rv_idx, 0);
+        }
+        if self.mop_graph.values[rv_idx].father != None {
+            self.sync_father_alias(lv_idx, rv_idx, r_set_idx);
+        }
+    }
+
+    // Update the aliases of fields.
+    // Case 1, lv = 1; rv = 2; field of rv: 1;
+    // Expected result: [1,2] [1.1,2.1];
+    // Case 2, lv = 0.0, rv = 7, field of rv: 0;
+    // Expected result: [0.0,7] [0.0.0,7.0]
+    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
+        rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
+
+        let max_field_depth = match std::env::var_os("MOP") {
+            Some(val) if val == "0" => 10,
+            Some(val) if val == "1" => 20,
+            Some(val) if val == "2" => 30,
+            Some(val) if val == "3" => 50,
+            _ => 15,
+        };
+
+        if depth > max_field_depth {
+            return;
+        }
+
+        // For the fields of lv; we should remove them from the alias sets;
+        //
+        for lv_field in self.mop_graph.values[lv].fields.clone().into_iter() {
+            if let Some(alias_set_idx) = self.mop_graph.find_alias_set(lv_field.1) {
+                self.mop_graph.alias_sets[alias_set_idx].remove(&lv_field.1);
+            }
+        }
+
+        for rv_field in self.mop_graph.values[rv].fields.clone().into_iter() {
+            rap_debug!("rv_field: {:?}", rv_field);
+            if !self.mop_graph.values[lv].fields.contains_key(&rv_field.0) {
+                let mut node = Value::new(
+                    self.mop_graph.values.len(),
+                    self.mop_graph.values[lv].local,
+                    self.mop_graph.values[rv_field.1].need_drop,
+                    self.mop_graph.values[rv_field.1].may_drop,
+                );
+                node.kind = self.mop_graph.values[rv_field.1].kind;
+                node.father = Some(FatherInfo::new(lv, rv_field.0));
+                self.mop_graph.values[lv]
+                    .fields
+                    .insert(rv_field.0, node.index);
+                self.mop_graph.values.push(node);
+                self.drop_record.push(self.drop_record[lv]);
+            }
+            let lv_field_value_idx = *(self.mop_graph.values[lv].fields.get(&rv_field.0).unwrap());
+
+            rap_debug!(
+                "alias_set_id of rv_field {:?}",
+                self.mop_graph.find_alias_set(rv_field.1)
+            );
+            if let Some(alias_set_idx) = self.mop_graph.find_alias_set(rv_field.1) {
+                self.mop_graph.alias_sets[alias_set_idx].insert(lv_field_value_idx);
+            }
+            rap_debug!("alias sets: {:?}", self.mop_graph.alias_sets);
+            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
+        }
+    }
+
+    // For example,
+    // Case 1: lv = 1; rv = 2.0; alias set [2, 3]
+    // Expected result: [1, 2.0, 3.0], [2, 3];
+    // Case 2: lv = 1.0; rv = 2; alias set [1, 3]
+    // Expected result: [1.0, 2], [1, 3]
+    pub fn sync_father_alias(&mut self, lv: usize, rv: usize, lv_alias_set_idx: usize) {
+        rap_info!("sync father aliases for lv:{} rv:{}", lv, rv);
+        let mut father_id = rv;
+        let mut father = self.mop_graph.values[father_id].father.clone();
+        while let Some(father_info) = father {
+            father_id = father_info.father_value_id;
+            let field_id = father_info.field_id;
+            let father_value = self.mop_graph.values[father_id].clone();
+            if let Some(alias_set_idx) = self.mop_graph.find_alias_set(father_id) {
+                for value_idx in self.mop_graph.alias_sets[alias_set_idx].clone() {
+                    // create a new node if the node does not exist;
+                    let field_value_idx = if self.mop_graph.values[value_idx]
+                        .fields
+                        .contains_key(&field_id)
+                    {
+                        *self.mop_graph.values[value_idx]
+                            .fields
+                            .get(&field_id)
+                            .unwrap()
+                    } else {
+                        let mut node = Value::new(
+                            self.mop_graph.values.len(),
+                            self.mop_graph.values[value_idx].local,
+                            self.mop_graph.values[value_idx].need_drop,
+                            self.mop_graph.values[value_idx].may_drop,
+                        );
+                        node.kind = self.mop_graph.values[value_idx].kind;
+                        node.father = Some(FatherInfo::new(value_idx, field_id));
+                        self.mop_graph.values.push(node.clone());
+                        self.mop_graph.values[value_idx]
+                            .fields
+                            .insert(field_id, node.index);
+                        self.drop_record.push(self.drop_record[lv]);
+                        node.index
+                    };
+                    // add the node to the alias_set of lv;
+                    self.mop_graph.alias_sets[lv_alias_set_idx].insert(field_value_idx);
+                }
+            }
+            father = father_value.father;
         }
     }
 
@@ -164,6 +282,10 @@ impl<'tcx> SafeDropGraph<'tcx> {
     pub fn projection(&mut self, place: Place<'tcx>) -> usize {
         let local = place.local.as_usize();
         let mut value_idx = local;
+        // Projections are leveled
+        // Case 1: (*6).1 involves two projections: a Deref and a Field.
+        // Case 2: (6.0).1 involves two field projections.
+        // We should recursively parse the projection.
         for proj in place.projection {
             let new_value_idx = self.mop_graph.values.len();
             match proj {
@@ -179,58 +301,23 @@ impl<'tcx> SafeDropGraph<'tcx> {
                             Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
                         node.birth = self.mop_graph.values[local].birth;
                         node.kind = kind(ty);
-                        node.field_id = field_idx;
-                        self.mop_graph.values[local]
+                        node.father = Some(FatherInfo::new(value_idx, field_idx));
+                        self.mop_graph.values[value_idx]
                             .fields
                             .insert(field_idx, node.index);
                         self.mop_graph.values.push(node);
-                        self.drop_record.push(self.drop_record[local]);
+                        // The drop status is the same as its father.
+                        self.drop_record.push(self.drop_record[value_idx]);
                     }
-                    value_idx = *self.mop_graph.values[local].fields.get(&field_idx).unwrap();
+                    value_idx = *self.mop_graph.values[value_idx]
+                        .fields
+                        .get(&field_idx)
+                        .unwrap();
                 }
                 _ => {}
             }
         }
         value_idx
-    }
-
-    //instruction to assign alias for a variable.
-    pub fn merge_alias(&mut self, lv: usize, rv: usize, depth: usize) {
-        if lv >= self.mop_graph.values.len() || rv >= self.mop_graph.values.len() {
-            return;
-        }
-        self.mop_graph.assign_alias(lv, rv);
-
-        let max_field_depth = match std::env::var_os("SAFEDROP") {
-            Some(val) if val == "0" => 10,
-            Some(val) if val == "1" => 20,
-            Some(val) if val == "2" => 30,
-            Some(val) if val == "3" => 50,
-            _ => 15,
-        };
-
-        if depth > max_field_depth {
-            return;
-        }
-
-        for field in self.mop_graph.values[rv].fields.clone().into_iter() {
-            if !self.mop_graph.values[lv].fields.contains_key(&field.0) {
-                let mut node = Value::new(
-                    self.mop_graph.values.len(),
-                    self.mop_graph.values[lv].local,
-                    self.mop_graph.values[field.1].need_drop,
-                    self.mop_graph.values[field.1].may_drop,
-                );
-                node.kind = self.mop_graph.values[field.1].kind;
-                node.birth = self.mop_graph.values[lv].birth;
-                node.field_id = field.0;
-                self.mop_graph.values[lv].fields.insert(field.0, node.index);
-                self.drop_record.push(DropRecord::false_record());
-                self.mop_graph.values.push(node);
-            }
-            let lv_field = *(self.mop_graph.values[lv].fields.get(&field.0).unwrap());
-            self.merge_alias(lv_field, field.1, depth + 1);
-        }
     }
 
     //inter-procedure instruction to merge alias.
@@ -251,7 +338,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     Value::new(self.mop_graph.values.len(), left_init, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
                 node.birth = self.mop_graph.values[lv].birth;
-                node.field_id = *index;
+                node.father = Some(FatherInfo::new(lv, *index));
                 self.mop_graph.values[lv].fields.insert(*index, node.index);
                 self.drop_record.push(self.drop_record[lv]);
                 self.mop_graph.values.push(node);
@@ -272,7 +359,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 );
                 node.kind = TyKind::RawPtr;
                 node.birth = self.mop_graph.values[rv].birth;
-                node.field_id = *index;
+                node.father = Some(FatherInfo::new(rv, *index));
                 self.mop_graph.values[rv].fields.insert(*index, node.index);
                 self.drop_record.push(self.drop_record[rv]);
                 self.mop_graph.values.push(node);

@@ -1,6 +1,6 @@
 use super::{bug_records::TyBug, graph::*};
 use crate::{
-    analysis::core::alias_analysis::default::{types::TyKind, value::*},
+    analysis::core::alias_analysis::default::types::TyKind,
     utils::source::*,
 };
 use rustc_middle::mir::SourceInfo;
@@ -279,14 +279,14 @@ impl<'tcx> SafeDropGraph<'tcx> {
         //drop the fields of the root node.
         //alias flag is used to avoid the fields of the alias are dropped repeatly.
         if !flag_inprocess {
-            for (_, field_idx) in self.mop_graph.values[idx].fields.clone() {
+            for (_field_id, field_value_id) in self.mop_graph.values[idx].fields.clone() {
                 if self.mop_graph.values[idx].is_tuple()
-                    && !self.mop_graph.values[field_idx].need_drop
+                    && !self.mop_graph.values[field_value_id].need_drop
                 {
                     continue;
                 }
                 self.add_to_drop_record(
-                    field_idx,
+                    field_value_id,
                     self.mop_graph.values[via_idx].local,
                     birth,
                     info,
@@ -301,15 +301,5 @@ impl<'tcx> SafeDropGraph<'tcx> {
         {
             self.mop_graph.values[idx].drop();
         }
-    }
-
-    pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
-        let mut field_id_seq = vec![];
-        let mut node_ref = value;
-        while node_ref.field_id != usize::MAX {
-            field_id_seq.push(node_ref.field_id);
-            node_ref = &self.mop_graph.values[value.father];
-        }
-        return field_id_seq;
     }
 }

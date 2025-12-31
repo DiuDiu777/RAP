@@ -168,8 +168,10 @@ impl<'tcx> MopGraph<'tcx> {
                                 if !values[lv_local].fields.contains_key(&0) {
                                     let mut lvl0 = Value::new(values.len(), lv_local, false, true);
                                     lvl0.birth = values[lv_local].birth;
-                                    lvl0.field_id = 0;
-                                    values[lv_local].fields.insert(0, lvl0.index);
+                                    lvl0.father = Some(FatherInfo::new(lv_local, 0));
+                                    values[lv_local]
+                                        .fields
+                                        .insert(0, lvl0.index);
                                     values.push(lvl0);
                                 }
                                 match operand {

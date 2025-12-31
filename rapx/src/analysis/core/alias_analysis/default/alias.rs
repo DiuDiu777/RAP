@@ -152,8 +152,7 @@ impl<'tcx> MopGraph<'tcx> {
                         let mut node =
                             Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
                         node.kind = kind(ty);
-                        node.field_id = field_idx;
-                        node.father = value_idx;
+                        node.father = Some(FatherInfo::new(value_idx, field_idx));
                         self.values[value_idx].fields.insert(field_idx, node.index);
                         self.values.push(node);
                     }
@@ -186,7 +185,7 @@ impl<'tcx> MopGraph<'tcx> {
         if self.values[lv_idx].fields.len() > 0 || self.values[rv_idx].fields.len() > 0 {
             self.sync_field_alias(lv_idx, rv_idx, 0);
         }
-        if self.values[rv_idx].field_id != usize::MAX {
+        if self.values[rv_idx].father != None {
             self.sync_father_alias(lv_idx, rv_idx, r_set_idx);
         }
     }
@@ -229,13 +228,16 @@ impl<'tcx> MopGraph<'tcx> {
                     self.values[rv_field.1].may_drop,
                 );
                 node.kind = self.values[rv_field.1].kind;
-                node.field_id = rv_field.0;
+                node.father = Some(FatherInfo::new(lv, rv_field.0));
                 self.values[lv].fields.insert(rv_field.0, node.index);
                 self.values.push(node);
             }
             let lv_field_value_idx = *(self.values[lv].fields.get(&rv_field.0).unwrap());
 
-            rap_debug!("alias_set_id of rv_field {:?}", self.find_alias_set(rv_field.1));
+            rap_debug!(
+                "alias_set_id of rv_field {:?}",
+                self.find_alias_set(rv_field.1)
+            );
             if let Some(alias_set_idx) = self.find_alias_set(rv_field.1) {
                 self.alias_sets[alias_set_idx].insert(lv_field_value_idx);
             }
@@ -252,9 +254,10 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn sync_father_alias(&mut self, lv: usize, rv: usize, lv_alias_set_idx: usize) {
         rap_info!("sync father aliases for lv:{} rv:{}", lv, rv);
         let mut father_id = rv;
-        let mut field_id = self.values[rv].field_id;
-        while field_id != usize::MAX {
-            father_id = self.values[father_id].father;
+        let mut father = self.values[father_id].father.clone();
+        while let Some(father_info) = father {
+            father_id = father_info.father_value_id;
+            let field_id = father_info.field_id;
             let father_value = self.values[father_id].clone();
             if let Some(alias_set_idx) = self.find_alias_set(father_id) {
                 for value_idx in self.alias_sets[alias_set_idx].clone() {
@@ -269,7 +272,7 @@ impl<'tcx> MopGraph<'tcx> {
                             self.values[value_idx].may_drop,
                         );
                         node.kind = self.values[value_idx].kind;
-                        node.field_id = field_id;
+                        node.father = Some(FatherInfo::new(value_idx, field_id));
                         self.values.push(node.clone());
                         self.values[value_idx].fields.insert(field_id, node.index);
                         node.index
@@ -278,7 +281,7 @@ impl<'tcx> MopGraph<'tcx> {
                     self.alias_sets[lv_alias_set_idx].insert(field_value_idx);
                 }
             }
-            field_id = father_value.field_id;
+            father = father_value.father;
         }
     }
 
@@ -298,7 +301,7 @@ impl<'tcx> MopGraph<'tcx> {
                 let may_drop = ret_alias.lhs_may_drop;
                 let mut node = Value::new(self.values.len(), left_init, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
-                node.field_id = *index;
+                node.father = Some(FatherInfo::new(lv, *index));
                 self.values[lv].fields.insert(*index, node.index);
                 self.values.push(node);
             }
@@ -311,7 +314,7 @@ impl<'tcx> MopGraph<'tcx> {
                 let may_drop = ret_alias.rhs_may_drop;
                 let mut node = Value::new(self.values.len(), rv_local, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
-                node.field_id = *index;
+                node.father = Some(FatherInfo::new(lv, *index));
                 self.values[rv].fields.insert(*index, node.index);
                 self.values.push(node);
             }
@@ -323,9 +326,9 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
         let mut field_id_seq = vec![];
         let mut node_ref = value;
-        while node_ref.field_id != usize::MAX {
-            field_id_seq.push(node_ref.field_id);
-            node_ref = &self.values[value.father];
+        while let Some(father) = &node_ref.father {
+            field_id_seq.push(father.field_id);
+            node_ref = &self.values[father.father_value_id];
         }
         field_id_seq
     }
@@ -336,7 +339,7 @@ impl<'tcx> MopGraph<'tcx> {
             if node.local > self.arg_size {
                 continue;
             }
-            let f_node: Vec<usize> = results_nodes.iter().map(|v| v.father).collect();
+            let f_node: Vec<Option<FatherInfo>> = results_nodes.iter().map(|v| v.father.clone()).collect();
             for idx in 1..self.values.len() {
                 if !self.is_aliasing(idx, node.index) {
                     continue;
@@ -344,17 +347,19 @@ impl<'tcx> MopGraph<'tcx> {
 
                 let mut replace = None;
                 if results_nodes[idx].local > self.arg_size {
-                    for (i, &fidx) in f_node.iter().enumerate() {
-                        if i != idx && i != node.index && fidx == f_node[idx] {
+                    for (i, fidx) in f_node.iter().enumerate() {
+                        if let Some(father_info) = fidx {
+                        if i != idx && i != node.index { // && father_info.father_value_id == f_node[idx] {
                             for (j, v) in results_nodes.iter().enumerate() {
                                 if j != idx
                                     && j != node.index
-                                    && self.is_aliasing(j, fidx)
+                                    && self.is_aliasing(j, father_info.father_value_id)
                                     && v.local <= self.arg_size
                                 {
                                     replace = Some(&results_nodes[j]);
                                 }
                             }
+                        }
                         }
                     }
                 }
