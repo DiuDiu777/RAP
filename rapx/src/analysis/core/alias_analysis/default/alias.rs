@@ -102,7 +102,7 @@ impl<'tcx> MopGraph<'tcx> {
                         if !alias.valuable() {
                             continue;
                         }
-                        self.merge(alias, &merge_vec);
+                        self.handle_fn_alias(alias, &merge_vec);
                     }
                 } else if self.values[lv].may_drop {
                     for rv in &merge_vec {
@@ -277,21 +277,25 @@ impl<'tcx> MopGraph<'tcx> {
         }
     }
 
-    //inter-procedure instruction to merge alias.
-    pub fn merge(&mut self, ret_alias: &MopAAFact, arg_vec: &[usize]) {
-        rap_debug!("{:?}", ret_alias);
-        if ret_alias.lhs_no() >= arg_vec.len() || ret_alias.rhs_no() >= arg_vec.len() {
+    // Handle aliases introduced by function calls.
+    pub fn handle_fn_alias(&mut self, fn_alias: &MopAAFact, arg_vec: &[usize]) {
+        rap_debug!("merge aliases returned by function calls");
+        rap_info!("args: {:?}", arg_vec);
+        rap_info!("fn alias: {}", fn_alias);
+        if fn_alias.lhs_no() >= arg_vec.len() || fn_alias.rhs_no() >= arg_vec.len() {
             return;
         }
-        let left_init = arg_vec[ret_alias.lhs_no()];
-        let right_init = arg_vec[ret_alias.rhs_no()];
-        let mut lv = left_init;
-        let mut rv = right_init;
-        for index in ret_alias.lhs_fields().iter() {
+        
+        let mut lv = arg_vec[fn_alias.lhs_no()];
+        let mut rv = arg_vec[fn_alias.rhs_no()];
+        let left_local = self.values[lv].local;
+        let right_local = self.values[rv].local;
+
+        for index in fn_alias.lhs_fields().iter() {
             if !self.values[lv].fields.contains_key(index) {
-                let need_drop = ret_alias.lhs_need_drop;
-                let may_drop = ret_alias.lhs_may_drop;
-                let mut node = Value::new(self.values.len(), left_init, need_drop, may_drop);
+                let need_drop = fn_alias.lhs_need_drop;
+                let may_drop = fn_alias.lhs_may_drop;
+                let mut node = Value::new(self.values.len(), left_local, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
                 node.father = Some(FatherInfo::new(lv, *index));
                 self.values[lv].fields.insert(*index, node.index);
@@ -299,14 +303,13 @@ impl<'tcx> MopGraph<'tcx> {
             }
             lv = *self.values[lv].fields.get(index).unwrap();
         }
-        let rv_local = self.values[rv].local;
-        for index in ret_alias.rhs_fields().iter() {
+        for index in fn_alias.rhs_fields().iter() {
             if !self.values[rv].fields.contains_key(index) {
-                let need_drop = ret_alias.rhs_need_drop;
-                let may_drop = ret_alias.rhs_may_drop;
-                let mut node = Value::new(self.values.len(), rv_local, need_drop, may_drop);
+                let need_drop = fn_alias.rhs_need_drop;
+                let may_drop = fn_alias.rhs_may_drop;
+                let mut node = Value::new(self.values.len(), right_local, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
-                node.father = Some(FatherInfo::new(lv, *index));
+                node.father = Some(FatherInfo::new(rv, *index));
                 self.values[rv].fields.insert(*index, node.index);
                 self.values.push(node);
             }
@@ -326,31 +329,32 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     //merge the result of current path to the final result.
-    pub fn merge_results(&mut self, results_nodes: Vec<Value>) {
-        for node in results_nodes.iter() {
+    pub fn merge_results(&mut self) {
+        let f_node: Vec<Option<FatherInfo>> =
+            self.values.iter().map(|v| v.father.clone()).collect();
+        rap_info!("merge results, father nodes: {:?}", f_node);
+        for node in self.values.iter() {
             if node.local > self.arg_size {
                 continue;
             }
-            let f_node: Vec<Option<FatherInfo>> =
-                results_nodes.iter().map(|v| v.father.clone()).collect();
             for idx in 1..self.values.len() {
                 if !self.is_aliasing(idx, node.index) {
                     continue;
                 }
 
                 let mut replace = None;
-                if results_nodes[idx].local > self.arg_size {
+                if self.values[idx].local > self.arg_size {
                     for (i, fidx) in f_node.iter().enumerate() {
                         if let Some(father_info) = fidx {
                             if i != idx && i != node.index {
                                 // && father_info.father_value_id == f_node[idx] {
-                                for (j, v) in results_nodes.iter().enumerate() {
+                                for (j, v) in self.values.iter().enumerate() {
                                     if j != idx
                                         && j != node.index
                                         && self.is_aliasing(j, father_info.father_value_id)
                                         && v.local <= self.arg_size
                                     {
-                                        replace = Some(&results_nodes[j]);
+                                        replace = Some(&self.values[j]);
                                     }
                                 }
                             }
@@ -358,17 +362,17 @@ impl<'tcx> MopGraph<'tcx> {
                     }
                 }
 
-                if (results_nodes[idx].local <= self.arg_size || replace.is_some())
+                if (self.values[idx].local <= self.arg_size || replace.is_some())
                     && idx != node.index
-                    && node.local != results_nodes[idx].local
+                    && node.local != self.values[idx].local
                 {
                     let left_node;
                     let right_node;
-                    match results_nodes[idx].local {
+                    match self.values[idx].local {
                         0 => {
                             left_node = match replace {
                                 Some(replace_node) => replace_node,
-                                None => &results_nodes[idx],
+                                None => &self.values[idx],
                             };
                             right_node = node;
                         }
@@ -376,7 +380,7 @@ impl<'tcx> MopGraph<'tcx> {
                             left_node = node;
                             right_node = match replace {
                                 Some(replace_node) => replace_node,
-                                None => &results_nodes[idx],
+                                None => &self.values[idx],
                             };
                         }
                     }
@@ -393,17 +397,15 @@ impl<'tcx> MopGraph<'tcx> {
                     if new_alias.lhs_no() == new_alias.rhs_no() {
                         continue;
                     }
-                    rap_info!(
-                        "new_alias.lhs_no = {:?}, rhs_no = {:?}, lhs_fields = {:?}, rhs_fields = {:?}",
-                        new_alias.lhs_no(),
-                        new_alias.rhs_no(),
-                        new_alias.lhs_fields(),
-                        new_alias.rhs_fields()
-                    );
-                    rap_info!("new_alias: {:?}", new_alias);
+                    rap_debug!("new_alias: {:?}", new_alias);
                     self.ret_alias.add_alias(new_alias);
                 }
             }
+        }
+        let mut aliases: Vec<_> = self.ret_alias.alias_set.iter().collect();
+        aliases.sort();
+        for alias in &aliases {
+            rap_info!("{}", alias);
         }
     }
 
@@ -413,7 +415,7 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     #[inline(always)]
-    pub fn is_aliasing(&mut self, e1: usize, e2: usize) -> bool {
+    pub fn is_aliasing(&self, e1: usize, e2: usize) -> bool {
         let s1 = self.find_alias_set(e1);
         let s2 = self.find_alias_set(e2);
         s1.is_some() && s1 == s2

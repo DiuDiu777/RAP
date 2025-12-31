@@ -134,7 +134,7 @@ impl<'tcx> MopGraph<'tcx> {
         self.alias_bb(self.blocks[bb_idx].scc.enter);
         self.alias_bbcall(self.blocks[bb_idx].scc.enter, fn_map, recursion_set);
         if cur_block.next.is_empty() {
-            self.merge_results(self.values.clone());
+            self.merge_results();
             return;
         }
     }

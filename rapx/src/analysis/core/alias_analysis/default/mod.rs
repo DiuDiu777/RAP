@@ -17,7 +17,7 @@ use graph::MopGraph;
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
-use std::{collections::HashSet, convert::From, fmt};
+use std::{cmp::Ordering, collections::HashSet, convert::From, fmt};
 
 pub const VISIT_LIMIT: usize = 1000;
 
@@ -88,6 +88,33 @@ impl From<MopAAResult> for AAResult {
             arg_size: m.arg_size,
             alias_set,
         }
+    }
+}
+
+impl PartialOrd for MopAAFact {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for MopAAFact {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.fact
+            .lhs_no
+            .cmp(&other.fact.lhs_no)
+            .then_with(|| self.fact.lhs_fields.cmp(&other.fact.lhs_fields))
+            .then_with(|| self.fact.rhs_no.cmp(&other.fact.rhs_no))
+            .then_with(|| self.fact.rhs_fields.cmp(&other.fact.rhs_fields))
+            .then_with(|| self.lhs_may_drop.cmp(&other.lhs_may_drop))
+            .then_with(|| self.lhs_need_drop.cmp(&other.lhs_need_drop))
+            .then_with(|| self.rhs_may_drop.cmp(&other.rhs_may_drop))
+            .then_with(|| self.rhs_need_drop.cmp(&other.rhs_need_drop))
+    }
+}
+
+impl fmt::Display for MopAAFact {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.fact)
     }
 }
 
