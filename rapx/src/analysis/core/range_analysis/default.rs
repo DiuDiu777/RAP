@@ -5,7 +5,7 @@ use crate::{
         Analysis,
         core::{
             alias_analysis::default::graph::MopGraph,
-            callgraph::{default::CallGraphInfo, visitor::CallGraphVisitor},
+            callgraph::{default::CallGraph, visitor::CallGraphVisitor},
             range_analysis::{
                 Range, RangeAnalysis,
                 domain::{
@@ -45,7 +45,7 @@ pub struct RangeAnalyzer<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub final_vars: RAResultMap<'tcx, T>,
     pub ssa_places_mapping: FxHashMap<DefId, HashMap<Place<'tcx>, HashSet<Place<'tcx>>>>,
     pub fn_constraintgraph_mapping: FxHashMap<DefId, ConstraintGraph<'tcx, T>>,
-    pub callgraph: CallGraphInfo<'tcx>,
+    pub callgraph: CallGraph<'tcx>,
     pub body_map: FxHashMap<DefId, Body<'tcx>>,
     pub cg_map: FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
     pub vars_map: FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
@@ -143,7 +143,7 @@ where
             final_vars: FxHashMap::default(),
             ssa_places_mapping: FxHashMap::default(),
             fn_constraintgraph_mapping: FxHashMap::default(),
-            callgraph: CallGraphInfo::new(),
+            callgraph: CallGraph::new(tcx),
             body_map: FxHashMap::default(),
             cg_map: FxHashMap::default(),
             vars_map: FxHashMap::default(),
@@ -232,12 +232,8 @@ where
 
         let callers_by_callee_id = self.callgraph.get_callers_map();
 
-        for (&node_id_usize, node) in &self.callgraph.functions {
-            let def_id = node.get_def_id();
-
-            if !callers_by_callee_id.contains_key(&node_id_usize)
-                && self.cg_map.contains_key(&def_id)
-            {
+        for &def_id in &self.callgraph.functions {
+            if !callers_by_callee_id.contains_key(&def_id) && self.cg_map.contains_key(&def_id) {
                 call_chain_starts.push(def_id);
             }
         }
