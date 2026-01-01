@@ -174,7 +174,7 @@ impl<'tcx> MopGraph<'tcx> {
         };
 
         if let Some(l_set_idx) = self.find_alias_set(lv_idx) {
-            if l_set_idx == rv_idx {
+            if l_set_idx == r_set_idx {
                 return;
             }
             self.alias_sets[l_set_idx].remove(&lv_idx);
