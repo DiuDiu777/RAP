@@ -20,7 +20,7 @@ impl<'tcx> MopGraph<'tcx> {
             let lv_idx = self.projection(assign.lv);
             let rv_idx = self.projection(assign.rv);
 
-            self.assign_alias(lv_idx, rv_idx, true);
+            self.assign_alias(lv_idx, rv_idx);
             rap_debug!("Alias sets: {:?}", self.alias_sets)
         }
     }
@@ -103,11 +103,15 @@ impl<'tcx> MopGraph<'tcx> {
                             continue;
                         }
                         self.handle_fn_alias(alias, &merge_vec);
+                        rap_debug!("{:?}", self.alias_sets);
                     }
                 } else if self.values[lv].may_drop {
                     for rv in &merge_vec {
                         if self.values[*rv].may_drop && lv != *rv && self.values[lv].is_ptr() {
-                            self.assign_alias(lv, *rv, false);
+                            // We assume they are alias;
+                            // It is a function call and we should not distinguish left or right;
+                            // Merge the alias instead of assign.
+                            self.merge_alias(lv, *rv);
                         }
                     }
                 }
@@ -156,7 +160,10 @@ impl<'tcx> MopGraph<'tcx> {
         value_idx
     }
 
-    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize, clear_left: bool) {
+    /// Used to assign alias for a statement.
+    /// Operation: dealiasing the left; aliasing the left with right.
+    /// Synchronize the fields and father nodes iteratively.
+    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
         rap_debug!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
 
         let r_set_idx = if let Some(idx) = self.find_alias_set(rv_idx) {
@@ -167,19 +174,17 @@ impl<'tcx> MopGraph<'tcx> {
             self.alias_sets.len() - 1
         };
 
-        if clear_left {
-            if let Some(l_set_idx) = self.find_alias_set(lv_idx) {
-                if l_set_idx == rv_idx {
-                    return;
-                }
-                self.alias_sets[l_set_idx].remove(&lv_idx);
+        if let Some(l_set_idx) = self.find_alias_set(lv_idx) {
+            if l_set_idx == rv_idx {
+                return;
             }
+            self.alias_sets[l_set_idx].remove(&lv_idx);
         }
 
         self.alias_sets[r_set_idx].insert(lv_idx);
 
         if self.values[lv_idx].fields.len() > 0 || self.values[rv_idx].fields.len() > 0 {
-            self.sync_field_alias(lv_idx, rv_idx, 0, clear_left);
+            self.sync_field_alias(lv_idx, rv_idx, 0);
         }
         if self.values[rv_idx].father != None {
             self.sync_father_alias(lv_idx, rv_idx, r_set_idx);
@@ -191,7 +196,7 @@ impl<'tcx> MopGraph<'tcx> {
     // Expected result: [1,2] [1.1,2.1];
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
-    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
+    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
         rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         let max_field_depth = match std::env::var_os("MOP") {
@@ -207,11 +212,9 @@ impl<'tcx> MopGraph<'tcx> {
         }
 
         // For the fields of lv; we should remove them from the alias sets;
-        if clear_left {
-            for lv_field in self.values[lv].fields.clone().into_iter() {
-                if let Some(alias_set_idx) = self.find_alias_set(lv_field.1) {
-                    self.alias_sets[alias_set_idx].remove(&lv_field.1);
-                }
+        for lv_field in self.values[lv].fields.clone().into_iter() {
+            if let Some(alias_set_idx) = self.find_alias_set(lv_field.1) {
+                self.alias_sets[alias_set_idx].remove(&lv_field.1);
             }
         }
 
@@ -239,7 +242,7 @@ impl<'tcx> MopGraph<'tcx> {
                 self.alias_sets[alias_set_idx].insert(lv_field_value_idx);
             }
             rap_debug!("alias sets: {:?}", self.alias_sets);
-            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1, clear_left);
+            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
         }
     }
 
@@ -284,8 +287,7 @@ impl<'tcx> MopGraph<'tcx> {
 
     // Handle aliases introduced by function calls.
     pub fn handle_fn_alias(&mut self, fn_alias: &MopAAFact, arg_vec: &[usize]) {
-        rap_debug!("merge aliases returned by function calls");
-        rap_info!("args: {:?}", arg_vec);
+        rap_debug!("merge aliases returned by function calls, args: {:?}", arg_vec);
         rap_info!("fn alias: {}", fn_alias);
         if fn_alias.lhs_no() >= arg_vec.len() || fn_alias.rhs_no() >= arg_vec.len() {
             return;
@@ -320,7 +322,9 @@ impl<'tcx> MopGraph<'tcx> {
             }
             rv = *self.values[rv].fields.get(index).unwrap();
         }
-        self.assign_alias(lv, rv, false);
+        // It is a function call and we should not distinguish left or right;
+        // Merge the alias instead of assign.
+        self.merge_alias(lv, rv);
     }
 
     pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
@@ -426,8 +430,7 @@ impl<'tcx> MopGraph<'tcx> {
         s1.is_some() && s1 == s2
     }
 
-    #[inline(always)]
-    pub fn merge_alias_sets(&mut self, e1: usize, e2: usize) {
+    pub fn merge_alias(&mut self, e1: usize, e2: usize) {
         let mut s1 = self.find_alias_set(e1);
         let mut s2 = self.find_alias_set(e2);
 
