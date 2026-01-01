@@ -81,13 +81,20 @@ impl fmt::Display for AAResult {
         if self.aliases().is_empty() {
             write!(f, "null")?;
         } else {
-            let joined = self
-                .aliases()
-                .iter()
+            let mut facts: Vec<_> = self.aliases().iter().collect();
+            facts.sort_by(|a, b| {
+                a.lhs_no
+                    .cmp(&b.lhs_no)
+                    .then(a.rhs_no.cmp(&b.rhs_no))
+                    .then(a.lhs_fields.cmp(&b.lhs_fields))
+                    .then(a.rhs_fields.cmp(&b.rhs_fields))
+            });
+            let joined = facts
+                .into_iter()
                 .map(|fact| format!("{}", fact))
                 .collect::<Vec<_>>()
                 .join(", ");
-            write!(f, "{joined}")?;
+            write!(f, "{}", joined)?;
         }
         Ok(())
     }

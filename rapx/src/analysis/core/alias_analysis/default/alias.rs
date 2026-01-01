@@ -179,14 +179,14 @@ impl<'tcx> MopGraph<'tcx> {
             }
             self.alias_sets[l_set_idx].remove(&lv_idx);
         }
-
-        self.alias_sets[r_set_idx].insert(lv_idx);
+        let new_l_set_idx = r_set_idx;
+        self.alias_sets[new_l_set_idx].insert(lv_idx);
 
         if self.values[lv_idx].fields.len() > 0 || self.values[rv_idx].fields.len() > 0 {
-            self.sync_field_alias(lv_idx, rv_idx, 0);
+            self.sync_field_alias(lv_idx, rv_idx, 0, true);
         }
         if self.values[rv_idx].father != None {
-            self.sync_father_alias(lv_idx, rv_idx, r_set_idx);
+            self.sync_father_alias(lv_idx, rv_idx, new_l_set_idx);
         }
     }
 
@@ -195,7 +195,7 @@ impl<'tcx> MopGraph<'tcx> {
     // Expected result: [1,2] [1.1,2.1];
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
-    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
+    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
         rap_debug!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         let max_field_depth = match std::env::var_os("MOP") {
@@ -211,12 +211,13 @@ impl<'tcx> MopGraph<'tcx> {
         }
 
         // For the fields of lv; we should remove them from the alias sets;
-        for lv_field in self.values[lv].fields.clone().into_iter() {
-            if let Some(alias_set_idx) = self.find_alias_set(lv_field.1) {
-                self.alias_sets[alias_set_idx].remove(&lv_field.1);
+        if clear_left {
+            for lv_field in self.values[lv].fields.clone().into_iter() {
+                if let Some(alias_set_idx) = self.find_alias_set(lv_field.1) {
+                    self.alias_sets[alias_set_idx].remove(&lv_field.1);
+                }
             }
         }
-
         for rv_field in self.values[rv].fields.clone().into_iter() {
             rap_debug!("rv_field: {:?}", rv_field);
             if !self.values[lv].fields.contains_key(&rv_field.0) {
@@ -241,7 +242,7 @@ impl<'tcx> MopGraph<'tcx> {
                 self.alias_sets[alias_set_idx].insert(lv_field_value_idx);
             }
             rap_debug!("alias sets: {:?}", self.alias_sets);
-            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
+            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1, true);
         }
     }
 
@@ -524,6 +525,19 @@ impl<'tcx> MopGraph<'tcx> {
         // If idx2 < idx1, removing idx2 shifts idx1 down by one
         let idx1 = if idx2 < idx1 { idx1 - 1 } else { idx1 };
         self.alias_sets[idx1].extend(set2);
+
+        if self.values[e1].fields.len() > 0 {
+            self.sync_field_alias(e2, e1, 0, false);
+        }
+        if self.values[e2].fields.len() > 0 {
+            self.sync_field_alias(e1, e2, 0, false);
+        }
+        if self.values[e1].father != None {
+            self.sync_father_alias(e2, e1, idx1);
+        }
+        if self.values[e2].father != None {
+            self.sync_father_alias(e1, e2, idx1);
+        }
     }
 
     #[inline(always)]

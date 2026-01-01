@@ -88,7 +88,7 @@ impl<'tcx> MopGraph<'tcx> {
         let scc_tree = self.sort_scc_tree(&cur_block.scc);
         rap_debug!("scc_tree: {:?}", scc_tree);
         let paths_in_scc = self.find_scc_paths(bb_idx, &scc_tree, &mut FxHashMap::default());
-        rap_info!("Paths found in scc: {:?}", paths_in_scc);
+        rap_debug!("Paths found in scc: {:?}", paths_in_scc);
 
         let backup_values = self.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.constants.clone();
@@ -104,7 +104,7 @@ impl<'tcx> MopGraph<'tcx> {
 
             let path = raw_path.0;
             let path_constraints = &raw_path.1;
-            rap_info!("checking path: {:?}", path);
+            rap_debug!("checking path: {:?}", path);
             if !path.is_empty() {
                 for idx in &path[..path.len() - 1] {
                     self.alias_bb(*idx);
@@ -350,7 +350,7 @@ impl<'tcx> MopGraph<'tcx> {
             return;
         }
         // FIX ME: a temp complexity control;
-        if path.len() > 100 || paths_in_scc.len() > 200 {
+        if path.len() > 100 || paths_in_scc.len() > 100 {
             return;
         }
         if !scc.nodes.contains(&cur) && start != cur {

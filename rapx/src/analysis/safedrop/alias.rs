@@ -142,7 +142,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if self.mop_graph.values[lv_idx].fields.len() > 0
             || self.mop_graph.values[rv_idx].fields.len() > 0
         {
-            self.sync_field_alias(lv_idx, rv_idx, 0);
+            self.sync_field_alias(lv_idx, rv_idx, 0, true);
         }
         if self.mop_graph.values[rv_idx].father != None {
             self.sync_father_alias(lv_idx, rv_idx, r_set_idx);
@@ -154,7 +154,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     // Expected result: [1,2] [1.1,2.1];
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
-    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
+    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
         rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         let max_field_depth = match std::env::var_os("MOP") {
@@ -170,9 +170,11 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
 
         // For the fields of lv; we should remove them from the alias sets;
-        for lv_field in self.mop_graph.values[lv].fields.clone().into_iter() {
-            if let Some(alias_set_idx) = self.mop_graph.find_alias_set(lv_field.1) {
-                self.mop_graph.alias_sets[alias_set_idx].remove(&lv_field.1);
+        if clear_left {
+            for lv_field in self.mop_graph.values[lv].fields.clone().into_iter() {
+                if let Some(alias_set_idx) = self.mop_graph.find_alias_set(lv_field.1) {
+                    self.mop_graph.alias_sets[alias_set_idx].remove(&lv_field.1);
+                }
             }
         }
         for rv_field in self.mop_graph.values[rv].fields.clone().into_iter() {
@@ -202,7 +204,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 self.mop_graph.alias_sets[alias_set_idx].insert(lv_field_value_idx);
             }
             rap_debug!("alias sets: {:?}", self.mop_graph.alias_sets);
-            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1);
+            self.sync_field_alias(lv_field_value_idx, rv_field.1, depth + 1, true);
         }
     }
 
@@ -286,7 +288,10 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 ProjectionElem::Deref => {}
                 ProjectionElem::Field(field, ty) => {
                     let field_idx = field.as_usize();
-                    if !self.mop_graph.values[value_idx].fields.contains_key(&field_idx) {
+                    if !self.mop_graph.values[value_idx]
+                        .fields
+                        .contains_key(&field_idx)
+                    {
                         let ty_env =
                             ty::TypingEnv::post_analysis(self.mop_graph.tcx, self.mop_graph.def_id);
                         let need_drop = ty.needs_drop(self.mop_graph.tcx, ty_env);
@@ -360,6 +365,53 @@ impl<'tcx> SafeDropGraph<'tcx> {
             }
             rv = *self.mop_graph.values[rv].fields.get(&index).unwrap();
         }
-        self.mop_graph.merge_alias(lv, rv);
+        self.merge_alias(lv, rv);
+    }
+
+    pub fn merge_alias(&mut self, e1: usize, e2: usize) {
+        let mut s1 = self.mop_graph.find_alias_set(e1);
+        let mut s2 = self.mop_graph.find_alias_set(e2);
+
+        // Create set for e1 if needed
+        if s1.is_none() {
+            self.mop_graph
+                .alias_sets
+                .push([e1].into_iter().collect::<FxHashSet<usize>>());
+            s1 = Some(self.mop_graph.alias_sets.len() - 1);
+        }
+
+        // Create set for e2 if needed
+        if s2.is_none() {
+            self.mop_graph
+                .alias_sets
+                .push([e2].into_iter().collect::<FxHashSet<usize>>());
+            s2 = Some(self.mop_graph.alias_sets.len() - 1);
+        }
+
+        // After creation, fetch indices (unwrap OK)
+        let idx1 = s1.unwrap();
+        let idx2 = s2.unwrap();
+
+        if idx1 == idx2 {
+            return;
+        }
+
+        let set2 = self.mop_graph.alias_sets.remove(idx2);
+        // If idx2 < idx1, removing idx2 shifts idx1 down by one
+        let idx1 = if idx2 < idx1 { idx1 - 1 } else { idx1 };
+        self.mop_graph.alias_sets[idx1].extend(set2);
+
+        if self.mop_graph.values[e1].fields.len() > 0 {
+            self.sync_field_alias(e2, e1, 0, false);
+        }
+        if self.mop_graph.values[e2].fields.len() > 0 {
+            self.sync_field_alias(e1, e2, 0, false);
+        }
+        if self.mop_graph.values[e1].father != None {
+            self.sync_father_alias(e2, e1, idx1);
+        }
+        if self.mop_graph.values[e2].father != None {
+            self.sync_father_alias(e1, e2, idx1);
+        }
     }
 }
