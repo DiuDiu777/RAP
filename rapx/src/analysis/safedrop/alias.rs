@@ -286,7 +286,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 ProjectionElem::Deref => {}
                 ProjectionElem::Field(field, ty) => {
                     let field_idx = field.as_usize();
-                    if !self.mop_graph.values[local].fields.contains_key(&field_idx) {
+                    if !self.mop_graph.values[value_idx].fields.contains_key(&field_idx) {
                         let ty_env =
                             ty::TypingEnv::post_analysis(self.mop_graph.tcx, self.mop_graph.def_id);
                         let need_drop = ty.needs_drop(self.mop_graph.tcx, ty_env);

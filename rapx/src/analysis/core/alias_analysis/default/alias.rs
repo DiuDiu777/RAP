@@ -139,7 +139,6 @@ impl<'tcx> MopGraph<'tcx> {
                 ProjectionElem::Deref => {}
                 ProjectionElem::Field(field, ty) => {
                     let field_idx = field.as_usize();
-                    rap_info!("field_id = {}", field_idx);
                     // If the field has not been created as a value, we crate a value;
                     if !self.values[value_idx].fields.contains_key(&field_idx) {
                         let ty_env = ty::TypingEnv::post_analysis(self.tcx, self.def_id);
@@ -197,7 +196,7 @@ impl<'tcx> MopGraph<'tcx> {
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
     pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize) {
-        rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
+        rap_debug!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         let max_field_depth = match std::env::var_os("MOP") {
             Some(val) if val == "0" => 10,
@@ -252,7 +251,7 @@ impl<'tcx> MopGraph<'tcx> {
     // Case 2: lv = 1.0; rv = 2; alias set [1, 3]
     // Expected result: [1.0, 2], [1, 3]
     pub fn sync_father_alias(&mut self, lv: usize, rv: usize, lv_alias_set_idx: usize) {
-        rap_info!("sync father aliases for lv:{} rv:{}", lv, rv);
+        rap_debug!("sync father aliases for lv:{} rv:{}", lv, rv);
         let mut father_id = rv;
         let mut father = self.values[father_id].father.clone();
         while let Some(father_info) = father {
@@ -287,8 +286,11 @@ impl<'tcx> MopGraph<'tcx> {
 
     // Handle aliases introduced by function calls.
     pub fn handle_fn_alias(&mut self, fn_alias: &MopAAFact, arg_vec: &[usize]) {
-        rap_debug!("merge aliases returned by function calls, args: {:?}", arg_vec);
-        rap_info!("fn alias: {}", fn_alias);
+        rap_debug!(
+            "merge aliases returned by function calls, args: {:?}",
+            arg_vec
+        );
+        rap_debug!("fn alias: {}", fn_alias);
         if fn_alias.lhs_no() >= arg_vec.len() || fn_alias.rhs_no() >= arg_vec.len() {
             return;
         }
@@ -339,9 +341,9 @@ impl<'tcx> MopGraph<'tcx> {
 
     //merge the result of current path to the final result.
     pub fn merge_results(&mut self) {
+        rap_debug!("merge results");
         let f_node: Vec<Option<FatherInfo>> =
             self.values.iter().map(|v| v.father.clone()).collect();
-        rap_info!("merge results, father nodes: {:?}", f_node);
         for node in self.values.iter() {
             if node.local > self.arg_size {
                 continue;
@@ -411,10 +413,72 @@ impl<'tcx> MopGraph<'tcx> {
                 }
             }
         }
-        let mut aliases: Vec<_> = self.ret_alias.alias_set.iter().collect();
-        aliases.sort();
-        for alias in &aliases {
-            rap_info!("{}", alias);
+        self.compress_aliases();
+    }
+
+    /// Compresses the alias analysis results with a two-step procedure:
+    ///
+    /// 1. **Field Truncation:**
+    ///    For each alias fact, any `lhs_fields` or `rhs_fields` projection longer than one element
+    ///    is truncated to just its first element (e.g., `1.0.1` becomes `1.0`, `1.2.2.0.0` becomes `1.2`).
+    ///    This aggressively flattens all field projections to a single field level.
+    ///
+    /// 2. **Containment Merging:**
+    ///    For all pairs of alias facts with the same locals, if both the truncated `lhs_fields` and
+    ///    `rhs_fields` of one are a (strict) prefix of another, only the more general (shorter) alias
+    ///    is kept. For example:
+    ///      - Keep (0, 1), remove (0.0, 1.1)
+    ///      - But do **not** merge (0, 1.0) and (0, 1.1), since these have different non-prefix fields.
+    ///
+    /// Call this after constructing the alias set to minimize and canonicalize the result.
+    pub fn compress_aliases(&mut self) {
+        // Step 1: Truncate fields to only the first element if present
+        let mut truncated_facts = Vec::new();
+        for fact in self.ret_alias.alias_set.iter() {
+            let mut new_fact = fact.clone();
+            if !new_fact.fact.lhs_fields.is_empty() {
+                new_fact.fact.lhs_fields = vec![new_fact.fact.lhs_fields[0]];
+            }
+            if !new_fact.fact.rhs_fields.is_empty() {
+                new_fact.fact.rhs_fields = vec![new_fact.fact.rhs_fields[0]];
+            }
+            truncated_facts.push(new_fact);
+        }
+        // Clean up alias set and replace with truncated
+        self.ret_alias.alias_set.clear();
+        for fact in truncated_facts {
+            self.ret_alias.alias_set.insert(fact);
+        }
+
+        // Step 2: Containment merging
+        // For the same (lhs_local, rhs_local), if (a, b) is a prefix of (a', b'), keep only (a, b)
+        let aliases: Vec<MopAAFact> = self.ret_alias.alias_set.iter().cloned().collect();
+        let n = aliases.len();
+        let mut to_remove: HashSet<MopAAFact> = HashSet::new();
+
+        for i in 0..n {
+            for j in 0..n {
+                if i == j || to_remove.contains(&aliases[j]) {
+                    continue;
+                }
+                let a = &aliases[i].fact;
+                let b = &aliases[j].fact;
+                // Only merge if both lhs/rhs locals are equal and BOTH are strict prefixes
+                if a.lhs_no() == b.lhs_no() && a.rhs_no() == b.rhs_no() {
+                    if a.lhs_fields.len() <= b.lhs_fields.len()
+                    && a.lhs_fields == b.lhs_fields[..a.lhs_fields.len()]
+                    && a.rhs_fields.len() <= b.rhs_fields.len()
+                    && a.rhs_fields == b.rhs_fields[..a.rhs_fields.len()]
+                    // Exclude case where fields are exactly the same (avoid self-removal)
+                    && (a.lhs_fields.len() < b.lhs_fields.len() || a.rhs_fields.len() < b.rhs_fields.len())
+                    {
+                        to_remove.insert(aliases[j].clone());
+                    }
+                }
+            }
+        }
+        for alias in to_remove {
+            self.ret_alias.alias_set.remove(&alias);
         }
     }
 
