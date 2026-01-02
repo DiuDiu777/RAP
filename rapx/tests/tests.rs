@@ -2,6 +2,22 @@
 use std::path::Path;
 use std::process::Command;
 
+/// Checks if any bug message in the output has confidence > 50
+pub fn detected_high_confidence(output: &str) -> bool {
+    // Regex to find confidence, e.g., `confidence 50%`
+    let re = regex::Regex::new(r"confidence (\d+)%").unwrap();
+    output.lines().any(|line| {
+        if let Some(cap) = re.captures(line) {
+            if let Some(conf_str) = cap.get(1) {
+                if let Ok(conf) = conf_str.as_str().parse::<u32>() {
+                    return conf > 50;
+                }
+            }
+        }
+        false
+    })
+}
+
 #[inline(always)]
 fn running_tests_with_arg(dir: &str, arg: &str) -> String {
     let raw_path = "./tests/".to_owned() + dir;
@@ -108,7 +124,7 @@ fn test_uaf_swithint() {
 #[test]
 fn test_false_wrapper() {
     let output = running_tests_with_arg("uaf/false_wrapper", "-F");
-    assert_eq!(output.contains("detected"), false);
+    assert_eq!(detected_high_confidence(&output), false);
 }
 
 #[test]
@@ -120,7 +136,7 @@ fn test_false_scc1() {
 #[test]
 fn test_false_tuple_transitive() {
     let output = running_tests_with_arg("uaf/false_tuple_transitive", "-F");
-    assert_eq!(output.contains("detected"), false);
+    assert_eq!(detected_high_confidence(&output), false);
 }
 
 #[test]
@@ -137,10 +153,10 @@ fn test_false_clone1() {
 }
 
 #[test]
-fn test_false_field_clone1() {
+fn test_false_field_clone() {
     #[allow(unused)]
     let output = running_tests_with_arg("uaf/false_field_clone", "-F");
-    assert_eq!(output.contains("detected"), false);
+    assert_eq!(detected_high_confidence(&output), false);
 }
 
 #[test]

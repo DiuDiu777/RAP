@@ -155,7 +155,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
     pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
-        rap_info!("sync field aliases for lv:{} rv:{}", lv, rv);
+        rap_debug!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         let max_field_depth = match std::env::var_os("MOP") {
             Some(val) if val == "0" => 10,
@@ -214,7 +214,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     // Case 2: lv = 1.0; rv = 2; alias set [1, 3]
     // Expected result: [1.0, 2], [1, 3]
     pub fn sync_father_alias(&mut self, lv: usize, rv: usize, lv_alias_set_idx: usize) {
-        rap_info!("sync father aliases for lv:{} rv:{}", lv, rv);
+        rap_debug!("sync father aliases for lv:{} rv:{}", lv, rv);
         let mut father_id = rv;
         let mut father = self.mop_graph.values[father_id].father.clone();
         while let Some(father_info) = father {

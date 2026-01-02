@@ -11,6 +11,7 @@ pub struct DropRecord {
     pub is_dropped: bool,
     pub drop_at_bb: usize,
     pub drop_via_local: usize,
+    pub has_dropped_field: bool,
 }
 
 impl DropRecord {
@@ -19,6 +20,7 @@ impl DropRecord {
             is_dropped,
             drop_at_bb,
             drop_via_local,
+            has_dropped_field: false,
         }
     }
     pub fn false_record() -> Self {
@@ -26,6 +28,7 @@ impl DropRecord {
             is_dropped: false,
             drop_at_bb: usize::MAX,
             drop_via_local: usize::MAX,
+            has_dropped_field: false,
         }
     }
 }

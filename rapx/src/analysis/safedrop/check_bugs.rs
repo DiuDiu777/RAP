@@ -44,40 +44,38 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
     pub fn uaf_check(&mut self, bb_idx: usize, idx: usize, span: Span, is_fncall: bool) {
         let local = self.mop_graph.values[idx].local;
-        if !self.mop_graph.values[idx].may_drop {
-            return;
-        }
         rap_debug!(
-            "uaf_check, idx: {:?}, local: {:?}, drop_record: {:?}, local_drop_record: {:?}",
+            "uaf_check, idx: {:?}, local: {:?}, drop_record: {:?}",
             idx,
             local,
             self.drop_record[idx],
-            self.drop_record[local],
         );
 
-        self.sync_drop_record(idx);
-        rap_debug!(
-            "after sync drop record: idx: {:?}, local: {:?}, drop_record: {:?}",
-            idx,
-            local,
-            self.drop_record[idx]
-        );
-        if !self.drop_record[idx].is_dropped {
+        if !self.mop_graph.values[idx].may_drop {
             return;
         }
+        if self.mop_graph.values[idx].is_ptr() && !is_fncall {
+            return;
+        }
+
+        self.sync_drop_record(idx);
+
+        let mut fully_dropped = true;
+        if !self.drop_record[idx].is_dropped {
+            fully_dropped = false;
+            if !self.drop_record[idx].has_dropped_field {
+                return;
+            }
+        }
+
         rap_debug!(
             "is_ptr: {}, is_fn_call: {}",
             self.mop_graph.values[idx].is_ptr(),
             is_fncall
         );
-        if self.mop_graph.values[idx].is_ptr() && !is_fncall {
-            return;
-        }
 
-        let confidence = match self.mop_graph.values[idx].kind {
-            TyKind::CornerCase => 0,
-            _ => 99,
-        };
+        let kind = self.mop_graph.values[idx].kind;
+        let confidence = Self::rate_confidence(kind, fully_dropped);
 
         let bug = TyBug {
             drop_bb: self.drop_record[idx].drop_at_bb,
@@ -94,6 +92,15 @@ impl<'tcx> SafeDropGraph<'tcx> {
         self.bug_records.uaf_bugs.insert(local, bug);
     }
 
+    pub fn rate_confidence(kind: TyKind, fully_dropped: bool) -> usize {
+        let confidence = match (kind, fully_dropped) {
+            (TyKind::CornerCase, _) => 0,
+            (_, true) => 99,
+            (_, false) => 50,
+        };
+        confidence
+    }
+
     pub fn sync_drop_record(&mut self, idx: usize) {
         if idx >= self.mop_graph.values.len() {
             return;
@@ -102,11 +109,18 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if self.drop_record[local].is_dropped {
             self.drop_record[idx] = self.drop_record[local];
         }
+        // For all values in the same alias set as idx,
+        // set has_dropped_field = true for their father and all ancestors up the chain.
         if let Some(aliases) = self.mop_graph.get_alias_set(local) {
-            for i in aliases.iter() {
-                if self.drop_record[*i].is_dropped {
-                    self.drop_record[idx] = self.drop_record[*i];
-                    return;
+            for value_idx in aliases {
+                if self.drop_record[value_idx].is_dropped {
+                    self.drop_record[idx] = self.drop_record[value_idx];
+                }
+                let mut father = self.mop_graph.values[value_idx].father.clone();
+                while let Some(father_info) = father {
+                    let father_idx = father_info.father_value_id;
+                    self.drop_record[father_idx].has_dropped_field = true;
+                    father = self.mop_graph.values[father_idx].father.clone();
                 }
             }
         }
@@ -125,13 +139,17 @@ impl<'tcx> SafeDropGraph<'tcx> {
             "df_check: is alive? {:?}",
             self.mop_graph.values[idx].is_alive()
         );
-        if self.mop_graph.values[idx].is_alive() {
-            return false;
+
+        let mut fully_dropped = true;
+        if !self.drop_record[idx].is_dropped {
+            fully_dropped = false;
+            if !self.drop_record[idx].has_dropped_field {
+                return false;
+            }
         }
-        let confidence = match self.mop_graph.values[idx].kind {
-            TyKind::CornerCase => 0,
-            _ => 99,
-        };
+        let kind = self.mop_graph.values[idx].kind;
+        let confidence = Self::rate_confidence(kind, fully_dropped);
+
         let bug = TyBug {
             drop_bb: self.drop_record[idx].drop_at_bb,
             drop_id: self.drop_record[idx].drop_via_local,
@@ -144,7 +162,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if flag_cleanup {
             if !self.bug_records.df_bugs_unwind.contains_key(&local) {
                 self.bug_records.df_bugs_unwind.insert(local, bug);
-                rap_warn!(
+                rap_info!(
                     "Find double free bug {} during unwinding; add to records.",
                     local
                 );
@@ -152,41 +170,54 @@ impl<'tcx> SafeDropGraph<'tcx> {
         } else {
             if !self.bug_records.df_bugs.contains_key(&local) {
                 self.bug_records.df_bugs.insert(local, bug);
-                rap_warn!("Find double free bug {}; add to records.", local);
+                rap_info!("Find double free bug {}; add to records.", local);
             }
         }
         return true;
     }
 
     pub fn dp_check(&mut self, flag_cleanup: bool) {
+        rap_debug!("dangling pointer check");
+        rap_debug!("current alias sets: {:?}", self.mop_graph.alias_sets);
         if flag_cleanup {
             for arg_idx in 1..self.mop_graph.arg_size + 1 {
-                if self.mop_graph.values[arg_idx].is_ptr() && self.drop_record[arg_idx].is_dropped {
-                    let confidence = match self.mop_graph.values[arg_idx].kind {
-                        TyKind::CornerCase => 0,
-                        _ => 99,
-                    };
-                    let bug = TyBug {
-                        drop_bb: self.drop_record[arg_idx].drop_at_bb,
-                        drop_id: self.drop_record[arg_idx].drop_via_local,
-                        trigger_bb: usize::MAX,
-                        trigger_id: arg_idx,
-                        span: self.mop_graph.span.clone(),
-                        confidence,
-                    };
-                    self.bug_records.dp_bugs_unwind.insert(arg_idx, bug);
-                    rap_warn!(
-                        "Find dangling pointer {} during unwinding; add to record.",
-                        arg_idx
-                    );
+                if !self.mop_graph.values[arg_idx].is_ptr() {
+                    continue;
                 }
+                let mut fully_dropped = true;
+                if !self.drop_record[arg_idx].is_dropped {
+                    fully_dropped = false;
+                    if !self.drop_record[arg_idx].has_dropped_field {
+                        continue;
+                    }
+                }
+                let kind = self.mop_graph.values[arg_idx].kind;
+                let confidence = Self::rate_confidence(kind, fully_dropped);
+                let bug = TyBug {
+                    drop_bb: self.drop_record[arg_idx].drop_at_bb,
+                    drop_id: self.drop_record[arg_idx].drop_via_local,
+                    trigger_bb: usize::MAX,
+                    trigger_id: arg_idx,
+                    span: self.mop_graph.span.clone(),
+                    confidence,
+                };
+                self.bug_records.dp_bugs_unwind.insert(arg_idx, bug);
+                rap_info!(
+                    "Find dangling pointer {} during unwinding; add to record.",
+                    arg_idx
+                );
             }
         } else {
-            if self.mop_graph.values[0].may_drop && self.drop_record[0].is_dropped {
-                let confidence = match self.mop_graph.values[0].kind {
-                    TyKind::CornerCase => 0,
-                    _ => 99,
-                };
+            if self.mop_graph.values[0].may_drop
+                && (self.drop_record[0].is_dropped || self.drop_record[0].has_dropped_field)
+            {
+                let mut fully_dropped = true;
+                if !self.drop_record[0].is_dropped {
+                    fully_dropped = false;
+                }
+
+                let kind = self.mop_graph.values[0].kind;
+                let confidence = Self::rate_confidence(kind, fully_dropped);
                 let bug = TyBug {
                     drop_bb: self.drop_record[0].drop_at_bb,
                     drop_id: self.drop_record[0].drop_via_local,
@@ -196,27 +227,31 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     confidence,
                 };
                 self.bug_records.dp_bugs.insert(0, bug);
-                rap_warn!("Find dangling pointer 0; add to record.");
+                rap_info!("Find dangling pointer 0; add to record.");
             } else {
                 for arg_idx in 0..self.mop_graph.arg_size + 1 {
-                    if self.mop_graph.values[arg_idx].is_ptr()
-                        && self.drop_record[arg_idx].is_dropped
-                    {
-                        let confidence = match self.mop_graph.values[arg_idx].kind {
-                            TyKind::CornerCase => 0,
-                            _ => 99,
-                        };
-                        let bug = TyBug {
-                            drop_bb: self.drop_record[arg_idx].drop_at_bb,
-                            drop_id: self.drop_record[arg_idx].drop_via_local,
-                            trigger_bb: usize::MAX,
-                            trigger_id: arg_idx,
-                            span: self.mop_graph.span.clone(),
-                            confidence,
-                        };
-                        self.bug_records.dp_bugs.insert(arg_idx, bug);
-                        rap_warn!("Find dangling pointer {}; add to record.", arg_idx);
+                    if !self.mop_graph.values[arg_idx].is_ptr() {
+                        continue;
                     }
+                    let mut fully_dropped = true;
+                    if !self.drop_record[arg_idx].is_dropped {
+                        fully_dropped = false;
+                        if !self.drop_record[arg_idx].has_dropped_field {
+                            continue;
+                        }
+                    }
+                    let kind = self.mop_graph.values[arg_idx].kind;
+                    let confidence = Self::rate_confidence(kind, fully_dropped);
+                    let bug = TyBug {
+                        drop_bb: self.drop_record[arg_idx].drop_at_bb,
+                        drop_id: self.drop_record[arg_idx].drop_via_local,
+                        trigger_bb: usize::MAX,
+                        trigger_id: arg_idx,
+                        span: self.mop_graph.span.clone(),
+                        confidence,
+                    };
+                    self.bug_records.dp_bugs.insert(arg_idx, bug);
+                    rap_info!("Find dangling pointer {}; add to record.", arg_idx);
                 }
             }
         }
