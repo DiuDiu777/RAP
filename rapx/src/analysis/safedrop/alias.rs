@@ -26,7 +26,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
             // Perfoming alias analysis first would introduce false positives.
             self.uaf_check(bb_index, rv_idx, assign.span, false);
             self.assign_alias(lv_idx, rv_idx);
-            self.fill_birth(lv_idx, self.mop_graph.blocks[bb_index].scc.enter as isize);
 
             rap_debug!("Alias sets: {:?}", self.mop_graph.alias_sets.clone());
 
@@ -61,8 +60,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
             {
                 rap_debug!("alias_bbcall in {:?}: {:?}", bb_index, call);
                 let lv = self.projection(destination.clone());
-                self.mop_graph.values[lv].birth =
-                    self.mop_graph.blocks[bb_index].scc.enter as isize;
                 let mut merge_vec = Vec::new();
                 merge_vec.push(lv);
                 let mut may_drop_flag = 0;
@@ -256,19 +253,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    // assign to the variable _x, we will set the birth of _x and its child self.mop_graph.values a new birth.
-    pub fn fill_birth(&mut self, node: usize, birth: isize) {
-        self.mop_graph.values[node].birth = birth;
-        for i in 0..self.mop_graph.values.len() {
-            if self.mop_graph.is_aliasing(i, node) && self.mop_graph.values[i].birth == -1 {
-                self.mop_graph.values[i].birth = birth;
-            }
-        }
-        for i in self.mop_graph.values[node].fields.clone().into_iter() {
-            self.fill_birth(i.1, birth); //i.1 corresponds to the local field.
-        }
-    }
-
     /*
      * This is the function for field sensitivity.
      * If the projection is a deref, we directly return its local;
@@ -298,7 +282,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         let may_drop = !is_not_drop(self.mop_graph.tcx, ty);
                         let mut node =
                             Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
-                        node.birth = self.mop_graph.values[local].birth;
                         node.kind = kind(ty);
                         node.father = Some(FatherInfo::new(value_idx, field_idx));
                         self.mop_graph.values[value_idx]
@@ -336,7 +319,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 let mut node =
                     Value::new(self.mop_graph.values.len(), left_init, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
-                node.birth = self.mop_graph.values[lv].birth;
                 node.father = Some(FatherInfo::new(lv, *index));
                 self.mop_graph.values[lv].fields.insert(*index, node.index);
                 self.drop_record.push(self.drop_record[lv]);
@@ -357,7 +339,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     may_drop,
                 );
                 node.kind = TyKind::RawPtr;
-                node.birth = self.mop_graph.values[rv].birth;
                 node.father = Some(FatherInfo::new(rv, *index));
                 self.mop_graph.values[rv].fields.insert(*index, node.index);
                 self.drop_record.push(self.drop_record[rv]);

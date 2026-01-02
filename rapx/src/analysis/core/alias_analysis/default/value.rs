@@ -8,7 +8,6 @@ pub struct Value {
     pub need_drop: bool,
     pub may_drop: bool,
     pub kind: TyKind,
-    pub birth: isize,
     pub father: Option<FatherInfo>, // Use to indicate whether the value is a field of its father node:
     pub fields: FxHashMap<usize, usize>, // 1: field_id; 2: field_value_id;
 }
@@ -34,20 +33,11 @@ impl Value {
             index,
             local,
             need_drop,
-            birth: 0,
             may_drop,
             kind: TyKind::Adt,
             father: None,
             fields: FxHashMap::default(),
         }
-    }
-
-    pub fn drop(&mut self) {
-        self.birth = -1;
-    }
-
-    pub fn is_alive(&self) -> bool {
-        self.birth > -1
     }
 
     pub fn is_tuple(&self) -> bool {

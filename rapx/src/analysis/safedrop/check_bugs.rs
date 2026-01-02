@@ -135,10 +135,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
             idx,
             local
         );
-        rap_debug!(
-            "df_check: is alive? {:?}",
-            self.mop_graph.values[idx].is_alive()
-        );
 
         let mut fully_dropped = true;
         if !self.drop_record[idx].is_dropped {
@@ -327,11 +323,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     flag_cleanup,
                 );
             }
-        }
-        //SCC.
-        if self.mop_graph.values[idx].birth < birth as isize && self.mop_graph.values[idx].may_drop
-        {
-            self.mop_graph.values[idx].drop();
         }
     }
 }
