@@ -98,6 +98,11 @@ impl<'tcx> MopGraph<'tcx> {
                         recursion_set.remove(&target_id);
                         fn_map.get(&target_id).unwrap()
                     };
+                    if fn_aliases.aliases().is_empty() {
+                        if let Some(l_set_idx) = self.find_alias_set(lv) {
+                            self.alias_sets[l_set_idx].remove(&lv);
+                        }
+                    }
                     for alias in fn_aliases.aliases().iter() {
                         if !alias.valuable() {
                             continue;

@@ -10,7 +10,7 @@ pub fn detected_high_confidence(output: &str) -> bool {
         if let Some(cap) = re.captures(line) {
             if let Some(conf_str) = cap.get(1) {
                 if let Ok(conf) = conf_str.as_str().parse::<u32>() {
-                    return conf > 50;
+                    return conf > 10;
                 }
             }
         }

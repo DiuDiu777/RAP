@@ -109,13 +109,13 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if self.drop_record[local].is_dropped {
             self.drop_record[idx] = self.drop_record[local];
         }
-        // For all values in the same alias set as idx,
-        // set has_dropped_field = true for their father and all ancestors up the chain.
         if let Some(aliases) = self.mop_graph.get_alias_set(local) {
             for value_idx in aliases {
+                // set idx as dropped if any of its alias has been dropped.
                 if self.drop_record[value_idx].is_dropped {
                     self.drop_record[idx] = self.drop_record[value_idx];
                 }
+                // set has_dropped_field = true for their father and all ancestors up the chain.
                 let mut father = self.mop_graph.values[value_idx].father.clone();
                 while let Some(father_info) = father {
                     let father_idx = father_info.father_value_id;
