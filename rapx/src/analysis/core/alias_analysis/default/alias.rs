@@ -1,4 +1,4 @@
-use super::{MopAAFact, MopAAResultMap, block::Term, corner_case::*, graph::*, types::*, value::*};
+use super::{MopAliasPair, MopFnAliasPairsMap, block::Term, corner_case::*, graph::*, types::*, value::*};
 use crate::analysis::graphs::scc::Scc;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
@@ -29,7 +29,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn alias_bbcall(
         &mut self,
         bb_index: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         let cur_block = self.blocks[bb_index].clone();
@@ -291,7 +291,7 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     // Handle aliases introduced by function calls.
-    pub fn handle_fn_alias(&mut self, fn_alias: &MopAAFact, arg_vec: &[usize]) {
+    pub fn handle_fn_alias(&mut self, fn_alias: &MopAliasPair, arg_vec: &[usize]) {
         rap_debug!(
             "merge aliases returned by function calls, args: {:?}",
             arg_vec
@@ -401,7 +401,7 @@ impl<'tcx> MopGraph<'tcx> {
                             };
                         }
                     }
-                    let mut new_alias = MopAAFact::new(
+                    let mut new_alias = MopAliasPair::new(
                         left_node.local,
                         left_node.may_drop,
                         left_node.need_drop,
@@ -458,9 +458,9 @@ impl<'tcx> MopGraph<'tcx> {
 
         // Step 2: Containment merging
         // For the same (lhs_local, rhs_local), if (a, b) is a prefix of (a', b'), keep only (a, b)
-        let aliases: Vec<MopAAFact> = self.ret_alias.alias_set.iter().cloned().collect();
+        let aliases: Vec<MopAliasPair> = self.ret_alias.alias_set.iter().cloned().collect();
         let n = aliases.len();
-        let mut to_remove: HashSet<MopAAFact> = HashSet::new();
+        let mut to_remove: HashSet<MopAliasPair> = HashSet::new();
 
         for i in 0..n {
             for j in 0..n {

@@ -79,7 +79,7 @@ pub enum SymbolicExpr<'tcx> {
         bin_op: BinOp,
     },
     Discriminant(Box<SymbolicExpr<'tcx>>),
-    NullaryOp(NullOp),
+    //NullaryOp(NullOp),
     ThreadLocalRef(DefId),
     Unknown(UnknownReason),
 }
@@ -184,7 +184,7 @@ impl<'tcx> fmt::Display for SymbolicExpr<'tcx> {
                 )
             }
             SymbolicExpr::Discriminant(expr) => write!(f, "discriminant({})", expr),
-            SymbolicExpr::NullaryOp(op) => write!(f, "{:?}", op),
+            //SymbolicExpr::NullaryOp(op) => write!(f, "{:?}", op),
             SymbolicExpr::ThreadLocalRef(def_id) => write!(f, "tls_{:?}", def_id),
             SymbolicExpr::Unknown(reason) => write!(f, "{{{:?}}}", reason),
         }

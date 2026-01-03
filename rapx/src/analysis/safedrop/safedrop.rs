@@ -1,5 +1,5 @@
 use super::{corner_case::*, graph::*};
-use crate::analysis::core::alias_analysis::default::{MopAAResultMap, block::Term};
+use crate::analysis::core::alias_analysis::default::{MopFnAliasPairsMap, block::Term};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::{
     mir::{
@@ -87,7 +87,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    pub fn split_check(&mut self, bb_idx: usize, fn_map: &MopAAResultMap) {
+    pub fn split_check(&mut self, bb_idx: usize, fn_map: &MopFnAliasPairsMap) {
         /* duplicate the status before visiteding a path; */
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.mop_graph.constants.clone();
@@ -106,7 +106,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         bb_idx: usize,
         path_discr_id: usize,
         path_discr_val: usize,
-        fn_map: &MopAAResultMap,
+        fn_map: &MopFnAliasPairsMap,
     ) {
         /* duplicate the status before visiteding a path; */
         let backup_values = self.mop_graph.values.clone(); // duplicate the status when visiteding different paths;
@@ -126,7 +126,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     // the core function of the safedrop.
-    pub fn check(&mut self, bb_idx: usize, fn_map: &MopAAResultMap) {
+    pub fn check(&mut self, bb_idx: usize, fn_map: &MopFnAliasPairsMap) {
         self.mop_graph.visit_times += 1;
         if self.mop_graph.visit_times > VISIT_LIMIT {
             return;
@@ -149,7 +149,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    pub fn check_scc(&mut self, bb_idx: usize, fn_map: &MopAAResultMap) {
+    pub fn check_scc(&mut self, bb_idx: usize, fn_map: &MopFnAliasPairsMap) {
         let cur_block = self.mop_graph.blocks[bb_idx].clone();
         /* Handle cases if the current block is a merged scc block with sub block */
         let scc_tree = self.mop_graph.sort_scc_tree(&cur_block.scc);
@@ -189,7 +189,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    pub fn check_single_node(&mut self, bb_idx: usize, fn_map: &MopAAResultMap) {
+    pub fn check_single_node(&mut self, bb_idx: usize, fn_map: &MopFnAliasPairsMap) {
         let cur_block = self.mop_graph.blocks[bb_idx].clone();
         rap_debug!("check {:?} as a node", bb_idx);
         self.alias_bb(bb_idx);
@@ -208,7 +208,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     pub fn handle_nexts(
         &mut self,
         bb_idx: usize,
-        fn_map: &MopAAResultMap,
+        fn_map: &MopFnAliasPairsMap,
         exclusive_nodes: Option<&FxHashSet<usize>>,
         path_constraints: Option<&FxHashMap<usize, usize>>,
     ) {

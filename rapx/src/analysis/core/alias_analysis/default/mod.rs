@@ -7,7 +7,7 @@ pub mod mop;
 pub mod types;
 pub mod value;
 
-use super::{AAFact, AAResult, AAResultMap, AliasAnalysis};
+use super::{AliasPair, FnAliasPairs, FnAliasPairsMap, AliasAnalysis};
 use crate::{
     analysis::{Analysis, graphs::scc::Scc},
     def_id::*,
@@ -22,15 +22,15 @@ use std::{cmp::Ordering, collections::HashSet, convert::From, fmt};
 pub const VISIT_LIMIT: usize = 1000;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct MopAAFact {
-    pub fact: AAFact,
+pub struct MopAliasPair {
+    pub fact: AliasPair,
     pub lhs_may_drop: bool,
     pub lhs_need_drop: bool,
     pub rhs_may_drop: bool,
     pub rhs_need_drop: bool,
 }
 
-impl MopAAFact {
+impl MopAliasPair {
     pub fn new(
         lhs_no: usize,
         lhs_may_drop: bool,
@@ -38,9 +38,9 @@ impl MopAAFact {
         rhs_no: usize,
         rhs_may_drop: bool,
         rhs_need_drop: bool,
-    ) -> MopAAFact {
-        MopAAFact {
-            fact: AAFact::new(lhs_no, rhs_no),
+    ) -> MopAliasPair {
+        MopAliasPair {
+            fact: AliasPair::new(lhs_no, rhs_no),
             lhs_may_drop,
             lhs_need_drop,
             rhs_may_drop,
@@ -75,29 +75,29 @@ impl MopAAFact {
     }
 }
 
-impl From<MopAAFact> for AAFact {
-    fn from(m: MopAAFact) -> Self {
+impl From<MopAliasPair> for AliasPair {
+    fn from(m: MopAliasPair) -> Self {
         m.fact
     }
 }
 
-impl From<MopAAResult> for AAResult {
-    fn from(m: MopAAResult) -> Self {
-        let alias_set = m.alias_set.into_iter().map(Into::into).collect(); // MopAAFact -> AAFact
-        AAResult {
+impl From<MopFnAliasPairs> for FnAliasPairs {
+    fn from(m: MopFnAliasPairs) -> Self {
+        let alias_set = m.alias_set.into_iter().map(Into::into).collect(); // MopAliasPair -> AliasPair
+        FnAliasPairs {
             arg_size: m.arg_size,
             alias_set,
         }
     }
 }
 
-impl PartialOrd for MopAAFact {
+impl PartialOrd for MopAliasPair {
     fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for MopAAFact {
+impl Ord for MopAliasPair {
     fn cmp(&self, other: &Self) -> Ordering {
         self.fact
             .lhs_no
@@ -112,19 +112,19 @@ impl Ord for MopAAFact {
     }
 }
 
-impl fmt::Display for MopAAFact {
+impl fmt::Display for MopAliasPair {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.fact)
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct MopAAResult {
+pub struct MopFnAliasPairs {
     arg_size: usize,
-    alias_set: HashSet<MopAAFact>,
+    alias_set: HashSet<MopAliasPair>,
 }
 
-impl fmt::Display for MopAAResult {
+impl fmt::Display for MopFnAliasPairs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
@@ -138,8 +138,8 @@ impl fmt::Display for MopAAResult {
     }
 }
 
-impl MopAAResult {
-    pub fn new(arg_size: usize) -> MopAAResult {
+impl MopFnAliasPairs {
+    pub fn new(arg_size: usize) -> MopFnAliasPairs {
         Self {
             arg_size,
             alias_set: HashSet::new(),
@@ -150,11 +150,11 @@ impl MopAAResult {
         self.arg_size
     }
 
-    pub fn aliases(&self) -> &HashSet<MopAAFact> {
+    pub fn aliases(&self) -> &HashSet<MopAliasPair> {
         &self.alias_set
     }
 
-    pub fn add_alias(&mut self, alias: MopAAFact) {
+    pub fn add_alias(&mut self, alias: MopAliasPair) {
         self.alias_set.insert(alias);
     }
 
@@ -177,11 +177,11 @@ impl MopAAResult {
 }
 
 //struct to cache the results for analyzed functions.
-pub type MopAAResultMap = FxHashMap<DefId, MopAAResult>;
+pub type MopFnAliasPairsMap = FxHashMap<DefId, MopFnAliasPairs>;
 
 pub struct AliasAnalyzer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
-    pub fn_map: FxHashMap<DefId, MopAAResult>,
+    pub fn_map: FxHashMap<DefId, MopFnAliasPairs>,
 }
 
 impl<'tcx> Analysis for AliasAnalyzer<'tcx> {
@@ -212,14 +212,14 @@ impl<'tcx> Analysis for AliasAnalyzer<'tcx> {
 }
 
 impl<'tcx> AliasAnalysis for AliasAnalyzer<'tcx> {
-    fn get_fn_alias(&self, def_id: DefId) -> Option<AAResult> {
+    fn get_fn_alias(&self, def_id: DefId) -> Option<FnAliasPairs> {
         self.fn_map.get(&def_id).cloned().map(Into::into)
     }
 
-    fn get_all_fn_alias(&self) -> AAResultMap {
+    fn get_all_fn_alias(&self) -> FnAliasPairsMap {
         self.fn_map
             .iter()
-            .map(|(k, v)| (*k, AAResult::from(v.clone())))
+            .map(|(k, v)| (*k, FnAliasPairs::from(v.clone())))
             .collect()
     }
 }
@@ -239,7 +239,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
             copy_to(),
             copy_from(),
         ];
-        let alias = MopAAFact::new(1, true, true, 2, true, true);
+        let alias = MopAliasPair::new(1, true, true, 2, true, true);
         for (key, value) in self.fn_map.iter_mut() {
             if cases.iter().any(|lock| lock == key) {
                 value.alias_set.clear();
@@ -279,7 +279,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
         }
     }
 
-    pub fn get_all_fn_alias_raw(&mut self) -> MopAAResultMap {
+    pub fn get_all_fn_alias_raw(&mut self) -> MopFnAliasPairsMap {
         self.fn_map.clone()
     }
 }

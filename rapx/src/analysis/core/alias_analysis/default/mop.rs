@@ -17,7 +17,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn split_check(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         /* duplicate the status before visiting a path; */
@@ -35,7 +35,7 @@ impl<'tcx> MopGraph<'tcx> {
         bb_idx: usize,
         path_discr_id: usize,
         path_discr_val: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         /* duplicate the status before visiting a path; */
@@ -55,7 +55,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn check(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         self.visit_times += 1;
@@ -78,7 +78,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn check_scc(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         let cur_block = self.blocks[bb_idx].clone();
@@ -126,7 +126,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn check_single_node(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         rap_debug!("check {:?} as a node", bb_idx);
@@ -142,7 +142,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn handle_nexts(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopAAResultMap,
+        fn_map: &mut MopFnAliasPairsMap,
         path_constraints: Option<&FxHashMap<usize, usize>>,
         recursion_set: &mut HashSet<DefId>,
     ) {

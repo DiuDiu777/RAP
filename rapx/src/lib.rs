@@ -32,7 +32,7 @@ use crate::analysis::scan::ScanAnalysis;
 use analysis::{
     Analysis,
     core::{
-        alias_analysis::{AAResultMapWrapper, AliasAnalysis, default::AliasAnalyzer},
+        alias_analysis::{FnAliasPairsMapWrapper, AliasAnalysis, default::AliasAnalyzer},
         api_dependency::ApiDependencyAnalyzer,
         callgraph::{CallGraphAnalysis, FnCallDisplay, default::CallGraphAnalyzer},
         dataflow::{
@@ -427,7 +427,7 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
         let mut analyzer = AliasAnalyzer::new(tcx);
         analyzer.run();
         let alias = analyzer.get_local_fn_alias();
-        rap_info!("{}", AAResultMapWrapper(alias));
+        rap_info!("{}", FnAliasPairsMapWrapper(alias));
     }
 
     if callback.is_api_dependency_enabled() {

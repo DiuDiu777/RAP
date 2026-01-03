@@ -5,7 +5,7 @@ use rustc_middle::{
 
 use super::graph::*;
 use crate::analysis::core::alias_analysis::default::{
-    MopAAFact, MopAAResultMap, block::Term, corner_case::*, types::*, value::*,
+    MopAliasPair, MopFnAliasPairsMap, block::Term, corner_case::*, types::*, value::*,
 };
 use rustc_data_structures::fx::FxHashSet;
 
@@ -45,7 +45,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     /* Check the aliases introduced by the terminators (function call) of a scc block */
-    pub fn alias_bbcall(&mut self, bb_index: usize, fn_map: &MopAAResultMap) {
+    pub fn alias_bbcall(&mut self, bb_index: usize, fn_map: &MopFnAliasPairsMap) {
         let cur_block = self.mop_graph.blocks[bb_index].clone();
         if let Term::Call(call) | Term::Drop(call) = cur_block.terminator {
             if let TerminatorKind::Call {
@@ -303,7 +303,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     //inter-procedure instruction to merge alias.
-    pub fn handle_fn_alias(&mut self, ret_alias: &MopAAFact, arg_vec: &Vec<usize>) {
+    pub fn handle_fn_alias(&mut self, ret_alias: &MopAliasPair, arg_vec: &Vec<usize>) {
         rap_debug!("ret_alias: {:?}", ret_alias);
         if ret_alias.lhs_no() >= arg_vec.len() || ret_alias.rhs_no() >= arg_vec.len() {
             return;

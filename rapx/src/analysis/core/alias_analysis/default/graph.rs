@@ -1,4 +1,4 @@
-use super::{MopAAResult, assign::*, block::*, types::*, value::*};
+use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
 use crate::{
     analysis::{
         graphs::scc::{Scc, SccExit},
@@ -44,7 +44,7 @@ pub struct MopGraph<'tcx> {
     pub visit_times: usize,
     pub alias_sets: Vec<FxHashSet<usize>>,
     // contains the return results for inter-procedure analysis.
-    pub ret_alias: MopAAResult,
+    pub ret_alias: MopFnAliasPairs,
     pub terminators: Vec<TerminatorKind<'tcx>>,
 }
 
@@ -514,7 +514,7 @@ impl<'tcx> MopGraph<'tcx> {
             arg_size,
             alias_sets: Vec::<FxHashSet<usize>>::new(),
             constants: FxHashMap::default(),
-            ret_alias: MopAAResult::new(arg_size),
+            ret_alias: MopFnAliasPairs::new(arg_size),
             visit_times: 0,
             discriminants,
             terminators,

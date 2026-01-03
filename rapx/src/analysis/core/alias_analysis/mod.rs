@@ -8,20 +8,20 @@ use rustc_span::def_id::LOCAL_CRATE;
 use std::{collections::HashSet, fmt};
 
 /// The data structure to store aliases for a set of functions.
-pub type AAResultMap = FxHashMap<DefId, AAResult>;
+pub type FnAliasPairsMap = FxHashMap<DefId, FnAliasPairs>;
 
-/// This is a wrapper struct for displaying AAResultMap.
-pub struct AAResultMapWrapper(pub AAResultMap);
+/// This is a wrapper struct for displaying FnAliasPairsMap.
+pub struct FnAliasPairsMapWrapper(pub FnAliasPairsMap);
 
 /// This trait provides features related to alias analysis.
 pub trait AliasAnalysis: Analysis {
     /// Return the aliases among the function arguments and return value of a specific function.
-    fn get_fn_alias(&self, def_id: DefId) -> Option<AAResult>;
+    fn get_fn_alias(&self, def_id: DefId) -> Option<FnAliasPairs>;
     /// Return the aliases among the function arguments and return value for all functions.
-    fn get_all_fn_alias(&self) -> AAResultMap;
+    fn get_all_fn_alias(&self) -> FnAliasPairsMap;
     /// Return the aliases among the function arguments and return value for functions of the local
     /// crate.
-    fn get_local_fn_alias(&self) -> AAResultMap {
+    fn get_local_fn_alias(&self) -> FnAliasPairsMap {
         self.get_all_fn_alias()
             .iter()
             .filter(|(def_id, _)| def_id.krate == LOCAL_CRATE)
@@ -33,13 +33,13 @@ pub trait AliasAnalysis: Analysis {
 /// To store the alias relationships among arguments and return values.
 /// Each function may have multiple return instructions, leading to different RetAlias.
 #[derive(Debug, Clone)]
-pub struct AAResult {
+pub struct FnAliasPairs {
     arg_size: usize,
-    alias_set: HashSet<AAFact>,
+    alias_set: HashSet<AliasPair>,
 }
 
-impl AAResult {
-    pub fn new(arg_size: usize) -> AAResult {
+impl FnAliasPairs {
+    pub fn new(arg_size: usize) -> FnAliasPairs {
         Self {
             arg_size,
             alias_set: HashSet::new(),
@@ -50,11 +50,11 @@ impl AAResult {
         self.arg_size
     }
 
-    pub fn aliases(&self) -> &HashSet<AAFact> {
+    pub fn aliases(&self) -> &HashSet<AliasPair> {
         &self.alias_set
     }
 
-    pub fn add_alias(&mut self, alias: AAFact) {
+    pub fn add_alias(&mut self, alias: AliasPair) {
         self.alias_set.insert(alias);
     }
 
@@ -76,7 +76,7 @@ impl AAResult {
     }
 }
 
-impl fmt::Display for AAResult {
+impl fmt::Display for FnAliasPairs {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.aliases().is_empty() {
             write!(f, "null")?;
@@ -100,7 +100,7 @@ impl fmt::Display for AAResult {
     }
 }
 
-impl fmt::Display for AAResultMapWrapper {
+impl fmt::Display for FnAliasPairsMapWrapper {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "=== Print alias analysis resuts ===")?;
         for (def_id, result) in &self.0 {
@@ -111,19 +111,19 @@ impl fmt::Display for AAResultMapWrapper {
     }
 }
 
-/// AAFact is used to store the alias relationships between two places.
+/// AliasPair is used to store the alias relationships between two places.
 /// The result is field-sensitive.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
-pub struct AAFact {
+pub struct AliasPair {
     pub lhs_no: usize,
     pub lhs_fields: Vec<usize>,
     pub rhs_no: usize,
     pub rhs_fields: Vec<usize>,
 }
 
-impl AAFact {
-    pub fn new(lhs_no: usize, rhs_no: usize) -> AAFact {
-        AAFact {
+impl AliasPair {
+    pub fn new(lhs_no: usize, rhs_no: usize) -> AliasPair {
+        AliasPair {
             lhs_no,
             lhs_fields: Vec::<usize>::new(),
             rhs_no,
@@ -154,7 +154,7 @@ impl AAFact {
     }
 }
 
-impl fmt::Display for AAFact {
+impl fmt::Display for AliasPair {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
