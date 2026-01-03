@@ -1,9 +1,6 @@
 use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
 use crate::{
-    analysis::{
-        graphs::scc::{Scc, SccExit},
-        utils::show_mir::display_mir,
-    },
+    analysis::graphs::scc::{Scc, SccExit},
     def_id::*,
     utils::source::*,
 };
@@ -54,7 +51,7 @@ impl<'tcx> MopGraph<'tcx> {
         rap_info!("New a MopGraph for: {:?}", fn_name);
         // handle variables
         let body = tcx.optimized_mir(def_id);
-        display_mir(def_id, body);
+        //display_mir(def_id, body);
         let locals = &body.local_decls;
         let arg_size = body.arg_count;
         let mut values = Vec::<Value>::new();

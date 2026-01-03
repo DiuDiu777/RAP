@@ -7,7 +7,7 @@ pub mod mop;
 pub mod types;
 pub mod value;
 
-use super::{AliasPair, FnAliasPairs, FnAliasPairsMap, AliasAnalysis};
+use super::{AliasPair, FnAliasPairs, FnAliasMap, AliasAnalysis};
 use crate::{
     analysis::{Analysis, graphs::scc::Scc},
     def_id::*,
@@ -177,7 +177,7 @@ impl MopFnAliasPairs {
 }
 
 //struct to cache the results for analyzed functions.
-pub type MopFnAliasPairsMap = FxHashMap<DefId, MopFnAliasPairs>;
+pub type MopFnAliasMap = FxHashMap<DefId, MopFnAliasPairs>;
 
 pub struct AliasAnalyzer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
@@ -216,7 +216,7 @@ impl<'tcx> AliasAnalysis for AliasAnalyzer<'tcx> {
         self.fn_map.get(&def_id).cloned().map(Into::into)
     }
 
-    fn get_all_fn_alias(&self) -> FnAliasPairsMap {
+    fn get_all_fn_alias(&self) -> FnAliasMap {
         self.fn_map
             .iter()
             .map(|(k, v)| (*k, FnAliasPairs::from(v.clone())))
@@ -279,7 +279,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
         }
     }
 
-    pub fn get_all_fn_alias_raw(&mut self) -> MopFnAliasPairsMap {
+    pub fn get_all_fn_alias_raw(&mut self) -> MopFnAliasMap {
         self.fn_map.clone()
     }
 }

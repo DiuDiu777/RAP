@@ -17,7 +17,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn split_check(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         /* duplicate the status before visiting a path; */
@@ -35,7 +35,7 @@ impl<'tcx> MopGraph<'tcx> {
         bb_idx: usize,
         path_discr_id: usize,
         path_discr_val: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         /* duplicate the status before visiting a path; */
@@ -55,7 +55,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn check(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         self.visit_times += 1;
@@ -71,14 +71,14 @@ impl<'tcx> MopGraph<'tcx> {
             self.check_scc(bb_idx, fn_map, recursion_set);
         } else {
             self.check_single_node(bb_idx, fn_map, recursion_set);
-            self.handle_nexts(bb_idx, fn_map, None, recursion_set);
+            self.handle_nexts(bb_idx, fn_map,  None, recursion_set);
         }
     }
 
     pub fn check_scc(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         let cur_block = self.blocks[bb_idx].clone();
@@ -93,13 +93,11 @@ impl<'tcx> MopGraph<'tcx> {
         let backup_values = self.values.clone(); // duplicate the status when visiteding different paths;
         let backup_constant = self.constants.clone();
         let backup_alias_sets = self.alias_sets.clone();
-        let backup_fn_map = fn_map.clone();
         let backup_recursion_set = recursion_set.clone();
         for raw_path in paths_in_scc {
             self.alias_sets = backup_alias_sets.clone();
             self.values = backup_values.clone();
             self.constants = backup_constant.clone();
-            *fn_map = backup_fn_map.clone();
             *recursion_set = backup_recursion_set.clone();
 
             let path = raw_path.0;
@@ -126,7 +124,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn check_single_node(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         rap_debug!("check {:?} as a node", bb_idx);
@@ -142,7 +140,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn handle_nexts(
         &mut self,
         bb_idx: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         path_constraints: Option<&FxHashMap<usize, usize>>,
         recursion_set: &mut HashSet<DefId>,
     ) {

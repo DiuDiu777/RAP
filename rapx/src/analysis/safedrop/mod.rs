@@ -11,7 +11,7 @@ use rustc_middle::ty::TyCtxt;
 use crate::{
     analysis::{
         core::{
-            alias_analysis::default::{AliasAnalyzer, MopFnAliasPairsMap},
+            alias_analysis::default::{AliasAnalyzer, MopFnAliasMap},
             ownedheap_analysis::{OHAResultMap, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
         },
         graphs::scc::Scc,
@@ -56,7 +56,7 @@ impl<'tcx> SafeDrop<'tcx> {
 
 pub fn query_safedrop(
     tcx: TyCtxt,
-    fn_map: &MopFnAliasPairsMap,
+    fn_map: &MopFnAliasMap,
     def_id: DefId,
     adt_owner: OHAResultMap,
 ) {

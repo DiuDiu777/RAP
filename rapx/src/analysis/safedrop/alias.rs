@@ -5,7 +5,7 @@ use rustc_middle::{
 
 use super::graph::*;
 use crate::analysis::core::alias_analysis::default::{
-    MopAliasPair, MopFnAliasPairsMap, block::Term, corner_case::*, types::*, value::*,
+    MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, types::*, value::*,
 };
 use rustc_data_structures::fx::FxHashSet;
 
@@ -45,7 +45,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     /* Check the aliases introduced by the terminators (function call) of a scc block */
-    pub fn alias_bbcall(&mut self, bb_index: usize, fn_map: &MopFnAliasPairsMap) {
+    pub fn alias_bbcall(&mut self, bb_index: usize, fn_map: &MopFnAliasMap) {
         let cur_block = self.mop_graph.blocks[bb_index].clone();
         if let Term::Call(call) | Term::Drop(call) = cur_block.terminator {
             if let TerminatorKind::Call {

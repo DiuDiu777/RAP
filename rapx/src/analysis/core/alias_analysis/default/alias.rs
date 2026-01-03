@@ -1,4 +1,4 @@
-use super::{MopAliasPair, MopFnAliasPairsMap, block::Term, corner_case::*, graph::*, types::*, value::*};
+use super::{MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, graph::*, types::*, value::*};
 use crate::analysis::graphs::scc::Scc;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
@@ -29,7 +29,7 @@ impl<'tcx> MopGraph<'tcx> {
     pub fn alias_bbcall(
         &mut self,
         bb_index: usize,
-        fn_map: &mut MopFnAliasPairsMap,
+        fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
         let cur_block = self.blocks[bb_index].clone();
@@ -89,6 +89,7 @@ impl<'tcx> MopGraph<'tcx> {
                             return;
                         }
                         recursion_set.insert(target_id);
+                        rap_info!("analyze callee");
                         let mut mop_graph = MopGraph::new(self.tcx, target_id);
                         mop_graph.find_scc();
                         mop_graph.check(0, fn_map, recursion_set);

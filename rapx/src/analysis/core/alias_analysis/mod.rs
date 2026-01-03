@@ -8,20 +8,20 @@ use rustc_span::def_id::LOCAL_CRATE;
 use std::{collections::HashSet, fmt};
 
 /// The data structure to store aliases for a set of functions.
-pub type FnAliasPairsMap = FxHashMap<DefId, FnAliasPairs>;
+pub type FnAliasMap = FxHashMap<DefId, FnAliasPairs>;
 
-/// This is a wrapper struct for displaying FnAliasPairsMap.
-pub struct FnAliasPairsMapWrapper(pub FnAliasPairsMap);
+/// This is a wrapper struct for displaying FnAliasMap.
+pub struct FnAliasMapWrapper(pub FnAliasMap);
 
 /// This trait provides features related to alias analysis.
 pub trait AliasAnalysis: Analysis {
     /// Return the aliases among the function arguments and return value of a specific function.
     fn get_fn_alias(&self, def_id: DefId) -> Option<FnAliasPairs>;
     /// Return the aliases among the function arguments and return value for all functions.
-    fn get_all_fn_alias(&self) -> FnAliasPairsMap;
+    fn get_all_fn_alias(&self) -> FnAliasMap;
     /// Return the aliases among the function arguments and return value for functions of the local
     /// crate.
-    fn get_local_fn_alias(&self) -> FnAliasPairsMap {
+    fn get_local_fn_alias(&self) -> FnAliasMap {
         self.get_all_fn_alias()
             .iter()
             .filter(|(def_id, _)| def_id.krate == LOCAL_CRATE)
@@ -100,7 +100,7 @@ impl fmt::Display for FnAliasPairs {
     }
 }
 
-impl fmt::Display for FnAliasPairsMapWrapper {
+impl fmt::Display for FnAliasMapWrapper {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "=== Print alias analysis resuts ===")?;
         for (def_id, result) in &self.0 {
