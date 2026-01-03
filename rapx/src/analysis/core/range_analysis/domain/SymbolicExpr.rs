@@ -14,7 +14,6 @@ use num_traits::{Bounded, Num, Zero};
 use rustc_ast::token::TokenKind::Plus;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::*, ty::Ty};
-use rustc_public::mir::NullOp;
 use std::ops::{Add, Mul, Sub};
 
 use crate::{
