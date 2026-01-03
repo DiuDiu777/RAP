@@ -67,7 +67,7 @@ impl FnAliasPairs {
         let mut new_alias_set = HashSet::with_capacity(alias_set.len());
 
         for mut ra in alias_set.into_iter() {
-            if ra.lhs_no() >= ra.rhs_no() {
+            if ra.left_local() >= ra.right_local() {
                 ra.swap();
             }
             new_alias_set.insert(ra);
@@ -83,9 +83,9 @@ impl fmt::Display for FnAliasPairs {
         } else {
             let mut facts: Vec<_> = self.aliases().iter().collect();
             facts.sort_by(|a, b| {
-                a.lhs_no
-                    .cmp(&b.lhs_no)
-                    .then(a.rhs_no.cmp(&b.rhs_no))
+                a.left_local
+                    .cmp(&b.left_local)
+                    .then(a.right_local.cmp(&b.right_local))
                     .then(a.lhs_fields.cmp(&b.lhs_fields))
                     .then(a.rhs_fields.cmp(&b.rhs_fields))
             });
@@ -115,34 +115,34 @@ impl fmt::Display for FnAliasPairsMapWrapper {
 /// The result is field-sensitive.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct AliasPair {
-    pub lhs_no: usize,
+    pub left_local: usize,
     pub lhs_fields: Vec<usize>,
-    pub rhs_no: usize,
+    pub right_local: usize,
     pub rhs_fields: Vec<usize>,
 }
 
 impl AliasPair {
-    pub fn new(lhs_no: usize, rhs_no: usize) -> AliasPair {
+    pub fn new(left_local: usize, right_local: usize) -> AliasPair {
         AliasPair {
-            lhs_no,
+            left_local,
             lhs_fields: Vec::<usize>::new(),
-            rhs_no,
+            right_local,
             rhs_fields: Vec::<usize>::new(),
         }
     }
 
     /// Swap the two elements of an alias pair, i.e., left to right, and right to left.
     pub fn swap(&mut self) {
-        std::mem::swap(&mut self.lhs_no, &mut self.rhs_no);
+        std::mem::swap(&mut self.left_local, &mut self.right_local);
         std::mem::swap(&mut self.lhs_fields, &mut self.rhs_fields);
     }
 
-    pub fn lhs_no(&self) -> usize {
-        self.lhs_no
+    pub fn left_local(&self) -> usize {
+        self.left_local
     }
 
-    pub fn rhs_no(&self) -> usize {
-        self.rhs_no
+    pub fn right_local(&self) -> usize {
+        self.right_local
     }
 
     pub fn lhs_fields(&self) -> &[usize] {
@@ -159,8 +159,8 @@ impl fmt::Display for AliasPair {
         write!(
             f,
             "({},{})",
-            aa_place_desc_str(self.lhs_no, &self.lhs_fields, true),
-            aa_place_desc_str(self.rhs_no, &self.rhs_fields, true)
+            aa_place_desc_str(self.left_local, &self.lhs_fields, true),
+            aa_place_desc_str(self.right_local, &self.rhs_fields, true)
         )
     }
 }

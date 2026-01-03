@@ -681,7 +681,7 @@ impl<'tcx> BodyVisitor<'tcx> {
         let d_local = self.handle_proj(false, dst_place.clone());
         if let Some(retalias) = fn_map.get(def_id) {
             for alias_set in retalias.aliases() {
-                let (l, r) = (alias_set.lhs_no, alias_set.rhs_no);
+                let (l, r) = (alias_set.left_local, alias_set.right_local);
                 let (l_fields, r_fields) =
                     (alias_set.lhs_fields.clone(), alias_set.rhs_fields.clone());
                 let (l_place, r_place) = (

@@ -297,12 +297,12 @@ impl<'tcx> MopGraph<'tcx> {
             arg_vec
         );
         rap_debug!("fn alias: {}", fn_alias);
-        if fn_alias.lhs_no() >= arg_vec.len() || fn_alias.rhs_no() >= arg_vec.len() {
+        if fn_alias.left_local() >= arg_vec.len() || fn_alias.right_local() >= arg_vec.len() {
             return;
         }
 
-        let mut lv = arg_vec[fn_alias.lhs_no()];
-        let mut rv = arg_vec[fn_alias.rhs_no()];
+        let mut lv = arg_vec[fn_alias.left_local()];
+        let mut rv = arg_vec[fn_alias.right_local()];
         let left_local = self.values[lv].local;
         let right_local = self.values[rv].local;
 
@@ -411,7 +411,7 @@ impl<'tcx> MopGraph<'tcx> {
                     );
                     new_alias.fact.lhs_fields = self.get_field_seq(left_node);
                     new_alias.fact.rhs_fields = self.get_field_seq(right_node);
-                    if new_alias.lhs_no() == new_alias.rhs_no() {
+                    if new_alias.left_local() == new_alias.right_local() {
                         continue;
                     }
                     rap_debug!("new_alias: {:?}", new_alias);
@@ -457,7 +457,7 @@ impl<'tcx> MopGraph<'tcx> {
         }
 
         // Step 2: Containment merging
-        // For the same (lhs_local, rhs_local), if (a, b) is a prefix of (a', b'), keep only (a, b)
+        // For the same (left_local, rhs_local), if (a, b) is a prefix of (a', b'), keep only (a, b)
         let aliases: Vec<MopAliasPair> = self.ret_alias.alias_set.iter().cloned().collect();
         let n = aliases.len();
         let mut to_remove: HashSet<MopAliasPair> = HashSet::new();
@@ -470,7 +470,7 @@ impl<'tcx> MopGraph<'tcx> {
                 let a = &aliases[i].fact;
                 let b = &aliases[j].fact;
                 // Only merge if both lhs/rhs locals are equal and BOTH are strict prefixes
-                if a.lhs_no() == b.lhs_no() && a.rhs_no() == b.rhs_no() {
+                if a.left_local() == b.left_local() && a.right_local() == b.right_local() {
                     if a.lhs_fields.len() <= b.lhs_fields.len()
                     && a.lhs_fields == b.lhs_fields[..a.lhs_fields.len()]
                     && a.rhs_fields.len() <= b.rhs_fields.len()

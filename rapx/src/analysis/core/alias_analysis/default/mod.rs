@@ -32,15 +32,15 @@ pub struct MopAliasPair {
 
 impl MopAliasPair {
     pub fn new(
-        lhs_no: usize,
+        left_local: usize,
         lhs_may_drop: bool,
         lhs_need_drop: bool,
-        rhs_no: usize,
+        right_local: usize,
         rhs_may_drop: bool,
         rhs_need_drop: bool,
     ) -> MopAliasPair {
         MopAliasPair {
-            fact: AliasPair::new(lhs_no, rhs_no),
+            fact: AliasPair::new(left_local, right_local),
             lhs_may_drop,
             lhs_need_drop,
             rhs_may_drop,
@@ -58,12 +58,12 @@ impl MopAliasPair {
         std::mem::swap(&mut self.lhs_need_drop, &mut self.rhs_need_drop);
     }
 
-    pub fn lhs_no(&self) -> usize {
-        self.fact.lhs_no
+    pub fn left_local(&self) -> usize {
+        self.fact.left_local
     }
 
-    pub fn rhs_no(&self) -> usize {
-        self.fact.rhs_no
+    pub fn right_local(&self) -> usize {
+        self.fact.right_local
     }
 
     pub fn lhs_fields(&self) -> &[usize] {
@@ -100,10 +100,10 @@ impl PartialOrd for MopAliasPair {
 impl Ord for MopAliasPair {
     fn cmp(&self, other: &Self) -> Ordering {
         self.fact
-            .lhs_no
-            .cmp(&other.fact.lhs_no)
+            .left_local
+            .cmp(&other.fact.left_local)
             .then_with(|| self.fact.lhs_fields.cmp(&other.fact.lhs_fields))
-            .then_with(|| self.fact.rhs_no.cmp(&other.fact.rhs_no))
+            .then_with(|| self.fact.right_local.cmp(&other.fact.right_local))
             .then_with(|| self.fact.rhs_fields.cmp(&other.fact.rhs_fields))
             .then_with(|| self.lhs_may_drop.cmp(&other.lhs_may_drop))
             .then_with(|| self.lhs_need_drop.cmp(&other.lhs_need_drop))
@@ -167,7 +167,7 @@ impl MopFnAliasPairs {
         let mut new_alias_set = HashSet::with_capacity(alias_set.len());
 
         for mut ra in alias_set.into_iter() {
-            if ra.lhs_no() >= ra.rhs_no() {
+            if ra.left_local() >= ra.right_local() {
                 ra.swap();
             }
             new_alias_set.insert(ra);

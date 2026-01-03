@@ -305,11 +305,11 @@ impl<'tcx> SafeDropGraph<'tcx> {
     //inter-procedure instruction to merge alias.
     pub fn handle_fn_alias(&mut self, ret_alias: &MopAliasPair, arg_vec: &Vec<usize>) {
         rap_debug!("ret_alias: {:?}", ret_alias);
-        if ret_alias.lhs_no() >= arg_vec.len() || ret_alias.rhs_no() >= arg_vec.len() {
+        if ret_alias.left_local() >= arg_vec.len() || ret_alias.right_local() >= arg_vec.len() {
             return;
         }
-        let left_init = arg_vec[ret_alias.lhs_no()];
-        let mut right_init = arg_vec[ret_alias.rhs_no()];
+        let left_init = arg_vec[ret_alias.left_local()];
+        let mut right_init = arg_vec[ret_alias.right_local()];
         let mut lv = left_init;
         let mut rv = right_init;
         for index in ret_alias.lhs_fields().iter() {
