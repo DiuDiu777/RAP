@@ -7,7 +7,7 @@ pub mod mop;
 pub mod types;
 pub mod value;
 
-use super::{AliasPair, FnAliasPairs, FnAliasMap, AliasAnalysis};
+use super::{AliasAnalysis, AliasPair, FnAliasMap, FnAliasPairs};
 use crate::{
     analysis::{Analysis, graphs::scc::Scc},
     def_id::*,

@@ -32,7 +32,7 @@ use crate::analysis::scan::ScanAnalysis;
 use analysis::{
     Analysis,
     core::{
-        alias_analysis::{FnAliasMapWrapper, AliasAnalysis, default::AliasAnalyzer},
+        alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
         api_dependency::ApiDependencyAnalyzer,
         callgraph::{CallGraphAnalysis, FnCallDisplay, default::CallGraphAnalyzer},
         dataflow::{

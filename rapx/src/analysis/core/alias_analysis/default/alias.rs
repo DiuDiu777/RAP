@@ -1,9 +1,11 @@
-use super::{MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, graph::*, types::*, value::*};
+use super::{
+    MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, graph::*, types::*, value::*,
+};
 use crate::analysis::graphs::scc::Scc;
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
-    mir::{Operand, Place, ProjectionElem, TerminatorKind},
+    mir::{Local, Operand, Place, ProjectionElem, TerminatorKind},
     ty,
 };
 use std::collections::HashSet;
@@ -89,7 +91,6 @@ impl<'tcx> MopGraph<'tcx> {
                             return;
                         }
                         recursion_set.insert(target_id);
-                        rap_info!("analyze callee");
                         let mut mop_graph = MopGraph::new(self.tcx, target_id);
                         mop_graph.find_scc();
                         mop_graph.check(0, fn_map, recursion_set);
@@ -346,6 +347,28 @@ impl<'tcx> MopGraph<'tcx> {
         field_id_seq
     }
 
+    /// Checks whether a sequence of field projections on a local MIR variable is valid.
+    /// For example, if the type of a local (e.g., 0) has two fields, 0.2 or 0.3 are both invalid. 
+    fn is_valid_field(&self, local: usize, field_seq: &[usize]) -> bool {
+        let body = self.tcx.optimized_mir(self.def_id);
+        let mut ty = body.local_decls[Local::from_usize(local)].ty;
+        for &fidx in field_seq {
+            while let ty::TyKind::Ref(_, inner, _) | ty::TyKind::RawPtr(inner, _) = ty.kind() {
+                ty = *inner;
+            }
+            if let ty::Adt(def, _) = ty.kind() {
+                let field_count = def.all_fields().count();
+                if fidx >= field_count {
+                    return false;
+                }
+            } else {
+                // 不是 ADT（struct/tuple），不能投影 field
+                return false;
+            }
+        }
+        true
+    }
+
     //merge the result of current path to the final result.
     pub fn merge_results(&mut self) {
         rap_debug!("merge results");
@@ -413,6 +436,12 @@ impl<'tcx> MopGraph<'tcx> {
                     new_alias.fact.lhs_fields = self.get_field_seq(left_node);
                     new_alias.fact.rhs_fields = self.get_field_seq(right_node);
                     if new_alias.left_local() == new_alias.right_local() {
+                        continue;
+                    }
+                    if !self.is_valid_field(left_node.local, &new_alias.fact.lhs_fields)
+                        || !self.is_valid_field(right_node.local, &new_alias.fact.rhs_fields)
+                    {
+                        rap_debug!("new_alias with invalid field: {:?}", new_alias);
                         continue;
                     }
                     rap_debug!("new_alias: {:?}", new_alias);

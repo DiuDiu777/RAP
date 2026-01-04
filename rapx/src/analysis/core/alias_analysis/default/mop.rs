@@ -71,7 +71,7 @@ impl<'tcx> MopGraph<'tcx> {
             self.check_scc(bb_idx, fn_map, recursion_set);
         } else {
             self.check_single_node(bb_idx, fn_map, recursion_set);
-            self.handle_nexts(bb_idx, fn_map,  None, recursion_set);
+            self.handle_nexts(bb_idx, fn_map, None, recursion_set);
         }
     }
 

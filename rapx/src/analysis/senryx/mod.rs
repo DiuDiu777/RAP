@@ -22,7 +22,7 @@ use visitor::{BodyVisitor, CheckResult};
 
 use crate::analysis::{
     Analysis,
-    core::alias_analysis::{FnAliasPairs, AliasAnalysis, default::AliasAnalyzer},
+    core::alias_analysis::{AliasAnalysis, FnAliasPairs, default::AliasAnalyzer},
     upg::{fn_collector::FnCollector, hir_visitor::ContainsUnsafe},
     utils::fn_info::*,
 };

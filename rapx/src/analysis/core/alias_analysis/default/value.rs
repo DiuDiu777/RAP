@@ -17,7 +17,7 @@ pub struct Value {
     /// The type of this value node (see `TyKind`).
     pub kind: TyKind,
     /// Information about this value’s parent, if it is a field of a parent node.
-    pub father: Option<FatherInfo>, 
+    pub father: Option<FatherInfo>,
     /// Mapping from field IDs to their value node IDs for field accesses.
     /// First field: field id; Second field: value id;
     pub fields: FxHashMap<usize, usize>,
@@ -71,8 +71,8 @@ impl Value {
     pub fn is_ref(&self) -> bool {
         self.kind == TyKind::Ref
     }
-    
-     /// Returns whether this value is of a corner case type as defined in `TyKind`.
+
+    /// Returns whether this value is of a corner case type as defined in `TyKind`.
     pub fn is_corner_case(&self) -> bool {
         self.kind == TyKind::CornerCase
     }

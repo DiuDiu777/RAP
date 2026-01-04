@@ -189,6 +189,12 @@ fn test_reference() {
 
 // ===============Alias Analysis Test==============
 #[test]
+fn test_alias_from_raw_parts_in() {
+    let output = running_tests_with_arg("alias/alias_from_raw_parts_in", "-alias");
+    assert_eq!(output.contains("foo\": (0.0,1)"), true);
+}
+
+#[test]
 fn test_alias_from_raw_parts() {
     let output = running_tests_with_arg("alias/alias_from_raw_parts", "-alias");
     assert_eq!(output.contains("foo\": (0,1)"), true);

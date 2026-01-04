@@ -54,12 +54,7 @@ impl<'tcx> SafeDrop<'tcx> {
     }
 }
 
-pub fn query_safedrop(
-    tcx: TyCtxt,
-    fn_map: &MopFnAliasMap,
-    def_id: DefId,
-    adt_owner: OHAResultMap,
-) {
+pub fn query_safedrop(tcx: TyCtxt, fn_map: &MopFnAliasMap, def_id: DefId, adt_owner: OHAResultMap) {
     let fn_name = get_fn_name(tcx, def_id);
     if fn_name
         .as_ref()

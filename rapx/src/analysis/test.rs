@@ -1,7 +1,7 @@
 use crate::analysis::{
     Analysis,
     core::{
-        alias_analysis::{FnAliasMapWrapper, AliasAnalysis, default::AliasAnalyzer},
+        alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
         dataflow::{Arg2RetMapWrapper, DataFlowAnalysis, default::DataFlowAnalyzer},
         ownedheap_analysis::{OHAResultMapWrapper, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
         range_analysis::{PathConstraintMapWrapper, RangeAnalysis, default::RangeAnalyzer},
