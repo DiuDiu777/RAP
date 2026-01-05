@@ -56,7 +56,7 @@ impl BugRecords {
             "Double free detected.",
             |bug, drop_local, trigger_local, drop_bb, trigger_bb| {
                 format!(
-                    "Double free (confidence {}%): LocalSpotation in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} is dropped at {}.",
+                    "Double free (confidence {}%): Location in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} is dropped at {}.",
                     bug.confidence,
                     span_to_filename(bug.span),
                     span_to_line_number(bug.span),
@@ -73,7 +73,7 @@ impl BugRecords {
             "Double free detected during unwinding.",
             |bug, drop_local, trigger_local, drop_bb, trigger_bb| {
                 format!(
-                    "Double free (confidence {}%): LocalSpotation in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} is dropped at {}.",
+                    "Double free (confidence {}%): Location in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} is dropped at {}.",
                     bug.confidence,
                     span_to_filename(bug.span),
                     span_to_line_number(bug.span),
@@ -92,7 +92,7 @@ impl BugRecords {
             "Use-after-free detected.",
             |bug, drop_local, trigger_local, drop_bb, trigger_bb| {
                 format!(
-                    "Use-after-free (confidence {}%): LocalSpotation in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} is used at {}.",
+                    "Use-after-free (confidence {}%): Location in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} is used at {}.",
                     bug.confidence,
                     span_to_filename(bug.span),
                     span_to_line_number(bug.span),
@@ -111,7 +111,7 @@ impl BugRecords {
             "Dangling pointer detected.",
             |bug, drop_local, trigger_local, drop_bb, _trigger_bb| {
                 format!(
-                    "Dangling pointer (confidence {}%): LocalSpotation in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} became dangling.",
+                    "Dangling pointer (confidence {}%): Location in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} became dangling.",
                     bug.confidence,
                     span_to_filename(bug.span),
                     span_to_line_number(bug.span),
@@ -128,7 +128,7 @@ impl BugRecords {
             "Dangling pointer detected during unwinding.",
             |bug, drop_local, trigger_local, drop_bb, _trigger_bb| {
                 format!(
-                    "Dangling pointer (confidence {}%): LocalSpotation in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} became dangling.",
+                    "Dangling pointer (confidence {}%): Location in file {} line {}.\n    | MIR detail: Value {} and {} are alias.\n    | MIR detail: {} is dropped at {}; {} became dangling.",
                     bug.confidence,
                     span_to_filename(bug.span),
                     span_to_line_number(bug.span),
