@@ -33,11 +33,11 @@ impl<'tcx> SafeDropGraph<'tcx> {
             // The left vaule is no more danling after this assignment.
             // We should bring remove it from the drop record, as well as its aliases.
             if self.drop_record[lv_idx].is_dropped && !self.drop_record[rv_idx].is_dropped {
-                self.drop_record[lv_idx] = DropRecord::false_record();
+                self.drop_record[lv_idx] = DropRecord::false_record(lv_idx);
                 // Synchronize the status of its aliases as not dropped.
                 for i in 0..self.mop_graph.values.len() {
                     if self.mop_graph.is_aliasing(lv_idx, i) {
-                        self.drop_record[i] = DropRecord::false_record();
+                        self.drop_record[i] = DropRecord::false_record(i);
                     }
                 }
             }
@@ -92,6 +92,11 @@ impl<'tcx> SafeDropGraph<'tcx> {
                             if fn_map.contains_key(&target_id) {
                                 let fn_aliases = fn_map.get(&target_id).unwrap();
                                 rap_debug!("aliases of the fn: {:?}", fn_aliases);
+                                if fn_aliases.aliases().is_empty() {
+                                    if let Some(l_set_idx) = self.mop_graph.find_alias_set(lv) {
+                                        self.mop_graph.alias_sets[l_set_idx].remove(&lv);
+                                    }
+                                }
                                 for alias in fn_aliases.aliases().iter() {
                                     if !alias.valuable() {
                                         continue;
@@ -177,8 +182,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
         for rv_field in self.mop_graph.values[rv].fields.clone().into_iter() {
             rap_debug!("rv_field: {:?}", rv_field);
             if !self.mop_graph.values[lv].fields.contains_key(&rv_field.0) {
+                let new_index = self.mop_graph.values.len();
                 let mut node = Value::new(
-                    self.mop_graph.values.len(),
+                    new_index,
                     self.mop_graph.values[lv].local,
                     self.mop_graph.values[rv_field.1].need_drop,
                     self.mop_graph.values[rv_field.1].may_drop,
@@ -189,7 +195,8 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     .fields
                     .insert(rv_field.0, node.index);
                 self.mop_graph.values.push(node);
-                self.drop_record.push(self.drop_record[lv]);
+                self.drop_record
+                    .push(DropRecord::from(new_index, &self.drop_record[lv]));
             }
             let lv_field_value_idx = *(self.mop_graph.values[lv].fields.get(&rv_field.0).unwrap());
 
@@ -230,8 +237,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
                             .get(&field_id)
                             .unwrap()
                     } else {
+                        let new_index = self.mop_graph.values.len();
                         let mut node = Value::new(
-                            self.mop_graph.values.len(),
+                            new_index,
                             self.mop_graph.values[value_idx].local,
                             self.mop_graph.values[value_idx].need_drop,
                             self.mop_graph.values[value_idx].may_drop,
@@ -242,7 +250,8 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         self.mop_graph.values[value_idx]
                             .fields
                             .insert(field_id, node.index);
-                        self.drop_record.push(self.drop_record[lv]);
+                        self.drop_record
+                            .push(DropRecord::from(new_index, &self.drop_record[lv]));
                         node.index
                     };
                     // add the node to the alias_set of lv;
@@ -289,7 +298,10 @@ impl<'tcx> SafeDropGraph<'tcx> {
                             .insert(field_idx, node.index);
                         self.mop_graph.values.push(node);
                         // The drop status is the same as its father.
-                        self.drop_record.push(self.drop_record[value_idx]);
+                        self.drop_record.push(DropRecord::from(
+                            new_value_idx,
+                            &self.drop_record[value_idx],
+                        ));
                     }
                     value_idx = *self.mop_graph.values[value_idx]
                         .fields
@@ -303,45 +315,43 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     //inter-procedure instruction to merge alias.
-    pub fn handle_fn_alias(&mut self, ret_alias: &MopAliasPair, arg_vec: &Vec<usize>) {
-        rap_debug!("ret_alias: {:?}", ret_alias);
-        if ret_alias.left_local() >= arg_vec.len() || ret_alias.right_local() >= arg_vec.len() {
+    pub fn handle_fn_alias(&mut self, fn_alias: &MopAliasPair, arg_vec: &Vec<usize>) {
+        rap_debug!("ret_alias: {:?}", fn_alias);
+        if fn_alias.left_local() >= arg_vec.len() || fn_alias.right_local() >= arg_vec.len() {
             return;
         }
-        let left_init = arg_vec[ret_alias.left_local()];
-        let mut right_init = arg_vec[ret_alias.right_local()];
-        let mut lv = left_init;
-        let mut rv = right_init;
-        for index in ret_alias.lhs_fields().iter() {
-            if self.mop_graph.values[lv].fields.contains_key(&index) == false {
-                let need_drop = ret_alias.lhs_need_drop;
-                let may_drop = ret_alias.lhs_may_drop;
-                let mut node =
-                    Value::new(self.mop_graph.values.len(), left_init, need_drop, may_drop);
+
+        let mut lv = arg_vec[fn_alias.left_local()];
+        let mut rv = arg_vec[fn_alias.right_local()];
+        let left_local = self.mop_graph.values[lv].local;
+        let right_local = self.mop_graph.values[rv].local;
+
+        for index in fn_alias.lhs_fields().iter() {
+            if !self.mop_graph.values[lv].fields.contains_key(&index) {
+                let new_index = self.mop_graph.values.len();
+                let need_drop = fn_alias.lhs_need_drop;
+                let may_drop = fn_alias.lhs_may_drop;
+                let mut node = Value::new(new_index, left_local, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
                 node.father = Some(FatherInfo::new(lv, *index));
                 self.mop_graph.values[lv].fields.insert(*index, node.index);
-                self.drop_record.push(self.drop_record[lv]);
+                self.drop_record
+                    .push(DropRecord::from(new_index, &self.drop_record[lv]));
                 self.mop_graph.values.push(node);
             }
             lv = *self.mop_graph.values[lv].fields.get(&index).unwrap();
         }
-        for index in ret_alias.rhs_fields().iter() {
-            rv = self.mop_graph.values[rv].index;
-            right_init = self.mop_graph.values[rv].local;
+        for index in fn_alias.rhs_fields().iter() {
             if !self.mop_graph.values[rv].fields.contains_key(&index) {
-                let need_drop = ret_alias.rhs_need_drop;
-                let may_drop = ret_alias.rhs_may_drop;
-                let mut node = Value::new(
-                    self.mop_graph.alias_sets.len(),
-                    right_init,
-                    need_drop,
-                    may_drop,
-                );
+                let new_index = self.mop_graph.values.len();
+                let need_drop = fn_alias.rhs_need_drop;
+                let may_drop = fn_alias.rhs_may_drop;
+                let mut node = Value::new(new_index, right_local, need_drop, may_drop);
                 node.kind = TyKind::RawPtr;
                 node.father = Some(FatherInfo::new(rv, *index));
                 self.mop_graph.values[rv].fields.insert(*index, node.index);
-                self.drop_record.push(self.drop_record[rv]);
+                self.drop_record
+                    .push(DropRecord::from(new_index, &self.drop_record[rv]));
                 self.mop_graph.values.push(node);
             }
             rv = *self.mop_graph.values[rv].fields.get(&index).unwrap();
@@ -350,6 +360,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     pub fn merge_alias(&mut self, e1: usize, e2: usize) {
+        rap_debug!("merge alias: {}, {}", e1, e2);
         let mut s1 = self.mop_graph.find_alias_set(e1);
         let mut s2 = self.mop_graph.find_alias_set(e2);
 

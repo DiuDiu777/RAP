@@ -30,18 +30,14 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     if !self.drop_heap_item_check(place) {
                         return;
                     }
-                    let birth = self.mop_graph.blocks[bb_idx].scc.enter;
                     let value_idx = self.projection(place.clone());
                     let info = drop.source_info.clone();
-                    self.add_to_drop_record(
-                        value_idx, value_idx, birth, &info, false, bb_idx, is_cleanup,
-                    );
+                    self.add_to_drop_record(value_idx, value_idx, &info, false, bb_idx, is_cleanup);
                 }
                 TerminatorKind::Call {
                     func: _, ref args, ..
                 } => {
                     if args.len() > 0 {
-                        let birth = self.mop_graph.blocks[bb_idx].scc.enter;
                         let place = match args[0].node {
                             Operand::Copy(place) => place,
                             Operand::Move(place) => place,
@@ -55,9 +51,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         }
                         let local = self.projection(place.clone());
                         let info = drop.source_info.clone();
-                        self.add_to_drop_record(
-                            local, local, birth, &info, false, bb_idx, is_cleanup,
-                        );
+                        self.add_to_drop_record(local, local, &info, false, bb_idx, is_cleanup);
                     }
                 }
                 _ => {}

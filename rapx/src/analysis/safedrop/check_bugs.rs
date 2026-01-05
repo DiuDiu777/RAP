@@ -78,17 +78,15 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let confidence = Self::rate_confidence(kind, fully_dropped);
 
         let bug = TyBug {
-            drop_bb: self.drop_record[idx].drop_at_bb,
-            drop_id: self.drop_record[idx].drop_via_local,
-            trigger_bb: bb_idx,
-            trigger_id: local,
+            drop_info: self.drop_record[idx].drop_info,
+            trigger_info: LocalSpot::new(bb_idx, local),
             span: span.clone(),
             confidence,
         };
         if self.bug_records.uaf_bugs.contains_key(&local) {
             return;
         }
-        rap_warn!("Find use-after-free bug {:?}; add to records", bug);
+        rap_warn!("Find a use-after-free bug {:?}; add to records", bug);
         self.bug_records.uaf_bugs.insert(local, bug);
     }
 
@@ -114,13 +112,13 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 // set idx as dropped if any of its alias has been dropped.
                 if self.drop_record[value_idx].is_dropped {
                     self.drop_record[idx] = self.drop_record[value_idx];
-                }
-                // set has_dropped_field = true for their father and all ancestors up the chain.
-                let mut father = self.mop_graph.values[value_idx].father.clone();
-                while let Some(father_info) = father {
-                    let father_idx = father_info.father_value_id;
-                    self.drop_record[father_idx].has_dropped_field = true;
-                    father = self.mop_graph.values[father_idx].father.clone();
+                    // set has_dropped_field = true for the father and all ancestors up the chain.
+                    let mut father = self.mop_graph.values[idx].father.clone();
+                    while let Some(father_info) = father {
+                        let father_idx = father_info.father_value_id;
+                        self.drop_record[father_idx].has_dropped_field = true;
+                        father = self.mop_graph.values[father_idx].father.clone();
+                    }
                 }
             }
         }
@@ -130,10 +128,11 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let local = self.mop_graph.values[idx].local;
         // If the value has not been dropped, it is not a double free.
         rap_debug!(
-            "df_check: bb_idx = {:?}, idx = {:?}, local = {:?}",
+            "df_check: bb_idx = {:?}, idx = {:?}, local = {:?}, alias_sets: {:?}",
             bb_idx,
             idx,
-            local
+            local,
+            self.mop_graph.alias_sets,
         );
 
         let mut fully_dropped = true;
@@ -147,26 +146,27 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let confidence = Self::rate_confidence(kind, fully_dropped);
 
         let bug = TyBug {
-            drop_bb: self.drop_record[idx].drop_at_bb,
-            drop_id: self.drop_record[idx].drop_via_local,
-            trigger_bb: bb_idx,
-            trigger_id: local,
+            drop_info: self.drop_record[idx].drop_info,
+            trigger_info: LocalSpot::new(bb_idx, local),
             span: span.clone(),
             confidence,
         };
 
+        for item in &self.drop_record {
+            rap_info!("drop_info: {:?}", item);
+        }
         if flag_cleanup {
             if !self.bug_records.df_bugs_unwind.contains_key(&local) {
                 self.bug_records.df_bugs_unwind.insert(local, bug);
                 rap_info!(
-                    "Find double free bug {} during unwinding; add to records.",
+                    "Find a double free bug {} during unwinding; add to records.",
                     local
                 );
             }
         } else {
             if !self.bug_records.df_bugs.contains_key(&local) {
                 self.bug_records.df_bugs.insert(local, bug);
-                rap_info!("Find double free bug {}; add to records.", local);
+                rap_info!("Find a double free bug {}; add to records.", local);
             }
         }
         return true;
@@ -190,16 +190,14 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 let kind = self.mop_graph.values[arg_idx].kind;
                 let confidence = Self::rate_confidence(kind, fully_dropped);
                 let bug = TyBug {
-                    drop_bb: self.drop_record[arg_idx].drop_at_bb,
-                    drop_id: self.drop_record[arg_idx].drop_via_local,
-                    trigger_bb: usize::MAX,
-                    trigger_id: arg_idx,
+                    drop_info: self.drop_record[arg_idx].drop_info,
+                    trigger_info: LocalSpot::from_local(arg_idx),
                     span: self.mop_graph.span.clone(),
                     confidence,
                 };
                 self.bug_records.dp_bugs_unwind.insert(arg_idx, bug);
                 rap_info!(
-                    "Find dangling pointer {} during unwinding; add to record.",
+                    "Find a dangling pointer {} during unwinding; add to record.",
                     arg_idx
                 );
             }
@@ -215,15 +213,13 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 let kind = self.mop_graph.values[0].kind;
                 let confidence = Self::rate_confidence(kind, fully_dropped);
                 let bug = TyBug {
-                    drop_bb: self.drop_record[0].drop_at_bb,
-                    drop_id: self.drop_record[0].drop_via_local,
-                    trigger_bb: usize::MAX,
-                    trigger_id: 0,
+                    drop_info: self.drop_record[0].drop_info,
+                    trigger_info: LocalSpot::from_local(0),
                     span: self.mop_graph.span.clone(),
                     confidence,
                 };
                 self.bug_records.dp_bugs.insert(0, bug);
-                rap_info!("Find dangling pointer 0; add to record.");
+                rap_info!("Find a dangling pointer 0; add to record.");
             } else {
                 for arg_idx in 0..self.mop_graph.arg_size + 1 {
                     if !self.mop_graph.values[arg_idx].is_ptr() {
@@ -239,15 +235,13 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     let kind = self.mop_graph.values[arg_idx].kind;
                     let confidence = Self::rate_confidence(kind, fully_dropped);
                     let bug = TyBug {
-                        drop_bb: self.drop_record[arg_idx].drop_at_bb,
-                        drop_id: self.drop_record[arg_idx].drop_via_local,
-                        trigger_bb: usize::MAX,
-                        trigger_id: arg_idx,
+                        drop_info: self.drop_record[arg_idx].drop_info,
+                        trigger_info: LocalSpot::from_local(arg_idx),
                         span: self.mop_graph.span.clone(),
                         confidence,
                     };
                     self.bug_records.dp_bugs.insert(arg_idx, bug);
-                    rap_info!("Find dangling pointer {}; add to record.", arg_idx);
+                    rap_info!("Find a dangling pointer {}; add to record.", arg_idx);
                 }
             }
         }
@@ -261,7 +255,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
         &mut self,
         idx: usize,     // the value to be dropped
         via_idx: usize, // the value is dropped via its alias: via_idx
-        birth: usize,
         info: &SourceInfo,
         flag_inprocess: bool,
         bb_idx: usize,
@@ -276,37 +269,21 @@ impl<'tcx> SafeDropGraph<'tcx> {
             return;
         }
         if !self.drop_record[idx].is_dropped {
-            self.drop_record[idx] =
-                DropRecord::new(true, bb_idx, self.mop_graph.values[via_idx].local);
+            let drop_info = LocalSpot::new(bb_idx, self.mop_graph.values[via_idx].local);
+            self.drop_record[idx] = DropRecord::new(idx, true, drop_info);
             rap_debug!(
                 "add_to_drop_record: idx = {}, {:?}",
                 idx,
                 self.drop_record[idx]
             );
-            //drop their alias
-            for i in 0..self.mop_graph.values.len() {
-                if !self.mop_graph.is_aliasing(idx, i)
-                    || i == idx
-                    || self.mop_graph.values[i].is_ref()
-                {
-                    continue;
-                }
-                self.add_to_drop_record(
-                    i,
-                    self.mop_graph.values[via_idx].local,
-                    birth,
-                    info,
-                    true,
-                    bb_idx,
-                    flag_cleanup,
-                );
+            // sync the father node: has_dropped_field
+            let mut father = self.mop_graph.values[idx].father.clone();
+            while let Some(father_info) = father {
+                let father_idx = father_info.father_value_id;
+                self.drop_record[father_idx].has_dropped_field = true;
+                father = self.mop_graph.values[father_idx].father.clone();
             }
-        } else {
-            return;
-        }
-        //drop the fields of the root node.
-        //alias flag is used to avoid the fields of the alias are dropped repeatly.
-        if !flag_inprocess {
+            //drop the fields of the root node.
             for (_field_id, field_value_id) in self.mop_graph.values[idx].fields.clone() {
                 if self.mop_graph.values[idx].is_tuple()
                     && !self.mop_graph.values[field_value_id].need_drop
@@ -316,12 +293,26 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 self.add_to_drop_record(
                     field_value_id,
                     self.mop_graph.values[via_idx].local,
-                    birth,
                     info,
-                    true,
+                    false,
                     bb_idx,
                     flag_cleanup,
                 );
+            }
+        }
+        if !flag_inprocess {
+            //drop their alias
+            if let Some(aliases) = self.mop_graph.get_alias_set(idx) {
+                for i in aliases {
+                    self.add_to_drop_record(
+                        i,
+                        self.mop_graph.values[via_idx].local,
+                        info,
+                        true,
+                        bb_idx,
+                        flag_cleanup,
+                    );
+                }
             }
         }
     }

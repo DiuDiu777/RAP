@@ -348,7 +348,7 @@ impl<'tcx> MopGraph<'tcx> {
     }
 
     /// Checks whether a sequence of field projections on a local MIR variable is valid.
-    /// For example, if the type of a local (e.g., 0) has two fields, 0.2 or 0.3 are both invalid. 
+    /// For example, if the type of a local (e.g., 0) has two fields, 0.2 or 0.3 are both invalid.
     fn is_valid_field(&self, local: usize, field_seq: &[usize]) -> bool {
         let body = self.tcx.optimized_mir(self.def_id);
         let mut ty = body.local_decls[Local::from_usize(local)].ty;
