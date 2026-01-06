@@ -1,12 +1,15 @@
 use super::{
-    MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, graph::*, types::*, value::*,
+    MopAliasPair, MopFnAliasMap, block::Term, graph::*, types::*, value::*,
 };
-use crate::analysis::graphs::scc::Scc;
+use crate::{
+    def_id::*,
+    analysis::graphs::scc::Scc,
+};
 use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{Local, Operand, Place, ProjectionElem, TerminatorKind},
-    ty,
+    ty::self,
 };
 use std::collections::HashSet;
 
@@ -75,7 +78,7 @@ impl<'tcx> MopGraph<'tcx> {
                         return;
                     }
                     // This function does not introduce new aliases.
-                    if is_corner_case(target_id) {
+                    if is_no_alias_intrinsic(target_id) {
                         return;
                     }
                     if !self.tcx.is_mir_available(target_id) {
@@ -313,7 +316,7 @@ impl<'tcx> MopGraph<'tcx> {
                 let need_drop = fn_alias.lhs_need_drop;
                 let may_drop = fn_alias.lhs_may_drop;
                 let mut node = Value::new(self.values.len(), left_local, need_drop, may_drop);
-                node.kind = TyKind::RawPtr;
+                node.kind = ValueKind::RawPtr;
                 node.father = Some(FatherInfo::new(lv, *index));
                 self.values[lv].fields.insert(*index, node.index);
                 self.values.push(node);
@@ -325,7 +328,7 @@ impl<'tcx> MopGraph<'tcx> {
                 let need_drop = fn_alias.rhs_need_drop;
                 let may_drop = fn_alias.rhs_may_drop;
                 let mut node = Value::new(self.values.len(), right_local, need_drop, may_drop);
-                node.kind = TyKind::RawPtr;
+                node.kind = ValueKind::RawPtr;
                 node.father = Some(FatherInfo::new(rv, *index));
                 self.values[rv].fields.insert(*index, node.index);
                 self.values.push(node);
@@ -583,4 +586,11 @@ impl<'tcx> MopGraph<'tcx> {
             None
         }
     }
+}
+
+pub fn is_no_alias_intrinsic(def_id: DefId) -> bool {
+    if def_id == call_mut() || def_id == clone() || def_id == take() {
+        return true;
+    }
+    return false;
 }

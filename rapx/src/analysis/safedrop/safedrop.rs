@@ -1,6 +1,6 @@
 use super::{bug_records::*, corner_case::*, drop::*, graph::*};
 use crate::{
-    analysis::core::alias_analysis::default::{MopFnAliasMap, block::Term, types::TyKind},
+    analysis::core::alias_analysis::default::{MopFnAliasMap, block::Term, types::ValueKind},
     utils::source::{get_filename, get_name},
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -438,9 +438,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
         self.bug_records.uaf_bugs.insert(local, bug);
     }
 
-    pub fn rate_confidence(kind: TyKind, fully_dropped: bool) -> usize {
+    pub fn rate_confidence(kind: ValueKind, fully_dropped: bool) -> usize {
         let confidence = match (kind, fully_dropped) {
-            (TyKind::CornerCase, _) => 0,
+            (ValueKind::SpecialPtr, _) => 0,
             (_, true) => 99,
             (_, false) => 50,
         };

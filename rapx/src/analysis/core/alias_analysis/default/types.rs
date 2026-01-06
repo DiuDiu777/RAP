@@ -2,8 +2,8 @@ use rustc_middle::ty::{self, Ty, TyCtxt};
 
 #[derive(PartialEq, Debug, Copy, Clone)]
 /// Represents different kinds of types for alias analysis purposes.
-/// This is a wrapper of rustc_middle::ty, except that treat some types as corner cases;
-pub enum TyKind {
+/// This is a wrapper of rustc_middle::ty::TyKind, except that treat some types as special cases;
+pub enum ValueKind {
     /// Algebraic Data Type (structs, enums, basic composite types).
     Adt,
     /// Raw pointer type, e.g., `*const T` or `*mut T`.
@@ -13,7 +13,7 @@ pub enum TyKind {
     /// Tuple type, e.g., `(T1, T2, ...)`.
     Tuple,
     /// Special cases such as `RefCell`, `Rc`, etc., which need to be treated differently.
-    CornerCase,
+    SpecialPtr,
 }
 
 /// Analyzes a `Ty` (Rustc type) and returns its `TyKind` for alias analysis.
@@ -26,21 +26,21 @@ pub enum TyKind {
 ///
 /// # Returns
 /// * `TyKind` - The classified type kind.
-pub fn kind(ty: Ty<'_>) -> TyKind {
+pub fn kind(ty: Ty<'_>) -> ValueKind {
     match ty.kind() {
-        ty::RawPtr(..) => TyKind::RawPtr,
-        ty::Ref(..) => TyKind::Ref,
-        ty::Tuple(..) => TyKind::Tuple,
+        ty::RawPtr(..) => ValueKind::RawPtr,
+        ty::Ref(..) => ValueKind::Ref,
+        ty::Tuple(..) => ValueKind::Tuple,
         ty::Adt(adt, _) => {
             // Use string matching to catch RefCell/RefMut/Rc for special handling.
             let s = format!("{:?}", adt);
             if s.contains("cell::RefMut") || s.contains("cell::Ref") || s.contains("rc::Rc") || s.contains("sync::Arc") || s.contains("sync::Weak") {
-                TyKind::CornerCase
+                ValueKind::SpecialPtr
             } else {
-                TyKind::Adt
+                ValueKind::Adt
             }
         }
-        _ => TyKind::Adt,
+        _ => ValueKind::Adt,
     }
 }
 

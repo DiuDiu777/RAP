@@ -5,7 +5,7 @@ use rustc_middle::{
 
 use super::{drop::*, graph::*};
 use crate::analysis::core::alias_analysis::default::{
-    MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, types::*, value::*,
+    MopAliasPair, MopFnAliasMap, alias::is_no_alias_intrinsic, block::Term, types::*, value::*
 };
 use rustc_data_structures::fx::FxHashSet;
 
@@ -72,7 +72,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 if let ty::FnDef(target_id, _) = constant.const_.ty().kind() {
                     if may_drop_flag > 1 {
                         // This function does not introduce new aliases.
-                        if is_corner_case(*target_id) {
+                        if is_no_alias_intrinsic(*target_id) {
                             return;
                         }
                         if self.mop_graph.tcx.is_mir_available(*target_id) {
@@ -322,7 +322,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 let need_drop = fn_alias.lhs_need_drop;
                 let may_drop = fn_alias.lhs_may_drop;
                 let mut node = Value::new(new_index, left_local, need_drop, may_drop);
-                node.kind = TyKind::RawPtr;
+                node.kind = ValueKind::RawPtr;
                 node.father = Some(FatherInfo::new(lv, *index));
                 self.mop_graph.values[lv].fields.insert(*index, node.index);
                 self.drop_record
@@ -337,7 +337,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 let need_drop = fn_alias.rhs_need_drop;
                 let may_drop = fn_alias.rhs_may_drop;
                 let mut node = Value::new(new_index, right_local, need_drop, may_drop);
-                node.kind = TyKind::RawPtr;
+                node.kind = ValueKind::RawPtr;
                 node.father = Some(FatherInfo::new(rv, *index));
                 self.mop_graph.values[rv].fields.insert(*index, node.index);
                 self.drop_record

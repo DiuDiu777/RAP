@@ -92,7 +92,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             bb_idx
         );
         //Rc drop
-        if self.mop_graph.values[value_idx].is_corner_case() {
+        if self.mop_graph.values[value_idx].is_ref_count() {
             return;
         }
         if self.df_check(value_idx, bb_idx, self.mop_graph.span, flag_cleanup) {

@@ -1,4 +1,4 @@
-use crate::analysis::core::alias_analysis::default::types::TyKind;
+use crate::analysis::core::alias_analysis::default::types::ValueKind;
 use rustc_data_structures::fx::FxHashMap;
 
 /// Represents a value node in the alias analysis graph.
@@ -14,8 +14,8 @@ pub struct Value {
     pub need_drop: bool,
     /// Indicates whether this value may need to be dropped (uncertain drop semantics).
     pub may_drop: bool,
-    /// The type of this value node (see `TyKind`).
-    pub kind: TyKind,
+    /// The type of this value node (see `ValueKind`).
+    pub kind: ValueKind,
     /// Information about this value’s parent, if it is a field of a parent node.
     pub father: Option<FatherInfo>,
     /// Mapping from field IDs to their value node IDs for field accesses.
@@ -44,14 +44,14 @@ impl FatherInfo {
 
 impl Value {
     /// Create a new value node with the provided properties.
-    /// The `kind` defaults to `TyKind::Adt` and `father` defaults to `None`.
+    /// The `kind` defaults to `ValueKind::Adt` and `father` defaults to `None`.
     pub fn new(index: usize, local: usize, need_drop: bool, may_drop: bool) -> Self {
         Value {
             index,
             local,
             need_drop,
             may_drop,
-            kind: TyKind::Adt,
+            kind: ValueKind::Adt,
             father: None,
             fields: FxHashMap::default(),
         }
@@ -59,21 +59,21 @@ impl Value {
 
     /// Returns whether this value is a tuple type.
     pub fn is_tuple(&self) -> bool {
-        self.kind == TyKind::Tuple
+        self.kind == ValueKind::Tuple
     }
 
     /// Returns whether this value is a pointer (raw pointer or reference).
     pub fn is_ptr(&self) -> bool {
-        self.kind == TyKind::RawPtr || self.kind == TyKind::Ref
+        self.kind == ValueKind::RawPtr || self.kind == ValueKind::Ref
     }
 
     /// Returns whether this value is a reference type.
     pub fn is_ref(&self) -> bool {
-        self.kind == TyKind::Ref
+        self.kind == ValueKind::Ref
     }
 
-    /// Returns whether this value is of a corner case type as defined in `TyKind`.
-    pub fn is_corner_case(&self) -> bool {
-        self.kind == TyKind::CornerCase
+    /// Returns whether this value is of a corner case type as defined in `ValueKind`.
+    pub fn is_ref_count(&self) -> bool {
+        self.kind == ValueKind::SpecialPtr
     }
 }
