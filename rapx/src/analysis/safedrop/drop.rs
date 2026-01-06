@@ -80,6 +80,11 @@ impl<'tcx> SafeDropGraph<'tcx> {
         _info: &SourceInfo,
         flag_cleanup: bool,
     ) {
+        rap_debug!(
+            "add_to_drop_record: value_idx = {}, bb_idx = {}",
+            value_idx,
+            bb_idx
+        );
         //Rc drop
         if self.mop_graph.values[value_idx].is_corner_case() {
             return;
@@ -90,70 +95,104 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if !self.drop_record[value_idx].is_dropped {
             let drop_spot = LocalSpot::new(bb_idx, self.mop_graph.values[value_idx].local);
             self.drop_record[value_idx] = DropRecord::new(value_idx, true, drop_spot);
-            rap_debug!(
-                "add_to_drop_record: idx = {}, {:?}",
-                value_idx,
-                self.drop_record[value_idx]
-            );
-
-            self.update_drop_bottom_up(value_idx);
-            self.update_drop_top_down(value_idx, drop_spot);
+            rap_debug!("{:?}", self.drop_record[value_idx]);
+            self.push_drop_info(value_idx, drop_spot);
         }
     }
 
-    pub fn update_drop_alias(&mut self, idx: usize, drop_spot: LocalSpot) {
-        if let Some(aliases) = self.mop_graph.get_alias_set(idx) {
+    pub fn push_drop_info(&mut self, value_idx: usize, drop_spot: LocalSpot) {
+        self.push_drop_bottom_up(value_idx);
+        self.push_drop_top_down(value_idx, drop_spot);
+        //self.push_drop_alias(value_idx, drop_spot);
+    }
+
+    pub fn push_drop_alias(&mut self, value_idx: usize, drop_spot: LocalSpot) {
+        rap_debug!("push_drop_alias: value_idx = {}", value_idx,);
+        if let Some(aliases) = self.mop_graph.get_alias_set(value_idx) {
             for i in aliases {
-                if i != idx {
+                if i != value_idx {
                     self.drop_record[i] = DropRecord::new(i, true, drop_spot);
-                    rap_debug!("update_drop_alias: i = {}, {:?}", i, self.drop_record[i]);
+                    self.drop_record[i].prop_chain = self.drop_record[value_idx].prop_chain.clone();
+                    self.drop_record[i].prop_chain.push(i);
+                    rap_debug!("{:?}", self.drop_record[i]);
                 }
             }
         }
     }
 
     ///drop the fields of the root node.
-    pub fn update_drop_top_down(&mut self, value_idx: usize, drop_spot: LocalSpot) {
+    pub fn push_drop_top_down(&mut self, value_idx: usize, drop_spot: LocalSpot) {
+        rap_debug!("push_drop_top_down: value_idx = {}", value_idx);
+        let mut prop_chain = vec![value_idx];
         for (_field_id, field_value_id) in self.mop_graph.values[value_idx].fields.clone() {
-            if self.mop_graph.values[value_idx].is_tuple()
-                && !self.mop_graph.values[field_value_id].need_drop
-            {
-                continue;
-            }
-            self.drop_record[field_value_id] = DropRecord::new(value_idx, true, drop_spot);
-            rap_debug!(
-                "update_drop_top_down: field_value_id = {}, {:?}",
-                field_value_id,
-                self.drop_record[field_value_id]
-            );
+            self.drop_record[field_value_id] = DropRecord::new(field_value_id, true, drop_spot);
+            prop_chain.push(field_value_id);
+            self.drop_record[field_value_id].prop_chain = prop_chain.clone();
+            rap_debug!("{:?}", self.drop_record[field_value_id]);
+            self.push_drop_top_down(field_value_id, drop_spot);
         }
     }
 
-    pub fn update_drop_bottom_up(&mut self, value_idx: usize) {
-        // sync the father node: has_dropped_field
+    pub fn push_drop_bottom_up(&mut self, value_idx: usize) {
+        rap_debug!("push_drop_bottom_up: value_idx = {}", value_idx);
         let mut father = self.mop_graph.values[value_idx].father.clone();
-        let _prop_chain = vec![value_idx];
+        let mut prop_chain = vec![value_idx];
         while let Some(father_info) = father {
             let father_idx = father_info.father_value_id;
             self.drop_record[father_idx].has_dropped_field = true;
-            self.drop_record[father_idx].prop_chain.push(father_idx);
+            if !self.drop_record[father_idx].is_dropped {
+                prop_chain.push(father_idx);
+                self.drop_record[father_idx].prop_chain = prop_chain.clone();
+            }
+            rap_debug!("{:?}", self.drop_record[father_idx]);
             father = self.mop_graph.values[father_idx].father.clone();
         }
     }
 
-    pub fn sync_drop_from_alias(&mut self, idx: usize) {
-        if idx >= self.mop_graph.values.len() {
-            return;
+    pub fn fetch_drop_info(&mut self, value_idx: usize) {
+        self.fetch_drop_from_bottom(value_idx);
+        self.fetch_drop_from_top(value_idx);
+        self.fetch_drop_from_alias(value_idx);
+    }
+
+    pub fn fetch_drop_from_bottom(&mut self, value_idx: usize) {
+        rap_debug!("fetch_drop_from_bottom: value_idx = {}", value_idx);
+        for (_field_id, field_value_id) in self.mop_graph.values[value_idx].fields.clone() {
+            rap_debug!("{:?}", self.drop_record[field_value_id]);
+            self.fetch_drop_from_alias(field_value_id);
+            if self.drop_record[field_value_id].is_dropped {
+                self.push_drop_bottom_up(field_value_id);
+                rap_debug!("{:?}", self.drop_record[value_idx]);
+                break;
+            }
+            self.fetch_drop_from_bottom(field_value_id);
         }
-        let local = self.mop_graph.values[idx].local;
-        if self.drop_record[local].is_dropped {
-            self.drop_record[idx] = self.drop_record[local].clone();
+    }
+
+    pub fn fetch_drop_from_top(&mut self, value_idx: usize) {
+        rap_debug!("fetch_drop_from_top: value_idx = {}", value_idx);
+        let mut father = self.mop_graph.values[value_idx].father.clone();
+        while let Some(father_info) = father {
+            let father_idx = father_info.father_value_id;
+            self.fetch_drop_from_alias(father_idx);
+            if self.drop_record[father_idx].is_dropped {
+                self.push_drop_top_down(father_idx, self.drop_record[father_idx].drop_spot);
+                rap_debug!("{:?}", self.drop_record[value_idx]);
+                break;
+            }
+            father = self.mop_graph.values[father_idx].father.clone();
         }
-        if let Some(aliases) = self.mop_graph.get_alias_set(local) {
-            for value_idx in aliases {
+    }
+
+    pub fn fetch_drop_from_alias(&mut self, value_idx: usize) {
+        rap_debug!("fetch_drop_from_alias: value_idx = {}", value_idx);
+        if let Some(aliases) = self.mop_graph.get_alias_set(value_idx) {
+            for idx in aliases {
                 // set idx as dropped if any of its alias has been dropped.
-                if self.drop_record[value_idx].is_dropped {
-                    self.drop_record[idx] = self.drop_record[value_idx].clone();
+                if self.drop_record[idx].is_dropped {
+                    self.drop_record[value_idx] = self.drop_record[idx].clone();
+                    self.drop_record[value_idx].value_index = value_idx;
+                    self.drop_record[value_idx].prop_chain.push(value_idx);
                 }
             }
         }

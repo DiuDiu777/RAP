@@ -411,7 +411,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             return;
         }
 
-        self.sync_drop_from_alias(value_idx);
+        self.fetch_drop_info(value_idx);
 
         let mut fully_dropped = true;
         if !self.drop_record[value_idx].is_dropped {
@@ -462,7 +462,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             bb_idx,
             self.mop_graph.alias_sets,
         );
-        self.sync_drop_from_alias(value_idx);
+        self.fetch_drop_info(value_idx);
         let mut fully_dropped = true;
         if !self.drop_record[value_idx].is_dropped {
             fully_dropped = false;
@@ -482,7 +482,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         };
 
         for item in &self.drop_record {
-            rap_info!("drop_spot: {:?}", item);
+            rap_debug!("drop_spot: {:?}", item);
         }
         if flag_cleanup {
             if !self.bug_records.df_bugs_unwind.contains_key(&local) {
@@ -509,7 +509,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 if !self.mop_graph.values[arg_idx].is_ptr() {
                     continue;
                 }
-                self.sync_drop_from_alias(arg_idx);
+                self.fetch_drop_info(arg_idx);
                 let mut fully_dropped = true;
                 if !self.drop_record[arg_idx].is_dropped {
                     fully_dropped = false;
@@ -536,7 +536,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             if self.mop_graph.values[0].may_drop
                 && (self.drop_record[0].is_dropped || self.drop_record[0].has_dropped_field)
             {
-                self.sync_drop_from_alias(0);
+                self.fetch_drop_info(0);
                 let mut fully_dropped = true;
                 if !self.drop_record[0].is_dropped {
                     fully_dropped = false;
@@ -558,7 +558,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     if !self.mop_graph.values[arg_idx].is_ptr() {
                         continue;
                     }
-                    self.sync_drop_from_alias(arg_idx);
+                    self.fetch_drop_info(arg_idx);
                     let mut fully_dropped = true;
                     if !self.drop_record[arg_idx].is_dropped {
                         fully_dropped = false;
