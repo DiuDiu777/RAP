@@ -140,6 +140,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             self.mop_graph.alias_sets[l_set_idx].remove(&lv_idx);
         }
         self.mop_graph.alias_sets[r_set_idx].insert(lv_idx);
+        self.clear_drop(lv_idx);
 
         if self.mop_graph.values[lv_idx].fields.len() > 0
             || self.mop_graph.values[rv_idx].fields.len() > 0

@@ -66,6 +66,12 @@ impl DropRecord {
             has_dropped_field: record.has_dropped_field,
         }
     }
+    pub fn clear(&mut self) {
+        self.is_dropped = false;
+        self.drop_spot = LocalSpot::default();
+        self.prop_chain.clear();
+        self.has_dropped_field = false;
+    }
 }
 
 impl<'tcx> SafeDropGraph<'tcx> {
@@ -156,13 +162,44 @@ impl<'tcx> SafeDropGraph<'tcx> {
         self.fetch_drop_from_alias(value_idx);
     }
 
+    pub fn clear_drop(&mut self, value_idx: usize) {
+        rap_debug!("clear_drop: value_idx = {}", value_idx);
+        self.drop_record[value_idx].clear();
+        self.clear_field_drop(value_idx);
+        self.clear_father_drop(value_idx);
+    }
+
+    pub fn clear_father_drop(&mut self, value_idx: usize) {
+        rap_debug!("clear_drop_father: value_idx = {}", value_idx);
+        // to fix: this is an over approximation.
+        let mut father = self.mop_graph.values[value_idx].father.clone();
+        while let Some(father_info) = father {
+            let father_idx = father_info.father_value_id;
+            if !self.drop_record[father_idx].is_dropped {
+                self.drop_record[father_idx].clear();
+            }
+            father = self.mop_graph.values[father_idx].father.clone();
+        }
+    }
+
+    pub fn clear_field_drop(&mut self, value_idx: usize) {
+        rap_debug!("clear_field_drop: value_idx = {}", value_idx);
+        for (_field_id, field_value_id) in self.mop_graph.values[value_idx].fields.clone() {
+            self.drop_record[field_value_id].clear();
+            self.clear_field_drop(field_value_id);
+        }
+    }
+
     pub fn fetch_drop_from_bottom(&mut self, value_idx: usize) {
         rap_debug!("fetch_drop_from_bottom: value_idx = {}", value_idx);
         for (_field_id, field_value_id) in self.mop_graph.values[value_idx].fields.clone() {
             rap_debug!("{:?}", self.drop_record[field_value_id]);
             self.fetch_drop_from_alias(field_value_id);
             if self.drop_record[field_value_id].is_dropped {
-                self.push_drop_bottom_up(field_value_id, self.drop_record[field_value_id].drop_spot);
+                self.push_drop_bottom_up(
+                    field_value_id,
+                    self.drop_record[field_value_id].drop_spot,
+                );
                 rap_debug!("{:?}", self.drop_record[value_idx]);
                 break;
             }
