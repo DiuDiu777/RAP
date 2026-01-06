@@ -3,7 +3,7 @@ use rustc_middle::{
     ty::{self},
 };
 
-use super::graph::*;
+use super::{drop::*, graph::*};
 use crate::analysis::core::alias_analysis::default::{
     MopAliasPair, MopFnAliasMap, block::Term, corner_case::*, types::*, value::*,
 };
@@ -24,7 +24,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             // We should perform uaf check before alias analysis.
             // Example: *1 = 4; when *1 is dangling.
             // Perfoming alias analysis first would introduce false positives.
-            self.uaf_check(bb_index, rv_idx, assign.span, false);
+            self.uaf_check(rv_idx, bb_index, assign.span, false);
             self.assign_alias(lv_idx, rv_idx);
 
             rap_debug!("Alias sets: {:?}", self.mop_graph.alias_sets.clone());
@@ -70,7 +70,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     match arg.node {
                         Operand::Copy(ref p) | Operand::Move(ref p) => {
                             let rv = self.projection(p.clone());
-                            self.uaf_check(bb_index, rv, call.source_info.span, true);
+                            self.uaf_check(rv, bb_index, call.source_info.span, true);
                             merge_vec.push(rv);
                             if self.mop_graph.values[rv].may_drop {
                                 may_drop_flag += 1;

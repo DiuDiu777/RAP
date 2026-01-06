@@ -8,12 +8,13 @@ use crate::utils::log::{
 };
 use rustc_middle::mir::{Body, HasLocalDecls, Local};
 
-use super::graph::LocalSpot;
+use super::drop::LocalSpot;
 
 #[derive(Debug)]
 pub struct TyBug {
-    pub drop_info: LocalSpot,
+    pub drop_spot: LocalSpot,
     pub trigger_info: LocalSpot,
+    pub prop_chain: Vec<usize>,
     pub span: Span,
     pub confidence: usize,
 }
@@ -192,12 +193,12 @@ impl BugRecords {
                     format!("BB{}({})", bb_id, location)
                 };
 
-                let drop_bb = if let Some(bb) = bug.drop_info.bb {
+                let drop_bb = if let Some(bb) = bug.drop_spot.bb {
                     format_bb_info(bb)
                 } else {
                     String::from("NA")
                 };
-                let drop_local = if let Some(local) = bug.drop_info.local {
+                let drop_local = if let Some(local) = bug.drop_spot.local {
                     format_local_info(local)
                 } else {
                     String::from("NA")

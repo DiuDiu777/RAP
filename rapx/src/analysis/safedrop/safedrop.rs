@@ -1,13 +1,17 @@
-use super::{corner_case::*, graph::*};
-use crate::analysis::core::alias_analysis::default::{MopFnAliasMap, block::Term};
+use super::{bug_records::*, corner_case::*, drop::*, graph::*};
+use crate::{
+    analysis::core::alias_analysis::default::{MopFnAliasMap, block::Term, types::TyKind},
+    utils::source::{get_filename, get_name},
+};
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::{
     mir::{
         Operand::{self, Constant, Copy, Move},
         Place, TerminatorKind,
     },
-    ty::{TyKind, TypingEnv},
+    ty::{self, TypingEnv},
 };
+use rustc_span::{Span, Symbol};
 
 pub const VISIT_LIMIT: usize = 1000;
 
@@ -32,7 +36,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     }
                     let value_idx = self.projection(place.clone());
                     let info = drop.source_info.clone();
-                    self.add_to_drop_record(value_idx, value_idx, &info, false, bb_idx, is_cleanup);
+                    self.add_to_drop_record(value_idx, bb_idx, &info, is_cleanup);
                 }
                 TerminatorKind::Call {
                     func: _, ref args, ..
@@ -51,7 +55,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         }
                         let local = self.projection(place.clone());
                         let info = drop.source_info.clone();
-                        self.add_to_drop_record(local, local, &info, false, bb_idx, is_cleanup);
+                        self.add_to_drop_record(local, bb_idx, &info, is_cleanup);
                     }
                 }
                 _ => {}
@@ -63,7 +67,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         let tcx = self.mop_graph.tcx;
         let place_ty = place.ty(&tcx.optimized_mir(self.mop_graph.def_id).local_decls, tcx);
         match place_ty.ty.kind() {
-            TyKind::Adt(adtdef, ..) => match self.adt_owner.get(&adtdef.did()) {
+            ty::TyKind::Adt(adtdef, ..) => match self.adt_owner.get(&adtdef.did()) {
                 None => true,
                 Some(owenr_unit) => {
                     let idx = match place_ty.variant_index {
@@ -236,7 +240,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         let place_ty = (*p).ty(local_decls, tcx);
                         rap_debug!("value_idx: {:?}", value_idx);
                         match place_ty.ty.kind() {
-                            TyKind::Bool => {
+                            ty::TyKind::Bool => {
                                 rap_debug!("SwitchInt via Bool");
                                 if let Some(constant) = self.mop_graph.constants.get(&value_idx) {
                                     if *constant != usize::MAX {
@@ -349,6 +353,230 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         None => {}
                     }
                     self.split_check(*next, fn_map);
+                }
+            }
+        }
+    }
+    pub fn report_bugs(&self) {
+        rap_debug!(
+            "report bugs, id: {:?}, uaf: {:?}",
+            self.mop_graph.def_id,
+            self.bug_records.uaf_bugs
+        );
+        let filename = get_filename(self.mop_graph.tcx, self.mop_graph.def_id);
+        match filename {
+            Some(filename) => {
+                if filename.contains(".cargo") {
+                    return;
+                }
+            }
+            None => {}
+        }
+        if self.bug_records.is_bug_free() {
+            return;
+        }
+        let fn_name = match get_name(self.mop_graph.tcx, self.mop_graph.def_id) {
+            Some(name) => name,
+            None => Symbol::intern("no symbol available"),
+        };
+        let body = self.mop_graph.tcx.optimized_mir(self.mop_graph.def_id);
+        self.bug_records
+            .df_bugs_output(body, fn_name, self.mop_graph.span);
+        self.bug_records
+            .uaf_bugs_output(body, fn_name, self.mop_graph.span);
+        self.bug_records
+            .dp_bug_output(body, fn_name, self.mop_graph.span);
+        /*
+        let _ = generate_mir_cfg_dot(
+            self.mop_graph.tcx,
+            self.mop_graph.def_id,
+            &self.mop_graph.alias_sets,
+        );
+        */
+    }
+
+    pub fn uaf_check(&mut self, value_idx: usize, bb_idx: usize, span: Span, is_fncall: bool) {
+        let local = self.mop_graph.values[value_idx].local;
+        rap_debug!(
+            "uaf_check, idx: {:?}, local: {:?}, drop_record: {:?}",
+            value_idx,
+            local,
+            self.drop_record[value_idx],
+        );
+
+        if !self.mop_graph.values[value_idx].may_drop {
+            return;
+        }
+        if self.mop_graph.values[value_idx].is_ptr() && !is_fncall {
+            return;
+        }
+
+        self.sync_drop_from_alias(value_idx);
+
+        let mut fully_dropped = true;
+        if !self.drop_record[value_idx].is_dropped {
+            fully_dropped = false;
+            if !self.drop_record[value_idx].has_dropped_field {
+                return;
+            }
+        }
+
+        let kind = self.mop_graph.values[value_idx].kind;
+        let confidence = Self::rate_confidence(kind, fully_dropped);
+
+        let bug = TyBug {
+            drop_spot: self.drop_record[value_idx].drop_spot,
+            trigger_info: LocalSpot::new(bb_idx, local),
+            prop_chain: self.drop_record[value_idx].prop_chain.clone(),
+            span: span.clone(),
+            confidence,
+        };
+        if self.bug_records.uaf_bugs.contains_key(&local) {
+            return;
+        }
+        rap_warn!("Find a use-after-free bug {:?}; add to records", bug);
+        self.bug_records.uaf_bugs.insert(local, bug);
+    }
+
+    pub fn rate_confidence(kind: TyKind, fully_dropped: bool) -> usize {
+        let confidence = match (kind, fully_dropped) {
+            (TyKind::CornerCase, _) => 0,
+            (_, true) => 99,
+            (_, false) => 50,
+        };
+        confidence
+    }
+
+    pub fn df_check(
+        &mut self,
+        value_idx: usize,
+        bb_idx: usize,
+        span: Span,
+        flag_cleanup: bool,
+    ) -> bool {
+        let local = self.mop_graph.values[value_idx].local;
+        // If the value has not been dropped, it is not a double free.
+        rap_debug!(
+            "df_check: value_idx = {:?}, bb_idx = {:?}, alias_sets: {:?}",
+            value_idx,
+            bb_idx,
+            self.mop_graph.alias_sets,
+        );
+        self.sync_drop_from_alias(value_idx);
+        let mut fully_dropped = true;
+        if !self.drop_record[value_idx].is_dropped {
+            fully_dropped = false;
+            if !self.drop_record[value_idx].has_dropped_field {
+                return false;
+            }
+        }
+        let kind = self.mop_graph.values[value_idx].kind;
+        let confidence = Self::rate_confidence(kind, fully_dropped);
+
+        let bug = TyBug {
+            drop_spot: self.drop_record[value_idx].drop_spot,
+            trigger_info: LocalSpot::new(bb_idx, local),
+            prop_chain: self.drop_record[value_idx].prop_chain.clone(),
+            span: span.clone(),
+            confidence,
+        };
+
+        for item in &self.drop_record {
+            rap_info!("drop_spot: {:?}", item);
+        }
+        if flag_cleanup {
+            if !self.bug_records.df_bugs_unwind.contains_key(&local) {
+                self.bug_records.df_bugs_unwind.insert(local, bug);
+                rap_info!(
+                    "Find a double free bug {} during unwinding; add to records.",
+                    local
+                );
+            }
+        } else {
+            if !self.bug_records.df_bugs.contains_key(&local) {
+                self.bug_records.df_bugs.insert(local, bug);
+                rap_info!("Find a double free bug {}; add to records.", local);
+            }
+        }
+        return true;
+    }
+
+    pub fn dp_check(&mut self, flag_cleanup: bool) {
+        rap_debug!("dangling pointer check");
+        rap_debug!("current alias sets: {:?}", self.mop_graph.alias_sets);
+        if flag_cleanup {
+            for arg_idx in 1..self.mop_graph.arg_size + 1 {
+                if !self.mop_graph.values[arg_idx].is_ptr() {
+                    continue;
+                }
+                self.sync_drop_from_alias(arg_idx);
+                let mut fully_dropped = true;
+                if !self.drop_record[arg_idx].is_dropped {
+                    fully_dropped = false;
+                    if !self.drop_record[arg_idx].has_dropped_field {
+                        continue;
+                    }
+                }
+                let kind = self.mop_graph.values[arg_idx].kind;
+                let confidence = Self::rate_confidence(kind, fully_dropped);
+                let bug = TyBug {
+                    drop_spot: self.drop_record[arg_idx].drop_spot,
+                    trigger_info: LocalSpot::from_local(arg_idx),
+                    prop_chain: self.drop_record[arg_idx].prop_chain.clone(),
+                    span: self.mop_graph.span.clone(),
+                    confidence,
+                };
+                self.bug_records.dp_bugs_unwind.insert(arg_idx, bug);
+                rap_info!(
+                    "Find a dangling pointer {} during unwinding; add to record.",
+                    arg_idx
+                );
+            }
+        } else {
+            if self.mop_graph.values[0].may_drop
+                && (self.drop_record[0].is_dropped || self.drop_record[0].has_dropped_field)
+            {
+                self.sync_drop_from_alias(0);
+                let mut fully_dropped = true;
+                if !self.drop_record[0].is_dropped {
+                    fully_dropped = false;
+                }
+
+                let kind = self.mop_graph.values[0].kind;
+                let confidence = Self::rate_confidence(kind, fully_dropped);
+                let bug = TyBug {
+                    drop_spot: self.drop_record[0].drop_spot,
+                    trigger_info: LocalSpot::from_local(0),
+                    prop_chain: self.drop_record[0].prop_chain.clone(),
+                    span: self.mop_graph.span.clone(),
+                    confidence,
+                };
+                self.bug_records.dp_bugs.insert(0, bug);
+                rap_info!("Find a dangling pointer 0; add to record.");
+            } else {
+                for arg_idx in 0..self.mop_graph.arg_size + 1 {
+                    if !self.mop_graph.values[arg_idx].is_ptr() {
+                        continue;
+                    }
+                    self.sync_drop_from_alias(arg_idx);
+                    let mut fully_dropped = true;
+                    if !self.drop_record[arg_idx].is_dropped {
+                        fully_dropped = false;
+                        if !self.drop_record[arg_idx].has_dropped_field {
+                            continue;
+                        }
+                    }
+                    let kind = self.mop_graph.values[arg_idx].kind;
+                    let confidence = Self::rate_confidence(kind, fully_dropped);
+                    let bug = TyBug {
+                        drop_spot: self.drop_record[arg_idx].drop_spot,
+                        trigger_info: LocalSpot::from_local(arg_idx),
+                        prop_chain: self.drop_record[arg_idx].prop_chain.clone(),
+                        span: self.mop_graph.span.clone(),
+                        confidence,
+                    };
+                    self.bug_records.dp_bugs.insert(arg_idx, bug);
+                    rap_info!("Find a dangling pointer {}; add to record.", arg_idx);
                 }
             }
         }
