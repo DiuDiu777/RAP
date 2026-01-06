@@ -101,7 +101,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     pub fn push_drop_info(&mut self, value_idx: usize, drop_spot: LocalSpot) {
-        self.push_drop_bottom_up(value_idx);
+        self.push_drop_bottom_up(value_idx, drop_spot);
         self.push_drop_top_down(value_idx, drop_spot);
         //self.push_drop_alias(value_idx, drop_spot);
     }
@@ -133,7 +133,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    pub fn push_drop_bottom_up(&mut self, value_idx: usize) {
+    pub fn push_drop_bottom_up(&mut self, value_idx: usize, drop_spot: LocalSpot) {
         rap_debug!("push_drop_bottom_up: value_idx = {}", value_idx);
         let mut father = self.mop_graph.values[value_idx].father.clone();
         let mut prop_chain = vec![value_idx];
@@ -143,6 +143,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             if !self.drop_record[father_idx].is_dropped {
                 prop_chain.push(father_idx);
                 self.drop_record[father_idx].prop_chain = prop_chain.clone();
+                self.drop_record[father_idx].drop_spot = drop_spot;
             }
             rap_debug!("{:?}", self.drop_record[father_idx]);
             father = self.mop_graph.values[father_idx].father.clone();
@@ -161,7 +162,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             rap_debug!("{:?}", self.drop_record[field_value_id]);
             self.fetch_drop_from_alias(field_value_id);
             if self.drop_record[field_value_id].is_dropped {
-                self.push_drop_bottom_up(field_value_id);
+                self.push_drop_bottom_up(field_value_id, self.drop_record[field_value_id].drop_spot);
                 rap_debug!("{:?}", self.drop_record[value_idx]);
                 break;
             }
