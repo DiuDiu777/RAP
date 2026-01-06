@@ -162,7 +162,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         self.fetch_drop_from_alias(value_idx);
     }
 
-    pub fn clear_drop(&mut self, value_idx: usize) {
+    pub fn clear_drop_info(&mut self, value_idx: usize) {
         rap_debug!("clear_drop: value_idx = {}", value_idx);
         self.drop_record[value_idx].clear();
         self.clear_field_drop(value_idx);

@@ -34,7 +34,7 @@ pub fn kind(ty: Ty<'_>) -> TyKind {
         ty::Adt(adt, _) => {
             // Use string matching to catch RefCell/RefMut/Rc for special handling.
             let s = format!("{:?}", adt);
-            if s.contains("cell::RefMut") || s.contains("cell::Ref") || s.contains("rc::Rc") {
+            if s.contains("cell::RefMut") || s.contains("cell::Ref") || s.contains("rc::Rc") || s.contains("sync::Arc") || s.contains("sync::Weak") {
                 TyKind::CornerCase
             } else {
                 TyKind::Adt

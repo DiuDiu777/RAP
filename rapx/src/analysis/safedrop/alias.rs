@@ -26,21 +26,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
             // Perfoming alias analysis first would introduce false positives.
             self.uaf_check(rv_idx, bb_index, assign.span, false);
             self.assign_alias(lv_idx, rv_idx);
+            self.clear_drop_info(lv_idx);
 
             rap_debug!("Alias sets: {:?}", self.mop_graph.alias_sets.clone());
-
-            // If the left value is dangling while the right value is not,
-            // The left vaule is no more danling after this assignment.
-            // We should bring remove it from the drop record, as well as its aliases.
-            if self.drop_record[lv_idx].is_dropped && !self.drop_record[rv_idx].is_dropped {
-                self.drop_record[lv_idx] = DropRecord::false_record(lv_idx);
-                // Synchronize the status of its aliases as not dropped.
-                for i in 0..self.mop_graph.values.len() {
-                    if self.mop_graph.is_aliasing(lv_idx, i) {
-                        self.drop_record[i] = DropRecord::false_record(i);
-                    }
-                }
-            }
         }
     }
 
@@ -112,6 +100,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                                         && self.mop_graph.values[lv].is_ptr()
                                     {
                                         self.mop_graph.merge_alias(lv, *rv);
+                                        self.clear_drop_info(lv);
                                     }
                                 }
                             }
@@ -140,7 +129,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
             self.mop_graph.alias_sets[l_set_idx].remove(&lv_idx);
         }
         self.mop_graph.alias_sets[r_set_idx].insert(lv_idx);
-        self.clear_drop(lv_idx);
 
         if self.mop_graph.values[lv_idx].fields.len() > 0
             || self.mop_graph.values[rv_idx].fields.len() > 0
@@ -323,6 +311,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
 
         let mut lv = arg_vec[fn_alias.left_local()];
+        self.clear_drop_info(lv);
         let mut rv = arg_vec[fn_alias.right_local()];
         let left_local = self.mop_graph.values[lv].local;
         let right_local = self.mop_graph.values[rv].local;
