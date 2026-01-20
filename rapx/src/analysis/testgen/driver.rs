@@ -18,7 +18,7 @@ use std::{fs, io, thread};
 use toml;
 
 #[derive(Deserialize, Debug)]
-struct LtGenConfig {
+struct Config {
     pub max_complexity: usize,
     pub max_iteration: usize,
     pub max_run: usize,
@@ -28,6 +28,8 @@ struct LtGenConfig {
     pub override_: bool,
     #[serde(default = "default_timeout")]
     pub timeout: usize,
+    #[serde(default)]
+    pub terminate_on_ub: bool,
 }
 
 #[derive(Copy, Clone, Debug, Deserialize)]
@@ -54,14 +56,14 @@ fn default_mode() -> Mode {
     Mode::Normal
 }
 
-impl LtGenConfig {
+impl Config {
     pub fn load() -> io::Result<Self> {
         let mut current_dir = std::env::current_dir()?;
 
         loop {
             let config_path = current_dir.join(".ltgenconfig");
             if config_path.exists() {
-                rap_debug!("load config file from: {}", config_path.display());
+                rap_info!("load config file from: {}", config_path.display());
                 return Self::load_from(config_path);
             }
 
@@ -77,7 +79,7 @@ impl LtGenConfig {
     pub fn load_from<P: AsRef<Path>>(path: P) -> io::Result<Self> {
         let path = path.as_ref();
         let contents = fs::read_to_string(&path)?;
-        let config: LtGenConfig = toml::from_str(&contents)
+        let config: Config = toml::from_str(&contents)
             .expect(&format!("cannot parse the content of {}", path.display()));
         Ok(config)
     }
@@ -123,7 +125,7 @@ fn asan_env_vars() -> &'static [(&'static str, &'static str)] {
 }
 
 pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
-    let config = LtGenConfig::load()?;
+    let config = Config::load()?;
     let local_crate_name = tcx.crate_name(LOCAL_CRATE);
     rap_info!("run on crate: {}", local_crate_name);
 
@@ -224,14 +226,29 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         let delimeter = "=".repeat(40);
         writeln!(&mut report_file, "{}", delimeter)?;
 
-        if let Err(err) = check_and_evaluate(&project, &mut report_file, &config, &poc_path) {
-            rap_error!("evaluate project {} fail: {}", project_path.display(), err);
-            writeln!(
-                &mut report_file,
-                "[Evaluate Fail] project {}: {}",
-                project_path.display(),
-                err
-            )?;
+        match check_and_evaluate(&project, &mut report_file, &config) {
+            Ok(EvalResult::UBDetected) => {
+                let new_project = project.copy_to(&poc_path)?;
+                rap_warn!(
+                    "copy project to {} and reduce",
+                    new_project.option().project_path.display()
+                );
+                new_project.reduce()?;
+                if config.terminate_on_ub {
+                    rap_info!("terminate on first UB detection");
+                    break;
+                }
+            }
+            Err(err) => {
+                rap_error!("evaluate project {} fail: {}", project_path.display(), err);
+                writeln!(
+                    &mut report_file,
+                    "[Evaluate Fail] project {}: {}",
+                    project_path.display(),
+                    err
+                )?;
+            }
+            _ => {}
         }
 
         writeln!(&mut report_file, "{}", delimeter)?;
@@ -257,12 +274,19 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+pub enum EvalResult {
+    Success,
+    UBDetected,
+    Timeout,
+    CompileFailed,
+    Other,
+}
+
 fn check_and_evaluate(
     project: &PocProject,
     log: &mut impl Write,
-    config: &LtGenConfig,
-    poc_path: &Path,
-) -> io::Result<()> {
+    config: &Config,
+) -> io::Result<EvalResult> {
     let project_path = &project.option().project_path;
 
     // run `cargo check`
@@ -271,15 +295,17 @@ fn check_and_evaluate(
         rap_error!("running `cargo check` fail: {:?}", result.retcode);
         rap_error!("project {} compile fail", project_path.display());
         writeln!(log, "{}", result.brief())?;
-        return Ok(());
+        return Ok(EvalResult::CompileFailed);
     } else {
         rap_info!("`cargo check` success");
     }
 
     // if this is dryrun, skip evaluataion
     if config.mode.is_dryrun() {
-        return Ok(());
+        return Ok(EvalResult::Success);
     }
+
+    let mut eval_result = EvalResult::Success;
 
     // run `cargo miri run`
     let result = project.run_cargo_cmd(&["miri", "run"], miri_env_vars(), config.timeout)?;
@@ -291,15 +317,13 @@ fn check_and_evaluate(
         match result.retcode {
             Some(1) => {
                 // if return Some(1), copy this project to poc directory, and automately reduce
+                eval_result = EvalResult::UBDetected;
                 rap_warn!("this may indicate a UB bug detected");
-                let new_project = project.copy_to(poc_path)?;
-                rap_warn!(
-                    "copy project to {} and reduce",
-                    new_project.option().project_path.display()
-                );
-                new_project.reduce()?;
             }
-            None => rap_warn!("this may indicate the program is timeout"),
+            None => {
+                eval_result = EvalResult::Timeout;
+                rap_warn!("this may indicate the program is timeout");
+            }
             _ => {}
         }
     }
@@ -318,5 +342,5 @@ fn check_and_evaluate(
     //     }
     // }
 
-    Ok(())
+    Ok(eval_result)
 }

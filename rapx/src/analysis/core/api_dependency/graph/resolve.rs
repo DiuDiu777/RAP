@@ -10,6 +10,7 @@ use crate::analysis::core::api_dependency::utils::{
 use crate::analysis::core::api_dependency::visitor::FnVisitor;
 use crate::analysis::core::api_dependency::ApiDependencyGraph;
 use crate::analysis::core::api_dependency::{mono, utils};
+use crate::analysis::utils::def_path::path_str_def_id;
 use crate::utils::fs::rap_create_file;
 use crate::{rap_debug, rap_info, rap_trace};
 use petgraph::dot;
@@ -138,7 +139,13 @@ impl<'tcx> TypeCandidates<'tcx> {
 
     pub fn add_prelude_tys(&mut self) {
         let tcx = self.tcx;
-        let prelude_tys = [
+        let vec_def_id = path_str_def_id(tcx, "std::vec::Vec");
+        let vec_ty_for = |element_ty: Ty<'tcx>| {
+            let args = self.tcx.mk_args(&[ty::GenericArg::from(element_ty)]);
+            Ty::new_adt(self.tcx, self.tcx.adt_def(vec_def_id), args)
+        };
+
+        let primitive_tys = [
             tcx.types.bool,
             tcx.types.char,
             tcx.types.f32,
@@ -155,8 +162,27 @@ impl<'tcx> TypeCandidates<'tcx> {
             tcx.types.u64,
             tcx.types.u128,
             tcx.types.usize,
-            Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, tcx.types.str_),
         ];
+
+        let mut prelude_tys = Vec::new();
+
+        prelude_tys.extend_from_slice(&primitive_tys);
+        // &str
+        prelude_tys.push(Ty::new_imm_ref(
+            tcx,
+            tcx.lifetimes.re_erased,
+            tcx.types.str_,
+        ));
+        // String
+        prelude_tys.push(Ty::new_adt(
+            self.tcx,
+            self.tcx.adt_def(self.tcx.lang_items().string().unwrap()),
+            ty::GenericArgs::empty(),
+        ));
+        for element_ty in &primitive_tys {
+            // Vec<T>
+            prelude_tys.push(vec_ty_for(*element_ty));
+        }
         prelude_tys.into_iter().for_each(|ty| {
             self.insert_all(ty);
         });

@@ -14,7 +14,8 @@ fn join_lines_if(lines: &[&str], reserved: &[bool]) -> String {
 impl PocProject {
     fn is_project_still_interesting(&self) -> io::Result<bool> {
         let record = self.run_cargo_cmd(&["miri", "run"], driver::miri_env_vars(), 0)?;
-
+        rap_info!("Poc Stdout: {}", String::from_utf8_lossy(&record.stdout));
+        rap_info!("Poc Stderr: {}", String::from_utf8_lossy(&record.stderr));
         if !matches!(record.retcode, Some(1)) {
             return Ok(false);
         }
@@ -27,7 +28,7 @@ impl PocProject {
         rap_info!("reduce {}", source_path.display());
 
         // backup the source file
-        fs::copy(&source_path, source_path.with_file_name("main.rs.bak"))?;
+        fs::copy(&source_path, source_path.with_file_name("main.rs.orig"))?;
         let content = fs::read_to_string(&source_path)?;
         // analyze source
         let lines = content.split('\n').collect::<Vec<&str>>();
@@ -62,7 +63,7 @@ impl PocProject {
                 reserved[end] = true;
                 msg += "fail :(";
             } else {
-                msg += "succuss!";
+                msg += "success!";
             }
 
             rap_info!("{}", msg);

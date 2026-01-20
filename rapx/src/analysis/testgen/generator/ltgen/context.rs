@@ -4,8 +4,7 @@ mod safety;
 use super::lifetime::{RegionGraph, Rid};
 use super::pattern::PatternProvider;
 use crate::analysis::core::alias_analysis::AAResultMap;
-use crate::analysis::testgen::context::{Context, UseKind};
-use crate::analysis::testgen::context::{Var, VarState};
+use crate::analysis::testgen::context::{Context, UseKind, Var, VarState, DUMMY_UNIT_VAR};
 use crate::analysis::testgen::generator::ltgen::lifetime::visit_ty_region_with;
 use crate::rap_debug;
 use rustc_hir::def_id::DefId;
@@ -66,6 +65,10 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
     }
 
     fn mk_var(&mut self, ty: Ty<'tcx>, is_input: bool) -> Var {
+        if ty.is_unit() {
+            return DUMMY_UNIT_VAR;
+        }
+
         let ty = self.region_graph.register_ty(ty, self.tcx);
         let next_var = self.cx.mk_var(ty, is_input);
         let rid = self.region_graph.register_var(next_var);
@@ -101,7 +104,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
 
         for var in vars {
             let ty = self.cx.type_of(var);
-            if self.cx.var_state(var) != VarState::borrowed_mut()
+            if self.cx.var_state(var) != VarState::BorrowedMut
                 && ty != self.tcx.types.unit
                 && infcx
                     .type_implements_trait(debug_def_id, [ty], param_env)

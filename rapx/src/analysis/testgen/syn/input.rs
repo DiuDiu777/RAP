@@ -1,9 +1,12 @@
-use super::visible_path::ty_to_string_with_visible_path;
 use rand::{rngs::ThreadRng, seq::IndexedRandom, Rng};
 use rustc_abi::FIRST_VARIANT;
+use rustc_hir::LangItem;
 use rustc_middle::ty::{AdtDef, GenericArgsRef, Ty, TyCtxt, TyKind};
+use rustc_span::sym;
 use rustc_type_ir::{IntTy, UintTy};
 use std::ops::Range;
+
+use crate::analysis::testgen::path::PathResolver;
 
 pub trait InputGen {
     fn gen_bool(&mut self) -> bool;
@@ -17,9 +20,28 @@ pub trait InputGen {
         adt_def: AdtDef<'tcx>,
         args: GenericArgsRef<'tcx>,
         tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
     ) -> String;
 
-    fn gen<'tcx>(&mut self, ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> String {
+    fn gen_custom<'tcx>(
+        &mut self,
+        ty: Ty<'tcx>,
+        tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn gen<'tcx>(
+        &mut self,
+        ty: Ty<'tcx>,
+        tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
+    ) -> String {
+        if let Some(s) = self.gen_custom(ty, tcx, resolver) {
+            return s;
+        }
+
         match ty.kind() {
             TyKind::Ref(_, inner_ty, mutability) => {
                 if inner_ty.is_str() && mutability.is_not() {
@@ -28,7 +50,7 @@ pub trait InputGen {
                 format!(
                     "{}{}",
                     mutability.ref_prefix_str(),
-                    self.gen(*inner_ty, tcx)
+                    self.gen(*inner_ty, tcx, resolver)
                 )
             }
             TyKind::Bool => self.gen_bool().to_string(),
@@ -51,21 +73,23 @@ pub trait InputGen {
 
                 let mut arr: Vec<String> = Vec::new();
                 for _ in 0..len {
-                    arr.push(self.gen(*inner_ty, tcx).to_string());
+                    arr.push(self.gen(*inner_ty, tcx, resolver).to_string());
                 }
                 format!("[{}]", arr.join(", "))
             }
             TyKind::Tuple(tys) => {
                 let mut fields = Vec::new();
                 for ty in tys.iter() {
-                    fields.push(self.gen(ty, tcx).to_string());
+                    fields.push(self.gen(ty, tcx, resolver).to_string());
                 }
                 format!("({})", fields.join(", "))
             }
-            TyKind::Adt(adt_def, generic_args) => self.gen_adt(*adt_def, generic_args, tcx),
+            TyKind::Adt(adt_def, generic_args) => {
+                self.gen_adt(*adt_def, generic_args, tcx, resolver)
+            }
             TyKind::Slice(inner_ty) => {
                 let len = 3; // Fixed length for simplicity
-                let element = self.gen(*inner_ty, tcx).to_string();
+                let element = self.gen(*inner_ty, tcx, resolver).to_string();
                 format!("[{}; {}]", element, len)
             }
             _ => panic!("Unsupported type: {:?}", ty),
@@ -73,7 +97,7 @@ pub trait InputGen {
     }
 }
 
-pub struct SillyInputGen {}
+pub struct SillyInputGen;
 
 impl InputGen for SillyInputGen {
     fn gen_bool(&mut self) -> bool {
@@ -105,16 +129,16 @@ impl InputGen for SillyInputGen {
         adt_def: AdtDef<'tcx>,
         args: GenericArgsRef<'tcx>,
         tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
     ) -> String {
-        let ty = Ty::new_adt(tcx, adt_def, args);
-        let name = ty_to_string_with_visible_path(tcx, ty);
+        let name = resolver.path_str_with_args(adt_def.did(), args);
         if adt_def.is_struct() {
             // generate input for each field
             let mut fields = Vec::new();
             for field in adt_def.all_fields() {
                 let field_name = field.name.to_string();
                 let field_type = field.ty(tcx, args);
-                let field_input = self.gen(field_type, tcx).to_string();
+                let field_input = self.gen(field_type, tcx, resolver).to_string();
                 fields.push(format!("{field_name}: {field_input}"));
             }
             return format!("{name} {{ {} }}", fields.join(", "));
@@ -128,7 +152,7 @@ impl InputGen for SillyInputGen {
             for field in variant_def.fields.iter() {
                 let field_name = field.name.to_string();
                 let field_type = field.ty(tcx, args);
-                let field_input = self.gen(field_type, tcx).to_string();
+                let field_input = self.gen(field_type, tcx, resolver).to_string();
                 fields.push(format!("{field_name}: {field_input}"));
             }
             if fields.is_empty() {
@@ -136,7 +160,7 @@ impl InputGen for SillyInputGen {
             }
             return format!("{name}::{variant_name} {{ {} }}", fields.join(", "));
         }
-        panic!("Unsupported ADT: {:?}", ty)
+        panic!("Unsupported ADT ({:?},{:?})", adt_def, args)
     }
 }
 
@@ -193,21 +217,47 @@ impl<R: Rng> InputGen for RandomGen<R> {
         gen_random_utf8_seq(&mut self.rng, 0, 16)
     }
 
+    fn gen_custom<'tcx>(
+        &mut self,
+        ty: Ty<'tcx>,
+        tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
+    ) -> Option<String> {
+        if let TyKind::Adt(adt_def, args) = ty.kind() {
+            let did = adt_def.did();
+            if tcx.is_lang_item(did, LangItem::String) {
+                return Some(format!("String::from(\"{}\")", self.gen_str()));
+            }
+            if tcx.is_diagnostic_item(sym::Vec, did) {
+                let mut rng = rand::rng();
+                let len = rng.random_range(2..=5);
+                let mut elements = Vec::new();
+                for _ in 0..len {
+                    let element_ty = args.type_at(0);
+                    let element_input = self.gen(element_ty, tcx, resolver);
+                    elements.push(element_input);
+                }
+                return Some(format!("vec![{}]", elements.join(", ")));
+            }
+        }
+        None
+    }
+
     fn gen_adt<'tcx>(
         &mut self,
         adt_def: AdtDef<'tcx>,
         args: GenericArgsRef<'tcx>,
         tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
     ) -> String {
-        let ty = Ty::new_adt(tcx, adt_def, args);
-        let name = ty_to_string_with_visible_path(tcx, ty);
+        let name = resolver.path_str_with_args(adt_def.did(), args);
         if adt_def.is_struct() {
             // generate input for each field
             let mut fields = Vec::new();
             for field in adt_def.all_fields() {
                 let field_name = field.name.to_string();
                 let field_type = field.ty(tcx, args);
-                let field_input = self.gen(field_type, tcx).to_string();
+                let field_input = self.gen(field_type, tcx, resolver).to_string();
                 fields.push(format!("{field_name}: {field_input}"));
             }
             return format!("{name} {{ {} }}", fields.join(", "));
@@ -222,7 +272,7 @@ impl<R: Rng> InputGen for RandomGen<R> {
             for field in variant_def.fields.iter() {
                 let field_name = field.name.to_string();
                 let field_type = field.ty(tcx, args);
-                let field_input = self.gen(field_type, tcx).to_string();
+                let field_input = self.gen(field_type, tcx, resolver).to_string();
                 fields.push(format!("{field_name}: {field_input}"));
             }
             if fields.is_empty() {
@@ -230,6 +280,6 @@ impl<R: Rng> InputGen for RandomGen<R> {
             }
             return format!("{name}::{variant_name} {{ {} }}", fields.join(", "));
         }
-        panic!("Unsupported ADT: {:?}", ty)
+        panic!("Unsupported ADT ({:?},{:?})", adt_def, args)
     }
 }

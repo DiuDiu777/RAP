@@ -64,7 +64,7 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
             StmtKind::Input => {
                 let ty = cx.type_of(stmt.place());
                 rap_debug!("{} -> {}", stmt.place(), ty);
-                self.input_gen.gen(ty, cx.tcx())
+                self.input_gen.gen(ty, cx.tcx(), self.resolver)
             }
             StmtKind::Ref(var, mutability) => {
                 format!("{}{}", mutability.ref_prefix_str(), self.var_str(**var))
@@ -105,6 +105,30 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
                     mutability.ref_prefix_str(),
                     self.var_str(*inner_var)
                 )
+            }
+            StmtKind::Comment(comment) => {
+                format!("// {}", comment)
+            }
+
+            StmtKind::Ctor(dict) => {
+                let adt_def = dict.adt_def;
+                let adt_path = self.resolver.path_str(adt_def.did());
+                let variant = adt_def.variant(dict.variant_idx);
+                let variant_name = variant.name;
+                let mut fields = Vec::new();
+                for (field_name, field_var) in dict.field_vars.iter() {
+                    fields.push(format!("{field_name}: {field_var}"));
+                }
+
+                if adt_def.is_struct() {
+                    return format!("{adt_path} {{ {} }}", fields.join(", "));
+                }
+
+                // must be enum here
+                if fields.is_empty() {
+                    return format!("{adt_path}::{variant_name}");
+                }
+                return format!("{adt_path}::{variant_name} {{ {} }}", fields.join(", "));
             }
         }
     }

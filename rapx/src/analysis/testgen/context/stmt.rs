@@ -1,8 +1,10 @@
 use super::utils;
 use super::var::Var;
-use crate::analysis::testgen::context::Context;
+use crate::analysis::testgen::context::{var::DUMMY_UNIT_VAR, Context};
+use rustc_abi::VariantIdx;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, AdtDef, TyCtxt};
+use std::collections::HashMap;
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct ApiCall<'tcx> {
@@ -43,6 +45,13 @@ pub enum UseKind {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct CtorDict<'tcx> {
+    pub adt_def: AdtDef<'tcx>,
+    pub variant_idx: VariantIdx,
+    pub field_vars: Vec<(String, Var)>,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum StmtKind<'tcx> {
     Input,
     Tuple(Vec<Var>),               // place = (..)
@@ -51,6 +60,8 @@ pub enum StmtKind<'tcx> {
     Call(ApiCall<'tcx>),
     SpecialCall(String, Vec<Var>),
     Ref(Box<Var>, ty::Mutability), // a -> &(mut) b
+    Ctor(CtorDict<'tcx>),
+    Comment(String),
     // Deref(Box<Var>, ty::Mutability), // &T -> &U
     Exploit(Var, UseKind),
 }
@@ -75,6 +86,20 @@ impl<'tcx> Stmt<'tcx> {
         Stmt {
             kind: StmtKind::Input,
             place,
+        }
+    }
+
+    pub fn ctor(place: Var, dict: CtorDict<'tcx>) -> Stmt<'tcx> {
+        Stmt {
+            kind: StmtKind::Ctor(dict),
+            place,
+        }
+    }
+
+    pub fn comment(comment: String) -> Stmt<'tcx> {
+        Stmt {
+            kind: StmtKind::Comment(comment),
+            place: DUMMY_UNIT_VAR,
         }
     }
 

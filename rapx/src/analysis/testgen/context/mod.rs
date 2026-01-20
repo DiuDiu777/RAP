@@ -1,10 +1,13 @@
 mod stmt;
 mod var;
+mod var_state;
+
 use super::utils::{self};
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use std::collections::HashMap;
-pub use stmt::{ApiCall, Stmt, StmtKind, UseKind};
-pub use var::{Var, VarState, DUMMY_INPUT_VAR};
+pub use stmt::{ApiCall, CtorDict, Stmt, StmtKind, UseKind};
+pub use var::{Var, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR};
+pub use var_state::VarState;
 
 #[derive(Clone)]
 pub struct Context<'tcx> {
@@ -67,34 +70,10 @@ impl<'tcx> Context<'tcx> {
     }
 
     pub fn type_of(&self, var: Var) -> Ty<'tcx> {
-        self.var_ty[&var]
-    }
-
-    pub fn var_state(&self, var: Var) -> VarState {
-        self.var_state[&var]
-    }
-
-    pub fn set_var_moved(&mut self, var: Var) -> VarState {
-        self.set_var_state(var, VarState::Moved)
-    }
-
-    pub fn set_var_state(&mut self, var: Var, state: VarState) -> VarState {
-        assert!(!matches!(state, VarState::Borrowed(..)));
-        let old_state = self
-            .var_state
-            .insert(var, state)
-            .expect("var are expected always have a var state");
-        if old_state == VarState::Moved {
-            unreachable!("try to change the varstate of moved var {var} to {state}");
+        if var == DUMMY_UNIT_VAR {
+            return self.tcx.types.unit;
         }
-        old_state
-    }
-
-    pub fn set_var_borrowed(&mut self, var: Var, mutability: ty::Mutability) -> VarState {
-        self.lift_mutability(var, mutability);
-        self.var_state
-            .insert(var, VarState::Borrowed(mutability))
-            .expect("var are expected always have a var state")
+        self.var_ty[&var]
     }
 
     pub fn available_vars(&self) -> impl Iterator<Item = Var> + '_ {
@@ -102,7 +81,7 @@ impl<'tcx> Context<'tcx> {
             .var_state
             .iter()
             .filter_map(|(var, state)| match state {
-                VarState::Live | VarState::Borrowed(_) => Some(*var),
+                VarState::Live => Some(*var),
                 _ => None,
             });
         iter

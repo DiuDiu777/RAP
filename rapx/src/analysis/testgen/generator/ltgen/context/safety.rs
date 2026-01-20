@@ -213,7 +213,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         });
 
         for var in dropped_var.iter() {
-            self.add_drop_stmt(*var);
+            self.drop_var(*var);
         }
 
         rap_debug!("[unsafe] drop var: {:?}", dropped_var);

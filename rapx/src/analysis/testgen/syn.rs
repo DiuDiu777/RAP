@@ -2,7 +2,7 @@ pub mod impls;
 pub mod input;
 pub mod project;
 pub mod reduce;
-pub mod visible_path;
+// pub mod visible_path;
 
 use super::context::Context;
 use rustc_middle::ty::TyCtxt;

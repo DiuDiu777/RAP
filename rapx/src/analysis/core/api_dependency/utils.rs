@@ -19,10 +19,16 @@ pub fn is_def_id_public(fn_def_id: impl Into<DefId>, tcx: TyCtxt<'_>) -> bool {
 
 fn is_fuzzable_std_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
     match ty.kind() {
-        ty::Adt(def, _) => {
-            tcx.is_lang_item(def.did(), LangItem::String)
-                || tcx.is_diagnostic_item(sym::Vec, def.did())
+        ty::Adt(def, args) => {
+            if tcx.is_lang_item(def.did(), LangItem::String)
                 || tcx.is_diagnostic_item(sym::Arc, def.did())
+            {
+                return true;
+            }
+            if tcx.is_diagnostic_item(sym::Vec, def.did()) && is_fuzzable_ty(args.type_at(0), tcx) {
+                return true;
+            }
+            false
         }
         _ => false,
     }
@@ -81,30 +87,33 @@ pub fn is_fuzzable_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
             .all(|inner_ty| is_fuzzable_ty(inner_ty.peel_refs(), tcx)),
 
         // ADT
-        TyKind::Adt(adt_def, substs) => {
+        TyKind::Adt(adt_def, args) => {
+            if adt_def.is_union() {
+                return false;
+            }
+
             if adt_def.is_variant_list_non_exhaustive() {
                 return false;
             }
-            if adt_def.is_struct() {
-                // 检查所有字段是否为 pub 且类型可 Fuzz
-                adt_def.all_fields().all(|field| {
-                    field.vis.is_public() && // 字段必须是 pub
-                    is_fuzzable_ty(field.ty(tcx, substs).peel_refs(), tcx)
-                })
-            } else if adt_def.is_enum() {
-                // An empty enum cannot be instantiated
-                if adt_def.variants().is_empty() {
-                    return false;
-                }
-                adt_def.variants().iter().all(|variant| {
-                    variant
-                        .fields
-                        .iter()
-                        .all(|field| is_fuzzable_ty(field.ty(tcx, substs).peel_refs(), tcx))
-                })
-            } else {
-                false // union 暂不处理
+
+            // if adt contain region, then we consider it non-fuzzable
+            if args.iter().any(|arg| arg.as_region().is_some()) {
+                return false;
             }
+
+            // if any field is not public or not fuzzable, then we consider it non-fuzzable
+            if adt_def.all_fields().any(|field| {
+                !field.vis.is_public() || // 字段必须是 pub
+                    !is_fuzzable_ty(field.ty(tcx, args), tcx)
+            }) {
+                return false;
+            }
+
+            if adt_def.is_enum() && adt_def.variants().is_empty() {
+                return false;
+            }
+
+            true
         }
 
         // 其他类型默认不可 Fuzz

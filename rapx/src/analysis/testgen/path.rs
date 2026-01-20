@@ -187,7 +187,8 @@ impl<'tcx> PathResolver<'tcx> {
         let mut args: Vec<String> = Vec::new();
         for arg in generic_args {
             args.push(match arg.kind() {
-                ty::GenericArgKind::Lifetime(re) => re.to_string(),
+                // ty::GenericArgKind::Lifetime(re) => re.to_string(),
+                ty::GenericArgKind::Lifetime(_) => "'_".to_string(),
                 ty::GenericArgKind::Type(ty) => self.ty_str(ty),
                 ty::GenericArgKind::Const(const_) => format!("{}", const_),
             });

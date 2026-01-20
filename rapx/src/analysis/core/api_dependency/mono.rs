@@ -392,7 +392,8 @@ fn get_mono_set<'tcx>(
     // erase infer region var
     res.erase_region_var(tcx);
 
-    res
+    // if there is still unbound generic type, we try to instantiate it with predefined candidates
+    res.instantiate_unbound(tcx)
 }
 
 fn is_special_std_ty<'tcx>(def_id: DefId, tcx: TyCtxt<'tcx>) -> bool {
@@ -517,7 +518,7 @@ pub fn resolve_mono_apis<'tcx>(
     }
 
     // 2. get mono set from available types
-    let ret = get_mono_set(fn_did, &available_ty, tcx).instantiate_unbound(tcx);
+    let ret = get_mono_set(fn_did, &available_ty, tcx);
 
     // 3. check trait bound & ty is stable
     let ret = ret.filter(|mono| {

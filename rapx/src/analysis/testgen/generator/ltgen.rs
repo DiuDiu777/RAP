@@ -149,6 +149,20 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 .join(", ")
         );
 
+        let comment: String = cx
+            .cx()
+            .vars()
+            .filter_map(|var| {
+                let state = cx.cx().var_state(var);
+                if !state.is_dead() {
+                    Some(format!("{}: {}", var, cx.cx().var_state(var)))
+                } else {
+                    None
+                }
+            })
+            .join(", ");
+        cx.add_comment_stmt(comment);
+
         let nodes = self.eligable_nodes(cx);
         rap_debug!("# eligible actions = {}", nodes.len());
         rap_debug!("eligible actions: {:?}", nodes);

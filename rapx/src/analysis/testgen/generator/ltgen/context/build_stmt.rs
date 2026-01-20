@@ -1,92 +1,31 @@
-use crate::analysis::testgen::context::{ApiCall, UseKind, VarState, DUMMY_INPUT_VAR};
+use std::collections::VecDeque;
+
+use crate::analysis::testgen::context::{ApiCall, CtorDict, UseKind, VarState, DUMMY_INPUT_VAR};
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::generator::ltgen::context::LtContext;
 use crate::analysis::testgen::generator::ltgen::folder::RidExtractFolder;
-use crate::analysis::testgen::generator::ltgen::lifetime::RegionNode;
+use crate::analysis::testgen::generator::ltgen::lifetime::{RegionNode, Rid};
 use crate::analysis::testgen::utils;
 use crate::{rap_debug, rap_trace};
+use rand::seq::IteratorRandom;
 use rustc_hir::def_id::DefId;
 use rustc_hir::LangItem;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind, TypeFoldable};
 use rustc_span::sym::{self};
-use std::collections::VecDeque;
 
 fn str_ref<'tcx>(region: ty::Region<'tcx>, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
     Ty::new_ref(tcx, region, tcx.types.str_, ty::Mutability::Not)
 }
 
 impl<'tcx, 'a> LtContext<'tcx, 'a> {
-    ///
-    /// drop all vars depended on `from`, but skip dropping `from` itself
-    fn set_implicit_drop_state_from(&mut self, from: Var) {
-        let mut q = VecDeque::from([self.rid_of(from).into()]);
-        let mut visited = vec![false; self.region_graph.total_node_count()];
-        let mut drop_var = Vec::new();
-        visited[self.rid_of(from).index()] = true;
-        while let Some(rid) = q.pop_front() {
-            if let RegionNode::Named(var) = self.region_graph.get_node(rid) {
-                if self.cx.var_state(var).is_dead() {
-                    continue;
-                }
-                if from != var {
-                    drop_var.push(var);
-                }
-            }
-            for next_idx in self
-                .region_graph
-                .inner()
-                .neighbors_directed(rid.into(), petgraph::Direction::Incoming)
-            {
-                if !visited[next_idx.index()] {
-                    visited[next_idx.index()] = true;
-                    q.push_back(next_idx.into());
-                }
-            }
-        }
-        for var in drop_var.into_iter().rev() {
-            self.cx.set_var_state(var, VarState::Dropped);
-            let unit_place = self.mk_var(self.tcx.types.unit, false);
-            self.cx.add_stmt(Stmt::drop_(unit_place, var));
-            rap_debug!("implicitly set var {} dropped", var);
-        }
-    }
-
-    fn borrow_var(&mut self, var: Var, mutability: ty::Mutability) {
-        match self.cx.set_var_borrowed(var, mutability) {
-            VarState::Borrowed(ty::Mutability::Not) => {
-                if mutability.is_mut() {
-                    self.set_implicit_drop_state_from(var);
-                }
-            }
-            VarState::Borrowed(ty::Mutability::Mut) => {
-                self.set_implicit_drop_state_from(var);
-            }
-            _ => {}
-        }
-    }
-
-    fn move_var(&mut self, var: Var) {
-        self.set_implicit_drop_state_from(var);
-        self.cx.set_var_moved(var);
-    }
-
-    pub fn add_drop_stmt(&mut self, dropped: Var) {
-        self.set_implicit_drop_state_from(dropped);
-        if !self
-            .cx
-            .set_var_state(dropped, VarState::Dropped)
-            .is_dropped()
-        {
-            let var = self.mk_var(self.tcx.types.unit, false);
-            self.cx.add_stmt(Stmt::drop_(var, dropped));
-            self.explicit_droped_cnt += 1;
-        }
-    }
-
     pub fn add_exploit_stmt(&mut self, var: Var, use_kind: UseKind) -> Var {
         let retvar = self.mk_var(self.tcx.types.unit, false);
         self.cx.add_stmt(Stmt::exploit(retvar, var, use_kind));
         retvar
+    }
+
+    pub fn add_comment_stmt(&mut self, comment: String) {
+        self.cx.add_stmt(Stmt::comment(comment));
     }
 
     pub fn add_box_stmt(&mut self, boxed: Var) -> Var {
@@ -153,17 +92,46 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
     pub fn try_add_input_stmts(&mut self, ty: Ty<'tcx>, must_instantiate: bool) -> Var {
         let var;
         match ty.kind() {
-            ty::Adt(def, args) => {
-                if let Some(var) = self.try_add_input_stmts_for_std_item(ty, def.did(), args) {
+            ty::Adt(adt_def, args) => {
+                if let Some(var) = self.try_add_input_stmts_for_std_item(ty, adt_def.did(), args) {
                     return var;
                 }
+
                 var = DUMMY_INPUT_VAR;
+                // TODO: Add Ctor Support
+                // // we need to make var first to register region inside the type of var
+                // var = self.mk_var(ty, false);
+                // let place_ty = self.cx.type_of(var);
+                // let args = match place_ty.kind() {
+                //     TyKind::Adt(_, args) => args,
+                //     _ => panic!(),
+                // };
+
+                // let mut rng = rand::rng();
+                // let variant_idx = adt_def.variants().indices().choose(&mut rng).unwrap();
+                // let variant_def = adt_def.variant(variant_idx);
+                // let mut field_vars = Vec::new();
+
+                // for field in variant_def.fields.iter() {
+                //     let field_name = field.name.to_string();
+                //     let field_type = field.ty(self.tcx, args);
+                //     let field_var = self.try_add_input_stmts(field_type, false);
+                //     field_vars.push((field_name, field_var));
+                // }
+
+                // let dict = CtorDict {
+                //     adt_def: *adt_def,
+                //     variant_idx,
+                //     field_vars,
+                // };
+
+                // self.cx.add_stmt(Stmt::ctor(var, dict));
             }
             ty::Ref(region, inner_ty, mutability) => {
                 match (region.kind(), inner_ty.kind(), mutability) {
                     // Handle 'static
                     (ty::ReStatic, _, ty::Mutability::Mut) => {
-                        panic!("&'static mut T is not supported yet");
+                        panic!("&'static mut T is not supported");
                     }
                     (ty::ReStatic, _, ty::Mutability::Not) => {
                         var = DUMMY_INPUT_VAR;
@@ -277,10 +245,8 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
                 continue;
             }
 
-            // if the var is not copy, the ownership of the var is moved into the call
-            if !utils::is_ty_impl_copy(self.cx.type_of(arg), tcx) {
-                self.move_var(arg);
-            }
+            // do not consider reborrow, so all vars is moved
+            self.move_var(arg);
         }
 
         let var = self.mk_var(output_ty, false);
@@ -312,9 +278,9 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         &mut self,
         var: Var,
         mutability: ty::Mutability,
-        as_ref_ty: Option<Ty<'tcx>>, // None represent &T
+        as_ref_ty: Option<Ty<'tcx>>, // None represent the type of var
     ) -> Var {
-        self.borrow_var(var, mutability);
+        self.cx.borrow_var(var, mutability);
 
         let ref_ty = Ty::new_ref(
             self.tcx,
@@ -334,7 +300,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         mutability: ty::Mutability,
         slice_ty: Ty<'tcx>,
     ) -> Var {
-        self.borrow_var(var, mutability);
+        self.cx.borrow_var(var, mutability);
 
         let ref_slice_ty = ty::Ty::new_ref(
             self.tcx,
@@ -346,5 +312,85 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         let new_var = self.mk_var(ref_slice_ty, false);
         self.cx.add_stmt(Stmt::slice_ref(new_var, var, mutability));
         new_var
+    }
+}
+
+/// VarState maintain implementation
+///
+impl<'tcx, 'a> LtContext<'tcx, 'a> {
+    /// drop all vars depended on `from`, but skip dropping `from` itself
+    pub fn implicit_drop_from(&mut self, from: Var) {
+        let mut q: VecDeque<Rid> = VecDeque::from([self.rid_of(from).into()]);
+        let mut visited = vec![false; self.region_graph.total_node_count()];
+        let mut drop_var = Vec::new();
+        while let Some(rid) = q.pop_front() {
+            visited[rid.index()] = true;
+            if let RegionNode::Named(var) = self.region_graph.get_node(rid) {
+                if self.cx.var_state(var).is_dead() {
+                    continue;
+                }
+                if from != var {
+                    drop_var.push(var);
+                }
+            }
+            for next_idx in self
+                .region_graph
+                .inner()
+                .neighbors_directed(rid.into(), petgraph::Direction::Incoming)
+            {
+                if !visited[next_idx.index()] {
+                    q.push_back(next_idx.into());
+                }
+            }
+        }
+        for var in drop_var.into_iter().rev() {
+            self.cx.set_var_state(var, VarState::Dropped);
+            let unit_place = self.mk_var(self.tcx.types.unit, false);
+            self.cx.add_stmt(Stmt::drop_(unit_place, var));
+            rap_debug!("implicitly set var {} dropped", var);
+        }
+    }
+
+    pub fn drop_var(&mut self, dropped: Var) {
+        self.implicit_drop_from(dropped);
+        if !self
+            .cx
+            .set_var_state(dropped, VarState::Dropped)
+            .is_dropped()
+        {
+            let var = self.mk_var(self.tcx.types.unit, false);
+            self.cx.add_stmt(Stmt::drop_(var, dropped));
+            self.explicit_droped_cnt += 1;
+        }
+    }
+
+    pub fn move_var(&mut self, var: Var) {
+        let mut q = VecDeque::from([self.rid_of(var)]);
+        self.cx.set_var_state(var, VarState::Moved);
+        let mut visited = vec![false; self.region_graph.total_node_count()];
+        while let Some(rid) = q.pop_front() {
+            visited[rid.index()] = true;
+
+            if let Some(target_var) = self.region_graph.get_node(rid).as_var() {
+                if target_var != var {
+                    let state = self.cx.var_state(target_var);
+                    self.cx
+                        .unborrow_var(target_var)
+                        .expect(&format!("try unborrow {target_var} with state {state:?}"));
+
+                    continue;
+                }
+            }
+
+            for next_idx in self
+                .region_graph
+                .inner()
+                .neighbors_directed(rid.into(), petgraph::Direction::Outgoing)
+            {
+                if !visited[next_idx.index()] {
+                    q.push_back(next_idx.into());
+                }
+            }
+        }
     }
 }
