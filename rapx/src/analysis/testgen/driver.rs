@@ -14,7 +14,7 @@ use rustc_middle::ty::TyCtxt;
 use serde::Deserialize;
 use std::io::Write;
 use std::path::Path;
-use std::{fs, io, thread};
+use std::{fs, io};
 use toml;
 
 #[derive(Deserialize, Debug)]

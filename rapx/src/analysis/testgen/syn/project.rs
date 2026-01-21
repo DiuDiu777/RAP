@@ -1,5 +1,4 @@
 use crate::rap_info;
-use std::error::Error;
 use std::fs::{self, File};
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};

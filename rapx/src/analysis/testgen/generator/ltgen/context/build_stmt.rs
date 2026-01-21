@@ -1,11 +1,10 @@
-use super::var_state::VarState;
 use crate::analysis::testgen::context::{
-    ApiCall, CtorDict, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
+    ApiCall, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
 };
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::generator::ltgen::context::{is_ty_move_on_call, LtContext};
 use crate::analysis::testgen::generator::ltgen::folder::RidExtractFolder;
-use crate::analysis::testgen::generator::ltgen::lifetime::{RegionGraph, RegionNode, Rid};
+use crate::analysis::testgen::generator::ltgen::lifetime::{RegionNode, Rid};
 use crate::analysis::testgen::utils;
 use crate::{rap_debug, rap_trace};
 use itertools::Itertools;

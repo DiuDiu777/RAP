@@ -1,4 +1,3 @@
-use rustc_middle::ty;
 use std::fmt::{self, Display};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

@@ -5,9 +5,7 @@ use super::LtContext;
 use crate::analysis::core::alias_analysis::AAFact;
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::{rap_debug, rap_trace};
-use rand::rngs::ThreadRng;
 use rand::seq::IndexedRandom;
-use rand::Rng;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind};
 use std::collections::{HashMap, HashSet};
 

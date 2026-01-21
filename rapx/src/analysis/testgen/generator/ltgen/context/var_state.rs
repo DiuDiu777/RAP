@@ -1,8 +1,7 @@
-use crate::analysis::testgen::context::{Stmt, Var, DUMMY_INPUT_VAR};
+use crate::analysis::testgen::context::{Var, DUMMY_INPUT_VAR};
 use crate::analysis::testgen::generator::ltgen::context::LtContext;
 use crate::analysis::testgen::utils;
-use rustc_middle::ty::{self, ParamEnv, Ty, TyCtxt, TypingMode};
-use std::collections::VecDeque;
+use rustc_middle::ty::{self, Ty};
 use std::fmt::{self, Display};
 
 /// only Live, Moved, Borrowed is used

@@ -1,6 +1,6 @@
 use super::super::driver;
 use super::project::PocProject;
-use std::{fs, io, path::Path};
+use std::{fs, io};
 
 fn join_lines_if(lines: &[&str], reserved: &[bool]) -> String {
     lines

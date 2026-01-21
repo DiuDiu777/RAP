@@ -6,7 +6,6 @@ use super::lifetime::{RegionGraph, Rid};
 use super::pattern::PatternProvider;
 use crate::analysis::core::alias_analysis::AAResultMap;
 use crate::analysis::testgen::context::{Context, UseKind, Var, DUMMY_UNIT_VAR};
-use crate::analysis::testgen::generator::ltgen::context::var_state::VarState;
 use crate::analysis::testgen::generator::ltgen::lifetime::visit_ty_region_with;
 use crate::analysis::testgen::utils;
 use crate::rap_debug;
