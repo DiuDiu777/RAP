@@ -1,22 +1,31 @@
 mod build_stmt;
 mod safety;
+mod var_state;
 
 use super::lifetime::{RegionGraph, Rid};
 use super::pattern::PatternProvider;
 use crate::analysis::core::alias_analysis::AAResultMap;
-use crate::analysis::testgen::context::{Context, UseKind, Var, VarState, DUMMY_UNIT_VAR};
+use crate::analysis::testgen::context::{Context, UseKind, Var, DUMMY_UNIT_VAR};
+use crate::analysis::testgen::generator::ltgen::context::var_state::VarState;
 use crate::analysis::testgen::generator::ltgen::lifetime::visit_ty_region_with;
+use crate::analysis::testgen::utils;
 use crate::rap_debug;
+use bit_set::BitSet;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::ty::{self, ParamEnv, Ty, TyCtxt, TypingMode};
 use rustc_trait_selection::infer::InferCtxtExt;
 use std::collections::{HashMap, HashSet};
 
+pub fn is_ty_move_on_call<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
+    !utils::is_ty_impl_copy(ty, tcx) || ty.is_ref()
+}
 pub struct LtContext<'tcx, 'a> {
     tcx: TyCtxt<'tcx>,
     cx: Context<'tcx>,
     var_rid: HashMap<Var, Rid>,
+    var_borrow: HashMap<Var, BitSet>,
+    live_state: BitSet,
     region_graph: RegionGraph,
     pat_provider: PatternProvider<'tcx>,
     alias_map: &'a AAResultMap,
@@ -32,6 +41,8 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
             cx: Context::new(tcx),
             var_rid: HashMap::new(),
             region_graph: RegionGraph::new(),
+            var_borrow: HashMap::new(),
+            live_state: BitSet::new(),
             pat_provider: PatternProvider::new(tcx),
             alias_map,
             covered_api: HashSet::new(),
@@ -40,8 +51,16 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         }
     }
 
+    pub fn live_state(&self) -> &BitSet {
+        &self.live_state
+    }
+
     pub fn cx(&self) -> &Context<'tcx> {
         &self.cx
+    }
+
+    pub fn cx_mut(&mut self) -> &mut Context<'tcx> {
+        &mut self.cx
     }
 
     pub fn into_cx(self) -> Context<'tcx> {
@@ -72,6 +91,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         let ty = self.region_graph.register_ty(ty, self.tcx);
         let next_var = self.cx.mk_var(ty, is_input);
         let rid = self.region_graph.register_var(next_var);
+
         rap_debug!(
             "[mk_var] register ['?{}] {}: {:?}",
             rid.index(),
@@ -80,6 +100,8 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         );
 
         self.var_rid.insert(next_var, rid);
+        self.live_state.insert(next_var.index());
+        self.var_borrow.insert(next_var, BitSet::new());
 
         // add structural constraint between 'var and 'a where carry by the type of var
         visit_ty_region_with(
@@ -93,8 +115,9 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         next_var
     }
 
-    pub fn try_use_all_available_vars(&mut self) {
-        let vars: Vec<Var> = self.cx.available_vars().collect();
+    /// try to add exploit stmt for all live vars    
+    pub fn try_add_exploit_stmts(&mut self) {
+        let vars: Vec<Var> = self.available_vars().collect();
         let debug_def_id = self
             .tcx
             .get_diagnostic_item(rustc_span::sym::Debug)
@@ -104,8 +127,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
 
         for var in vars {
             let ty = self.cx.type_of(var);
-            if self.cx.var_state(var) != VarState::BorrowedMut
-                && ty != self.tcx.types.unit
+            if ty != self.tcx.types.unit
                 && infcx
                     .type_implements_trait(debug_def_id, [ty], param_env)
                     .must_apply_modulo_regions()

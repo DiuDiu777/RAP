@@ -1,11 +1,10 @@
-use crate::analysis::testgen::context::ApiCall;
-use crate::analysis::testgen::generator::ltgen::context::LtContext;
+use crate::analysis::testgen::context::{ApiCall, Var};
+use crate::analysis::testgen::generator::ltgen::context::{is_ty_move_on_call, LtContext};
 use crate::analysis::testgen::generator::ltgen::LtGen;
-use crate::analysis::testgen::utils::{self};
-use crate::rap_debug;
+use crate::analysis::testgen::utils;
 use rand::{self, Rng};
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self};
+use rustc_middle::ty;
 
 impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
     pub fn get_eligable_call(
@@ -25,37 +24,48 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let fn_sig =
             utils::fn_sig_with_generic_args(api_call.fn_did(), api_call.generic_args(), tcx);
 
-        rap_debug!(
+        rap_trace!(
             "check eligible api: {}",
             tcx.def_path_str_with_args(api_call.fn_did, tcx.mk_args(&api_call.generic_args()))
         );
+
         let mut moved_vars = Vec::new();
-        for input_ty in fn_sig.inputs().iter() {
-            rap_debug!("input_ty = {input_ty}");
-            let providers = lt_ctxt.cx().all_possible_providers(*input_ty);
+
+        let mut select_provider = |providers: &[Var], is_move| -> bool {
+            const MAX_FAIL_COUNT: usize = 10;
+
             if providers.is_empty() {
-                rap_debug!("no possible providers");
-                return None;
+                rap_trace!("no possible providers");
+                return false;
             }
-            let mut fail_count = 0;
-            loop {
-                if fail_count >= 5 {
-                    return None;
-                }
-                rap_debug!("providers: {providers:?}");
+
+            for _ in 0..MAX_FAIL_COUNT {
+                rap_trace!("select provider: {providers:?}");
                 let idx = self.rng.borrow_mut().random_range(0..providers.len());
+                let provider = &providers[idx];
 
                 // the provider is moved by another arg, try again
-                if !lt_ctxt.is_var_impl_copy(providers[idx]) && moved_vars.contains(&providers[idx])
-                {
-                    fail_count += 1;
+                if !provider.is_from_input() && is_move && moved_vars.contains(provider) {
                     continue;
                 }
-                api_call.args.push(providers[idx].clone());
-                if !lt_ctxt.is_var_impl_copy(providers[idx]) {
-                    moved_vars.push(providers[idx]);
+
+                api_call.args.push(*provider);
+                if is_move {
+                    moved_vars.push(*provider);
                 }
-                break;
+                return true;
+            }
+            false
+        };
+
+        // choose variable for each input arg
+        for input_ty in fn_sig.inputs().iter() {
+            rap_trace!("input_ty = {input_ty}");
+            let providers = lt_ctxt.all_possible_providers(*input_ty);
+
+            let is_move = is_ty_move_on_call(*input_ty, tcx);
+            if !select_provider(&providers, is_move) {
+                return None;
             }
         }
 

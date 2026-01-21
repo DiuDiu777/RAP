@@ -2,6 +2,7 @@ use super::pattern::EdgePatterns;
 use crate::analysis::testgen::context::Var;
 use crate::analysis::testgen::generator::ltgen::pattern::PatternNode;
 use crate::{rap_debug, rap_trace};
+use bit_set::BitSet;
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::NodeIndex;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypeFoldable};
@@ -105,9 +106,15 @@ impl RegionGraph {
         &self.inner
     }
 
+    pub fn add_node(&mut self, node: RegionNode) -> Rid {
+        let index = self.inner.add_node(node);
+        Rid(index)
+    }
+
     pub fn new() -> RegionGraph {
         let mut graph = petgraph::Graph::new();
         let static_index = Rid(graph.add_node(RegionNode::Static));
+
         RegionGraph {
             inner: graph,
             static_rid: static_index,
@@ -175,11 +182,11 @@ impl RegionGraph {
     }
 
     fn next_anon_node_index(&mut self) -> Rid {
-        self.inner.add_node(RegionNode::Anon).into()
+        self.add_node(RegionNode::Anon)
     }
 
     pub fn register_var<'tcx>(&mut self, var: Var) -> Rid {
-        self.inner.add_node(RegionNode::Named(var)).into()
+        self.add_node(RegionNode::Named(var))
     }
 
     pub fn register_ty<'tcx>(&mut self, ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
@@ -218,22 +225,58 @@ impl RegionGraph {
         self.inner.node_count()
     }
 
-    pub fn for_each_source(&self, rid: Rid, f: &mut impl FnMut(Rid)) {
-        let mut visited = vec![false; self.total_node_count()];
+    /// Iterates through all sink nodes reachable from the given region node.
+    ///
+    /// A sink node is defined as a region node with no outgoing edges.
+    /// This method performs a breadth-first search (BFS) starting from the given `rid`,
+    /// visiting all reachable nodes and invoking the closure `f` for each sink node encountered.
+    ///
+    /// # Arguments
+    /// * `rid` - The starting region ID from which to search
+    /// * `f` - A closure that will be called for each sink node found during the traversal
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut sinks = Vec::new();
+    /// graph.for_each_sink(some_rid, &mut |sink_rid| {
+    ///     sinks.push(sink_rid);
+    /// });
+    /// ```
+    pub fn for_each_sink_from(&self, rid: Rid, f: &mut impl FnMut(Rid)) {
+        let mut visited = BitSet::with_capacity(self.total_node_count());
         let mut q = VecDeque::new();
         q.push_back(rid.into());
-        visited[rid.index()] = true;
+        visited.insert(rid.index());
         while let Some(node) = q.pop_front() {
             let mut outgoing_cnt = 0;
             for neighbor in self.inner.neighbors(node) {
                 outgoing_cnt += 1;
-                if !visited[neighbor.index()] {
-                    visited[neighbor.index()] = true;
+                if visited.insert(neighbor.index()) {
                     q.push_back(neighbor);
                 }
             }
             if outgoing_cnt == 0 {
                 f(node.into());
+            }
+        }
+    }
+
+    pub fn for_each_var_from(&self, src_rid: Rid, f: &mut impl FnMut(Var)) {
+        let mut visited = BitSet::with_capacity(self.total_node_count());
+        let mut q = VecDeque::new();
+        let src_var = self.get_node(src_rid).as_var().unwrap();
+        q.push_back(src_rid);
+        visited.insert(src_rid.index());
+        while let Some(rid) = q.pop_front() {
+            if let Some(var) = self.get_node(rid).as_var() {
+                if src_rid != rid {
+                    f(var);
+                }
+            }
+            for next_idx in self.inner.neighbors(rid.into()) {
+                if visited.insert(next_idx.index()) {
+                    q.push_back(next_idx.into());
+                }
             }
         }
     }

@@ -204,9 +204,9 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
     fn drop_source_from_rids(&mut self, rid: Rid) -> bool {
         let mut dropped_var = Vec::new();
 
-        self.region_graph.for_each_source(rid, &mut |rid| {
+        self.region_graph.for_each_sink_from(rid, &mut |rid| {
             if let Some(var) = self.region_graph.get_node(rid).as_var() {
-                if !self.cx.var_state(var).is_dead() {
+                if !self.var_state(var).is_dead() {
                     dropped_var.push(var);
                 }
             }

@@ -119,8 +119,8 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
     fn eligable_nodes(&self, cx: &LtContext<'tcx, 'a>) -> Vec<DepNode<'tcx>> {
         let tys: Vec<_> = cx
-            .cx()
             .available_vars()
+            .into_iter()
             .map(|var| cx.cx().type_of(var))
             .collect();
 
@@ -135,8 +135,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
     fn next(&mut self, cx: &mut LtContext<'tcx, 'a>) -> Option<DepNode<'tcx>> {
         rap_debug!(
             "live vars: {}",
-            cx.cx()
-                .available_vars()
+            cx.available_vars()
                 .map(|var| format!("{var}: {:?}", cx.cx().type_of(var)))
                 .join(", ")
         );
@@ -145,23 +144,13 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             "varstate: {}",
             cx.cx()
                 .vars()
-                .map(|var| { format!("{} -> {}", var, cx.cx().var_state(var)) })
+                .map(|var| { format!("{} -> {}", var, cx.var_state(var)) })
                 .join(", ")
         );
 
-        let comment: String = cx
-            .cx()
-            .vars()
-            .filter_map(|var| {
-                let state = cx.cx().var_state(var);
-                if !state.is_dead() {
-                    Some(format!("{}: {}", var, cx.cx().var_state(var)))
-                } else {
-                    None
-                }
-            })
-            .join(", ");
-        cx.add_comment_stmt(comment);
+        rap_debug!("live state: {:?}", cx.live_state());
+
+        cx.comment_current_state();
 
         let nodes = self.eligable_nodes(cx);
         rap_debug!("# eligible actions = {}", nodes.len());
@@ -251,7 +240,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                         );
 
                         let mut var_transforms = Vec::new();
-                        for var in cx.cx().available_vars() {
+                        for var in cx.available_vars() {
                             for (ty, kind) in transforms.iter() {
                                 if utils::is_ty_eq(cx.cx().type_of(var), ty.ty(), self.tcx) {
                                     var_transforms.push((var, *kind));
@@ -302,7 +291,8 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 estimated as f32 / total as f32
             );
         }
-        cx.try_use_all_available_vars();
+        cx.comment_current_state();
+        cx.try_add_exploit_stmts();
         cx
     }
 
