@@ -111,10 +111,7 @@ pub fn dump_alias_map(
 
 pub fn miri_env_vars() -> &'static [(&'static str, &'static str)] {
     &[
-        (
-            "MIRIFLAGS",
-            "-Zmiri-ignore-leaks -Zmiri-disable-stacked-borrows",
-        ),
+        ("MIRIFLAGS", "-Zmiri-ignore-leaks -Zmiri-tree-borrows"),
         ("RUSTFLAGS", "-Awarnings"),
         ("RUST_BACKTRACE", "1"),
     ]
@@ -290,7 +287,7 @@ fn check_and_evaluate(
     let project_path = &project.option().project_path;
 
     // run `cargo check`
-    let result = project.run_cargo_cmd(&["check"], &[], 0)?;
+    let result = project.run_cargo_cmd(&["check"], &[("RUSTFLAGS", "-Awarnings")], 0)?;
     if !result.success() {
         rap_error!("running `cargo check` fail: {:?}", result.retcode);
         rap_error!("project {} compile fail", project_path.display());

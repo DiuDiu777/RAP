@@ -124,20 +124,39 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
             });
         };
 
-        for fact in self
+        let facts = self
             .alias_map
             .get(&call.fn_did())
             .expect(&format!("{:?} do not have alias infomation", call.fn_did()))
-            .aliases()
-        {
+            .aliases();
+
+        for fact in facts.iter().cloned().flat_map(|fact| {
+            let mut rfact = fact.clone();
+            rfact.swap();
+            [fact, rfact]
+        }) {
             rap_debug!("alias fact: {}", fact);
-            let (lhs_ty, rhs_ty) = destruct_ret_alias(fn_sig, fact, self.tcx);
+            if fact.rhs_no() == 0 {
+                rap_debug!("filter this fact");
+                continue;
+            }
+
+            let (lhs_ty, rhs_ty) = destruct_ret_alias(fn_sig, &fact, self.tcx);
+
+            // lhs_ty must be a mutable
+            let is_mut_ref = match lhs_ty.kind() {
+                TyKind::Ref(_, _, mutability) => mutability.is_mut(),
+                _ => false,
+            };
+
+            if !is_mut_ref {
+                rap_debug!("filter this fact");
+                continue;
+            }
+
             let lhs_var = stmt.call_inputs_and_output_var_at(fact.lhs_no());
             let rhs_var = stmt.call_inputs_and_output_var_at(fact.rhs_no());
             add_potential_paths(lhs_var, lhs_ty, rhs_var, rhs_ty);
-            if fact.lhs_no() != 0 {
-                add_potential_paths(rhs_var, rhs_ty, lhs_var, lhs_ty);
-            }
         }
         if ret.is_empty() {
             return None;

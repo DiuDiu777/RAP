@@ -1,6 +1,9 @@
 use super::super::driver;
 use super::project::PocProject;
-use std::{fs, io};
+use std::{
+    fs,
+    io::{self, Write},
+};
 
 fn join_lines_if(lines: &[&str], reserved: &[bool]) -> String {
     lines
@@ -14,8 +17,8 @@ fn join_lines_if(lines: &[&str], reserved: &[bool]) -> String {
 impl PocProject {
     fn is_project_still_interesting(&self) -> io::Result<bool> {
         let record = self.run_cargo_cmd(&["miri", "run"], driver::miri_env_vars(), 0)?;
-        rap_info!("Poc Stdout: {}", String::from_utf8_lossy(&record.stdout));
-        rap_info!("Poc Stderr: {}", String::from_utf8_lossy(&record.stderr));
+        // rap_info!("Poc Stdout: {}", String::from_utf8_lossy(&record.stdout));
+        // rap_info!("Poc Stderr: {}", String::from_utf8_lossy(&record.stderr));
         if !matches!(record.retcode, Some(1)) {
             return Ok(false);
         }
@@ -56,14 +59,19 @@ impl PocProject {
         while end != start {
             let mut msg = format!("try reducing line {}...", end + 1);
             reserved[end] = false;
-            // write file to new content
-            fs::write(&source_path, join_lines_if(&lines, &reserved))?;
-            self.clear_artifact()?;
-            if !self.is_project_still_interesting()? {
-                reserved[end] = true;
-                msg += "fail :(";
-            } else {
+            // if it is comment line, skip directly
+            if lines[end].trim().starts_with("//") {
                 msg += "success!";
+            } else {
+                // write file to new content
+                fs::write(&source_path, join_lines_if(&lines, &reserved))?;
+                self.clear_artifact()?;
+                if !self.is_project_still_interesting()? {
+                    reserved[end] = true;
+                    msg += "fail :(";
+                } else {
+                    msg += "success!";
+                }
             }
 
             rap_info!("{}", msg);

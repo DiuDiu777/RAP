@@ -1,6 +1,4 @@
-use crate::analysis::testgen::context::{
-    ApiCall, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
-};
+use crate::analysis::testgen::context::{ApiCall, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR};
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::generator::ltgen::context::{is_ty_move_on_call, LtContext};
 use crate::analysis::testgen::generator::ltgen::folder::RidExtractFolder;
@@ -336,6 +334,8 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         mutability: ty::Mutability,
         slice_ty: Ty<'tcx>,
     ) -> Var {
+        self.cx.lift_mutability(var, mutability);
+
         let ref_slice_ty = ty::Ty::new_ref(
             self.tcx,
             self.region_of(var),

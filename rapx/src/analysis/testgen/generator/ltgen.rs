@@ -150,8 +150,6 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
         rap_debug!("live state: {:?}", cx.live_state());
 
-        cx.comment_current_state();
-
         let nodes = self.eligable_nodes(cx);
         rap_debug!("# eligible actions = {}", nodes.len());
         rap_debug!("eligible actions: {:?}", nodes);
@@ -208,6 +206,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             }
 
             if let Some(action) = self.next(&mut cx) {
+                cx.comment_current_state();
                 match action {
                     DepNode::Api(fn_did, args) => {
                         rap_debug!(
