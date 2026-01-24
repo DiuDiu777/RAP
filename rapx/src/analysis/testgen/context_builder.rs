@@ -1,15 +1,18 @@
 mod build_stmt;
+mod folder;
+mod lifetime;
+mod pattern;
 mod safety;
 mod var_state;
 
-use super::lifetime::{RegionGraph, Rid};
-use super::pattern::PatternProvider;
 use crate::analysis::core::alias_analysis::AAResultMap;
 use crate::analysis::testgen::context::{Context, UseKind, Var, DUMMY_UNIT_VAR};
-use crate::analysis::testgen::generator::ltgen::lifetime::visit_ty_region_with;
 use crate::analysis::testgen::utils;
 use crate::rap_debug;
 use bit_set::BitSet;
+use lifetime::visit_ty_region_with;
+use lifetime::{RegionGraph, Rid};
+use pattern::PatternProvider;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::TyCtxtInferExt;
 use rustc_middle::ty::{self, ParamEnv, Ty, TyCtxt, TypingMode};
@@ -19,11 +22,12 @@ use std::collections::{HashMap, HashSet};
 pub fn is_ty_move_on_call<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
     !utils::is_ty_impl_copy(ty, tcx) || ty.is_ref()
 }
-pub struct LtContext<'tcx, 'a> {
+pub struct ContextBuilder<'tcx, 'a> {
     tcx: TyCtxt<'tcx>,
     cx: Context<'tcx>,
     var_rid: HashMap<Var, Rid>,
     var_borrow: HashMap<Var, BitSet>,
+    var_steps: HashMap<Var, usize>,
     live_state: BitSet,
     region_graph: RegionGraph,
     pat_provider: PatternProvider<'tcx>,
@@ -33,7 +37,7 @@ pub struct LtContext<'tcx, 'a> {
     lack_of_alias: Vec<DefId>,
 }
 
-impl<'tcx, 'a> LtContext<'tcx, 'a> {
+impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     pub fn new(tcx: TyCtxt<'tcx>, alias_map: &'a AAResultMap) -> Self {
         Self {
             tcx,
@@ -41,6 +45,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
             var_rid: HashMap::new(),
             region_graph: RegionGraph::new(),
             var_borrow: HashMap::new(),
+            var_steps: HashMap::new(),
             live_state: BitSet::new(),
             pat_provider: PatternProvider::new(tcx),
             alias_map,
@@ -48,10 +53,6 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
             explicit_droped_cnt: 0,
             lack_of_alias: Vec::new(),
         }
-    }
-
-    pub fn live_state(&self) -> &BitSet {
-        &self.live_state
     }
 
     pub fn cx(&self) -> &Context<'tcx> {
@@ -66,6 +67,10 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
         self.cx
     }
 
+    pub fn live_state(&self) -> &BitSet {
+        &self.live_state
+    }
+
     pub fn region_graph(&self) -> &RegionGraph {
         &self.region_graph
     }
@@ -76,6 +81,10 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
 
     pub fn region_of(&self, var: Var) -> ty::Region<'tcx> {
         ty::Region::new_var(self.tcx, ty::RegionVid::from_usize(self.rid_of(var).into()))
+    }
+
+    pub fn step_of(&self, var: Var) -> usize {
+        self.var_steps.get(&var).copied().unwrap_or_default()
     }
 
     pub fn dropped_count(&self) -> usize {

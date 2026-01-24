@@ -1,7 +1,7 @@
-use super::super::folder::extract_rids;
-use super::super::lifetime::Rid;
 use super::super::utils;
-use super::LtContext;
+use super::folder::extract_rids;
+use super::lifetime::Rid;
+use super::ContextBuilder;
 use crate::analysis::core::alias_analysis::AAFact;
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::{rap_debug, rap_trace};
@@ -83,7 +83,7 @@ pub fn check_possibility<'tcx>(lhs_ty: Ty<'tcx>, rhs_ty: Ty<'tcx>, tcx: TyCtxt<'
     ret
 }
 
-impl<'tcx, 'a> LtContext<'tcx, 'a> {
+impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     pub fn detect_vulnerable_paths(&self, stmt: &Stmt<'tcx>) -> Option<HashMap<Var, HashSet<Rid>>> {
         let mut ret = HashMap::new();
         let tcx = self.tcx;
@@ -124,17 +124,22 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
             });
         };
 
+        // make facts symmetric
         let facts = self
             .alias_map
             .get(&call.fn_did())
             .expect(&format!("{:?} do not have alias infomation", call.fn_did()))
-            .aliases();
+            .aliases()
+            .iter()
+            .filter(|fact| fact.lhs_no() <= fact.rhs_no())
+            .cloned()
+            .flat_map(|fact| {
+                let mut rfact = fact.clone();
+                rfact.swap();
+                [fact, rfact]
+            });
 
-        for fact in facts.iter().cloned().flat_map(|fact| {
-            let mut rfact = fact.clone();
-            rfact.swap();
-            [fact, rfact]
-        }) {
+        for fact in facts {
             rap_debug!("alias fact: {}", fact);
             if fact.rhs_no() == 0 {
                 rap_debug!("filter this fact");

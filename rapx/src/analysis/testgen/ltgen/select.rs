@@ -1,6 +1,6 @@
 use crate::analysis::testgen::context::{ApiCall, Var};
-use crate::analysis::testgen::generator::ltgen::context::{is_ty_move_on_call, LtContext};
-use crate::analysis::testgen::generator::ltgen::LtGen;
+use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
+use crate::analysis::testgen::ltgen::LtGen;
 use crate::analysis::testgen::utils;
 use rand::{self, Rng};
 use rustc_hir::def_id::DefId;
@@ -11,7 +11,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         &self,
         fn_did: DefId,
         args: ty::GenericArgsRef<'tcx>,
-        lt_ctxt: &mut LtContext<'tcx, 'a>,
+        builder: &mut ContextBuilder<'tcx, 'a>,
     ) -> Option<ApiCall<'tcx>> {
         let tcx = self.tcx;
 
@@ -61,7 +61,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         // choose variable for each input arg
         for input_ty in fn_sig.inputs().iter() {
             rap_trace!("input_ty = {input_ty}");
-            let providers = lt_ctxt.all_possible_providers(*input_ty);
+            let providers = builder.all_possible_providers(*input_ty);
 
             let is_move = is_ty_move_on_call(*input_ty, tcx);
             if !select_provider(&providers, is_move) {

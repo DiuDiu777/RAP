@@ -1,5 +1,5 @@
+use super::ContextBuilder;
 use crate::analysis::testgen::context::{Var, DUMMY_INPUT_VAR};
-use crate::analysis::testgen::generator::ltgen::context::LtContext;
 use crate::analysis::testgen::utils;
 use rustc_middle::ty::{self, Ty};
 use std::fmt::{self, Display};
@@ -55,7 +55,7 @@ impl Display for VarState {
     }
 }
 
-impl<'tcx, 'a> LtContext<'tcx, 'a> {
+impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     pub fn is_borrowed(&self, var: Var) -> bool {
         self.var_borrow[&var].intersection(&self.live_state).count() > 0
     }

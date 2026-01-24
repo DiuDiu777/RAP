@@ -1,6 +1,7 @@
 use super::lifetime;
-use crate::analysis::testgen::generator::ltgen::lifetime::visit_ty_region_with;
-use crate::analysis::testgen::{generator::ltgen::folder::InfcxVarFolder, utils};
+use super::lifetime::visit_ty_region_with;
+use crate::analysis::testgen::context_builder::folder::InfcxVarFolder;
+use crate::analysis::testgen::utils;
 use crate::{rap_debug, rap_trace};
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer;

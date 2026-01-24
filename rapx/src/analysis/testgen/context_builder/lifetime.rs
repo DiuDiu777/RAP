@@ -1,6 +1,6 @@
 use super::pattern::EdgePatterns;
+use super::pattern::PatternNode;
 use crate::analysis::testgen::context::Var;
-use crate::analysis::testgen::generator::ltgen::pattern::PatternNode;
 use crate::{rap_debug, rap_trace};
 use bit_set::BitSet;
 use petgraph::dot::{Config, Dot};

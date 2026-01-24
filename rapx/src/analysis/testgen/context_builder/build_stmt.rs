@@ -1,8 +1,8 @@
+use super::folder::RidExtractFolder;
+use super::lifetime::{RegionNode, Rid};
 use crate::analysis::testgen::context::{ApiCall, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR};
 use crate::analysis::testgen::context::{Stmt, Var};
-use crate::analysis::testgen::generator::ltgen::context::{is_ty_move_on_call, LtContext};
-use crate::analysis::testgen::generator::ltgen::folder::RidExtractFolder;
-use crate::analysis::testgen::generator::ltgen::lifetime::{RegionNode, Rid};
+use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
 use crate::analysis::testgen::utils;
 use crate::{rap_debug, rap_trace};
 use itertools::Itertools;
@@ -16,7 +16,7 @@ fn str_ref<'tcx>(region: ty::Region<'tcx>, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
     Ty::new_ref(tcx, region, tcx.types.str_, ty::Mutability::Not)
 }
 
-impl<'tcx, 'a> LtContext<'tcx, 'a> {
+impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     pub fn add_stmt(&mut self, stmt: Stmt<'tcx>) {
         let place = stmt.place();
 
@@ -351,7 +351,7 @@ impl<'tcx, 'a> LtContext<'tcx, 'a> {
 
 /// VarState maintain implementation
 ///
-impl<'tcx, 'a> LtContext<'tcx, 'a> {
+impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     /// drop all vars depended on `from`, including `from`
     fn drop_var_from(&mut self, from: Var) {
         let from_rid = self.rid_of(from).into();

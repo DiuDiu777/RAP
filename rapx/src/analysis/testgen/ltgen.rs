@@ -1,14 +1,10 @@
-pub mod context;
-mod folder;
-mod lifetime;
-mod pattern;
 mod select;
 
+use super::context_builder::ContextBuilder;
 use crate::analysis::core::alias_analysis::AAResultMap;
 use crate::analysis::core::api_dependency::{graph::TransformKind, ApiDependencyGraph, DepNode};
 use crate::analysis::testgen::utils::{self};
 use crate::{rap_debug, rap_info};
-use context::LtContext;
 use itertools::Itertools;
 use rand::distr::weighted::WeightedIndex;
 use rand::rngs::ThreadRng;
@@ -117,7 +113,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             .collect()
     }
 
-    fn eligable_nodes(&self, cx: &LtContext<'tcx, 'a>) -> Vec<DepNode<'tcx>> {
+    fn eligable_nodes(&self, cx: &ContextBuilder<'tcx, 'a>) -> Vec<DepNode<'tcx>> {
         let tys: Vec<_> = cx
             .available_vars()
             .into_iter()
@@ -132,7 +128,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         self.api_graph.eligible_nodes_with(&tys)
     }
 
-    fn next(&mut self, cx: &mut LtContext<'tcx, 'a>) -> Option<DepNode<'tcx>> {
+    fn next(&mut self, cx: &mut ContextBuilder<'tcx, 'a>) -> Option<DepNode<'tcx>> {
         rap_debug!(
             "live vars: {}",
             cx.available_vars()
@@ -159,13 +155,11 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             return None;
         }
 
-        let weights;
-
-        if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
-            weights = self.weight_of_nodes(&nodes);
+        let weights = if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
+            self.weight_of_nodes(&nodes)
         } else {
-            weights = vec![1.0f32; nodes.len()];
-        }
+            vec![1.0f32; nodes.len()]
+        };
 
         let dist = WeightedIndex::new(&weights).unwrap();
         rap_debug!(
@@ -184,12 +178,12 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
     // pub fn print_brief()
 
-    pub fn cx_complexity(&self, cx: &LtContext<'tcx, 'a>) -> usize {
+    pub fn cx_complexity(&self, cx: &ContextBuilder<'tcx, 'a>) -> usize {
         cx.cx().num_apicall()
     }
 
-    pub fn gen(&mut self) -> LtContext<'tcx, 'a> {
-        let mut cx = LtContext::new(self.tcx, &self.alias_map);
+    pub fn gen(&mut self) -> ContextBuilder<'tcx, 'a> {
+        let mut builder = ContextBuilder::new(self.tcx, &self.alias_map);
         let (estimated, total) = self.api_graph.estimate_coverage();
         let mut count = 0;
         let mut num_drop_inject = 0;
@@ -200,13 +194,13 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 break;
             }
             rap_info!("<<<<< Iter {} >>>>>", count);
-            if self.cx_complexity(&cx) > self.max_complexity {
+            if self.cx_complexity(&builder) > self.max_complexity {
                 rap_info!("complexity limit reached, generation terminate");
                 break;
             }
 
-            if let Some(action) = self.next(&mut cx) {
-                cx.comment_current_state();
+            if let Some(action) = self.next(&mut builder) {
+                builder.comment_current_state();
                 match action {
                     DepNode::Api(fn_did, args) => {
                         rap_debug!(
@@ -214,11 +208,11 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                             self.tcx.def_path_str_with_args(fn_did, args)
                         );
 
-                        if let Some(call) = self.get_eligable_call(fn_did, args, &mut cx) {
+                        if let Some(call) = self.get_eligable_call(fn_did, args, &mut builder) {
                             self.covered_api.insert(call.fn_did());
-                            cx.add_call_stmt(call);
+                            builder.add_call_stmt(call);
                             if self.rng.borrow_mut().random_ratio(1, 2)
-                                && cx.try_inject_drop()
+                                && builder.try_inject_drop()
                                 && !utils::is_env_var_exist("TESTGEN_DISABLE_INJECT")
                             {
                                 num_drop_inject += 1;
@@ -239,9 +233,9 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                         );
 
                         let mut var_transforms = Vec::new();
-                        for var in cx.available_vars() {
+                        for var in builder.available_vars() {
                             for (ty, kind) in transforms.iter() {
-                                if utils::is_ty_eq(cx.cx().type_of(var), ty.ty(), self.tcx) {
+                                if utils::is_ty_eq(builder.cx().type_of(var), ty.ty(), self.tcx) {
                                     var_transforms.push((var, *kind));
                                 }
                             }
@@ -255,12 +249,12 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                         rap_debug!(
                             "[next] select transform: {}: {} {}",
                             var,
-                            cx.cx().type_of(var),
+                            builder.cx().type_of(var),
                             kind
                         );
                         match kind {
                             TransformKind::Ref(mutability) => {
-                                cx.add_ref_stmt(var, mutability, None);
+                                builder.add_ref_stmt(var, mutability, None);
                             }
                             _ => {
                                 panic!("not implemented yet");
@@ -275,24 +269,24 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
             rap_info!(
                 "num_stmt={}, complexity={}, num_drop_inject={}, covered/estimated/total_api={}/{}/{}",
-                cx.cx().num_stmt(),
-                self.cx_complexity(&cx),
+                builder.cx().num_stmt(),
+                self.cx_complexity(&builder),
                 num_drop_inject,
-                cx.num_covered_api(),
+                builder.num_covered_api(),
                 estimated,
                 total,
             );
 
             rap_info!(
                 "coverage={:.3}/{:.3}/{:.3} (current/global/estimated_max)",
-                cx.num_covered_api() as f32 / total as f32,
+                builder.num_covered_api() as f32 / total as f32,
                 self.covered_api.len() as f32 / total as f32,
                 estimated as f32 / total as f32
             );
         }
-        cx.comment_current_state();
-        cx.try_add_exploit_stmts();
-        cx
+        builder.comment_current_state();
+        builder.try_add_exploit_stmts();
+        builder
     }
 
     pub fn count_generic_api(&self) -> usize {

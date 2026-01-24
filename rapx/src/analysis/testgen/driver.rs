@@ -2,7 +2,7 @@ use super::path::get_path_resolver;
 use crate::analysis::core::alias_analysis::{AAResultMap, AliasAnalysis};
 use crate::analysis::core::api_dependency::ApiDependencyAnalysis;
 use crate::analysis::core::{alias_analysis, api_dependency};
-use crate::analysis::testgen::generator::ltgen::LtGenBuilder;
+use crate::analysis::testgen::ltgen::LtGenBuilder;
 use crate::analysis::testgen::syn::impls::FuzzDriverSynImpl;
 use crate::analysis::testgen::syn::input::RandomGen;
 use crate::analysis::testgen::syn::project::{CargoProjectBuilder, PocProject, RsProjectOption};
