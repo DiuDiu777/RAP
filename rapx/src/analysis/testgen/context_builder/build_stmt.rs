@@ -422,6 +422,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     }
 
     pub fn drop_var(&mut self, dropped: Var) {
+        rap_debug!("drop from: {dropped}");
         if !self.var_state(dropped).is_dropped() {
             self.drop_var_from(dropped);
             self.explicit_droped_cnt += 1;

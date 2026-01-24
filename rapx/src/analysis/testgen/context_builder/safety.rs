@@ -83,6 +83,15 @@ pub fn check_possibility<'tcx>(lhs_ty: Ty<'tcx>, rhs_ty: Ty<'tcx>, tcx: TyCtxt<'
     ret
 }
 
+/// check if underlied data of ty is stored inside the struct.
+/// If ty is any pointer type (&T, *T or Fn), this function return false
+fn ty_can_be_owned<'tcx>(ty: Ty<'tcx>) -> bool {
+    if ty.is_any_ptr() {
+        return false;
+    }
+    true
+}
+
 impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     pub fn detect_vulnerable_paths(&self, stmt: &Stmt<'tcx>) -> Option<HashMap<Var, HashSet<Rid>>> {
         let mut ret = HashMap::new();
@@ -113,7 +122,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             // the coresponding lifetime binding 'lhs->'rhs should be added
             // FIXME: the field-sensitive alias analysis is not exactly accurate,
             // so we may miss some 'lhs -> 'rhs lifetime bindings
-            if rhs_ty_rids.is_empty() {
+            if rhs_ty_rids.is_empty() && ty_can_be_owned(rhs_ty) {
                 rhs_ty_rids.push(self.rid_of(rhs_var));
             }
             let entry: &mut HashSet<Rid> = ret.entry(lhs_var).or_default();
@@ -226,6 +235,8 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     fn drop_source_from_rids(&mut self, rid: Rid) -> bool {
         let mut dropped_var = Vec::new();
 
+        rap_debug!("drop source from: {rid:?}");
+
         self.region_graph.for_each_sink_from(rid, &mut |rid| {
             if let Some(var) = self.region_graph.get_node(rid).as_var() {
                 if !self.var_state(var).is_dead() {
@@ -238,7 +249,6 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             self.drop_var(*var);
         }
 
-        rap_debug!("[unsafe] drop var: {:?}", dropped_var);
         !dropped_var.is_empty()
     }
 }
