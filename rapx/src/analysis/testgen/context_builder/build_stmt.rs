@@ -1,6 +1,8 @@
 use super::folder::RidExtractFolder;
 use super::lifetime::{RegionNode, Rid};
-use crate::analysis::testgen::context::{ApiCall, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR};
+use crate::analysis::testgen::context::{
+    ApiCall, StmtKind, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
+};
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
 use crate::analysis::testgen::utils;
@@ -38,6 +40,25 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
                     .map(|x| format! {"v{x}"})
                     .join(", ")
             );
+
+            // update step_of(var)
+            let num_steps = match stmt.kind() {
+                StmtKind::Input => 0,
+                StmtKind::Tuple(vars) | StmtKind::Array(vars) | StmtKind::SpecialCall(_, vars) => {
+                    vars.iter().fold(0, |acc, &var| acc + self.step_of(var))
+                }
+                StmtKind::SliceRef(var, _) | StmtKind::Ref(var, _) => self.step_of(*var),
+                StmtKind::Call(api_call) => {
+                    api_call
+                        .args()
+                        .iter()
+                        .fold(0, |acc, &arg| acc + self.step_of(arg))
+                        + 1
+                }
+                StmtKind::Comment(_) | StmtKind::Exploit(..) => unreachable!(),
+                StmtKind::Ctor(ctor_dict) => todo!(),
+            };
+            self.set_step_of(place, num_steps);
         }
 
         self.cx.add_stmt(stmt);
@@ -50,7 +71,12 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             .filter_map(|var| {
                 let state = self.var_state(var);
                 if !state.is_dead() {
-                    Some(format!("{}: {}", var, self.var_state(var)))
+                    Some(format!(
+                        "{}: {} ({})",
+                        var,
+                        self.var_state(var),
+                        self.step_of(var)
+                    ))
                 } else {
                     None
                 }
@@ -286,8 +312,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         let var = self.mk_var(output_ty, false);
         let stmt = Stmt::call(call, var);
 
-        self.covered_api.insert(fn_did);
-
+        // build call lifetime constraints
         let real_fn_sig = stmt.mk_fn_sig_with_var_tys(&self.cx);
         rap_trace!("stmt: {:?}", stmt);
         rap_trace!("real_fn_sig: {:?}", real_fn_sig);
@@ -304,7 +329,9 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
                     .add_edges_by_patterns(patterns, folder.rids());
             });
 
+        // maintain context
         self.add_stmt(stmt);
+        self.covered_api.insert(fn_did);
         var
     }
 

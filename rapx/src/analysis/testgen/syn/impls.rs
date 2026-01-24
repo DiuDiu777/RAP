@@ -67,7 +67,7 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
                 self.input_gen.gen(ty, cx.tcx(), self.resolver)
             }
             StmtKind::Ref(var, mutability) => {
-                format!("{}{}", mutability.ref_prefix_str(), self.var_str(**var))
+                format!("{}{}", mutability.ref_prefix_str(), self.var_str(*var))
             }
             // StmtKind::Deref(var, mutability) => {
             //     format!("{}*{}", mutability.ref_prefix_str(), self.var_str(**var))

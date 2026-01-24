@@ -97,7 +97,7 @@ impl<'tcx> PathResolver<'tcx> {
     pub fn path_str_with_args(&self, def_id: DefId, args: ty::GenericArgsRef<'tcx>) -> String {
         // `{assoc_path}::{item_name}`
         if let Some((assoc_id, kind)) = self.tcx.assoc_parent(def_id) {
-            rap_debug!("assoc item: {:?} => {:?}", assoc_id, kind);
+            rap_trace!("assoc item: {:?} => {:?}", assoc_id, kind);
             // the number of generic of assoc parent
             let num_generic = self.tcx.generics_of(assoc_id).own_params.len();
 

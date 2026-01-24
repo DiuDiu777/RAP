@@ -84,7 +84,11 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     }
 
     pub fn step_of(&self, var: Var) -> usize {
-        self.var_steps.get(&var).copied().unwrap_or_default()
+        self.var_steps.get(&var).copied().unwrap_or(1)
+    }
+
+    fn set_step_of(&mut self, var: Var, step: usize) {
+        self.var_steps.insert(var, step);
     }
 
     pub fn dropped_count(&self) -> usize {
@@ -121,6 +125,30 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             },
         );
         next_var
+    }
+
+    pub fn try_add_exploit_stmt_for(&mut self, var: Var) -> bool {
+        if !self.var_state(var).is_live() {
+            return false;
+        }
+        let debug_def_id = self
+            .tcx
+            .get_diagnostic_item(rustc_span::sym::Debug)
+            .unwrap();
+        let infcx = self.tcx.infer_ctxt().build(TypingMode::PostAnalysis);
+        let param_env = ParamEnv::empty();
+        let ty = self.cx.type_of(var);
+        if ty.is_unit() {
+            return false;
+        }
+        if infcx
+            .type_implements_trait(debug_def_id, [ty], param_env)
+            .must_apply_modulo_regions()
+        {
+            self.add_exploit_stmt(var, UseKind::Debug);
+            return true;
+        }
+        false
     }
 
     /// try to add exploit stmt for all live vars    

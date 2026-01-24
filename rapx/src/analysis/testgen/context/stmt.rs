@@ -25,6 +25,10 @@ impl<'tcx> ApiCall<'tcx> {
         &self.args
     }
 
+    pub fn args_mut(&mut self) -> &mut [Var] {
+        &mut self.args
+    }
+
     pub fn fn_did(&self) -> DefId {
         self.fn_did
     }
@@ -58,7 +62,7 @@ pub enum StmtKind<'tcx> {
     SliceRef(Var, ty::Mutability), // place = &[..]
     Call(ApiCall<'tcx>),
     SpecialCall(String, Vec<Var>),
-    Ref(Box<Var>, ty::Mutability), // a -> &(mut) b
+    Ref(Var, ty::Mutability), // a -> &(mut) b
     Ctor(CtorDict<'tcx>),
     Comment(String),
     // Deref(Box<Var>, ty::Mutability), // &T -> &U
@@ -126,7 +130,7 @@ impl<'tcx> Stmt<'tcx> {
 
     pub fn ref_(place: Var, ref_place: Var, mutability: ty::Mutability) -> Stmt<'tcx> {
         Stmt {
-            kind: StmtKind::Ref(Box::new(ref_place), mutability),
+            kind: StmtKind::Ref(ref_place, mutability),
             place,
         }
     }

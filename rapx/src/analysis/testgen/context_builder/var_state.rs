@@ -84,7 +84,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         iter
     }
 
-    pub fn all_possible_providers(&self, ty: Ty<'tcx>) -> Vec<Var> {
+    pub fn providers_for(&self, ty: Ty<'tcx>) -> Vec<Var> {
         let mut ret = Vec::new();
         if utils::is_fuzzable_ty(ty, self.tcx) {
             ret.push(DUMMY_INPUT_VAR);

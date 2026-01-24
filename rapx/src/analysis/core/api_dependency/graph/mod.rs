@@ -72,9 +72,9 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         self.ty_nodes.len()
     }
 
-    pub fn api_at(&self, idx: usize) -> (DefId, ty::GenericArgsRef<'tcx>) {
+    pub fn api_node_at(&self, idx: usize) -> DepNode<'tcx> {
         let index = self.api_nodes[idx];
-        self.graph[index].expect_api()
+        self.graph[index]
     }
 
     fn tcx(&self) -> TyCtxt<'tcx> {
@@ -145,6 +145,15 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
             }
             node_index
         }
+    }
+
+    pub fn get_node_from_index(&self, index: NodeIndex) -> DepNode<'tcx> {
+        self.graph[index]
+    }
+
+    pub fn get_index_by_ty(&self, ty: Ty<'tcx>) -> Option<NodeIndex> {
+        let ty_wrapper = TyWrapper::from(ty);
+        self.get_index(DepNode::Ty(ty_wrapper))
     }
 
     pub fn get_index(&self, node: DepNode<'tcx>) -> Option<NodeIndex> {

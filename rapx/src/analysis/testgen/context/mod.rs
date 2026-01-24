@@ -1,12 +1,14 @@
 mod stmt;
 mod var;
+mod var_set;
 
 use super::utils::{self};
 use itertools::Itertools;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use std::collections::HashMap;
 pub use stmt::{ApiCall, CtorDict, Stmt, StmtKind, UseKind};
-pub use var::{Var, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR};
+pub use var::*;
+pub use var_set::*;
 
 #[derive(Clone)]
 pub struct Context<'tcx> {

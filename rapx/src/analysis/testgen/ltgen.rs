@@ -3,6 +3,7 @@ mod select;
 use super::context_builder::ContextBuilder;
 use crate::analysis::core::alias_analysis::AAResultMap;
 use crate::analysis::core::api_dependency::{graph::TransformKind, ApiDependencyGraph, DepNode};
+use crate::analysis::testgen::context::DUMMY_INPUT_VAR;
 use crate::analysis::testgen::utils::{self};
 use crate::{rap_debug, rap_info};
 use itertools::Itertools;
@@ -14,6 +15,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
+use std::ops::AddAssign;
 
 pub struct LtGenBuilder<'tcx, 'a, R: Rng> {
     tcx: TyCtxt<'tcx>,
@@ -69,11 +71,17 @@ impl<'tcx, 'a, R: Rng> LtGenBuilder<'tcx, 'a, R> {
     }
 }
 
+pub struct Config {
+    max_complexity: usize,
+    max_iteration: usize,
+    num_samples: usize,
+    top_k: usize,
+}
+
 pub struct LtGen<'tcx, 'a, R: Rng> {
     tcx: TyCtxt<'tcx>,
     rng: RefCell<R>,
-    max_complexity: usize,
-    max_iteration: usize,
+    config: Config,
     pub_api: Vec<DefId>,
     alias_map: &'a AAResultMap,
     api_graph: ApiDependencyGraph<'tcx>,
@@ -90,12 +98,17 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         max_iteration: usize,
         api_graph: ApiDependencyGraph<'tcx>,
     ) -> Self {
+        let config = Config {
+            max_complexity,
+            max_iteration,
+            num_samples: 5,
+            top_k: 10,
+        };
         LtGen {
             pub_api: utils::get_all_pub_apis(tcx),
             tcx,
             rng: RefCell::new(rng),
-            max_complexity,
-            max_iteration,
+            config,
             alias_map,
             api_graph,
             covered_api: HashSet::new(),
@@ -103,83 +116,8 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         }
     }
 
-    fn weight_of_nodes(&self, nodes: &[DepNode<'tcx>]) -> Vec<f32> {
-        nodes
-            .iter()
-            .map(|node| {
-                let num_of_reach = *self.reached_map.get(node).unwrap_or(&0);
-                1.0 / (1 + num_of_reach) as f32
-            })
-            .collect()
-    }
-
-    fn eligable_nodes(&self, cx: &ContextBuilder<'tcx, 'a>) -> Vec<DepNode<'tcx>> {
-        let tys: Vec<_> = cx
-            .available_vars()
-            .into_iter()
-            .map(|var| cx.cx().type_of(var))
-            .collect();
-
-        rap_debug!(
-            "live tys: {}",
-            tys.iter().map(|ty| format!("{ty}")).join(", ")
-        );
-
-        self.api_graph.eligible_nodes_with(&tys)
-    }
-
-    fn next(&mut self, cx: &mut ContextBuilder<'tcx, 'a>) -> Option<DepNode<'tcx>> {
-        rap_debug!(
-            "live vars: {}",
-            cx.available_vars()
-                .map(|var| format!("{var}: {:?}", cx.cx().type_of(var)))
-                .join(", ")
-        );
-
-        rap_debug!(
-            "varstate: {}",
-            cx.cx()
-                .vars()
-                .map(|var| { format!("{} -> {}", var, cx.var_state(var)) })
-                .join(", ")
-        );
-
-        rap_debug!("live state: {:?}", cx.live_state());
-
-        let nodes = self.eligable_nodes(cx);
-        rap_debug!("# eligible actions = {}", nodes.len());
-        rap_debug!("eligible actions: {:?}", nodes);
-
-        // No action can do
-        if nodes.is_empty() {
-            return None;
-        }
-
-        let weights = if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
-            self.weight_of_nodes(&nodes)
-        } else {
-            vec![1.0f32; nodes.len()]
-        };
-
-        let dist = WeightedIndex::new(&weights).unwrap();
-        rap_debug!(
-            "weights: {}",
-            nodes
-                .iter()
-                .zip(weights.iter())
-                .map(|(node, weight)| { format!("{:?}: {:.2}", node, weight) })
-                .collect::<Vec<_>>()
-                .join(", ")
-        );
-        let index = self.rng.borrow_mut().sample(dist);
-        *self.reached_map.entry(nodes[index].clone()).or_default() += 1;
-        Some(nodes[index])
-    }
-
-    // pub fn print_brief()
-
-    pub fn cx_complexity(&self, cx: &ContextBuilder<'tcx, 'a>) -> usize {
-        cx.cx().num_apicall()
+    fn cx_complexity(&self, builder: &ContextBuilder<'tcx, 'a>) -> usize {
+        builder.cx().num_apicall()
     }
 
     pub fn gen(&mut self) -> ContextBuilder<'tcx, 'a> {
@@ -189,82 +127,76 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let mut num_drop_inject = 0;
         loop {
             count += 1;
-            if count > self.max_iteration {
+            rap_info!("<<<<< Iter {} >>>>>", count);
+
+            if count > self.config.max_iteration {
                 rap_info!("max iteration reached, generation terminate");
                 break;
             }
-            rap_info!("<<<<< Iter {} >>>>>", count);
-            if self.cx_complexity(&builder) > self.max_complexity {
+
+            if self.cx_complexity(&builder) > self.config.max_complexity {
                 rap_info!("complexity limit reached, generation terminate");
                 break;
             }
 
-            if let Some(action) = self.next(&mut builder) {
-                builder.comment_current_state();
-                match action {
-                    DepNode::Api(fn_did, args) => {
-                        rap_debug!(
-                            "[next] select API call: {}",
-                            self.tcx.def_path_str_with_args(fn_did, args)
-                        );
+            let Some(action) = self.next(&mut builder) else {
+                rap_info!("no eligable action, generation terminate");
+                break;
+            };
 
-                        if let Some(call) = self.get_eligable_call(fn_did, args, &mut builder) {
-                            self.covered_api.insert(call.fn_did());
-                            builder.add_call_stmt(call);
-                            if self.rng.borrow_mut().random_ratio(1, 2)
-                                && builder.try_inject_drop()
-                                && !utils::is_env_var_exist("TESTGEN_DISABLE_INJECT")
-                            {
-                                num_drop_inject += 1;
-                                rap_debug!("successfully inject drop");
-                            }
+            builder.comment_current_state();
+            let mut call = action.call().clone();
+
+            rap_debug!(
+                "[next] select API call: {}",
+                self.tcx
+                    .def_path_str_with_args(call.fn_did(), self.tcx.mk_args(call.generic_args()))
+            );
+
+            // first build transform stmts for vars
+
+            for (var, transforms) in call.args_mut().iter_mut().zip(action.transforms()) {
+                rap_trace!("var = {}, transforms = {:?}", var, transforms);
+                if *var == DUMMY_INPUT_VAR {
+                    rap_trace!("skip DUMMY INPUT");
+                    continue;
+                }
+                for transform in transforms {
+                    match transform {
+                        TransformKind::Ref(mutability) => {
+                            *var = builder.add_ref_stmt(*var, *mutability, None);
                         }
-                    }
-                    DepNode::Ty(ty) => {
-                        let transforms = self.api_graph.eligible_transforms_to(ty.ty());
-                        rap_debug!("ty = {}", ty.ty());
-                        rap_debug!(
-                            "transforms = {}",
-                            transforms
-                                .iter()
-                                .map(|(ty, kind)| format!("{} -> {}", ty.ty(), kind))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-
-                        let mut var_transforms = Vec::new();
-                        for var in builder.available_vars() {
-                            for (ty, kind) in transforms.iter() {
-                                if utils::is_ty_eq(builder.cx().type_of(var), ty.ty(), self.tcx) {
-                                    var_transforms.push((var, *kind));
-                                }
-                            }
-                        }
-
-                        rap_debug!("[next] transforms: {var_transforms:?}");
-
-                        let (var, kind) =
-                            var_transforms.choose(self.rng.get_mut()).unwrap().clone();
-
-                        rap_debug!(
-                            "[next] select transform: {}: {} {}",
-                            var,
-                            builder.cx().type_of(var),
-                            kind
-                        );
-                        match kind {
-                            TransformKind::Ref(mutability) => {
-                                builder.add_ref_stmt(var, mutability, None);
-                            }
-                            _ => {
-                                panic!("not implemented yet");
-                            }
+                        _ => {
+                            unimplemented!();
                         }
                     }
                 }
+            }
+
+            self.covered_api.insert(call.fn_did());
+            self.reached_map
+                .entry(action.node())
+                .or_default()
+                .add_assign(1);
+            let place = builder.add_call_stmt(call);
+
+            // linear probability to inject drop
+            let prob;
+            if utils::is_env_var_exist("TESTGEN_DISABLE_INJECT") {
+                prob = 0.0;
             } else {
-                rap_info!("no eligable action, generation terminate");
-                break;
+                prob = 1f64
+                    .min(self.cx_complexity(&builder) as f64 / self.config.max_complexity as f64);
+            }
+
+            if self.rng.borrow_mut().random_bool(prob) && builder.try_inject_drop() {
+                num_drop_inject += 1;
+                rap_info!("successfully inject drop");
+            }
+
+            // try exploit
+            if builder.try_add_exploit_stmt_for(place) {
+                rap_info!("add exploit stmt for {place}");
             }
 
             rap_info!(
