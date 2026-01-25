@@ -224,15 +224,14 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         res
     }
 
-    /// weights
+    /// search all possible next actions, and calculate their weights.
     ///
-    /// penalty = total_reach_of(api)
+    /// # Weight Algorithm
+    /// `penalty = -total_reach_of(api))`;
+    /// `api_score = depth_of(api)`;
+    /// `arg_score = sum(steps(args))`
     ///
-    /// api_score = 1 / (1 + penalty) * depth_of(api)
-    ///
-    /// arg_score = sum(steps(args))
-    ///
-    /// weight = api_score * arg_score
+    /// `weight = penalty + api_score + arg_score`
     fn eligable_actions_with_weights(
         &self,
         builder: &ContextBuilder<'tcx, 'a>,
@@ -246,17 +245,35 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
             if let DepNode::Api(fn_did, generic_args) = node {
                 let num_of_reach = self.global.num_reach(node);
-                let global_penalty = 1.0 / (1 + num_of_reach) as f32;
+                let global_penalty = -(num_of_reach as f32);
                 let current_actions =
                     self.sample_k_eligable_actions(node, fn_did, &generic_args, &builder);
 
                 let current_weights = current_actions.iter().map(|action| {
-                    global_penalty
-                        * action
-                            .call
-                            .args()
-                            .iter()
-                            .fold(1.0, |acc, &var| acc + builder.step_of(var) as f32)
+                    // calculate score for each action
+                    let arg_score = action
+                        .call
+                        .args()
+                        .iter()
+                        .fold(1.0, |acc, &var| acc + builder.step_of(var) as f32);
+
+                    let api_score = self
+                        .depth_of(action.node)
+                        .expect(&format!("visit unexpected node: {:?}", action.node))
+                        as f32;
+
+                    let weight = global_penalty + arg_score + api_score;
+
+                    rap_trace!(
+                        "weight of {} = {:.2} + {} + {} = {:.2}",
+                        action.pretty_str(self.tcx),
+                        global_penalty,
+                        arg_score,
+                        api_score,
+                        weight
+                    );
+
+                    weight
                 });
 
                 rap_trace!(
@@ -297,6 +314,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         rap_debug!("live state: {:?}", builder.live_state());
 
         let mut weights;
+
         let actions;
         if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
             (actions, weights) = self.eligable_actions_with_weights(builder);

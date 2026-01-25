@@ -96,7 +96,7 @@ struct GlobalState<'tcx> {
 
 impl<'tcx> GlobalState<'tcx> {
     pub fn new(api_graph: &ApiDependencyGraph<'tcx>) -> Self {
-        let (estimated, total) = api_graph.estimate_coverage_distinct();
+        let (estimated, total) = api_graph.estimate_coverage();
         Self {
             covered_api: HashSet::new(),
             reach_map: HashMap::new(),
@@ -125,6 +125,7 @@ pub struct LtGen<'tcx, 'a, R: Rng> {
     config: Config,
     alias_map: &'a AAResultMap,
     api_graph: ApiDependencyGraph<'tcx>,
+    depth_map: HashMap<DepNode<'tcx>, usize>,
     global: GlobalState<'tcx>,
 }
 
@@ -146,18 +147,29 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             initial_drop_prob: get_initial_drop_prob(),
         };
         let global = GlobalState::new(&api_graph);
+        let depth_map = api_graph.depth_map();
+
         LtGen {
             tcx,
             rng: RefCell::new(rng),
             config,
             alias_map,
             api_graph,
+            depth_map,
             global,
         }
     }
 
     fn cx_complexity(&self, builder: &ContextBuilder<'tcx, 'a>) -> usize {
         builder.cx().num_apicall()
+    }
+
+    fn depth_of(&self, node: DepNode<'tcx>) -> Option<usize> {
+        self.depth_map.get(&node).copied()
+    }
+
+    pub fn log_depth_map(&self) {
+        rap_debug!("depth map = {:?}", self.depth_map);
     }
 
     pub fn gen(&mut self) -> ContextBuilder<'tcx, 'a> {

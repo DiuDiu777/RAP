@@ -175,6 +175,8 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         .max_iteration(config.max_iteration)
         .build();
 
+    ltgen.log_depth_map();
+
     let report_path = workspace_dir.join("miri_report.txt");
 
     let mut report_file = std::fs::OpenOptions::new()

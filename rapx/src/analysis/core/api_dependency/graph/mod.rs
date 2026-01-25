@@ -14,6 +14,7 @@ use crate::analysis::utils::def_path::path_str_def_id;
 use crate::rap_debug;
 use crate::rap_trace;
 use crate::utils::fs::rap_create_file;
+use bit_set::BitSet;
 pub use dep_edge::DepEdge;
 pub use dep_node::{desc_str, DepNode};
 use petgraph::dot;
@@ -232,13 +233,85 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         }
     }
 
+    pub fn depth_map(&self) -> HashMap<DepNode<'tcx>, usize> {
+        let mut map = HashMap::new();
+        let mut reachable = BitSet::with_capacity(self.graph.node_count());
+
+        // initialize worklist with start node (indegree is zero)
+        let mut worklist = VecDeque::from_iter(self.graph.node_indices().filter(|index| {
+            if self.is_start_node_index(*index) {
+                reachable.insert(index.index());
+                true
+            } else {
+                false
+            }
+        }));
+
+        rap_trace!("[depth_map] initial worklist = {:?}", worklist);
+
+        const LARGE_ENOUGH: usize = 0xffffffff;
+
+        // initialize queue with fuzzable type
+        while let Some(current) = worklist.pop_front() {
+            let node = self.get_node_from_index(current);
+
+            // depth: Ty = min(prev_ty), Api = sum(arg_ty) + 1
+            let depth = match node {
+                DepNode::Ty(_) => self
+                    .graph
+                    .neighbors_directed(current, Direction::Incoming)
+                    .map(|prev| {
+                        let prev_node = &self.get_node_from_index(prev);
+                        map.get(prev_node).copied().unwrap_or(LARGE_ENOUGH)
+                    })
+                    .min()
+                    .unwrap_or(0),
+                DepNode::Api(..) => {
+                    self.graph
+                        .neighbors_directed(current, Direction::Incoming)
+                        .map(|prev| {
+                            let prev_node = &self.get_node_from_index(prev);
+                            map.get(prev_node).copied().unwrap_or(LARGE_ENOUGH)
+                        })
+                        .sum::<usize>()
+                        + 1
+                }
+            };
+
+            map.insert(node, depth);
+
+            for next in self.graph.neighbors(current) {
+                if match self.graph[next] {
+                    DepNode::Ty(_) => true,
+                    DepNode::Api(..) => {
+                        if self
+                            .graph
+                            .neighbors_directed(next, petgraph::Direction::Incoming)
+                            .all(|nbor| reachable.contains(nbor.index()))
+                        {
+                            true
+                        } else {
+                            false
+                        }
+                    }
+                } {
+                    rap_trace!("[depth_map] add {:?} to worklist", next);
+                    if reachable.insert(next.index()) {
+                        worklist.push_back(next);
+                    }
+                }
+            }
+        }
+
+        map
+    }
+
     pub fn traverse_covered_api_with(
         &self,
-        tcx: TyCtxt<'tcx>,
         f_cover: &mut impl FnMut(DefId),
         f_total: &mut impl FnMut(DefId),
     ) {
-        let mut reachable = vec![false; self.graph.node_count()];
+        let mut reachable = BitSet::with_capacity(self.graph.node_count());
 
         for index in self.graph.node_indices() {
             if let DepNode::Api(did, _) = self.graph[index] {
@@ -249,7 +322,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         // initialize worklist with start node (indegree is zero)
         let mut worklist = VecDeque::from_iter(self.graph.node_indices().filter(|index| {
             if self.is_start_node_index(*index) {
-                reachable[index.index()] = true;
+                reachable.insert(index.index());
                 true
             } else {
                 false
@@ -265,16 +338,13 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
             }
 
             for next in self.graph.neighbors(index) {
-                if reachable[next.index()] {
-                    continue;
-                }
                 if match self.graph[next] {
                     DepNode::Ty(_) => true,
                     DepNode::Api(..) => {
                         if self
                             .graph
                             .neighbors_directed(next, petgraph::Direction::Incoming)
-                            .all(|nbor| reachable[nbor.index()])
+                            .all(|nbor| reachable.contains(nbor.index()))
                         {
                             true
                         } else {
@@ -282,9 +352,10 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
                         }
                     }
                 } {
-                    // rap_trace!("[estimate_coverage] add {:?} to worklist", next);
-                    reachable[next.index()] = true;
-                    worklist.push_back(next);
+                    rap_trace!("[traverse_covered_api] add {:?} to worklist", next);
+                    if reachable.insert(next.index()) {
+                        worklist.push_back(next);
+                    }
                 }
             }
         }
@@ -309,7 +380,6 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         let mut covered = HashSet::new();
         let mut total = HashSet::new();
         self.traverse_covered_api_with(
-            self.tcx,
             &mut |did| {
                 covered.insert(did);
             },
@@ -326,7 +396,6 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         let mut num_total = 0;
         let mut num_estimate = 0;
         self.traverse_covered_api_with(
-            self.tcx,
             &mut |did| {
                 num_estimate += 1;
             },
@@ -343,7 +412,6 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         let mut total = HashSet::new();
         let mut estimate = HashSet::new();
         self.traverse_covered_api_with(
-            self.tcx,
             &mut |did| {
                 estimate.insert(did);
             },
