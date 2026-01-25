@@ -50,10 +50,10 @@ fn destruct_ret_alias<'tcx>(
     )
 }
 
-/// check whether 'lhs : 'rhs is possible.
+/// check whether it is possible that lhs point to rhs.
 ///
-/// condition: exist a `T`, that lhs_ty contains
-/// `&T`/`*T` and rhs_ty contains `T`
+/// if lhs contain any pointer to `T` (`&T`/`*T`) while rhs contain `T`,
+/// [check_possibility] return `true`
 pub fn check_possibility<'tcx>(lhs_ty: Ty<'tcx>, rhs_ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
     let mut set = HashSet::new();
     let mut ret = false;
@@ -151,22 +151,16 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         for fact in facts {
             rap_debug!("alias fact: {}", fact);
             if fact.rhs_no() == 0 {
-                rap_debug!("filter this fact");
+                rap_debug!("filter this fact (rhs is return value)");
                 continue;
             }
 
             let (lhs_ty, rhs_ty) = destruct_ret_alias(fn_sig, &fact, self.tcx);
 
-            // lhs_ty must be a mutable
-            let is_mut_ref = match lhs_ty.kind() {
-                TyKind::Ref(_, _, mutability) => mutability.is_mut(),
-                _ => false,
-            };
-
-            if !is_mut_ref {
-                rap_debug!("filter this fact");
-                continue;
-            }
+            // if fact.lhs_no() != 0 && !check_possibility(lhs_ty, rhs_ty, tcx) {
+            //     rap_debug!("filter this fact (lhs is not mutable reference)");
+            //     continue;
+            // }
 
             let lhs_var = stmt.call_inputs_and_output_var_at(fact.lhs_no());
             let rhs_var = stmt.call_inputs_and_output_var_at(fact.rhs_no());

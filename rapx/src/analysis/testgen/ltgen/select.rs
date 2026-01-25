@@ -323,16 +323,19 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             weights = vec![1.0; actions.len()];
         };
 
-        // Softmax
-        weights.iter_mut().for_each(|weight| *weight = weight.exp());
-
         rap_debug!("# eligible actions = {}", actions.len());
-        rap_debug!("weights = {:?}", weights);
 
         // No action can do
         if actions.is_empty() {
             return None;
         }
+
+        rap_debug!("raw weights = {:?}", weights);
+
+        // Softmax
+        weights.iter_mut().for_each(|weight| *weight = weight.exp());
+
+        rap_debug!("weights = {:?}", weights);
 
         rap_trace!(
             "actions, weights: {}",
@@ -350,7 +353,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let weights_top_k = top_k.iter().map(|&idx| weights[idx]).collect_vec();
 
         rap_trace!(
-            "actions, weights: {}",
+            "(top_k) actions, weights: {}",
             top_k
                 .iter()
                 .map(|&idx| {

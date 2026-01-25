@@ -235,16 +235,16 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
 
     pub fn depth_map(&self) -> HashMap<DepNode<'tcx>, usize> {
         let mut map = HashMap::new();
-        let mut reachable = BitSet::with_capacity(self.graph.node_count());
+        let mut visited = BitSet::with_capacity(self.graph.node_count());
 
         // initialize worklist with start node (indegree is zero)
         let mut worklist = VecDeque::from_iter(self.graph.node_indices().filter(|index| {
-            if self.is_start_node_index(*index) {
-                reachable.insert(index.index());
-                true
-            } else {
-                false
+            let cond = self.is_start_node_index(*index);
+            if cond {
+                visited.insert(index.index());
+                map.insert(self.get_node_from_index(*index), 0);
             }
+            cond
         }));
 
         rap_trace!("[depth_map] initial worklist = {:?}", worklist);
@@ -255,50 +255,44 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         while let Some(current) = worklist.pop_front() {
             let node = self.get_node_from_index(current);
 
-            // depth: Ty = min(prev_ty), Api = sum(arg_ty) + 1
-            let depth = match node {
-                DepNode::Ty(_) => self
-                    .graph
-                    .neighbors_directed(current, Direction::Incoming)
-                    .map(|prev| {
-                        let prev_node = &self.get_node_from_index(prev);
-                        map.get(prev_node).copied().unwrap_or(LARGE_ENOUGH)
-                    })
-                    .min()
-                    .unwrap_or(0),
-                DepNode::Api(..) => {
-                    self.graph
+            if !map.contains_key(&node) {
+                // depth: Ty = min(prev_ty), Api = sum(arg_ty) + 1
+                let depth = match node {
+                    DepNode::Ty(_) => self
+                        .graph
                         .neighbors_directed(current, Direction::Incoming)
                         .map(|prev| {
                             let prev_node = &self.get_node_from_index(prev);
                             map.get(prev_node).copied().unwrap_or(LARGE_ENOUGH)
                         })
-                        .sum::<usize>()
-                        + 1
-                }
-            };
-
-            map.insert(node, depth);
+                        .min()
+                        .unwrap_or(0),
+                    DepNode::Api(..) => {
+                        self.graph
+                            .neighbors_directed(current, Direction::Incoming)
+                            .map(|prev| {
+                                let prev_node = &self.get_node_from_index(prev);
+                                map.get(prev_node).copied().unwrap_or(LARGE_ENOUGH)
+                            })
+                            .sum::<usize>()
+                            + 1
+                    }
+                };
+                map.insert(node, depth);
+            }
 
             for next in self.graph.neighbors(current) {
-                if match self.graph[next] {
+                let is_reachable = match self.graph[next] {
                     DepNode::Ty(_) => true,
-                    DepNode::Api(..) => {
-                        if self
-                            .graph
-                            .neighbors_directed(next, petgraph::Direction::Incoming)
-                            .all(|nbor| reachable.contains(nbor.index()))
-                        {
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                } {
+                    DepNode::Api(..) => self
+                        .graph
+                        .neighbors_directed(next, petgraph::Direction::Incoming)
+                        .all(|nbor| visited.contains(nbor.index())),
+                };
+
+                if is_reachable && visited.insert(next.index()) {
                     rap_trace!("[depth_map] add {:?} to worklist", next);
-                    if reachable.insert(next.index()) {
-                        worklist.push_back(next);
-                    }
+                    worklist.push_back(next);
                 }
             }
         }
@@ -311,7 +305,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         f_cover: &mut impl FnMut(DefId),
         f_total: &mut impl FnMut(DefId),
     ) {
-        let mut reachable = BitSet::with_capacity(self.graph.node_count());
+        let mut visited = BitSet::with_capacity(self.graph.node_count());
 
         for index in self.graph.node_indices() {
             if let DepNode::Api(did, _) = self.graph[index] {
@@ -322,7 +316,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         // initialize worklist with start node (indegree is zero)
         let mut worklist = VecDeque::from_iter(self.graph.node_indices().filter(|index| {
             if self.is_start_node_index(*index) {
-                reachable.insert(index.index());
+                visited.insert(index.index());
                 true
             } else {
                 false
@@ -338,24 +332,16 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
             }
 
             for next in self.graph.neighbors(index) {
-                if match self.graph[next] {
+                let is_reachable = match self.graph[next] {
                     DepNode::Ty(_) => true,
-                    DepNode::Api(..) => {
-                        if self
-                            .graph
-                            .neighbors_directed(next, petgraph::Direction::Incoming)
-                            .all(|nbor| reachable.contains(nbor.index()))
-                        {
-                            true
-                        } else {
-                            false
-                        }
-                    }
-                } {
+                    DepNode::Api(..) => self
+                        .graph
+                        .neighbors_directed(next, petgraph::Direction::Incoming)
+                        .all(|nbor| visited.contains(nbor.index())),
+                };
+                if is_reachable && visited.insert(next.index()) {
                     rap_trace!("[traverse_covered_api] add {:?} to worklist", next);
-                    if reachable.insert(next.index()) {
-                        worklist.push_back(next);
-                    }
+                    worklist.push_back(next);
                 }
             }
         }
