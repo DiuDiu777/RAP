@@ -322,7 +322,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
 
     /// `estimate_coverage` treat each API as the distinct API.
     /// For example, if `foo<T>`, `foo<U>` are covered, this API return (2, 2).
-    pub fn estimate_coverage(&mut self) -> (usize, usize) {
+    pub fn estimate_coverage(&self) -> (usize, usize) {
         let mut num_total = 0;
         let mut num_estimate = 0;
         self.traverse_covered_api_with(
@@ -339,7 +339,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
 
     /// `estimate_coverage_distinct` treat mono API as the original generic API.
     /// For example, if `foo<T>`, `foo<U>` are covered, this API return (1, 1).
-    pub fn estimate_coverage_distinct(&mut self) -> (usize, usize) {
+    pub fn estimate_coverage_distinct(&self) -> (usize, usize) {
         let mut total = HashSet::new();
         let mut estimate = HashSet::new();
         self.traverse_covered_api_with(

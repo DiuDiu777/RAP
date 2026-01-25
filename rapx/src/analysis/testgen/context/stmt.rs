@@ -3,7 +3,7 @@ use super::var::Var;
 use crate::analysis::testgen::context::{var::DUMMY_UNIT_VAR, Context};
 use rustc_abi::VariantIdx;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, AdtDef, TyCtxt};
+use rustc_middle::ty::{self, AdtDef, GenericArgsRef, TyCtxt};
 
 #[derive(Debug, Clone, Eq, Hash, PartialEq)]
 pub struct ApiCall<'tcx> {
@@ -33,7 +33,7 @@ impl<'tcx> ApiCall<'tcx> {
         self.fn_did
     }
 
-    pub fn generic_args(&self) -> &[ty::GenericArg<'tcx>] {
+    pub fn generic_args(&self) -> GenericArgsRef<'tcx> {
         self.generic_args
     }
 

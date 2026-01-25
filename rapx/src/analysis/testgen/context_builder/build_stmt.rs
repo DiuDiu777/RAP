@@ -331,7 +331,6 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
 
         // maintain context
         self.add_stmt(stmt);
-        self.covered_api.insert(fn_did);
         var
     }
 

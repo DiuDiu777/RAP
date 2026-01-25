@@ -32,7 +32,6 @@ pub struct ContextBuilder<'tcx, 'a> {
     region_graph: RegionGraph,
     pat_provider: PatternProvider<'tcx>,
     alias_map: &'a AAResultMap,
-    covered_api: HashSet<DefId>,
     explicit_droped_cnt: usize,
     lack_of_alias: Vec<DefId>,
 }
@@ -49,7 +48,6 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             live_state: BitSet::new(),
             pat_provider: PatternProvider::new(tcx),
             alias_map,
-            covered_api: HashSet::new(),
             explicit_droped_cnt: 0,
             lack_of_alias: Vec::new(),
         }
@@ -171,9 +169,5 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
                 self.add_exploit_stmt(var, UseKind::Debug);
             }
         }
-    }
-
-    pub fn num_covered_api(&self) -> usize {
-        self.covered_api.len()
     }
 }

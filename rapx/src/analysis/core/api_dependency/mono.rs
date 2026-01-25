@@ -396,15 +396,6 @@ fn get_mono_set<'tcx>(
     res.instantiate_unbound(tcx)
 }
 
-fn is_special_std_ty<'tcx>(def_id: DefId, tcx: TyCtxt<'tcx>) -> bool {
-    let allowed_std_ty = [
-        tcx.lang_items().string().unwrap(),
-        path_str_def_id(tcx, "std::vec::Vec"),
-    ];
-
-    allowed_std_ty.contains(&def_id)
-}
-
 fn solve_unbound_type_generics<'tcx>(
     did: DefId,
     mono: Mono<'tcx>,

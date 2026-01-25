@@ -7,15 +7,13 @@ use crate::analysis::testgen::context::DUMMY_INPUT_VAR;
 use crate::analysis::testgen::utils::{self};
 use crate::{rap_debug, rap_info};
 use itertools::Itertools;
-use rand::distr::weighted::WeightedIndex;
 use rand::rngs::ThreadRng;
-use rand::seq::IndexedRandom;
 use rand::{self, Rng};
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{self, TyCtxt};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::ops::AddAssign;
+use std::ops::{AddAssign, MulAssign};
 
 pub struct LtGenBuilder<'tcx, 'a, R: Rng> {
     tcx: TyCtxt<'tcx>,
@@ -76,17 +74,58 @@ pub struct Config {
     max_iteration: usize,
     num_samples: usize,
     top_k: usize,
+    alpha: f64, // drop decay factor
+    initial_drop_prob: f64,
+}
+
+fn get_initial_drop_prob() -> f64 {
+    if utils::is_env_var_exist("TESTGEN_DISABLE_INJECT") {
+        0.0
+    } else {
+        1.0
+    }
+}
+
+struct GlobalState<'tcx> {
+    covered_api: HashSet<DefId>,
+    reach_map: HashMap<DepNode<'tcx>, usize>,
+    drop_prob: HashMap<DepNode<'tcx>, f64>,
+    estimated_covered_api: usize,
+    total_api: usize,
+}
+
+impl<'tcx> GlobalState<'tcx> {
+    pub fn new(api_graph: &ApiDependencyGraph<'tcx>) -> Self {
+        let (estimated, total) = api_graph.estimate_coverage_distinct();
+        Self {
+            covered_api: HashSet::new(),
+            reach_map: HashMap::new(),
+            drop_prob: HashMap::new(),
+            estimated_covered_api: estimated,
+            total_api: total,
+        }
+    }
+
+    pub fn num_global_covered_api(&self) -> usize {
+        self.reach_map.len()
+    }
+
+    pub fn reach(&mut self, node: DepNode<'tcx>) {
+        self.reach_map.entry(node).or_default().add_assign(1);
+    }
+
+    pub fn num_reach(&self, node: DepNode<'tcx>) -> usize {
+        self.reach_map.get(&node).copied().unwrap_or_default()
+    }
 }
 
 pub struct LtGen<'tcx, 'a, R: Rng> {
     tcx: TyCtxt<'tcx>,
     rng: RefCell<R>,
     config: Config,
-    pub_api: Vec<DefId>,
     alias_map: &'a AAResultMap,
     api_graph: ApiDependencyGraph<'tcx>,
-    covered_api: HashSet<DefId>,
-    reached_map: HashMap<DepNode<'tcx>, usize>,
+    global: GlobalState<'tcx>,
 }
 
 impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
@@ -102,17 +141,18 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             max_complexity,
             max_iteration,
             num_samples: 5,
-            top_k: 10,
+            top_k: 20,
+            alpha: 0.8,
+            initial_drop_prob: get_initial_drop_prob(),
         };
+        let global = GlobalState::new(&api_graph);
         LtGen {
-            pub_api: utils::get_all_pub_apis(tcx),
             tcx,
             rng: RefCell::new(rng),
             config,
             alias_map,
             api_graph,
-            covered_api: HashSet::new(),
-            reached_map: HashMap::new(),
+            global,
         }
     }
 
@@ -122,9 +162,9 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
     pub fn gen(&mut self) -> ContextBuilder<'tcx, 'a> {
         let mut builder = ContextBuilder::new(self.tcx, &self.alias_map);
-        let (estimated, total) = self.api_graph.estimate_coverage();
         let mut count = 0;
         let mut num_drop_inject = 0;
+        let mut current_reach = HashSet::new();
         loop {
             count += 1;
             rap_info!("<<<<< Iter {} >>>>>", count);
@@ -173,25 +213,27 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 }
             }
 
-            self.covered_api.insert(call.fn_did());
-            self.reached_map
-                .entry(action.node())
-                .or_default()
-                .add_assign(1);
+            self.global.reach(action.node());
+            current_reach.insert(action.node());
+
             let place = builder.add_call_stmt(call);
 
-            // linear probability to inject drop
-            let prob;
-            if utils::is_env_var_exist("TESTGEN_DISABLE_INJECT") {
-                prob = 0.0;
-            } else {
-                prob = 1f64
-                    .min(self.cx_complexity(&builder) as f64 / self.config.max_complexity as f64);
-            }
+            let drop_prob = self
+                .global
+                .drop_prob
+                .entry(action.node())
+                .or_insert(self.config.initial_drop_prob);
 
-            if self.rng.borrow_mut().random_bool(prob) && builder.try_inject_drop() {
+            rap_info!("test drop prob: {:.2}", drop_prob);
+            if !self.rng.borrow_mut().random_bool(*drop_prob) {
+                rap_info!("skip drop injection");
+            } else if builder.try_inject_drop() {
                 num_drop_inject += 1;
-                rap_info!("successfully inject drop");
+                drop_prob.mul_assign(self.config.alpha);
+                rap_info!(
+                    "successfully inject drop, drop_prob update to {}",
+                    drop_prob
+                );
             }
 
             // try exploit
@@ -199,21 +241,26 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 rap_info!("add exploit stmt for {place}");
             }
 
+            let current = current_reach.len();
+            let global = self.global.num_global_covered_api();
+            let total = self.global.total_api;
+            let estimate = self.global.estimated_covered_api;
             rap_info!(
-                "num_stmt={}, complexity={}, num_drop_inject={}, covered/estimated/total_api={}/{}/{}",
+                "num_stmt={}, complexity={}, num_drop_inject={}, covered_api(current/global/estimate/total)={}/{}/{}/{}",
                 builder.cx().num_stmt(),
                 self.cx_complexity(&builder),
                 num_drop_inject,
-                builder.num_covered_api(),
-                estimated,
+                current,
+                global,
+                estimate,
                 total,
             );
 
             rap_info!(
                 "coverage={:.3}/{:.3}/{:.3} (current/global/estimated_max)",
-                builder.num_covered_api() as f32 / total as f32,
-                self.covered_api.len() as f32 / total as f32,
-                estimated as f32 / total as f32
+                current as f32 / total as f32,
+                global as f32 / total as f32,
+                estimate as f32 / total as f32
             );
         }
         builder.comment_current_state();
@@ -221,21 +268,35 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         builder
     }
 
-    pub fn count_generic_api(&self) -> usize {
-        self.pub_api
-            .iter()
-            .filter(|did| utils::fn_requires_monomorphization(**did, self.tcx))
-            .count()
+    pub fn uncovered_apis(&self) -> Vec<(DefId, ty::GenericArgsRef<'tcx>)> {
+        let mut res = vec![];
+        for idx in 0..self.api_graph.num_api() {
+            let api_node = self.api_graph.api_node_at(idx);
+            if self
+                .global
+                .reach_map
+                .get(&api_node)
+                .copied()
+                .unwrap_or_default()
+                == 0
+            {
+                res.push(api_node.expect_api());
+            }
+        }
+        res
     }
 
     pub fn statistic_str(&self) -> String {
         let mut s = String::new();
-        s.push_str(&format!("# APIs = {}\n", self.pub_api.len()));
-        s.push_str(&format!("# generic APIs = {}\n", self.count_generic_api()));
-        s.push_str(&format!("# covered APIs = {}\n", self.covered_api.len()));
+        s.push_str(&format!("# APIs = {}\n", self.api_graph.num_api()));
+        s.push_str(&format!(
+            "# covered APIs = {}\n",
+            self.global.covered_api.len()
+        ));
         s.push_str("covered APIs:\n");
         s.push_str(
             &self
+                .global
                 .covered_api
                 .iter()
                 .map(|did| format!("{:?}", did))
@@ -244,10 +305,9 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         s.push_str("\nuncovered APIs:\n");
         s.push_str(
             &self
-                .pub_api
+                .uncovered_apis()
                 .iter()
-                .filter(|did| !self.covered_api.contains(did))
-                .map(|did| format!("{:?}", did))
+                .map(|(did, args)| self.tcx.def_path_str_with_args(did, args))
                 .join(", "),
         );
 

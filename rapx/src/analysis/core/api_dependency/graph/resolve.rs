@@ -21,7 +21,7 @@ use petgraph::Graph;
 use rand::Rng;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, GenericArgsRef, TraitRef, Ty, TyCtxt};
-use rustc_span::sym::require;
+use rustc_span::sym::{self, require};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -139,7 +139,8 @@ impl<'tcx> TypeCandidates<'tcx> {
 
     pub fn add_prelude_tys(&mut self) {
         let tcx = self.tcx;
-        let vec_def_id = path_str_def_id(tcx, "std::vec::Vec");
+        // let vec_def_id = path_str_def_id(tcx, "std::vec::Vec");
+        let vec_def_id = tcx.get_diagnostic_item(sym::Vec).unwrap();
         let vec_ty_for = |element_ty: Ty<'tcx>| {
             let args = self.tcx.mk_args(&[ty::GenericArg::from(element_ty)]);
             Ty::new_adt(self.tcx, self.tcx.adt_def(vec_def_id), args)

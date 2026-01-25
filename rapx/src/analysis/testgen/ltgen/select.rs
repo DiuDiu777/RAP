@@ -49,10 +49,10 @@ impl<'tcx> Action<'tcx> {
     }
 }
 
-fn top_k_idx_by_weight(actions: &[Action], weights: &[f32]) -> Vec<usize> {
+fn top_k_idx_by_weight(actions: &[Action], weights: &[f32], top_k: usize) -> Vec<usize> {
     let mut res = (0..actions.len()).collect_vec();
     res.sort_by(|lhs, rhs| weights[*lhs].partial_cmp(&weights[*rhs]).unwrap().reverse());
-    res
+    res[..top_k.min(res.len())].to_vec()
 }
 
 impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
@@ -100,7 +100,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         Some(args)
     }
 
-    fn dfs(
+    fn search_possible_tys_and_transforms(
         &self,
         current: NodeIndex,
         transform: &mut [TransformKind],
@@ -132,7 +132,13 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             let edge = edge_ref.weight();
             if let Some(kind) = edge.as_transform_kind() {
                 transform[last_steps - 1] = kind;
-                self.dfs(edge_ref.source(), transform, visited_ty, last_steps - 1, f);
+                self.search_possible_tys_and_transforms(
+                    edge_ref.source(),
+                    transform,
+                    visited_ty,
+                    last_steps - 1,
+                    f,
+                );
             }
         }
     }
@@ -149,14 +155,14 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let Some(index) = self.api_graph.get_index_by_ty(ty) else {
             return res;
         };
-        self.dfs(
+        self.search_possible_tys_and_transforms(
             index,
             &mut transform_buffer,
             &mut visited_ty,
             num_steps,
-            &mut |ty, transform, steps| {
+            &mut |ty, transforms, steps| {
                 let vars = builder.providers_for(ty);
-                let tt = transform.iter().skip(steps).copied().collect_vec();
+                let tt = transforms[steps..].to_vec();
                 res.extend(vars.into_iter().map(|var| (var, tt.clone())));
             },
         );
@@ -218,31 +224,6 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         res
     }
 
-    fn weight_of_nodes(&self, nodes: &[DepNode<'tcx>]) -> Vec<f32> {
-        nodes
-            .iter()
-            .map(|node| {
-                let num_of_reach = *self.reached_map.get(node).unwrap_or(&0);
-                1.0 / (1 + num_of_reach) as f32
-            })
-            .collect()
-    }
-
-    fn eligable_nodes(&self, builder: &ContextBuilder<'tcx, 'a>) -> Vec<DepNode<'tcx>> {
-        let tys: Vec<_> = builder
-            .available_vars()
-            .into_iter()
-            .map(|var| builder.cx().type_of(var))
-            .collect();
-
-        rap_debug!(
-            "live tys: {}",
-            tys.iter().map(|ty| format!("{ty}")).join(", ")
-        );
-
-        self.api_graph.eligible_nodes_with(&tys)
-    }
-
     /// weights
     ///
     /// penalty = total_reach_of(api)
@@ -264,7 +245,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             let node = self.api_graph.api_node_at(idx);
 
             if let DepNode::Api(fn_did, generic_args) = node {
-                let num_of_reach = *self.reached_map.get(&node).unwrap_or(&0);
+                let num_of_reach = self.global.num_reach(node);
                 let global_penalty = 1.0 / (1 + num_of_reach) as f32;
                 let current_actions =
                     self.sample_k_eligable_actions(node, fn_did, &generic_args, &builder);
@@ -347,7 +328,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 .join(", ")
         );
 
-        let top_k = top_k_idx_by_weight(&actions, &weights);
+        let top_k = top_k_idx_by_weight(&actions, &weights, self.config.top_k);
         let weights_top_k = top_k.iter().map(|&idx| weights[idx]).collect_vec();
 
         rap_trace!(

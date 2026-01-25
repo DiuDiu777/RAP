@@ -38,7 +38,7 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
                     ty::GenericArgKind::Lifetime(_) => {
                         ty::GenericArg::from(tcx.lifetimes.re_erased)
                     }
-                    _ => *arg,
+                    _ => arg,
                 });
                 let args = tcx.mk_args_from_iter(args);
                 format!(

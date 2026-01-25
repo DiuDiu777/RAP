@@ -185,7 +185,13 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             return false;
         }
 
-        let fn_did = stmt.as_apicall().fn_did();
+        let call = stmt.as_apicall();
+        let fn_did = call.fn_did();
+
+        rap_info!(
+            "try to inject drop for {}",
+            self.tcx.def_path_str_with_args(fn_did, call.generic_args())
+        );
 
         // if the function do not exist alias relationship, we assume it is safe
         if !self.alias_map.contains_key(&fn_did) {
