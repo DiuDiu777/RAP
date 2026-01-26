@@ -20,12 +20,13 @@ pub fn is_def_id_public(fn_def_id: impl Into<DefId>, tcx: TyCtxt<'_>) -> bool {
 fn is_fuzzable_std_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
     match ty.kind() {
         ty::Adt(def, args) => {
-            if tcx.is_lang_item(def.did(), LangItem::String)
-                || tcx.is_diagnostic_item(sym::Arc, def.did())
-            {
+            if tcx.is_lang_item(def.did(), LangItem::String) {
                 return true;
             }
             if tcx.is_diagnostic_item(sym::Vec, def.did()) && is_fuzzable_ty(args.type_at(0), tcx) {
+                return true;
+            }
+            if tcx.is_diagnostic_item(sym::Arc, def.did()) && is_fuzzable_ty(args.type_at(0), tcx) {
                 return true;
             }
             false
@@ -44,6 +45,12 @@ fn is_non_fuzzable_std_ty<'tcx>(ty: Ty<'tcx>, _tcx: TyCtxt<'tcx>) -> bool {
 }
 
 pub fn is_fuzzable_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
+    let is_fuzzable = _is_fuzzable_ty(ty, tcx);
+    // rap_info!("fuzzable {}: {}.", ty, is_fuzzable);
+    is_fuzzable
+}
+
+fn _is_fuzzable_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
     if is_fuzzable_std_ty(ty, tcx) {
         return true;
     }
@@ -102,13 +109,14 @@ pub fn is_fuzzable_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> bool {
             }
 
             // if any field is not public or not fuzzable, then we consider it non-fuzzable
-            if adt_def.all_fields().any(|field| {
-                !field.vis.is_public() || // 字段必须是 pub
-                    !is_fuzzable_ty(field.ty(tcx, args), tcx)
-            }) {
+            if !adt_def
+                .all_fields()
+                .all(|field| field.vis.is_public() && is_fuzzable_ty(field.ty(tcx, args), tcx))
+            {
                 return false;
             }
 
+            // empty enum cannot be instantiated
             if adt_def.is_enum() && adt_def.variants().is_empty() {
                 return false;
             }

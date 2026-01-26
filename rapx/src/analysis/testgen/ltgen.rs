@@ -143,7 +143,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             max_iteration,
             num_samples: 5,
             top_k: 20,
-            alpha: 0.8,
+            alpha: 0.9,
             initial_drop_prob: get_initial_drop_prob(),
         };
         let global = GlobalState::new(&api_graph);

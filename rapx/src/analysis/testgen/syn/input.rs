@@ -6,7 +6,7 @@ use rustc_span::sym;
 use rustc_type_ir::{IntTy, UintTy};
 use std::ops::Range;
 
-use crate::analysis::testgen::path::PathResolver;
+use crate::analysis::testgen::{path::PathResolver, utils::is_fuzzable_ty};
 
 pub trait InputGen {
     fn gen_bool(&mut self) -> bool;

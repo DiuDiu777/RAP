@@ -245,7 +245,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
             if let DepNode::Api(fn_did, generic_args) = node {
                 let num_of_reach = self.global.num_reach(node);
-                let global_penalty = -(num_of_reach as f32);
+                let global_penalty = 1.0 / (1.0 + num_of_reach as f32);
                 let current_actions =
                     self.sample_k_eligable_actions(node, fn_did, &generic_args, &builder);
 
@@ -257,19 +257,19 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                         .iter()
                         .fold(1.0, |acc, &var| acc + builder.step_of(var) as f32);
 
+                    // FIXME: depth_of sometimes return LARGE_ENOUGH
                     let api_score = self
                         .depth_of(action.node)
                         .expect(&format!("visit unexpected node: {:?}", action.node))
                         as f32;
 
-                    let weight = global_penalty + arg_score + api_score;
+                    let weight = global_penalty * arg_score;
 
                     rap_trace!(
-                        "weight of {} = {:.2} + {} + {} = {:.2}",
+                        "weight of {} = {:.2} * {} = {:.2}",
                         action.pretty_str(self.tcx),
                         global_penalty,
                         arg_score,
-                        api_score,
                         weight
                     );
 
@@ -323,6 +323,10 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             weights = vec![1.0; actions.len()];
         };
 
+        weights.iter_mut().for_each(|weight| {
+            *weight = weight.clamp(0.0, 1000.0);
+        });
+
         rap_debug!("# eligible actions = {}", actions.len());
 
         // No action can do
@@ -330,10 +334,10 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             return None;
         }
 
-        rap_debug!("raw weights = {:?}", weights);
+        // rap_debug!("raw weights = {:?}", weights);
 
         // Softmax
-        weights.iter_mut().for_each(|weight| *weight = weight.exp());
+        // weights.iter_mut().for_each(|weight| *weight = weight.exp());
 
         rap_debug!("weights = {:?}", weights);
 
