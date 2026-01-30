@@ -1,7 +1,7 @@
 use super::super::context::{Context, Stmt, StmtKind, Var};
 use super::input::InputGen;
 use super::{SynOption, Synthesizer};
-use crate::analysis::testgen::context::UseKind;
+use crate::analysis::testgen::context::ExploitKind;
 use crate::analysis::testgen::path::PathResolver;
 use crate::rap_debug;
 use rustc_middle::ty::{self, TyCtxt};
@@ -73,7 +73,7 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
             //     format!("{}*{}", mutability.ref_prefix_str(), self.var_str(**var))
             // }
             StmtKind::Exploit(var, kind) => match kind {
-                UseKind::Debug => {
+                ExploitKind::Debug => {
                     format!(
                         "println!(\"{}: {{:?}}\",{})",
                         self.var_str(*var),

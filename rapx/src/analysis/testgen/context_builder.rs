@@ -6,7 +6,7 @@ mod safety;
 mod var_state;
 
 use crate::analysis::core::alias_analysis::AAResultMap;
-use crate::analysis::testgen::context::{Context, UseKind, Var, DUMMY_UNIT_VAR};
+use crate::analysis::testgen::context::{Context, ExploitKind, Var, DUMMY_UNIT_VAR};
 use crate::analysis::testgen::utils;
 use crate::rap_debug;
 use bit_set::BitSet;
@@ -143,7 +143,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             .type_implements_trait(debug_def_id, [ty], param_env)
             .must_apply_modulo_regions()
         {
-            self.add_exploit_stmt(var, UseKind::Debug);
+            self.add_exploit_stmt(var, ExploitKind::Debug);
             return true;
         }
         false
@@ -166,7 +166,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
                     .type_implements_trait(debug_def_id, [ty], param_env)
                     .must_apply_modulo_regions()
             {
-                self.add_exploit_stmt(var, UseKind::Debug);
+                self.add_exploit_stmt(var, ExploitKind::Debug);
             }
         }
     }

@@ -313,17 +313,19 @@ fn check_and_evaluate(
         rap_info!("`cargo miri run` success, nothing interested happen");
     } else {
         rap_warn!("miri return {:?}", result.retcode);
+        let stderr_str = String::from_utf8_lossy(&result.stderr);
         match result.retcode {
-            Some(1) => {
-                // if return Some(1), copy this project to poc directory, and automately reduce
+            Some(1) if stderr_str.contains("error: Undefined Behavior:") => {
                 eval_result = EvalResult::UBDetected;
                 rap_warn!("this may indicate a UB bug detected");
+            }
+            Some(_) => {
+                eval_result = EvalResult::Other;
             }
             None => {
                 eval_result = EvalResult::Timeout;
                 rap_warn!("this may indicate the program is timeout");
             }
-            _ => {}
         }
     }
 

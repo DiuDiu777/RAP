@@ -43,7 +43,7 @@ impl<'tcx> ApiCall<'tcx> {
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
-pub enum UseKind {
+pub enum ExploitKind {
     Debug, // use by Debug trait
 }
 
@@ -66,7 +66,7 @@ pub enum StmtKind<'tcx> {
     Ctor(CtorDict<'tcx>),
     Comment(String),
     // Deref(Box<Var>, ty::Mutability), // &T -> &U
-    Exploit(Var, UseKind),
+    Exploit(Var, ExploitKind),
 }
 
 impl<'tcx> StmtKind<'tcx> {
@@ -164,7 +164,7 @@ impl<'tcx> Stmt<'tcx> {
         }
     }
 
-    pub fn exploit(place: Var, var: Var, use_kind: UseKind) -> Stmt<'tcx> {
+    pub fn exploit(place: Var, var: Var, use_kind: ExploitKind) -> Stmt<'tcx> {
         Stmt {
             kind: StmtKind::Exploit(var, use_kind),
             place,

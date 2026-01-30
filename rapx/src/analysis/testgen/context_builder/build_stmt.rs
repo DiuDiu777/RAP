@@ -1,7 +1,7 @@
 use super::folder::RidExtractFolder;
 use super::lifetime::{RegionNode, Rid};
 use crate::analysis::testgen::context::{
-    ApiCall, StmtKind, UseKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
+    ApiCall, ExploitKind, StmtKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
 };
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
@@ -85,7 +85,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         self.add_stmt(Stmt::comment(comment));
     }
 
-    pub fn add_exploit_stmt(&mut self, var: Var, use_kind: UseKind) -> Var {
+    pub fn add_exploit_stmt(&mut self, var: Var, use_kind: ExploitKind) -> Var {
         let retvar = self.mk_var(self.tcx.types.unit, false);
         self.add_stmt(Stmt::exploit(retvar, var, use_kind));
         retvar

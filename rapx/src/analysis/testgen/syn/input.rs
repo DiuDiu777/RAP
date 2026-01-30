@@ -8,6 +8,8 @@ use std::ops::Range;
 
 use crate::analysis::testgen::{path::PathResolver, utils::is_fuzzable_ty};
 
+// fn int_ty_suffix()
+
 pub trait InputGen {
     fn gen_bool(&mut self) -> bool;
     fn gen_int(&mut self, int_ty: IntTy) -> i64;
@@ -54,9 +56,19 @@ pub trait InputGen {
                 )
             }
             TyKind::Bool => self.gen_bool().to_string(),
-            TyKind::Int(int_ty) => self.gen_int(*int_ty).to_string(),
-            TyKind::Uint(uint_ty) => self.gen_uint(*uint_ty).to_string(),
-            TyKind::Float(_) => self.gen_float().to_string(),
+            TyKind::Int(int_ty) => {
+                format!("{}{}", self.gen_int(*int_ty).to_string(), int_ty.name_str())
+            }
+            TyKind::Uint(uint_ty) => {
+                format!(
+                    "{}{}",
+                    self.gen_uint(*uint_ty).to_string(),
+                    uint_ty.name_str()
+                )
+            }
+            TyKind::Float(float_ty) => {
+                format!("{}{}", self.gen_float().to_string(), float_ty.name_str())
+            }
             TyKind::Char => format!("'{}'", self.gen_char()),
             TyKind::Str => {
                 unreachable!("str should be referenced as &str");

@@ -6,7 +6,7 @@ use super::utils::{self};
 use itertools::Itertools;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use std::collections::HashMap;
-pub use stmt::{ApiCall, CtorDict, Stmt, StmtKind, UseKind};
+pub use stmt::{ApiCall, CtorDict, ExploitKind, Stmt, StmtKind};
 pub use var::*;
 pub use var_set::*;
 
