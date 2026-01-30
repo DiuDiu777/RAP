@@ -1,113 +1,37 @@
-# ![logo](https://raw.githubusercontent.com/Artisan-Lab/RAPx/main/logo.png)
-RAPx (Rust Analysis Platform with Extensions) [![license](https://img.shields.io/github/license/Artisan-Lab/RAPx)](./LICENSE-MPL)[![docs.rs](https://img.shields.io/docsrs/rapx)](https://docs.rs/rapx) is an advanced static analysis platform for Rust, developed by researchers at [Artisan-Lab](https://hxuhack.github.io), Fudan University. It provides an extensible framework for building and integrating powerful analysis capabilities that go beyond those available in the standard rustc compiler, empowering developers to reason about safety, robustness, and performance at a deeper level.
+# LifeSonar: Detecting Lifetime-unsoundness Bugs in Rust Libraries
 
-RAPx is available on crates.io. [![crates.io](https://img.shields.io/crates/v/rapx.svg)](https://crates.io/crates/rapx)
+LifeSonar is a automated tool to detect lifetime-unsoundness bugs and synthesize executable Proof-of-Concepts (PoCs). Our tool automatically performs the entire bug detection process, including analyzing crates, constructing the API dependency graph, program synthesis, program checking, and reduction for the tested crate. 
 
-## Features
-# ![logo](https://raw.githubusercontent.com/Artisan-Lab/RAPx/main/feature.png)
-RAPx is structured into two layers: a core layer offering essential program analysis algorithms (e.g., alias and dataflow analysis), and an application layer implementing specific tasks such as bug detection. This separation of concerns promotes modular development and fosters collaboration between algorithm and application developers.
+LifeSonar is developed as a fork of the Rust Analysis Platform with Extensions ([RAPx](https://github.com/safer-rust/RAPx)). 
 
-The project is still under heavy development. For further details, please refer to the [RAPx-Book](https://artisan-lab.github.io/RAPx-Book).
+# Quick Start
+To run LifeSonar, first run `./install.sh` from the root directory of the project to install LifeSonar.
 
-## Quick Start
+Once the LifeSonar is installed, you are only one step close to run LifeSonar. Create a `.ltgenconfig` on the root directory of tested crate, or any parent directory from the root directory is Ok. LifeSonar will automatically detect `.ltgenconfig` from project directory to `/`.
 
-Install `nightly-2025-09-10` on which rapx is compiled with. This just needs to do once on your machine. If the toolchain exists,
-this will do nothing.
+Here is a `.ltgenconfig` example to reproduce our evaluation:
 
-```shell
-rustup toolchain install nightly-2025-09-10 --profile minimal --component rustc-dev,rust-src,llvm-tools-preview
-cargo +nightly-2025-09-10 install rapx --git https://github.com/Artisan-Lab/RAPx.git
+```toml
+max_complexity = 16
+max_iteration = 1000
+max_run = 10000
+override = true
+timeout = 60 
+# terminate_on_ub = true # use for debug
 ```
 
-## Usage
+For more config information, please check `rapx/src/analysis/testgen/driver.rs`. 
 
-Navigate to your Rust project folder containing a `Cargo.toml` file. Then run `rapx` by manually specifying the toolchain version according to the [toolchain override shorthand syntax](https://rust-lang.github.io/rustup/overrides.html#toolchain-override-shorthand).
+Finally, you just need to run `cargo run -testgen` on the tested project to start LifeSonar.
 
-```shell
-cargo +nightly-2025-09-10 rapx [rapx options] -- [cargo check options]
-```
+# Bug Reports
 
-or by setting up default toolchain to the required version.
-```shell
-rustup default nightly-2025-09-10
-```
 
-Check out supported options with `-help`:
-
-```shell
-$ cargo rapx -help
-
-Usage:
-    cargo rapx [rapx options or rustc options] -- [cargo check options]
-
-RAPx Options:
-
-Application:
-    -F or -uaf      use-after-free/double free detection.
-    -M or -mleak    memory leakage detection.
-    -O or -opt      automatically detect code optimization chances.
-    -I or -infer    (under development) infer the safety properties required by unsafe APIs.
-    -V or -verify   (under development) verify if the safety requirements of unsafe API are satisfied.
-
-Analysis:
-    -alias          perform alias analysis (meet-over-paths by default)
-    -adg            generate API dependency graphs
-    -audit          (under development) generate unsafe code audit units
-    -callgraph      generate callgraphs
-    -dataflow       generate dataflow graphs
-    -ownedheap      analyze if the type holds a piece of memory on heap
-    -pathcond       extract path constraints
-    -range          perform range analysis
-
-General command: 
-    -help           show help information
-    -version        show the version of RAPx
-
-NOTE: multiple detections can be processed in single run by 
-appending the options to the arguments. Like `cargo rapx -F -M`
-will perform two kinds of detection in a row.
-
-e.g.
-1. detect use-after-free and memory leak for a riscv target:
-   cargo rapx -F -M -- --target riscv64gc-unknown-none-elf
-2. detect use-after-free and memory leak for tests:
-   cargo rapx -F -M -- --tests
-3. detect use-after-free and memory leak for all members:
-   cargo rapx -F -M -- --workspace
-
-Environment Variables (Values are case insensitive):
-    RAP_LOG          verbosity of logging: trace, debug, info, warn
-                     trace: print all the detailed RAP execution traces.
-                     debug: display intermidiate analysis results.
-                     warn: show bugs detected only.
-
-    RAP_CLEAN        run cargo clean before check: true, false
-                     * true is the default value except that false is set
-
-    RAP_RECURSIVE    scope of packages to check: none, shallow, deep
-                     * none or the variable not set: check for current folder
-                     * shallow: check for current workpace members
-                     * deep: check for all workspaces from current folder
-                      
-                     NOTE: for shallow or deep, rapx will enter each member
-                     folder to do the check.
-```
-
-If RAPx gets stuck after executing `cargo clean`, try manually downloading metadata dependencies by running `cargo metadata`. 
-
-RAPx supports the following environment variables (values are case insensitive):
-
-| var             | default when absent | one of these values | description                  |
-|-----------------|---------------------|---------------------|------------------------------|
-| `RAP_LOG`       | info                | debug, info, warn   | verbosity of logging         |
-| `RAP_CLEAN`     | true                | true, false         | run cargo clean before check |
-| `RAP_RECURSIVE` | none                | none, shallow, deep | scope of packages to check   |
-
-For `RAP_RECURSIVE`:
-* none: check for current folder
-* shallow: check for current workpace members
-* deep: check for all workspaces from current folder
- 
-NOTE: rapx will enter each member folder to do the check.
-
+| #   | Crate               | Issue                                                          | UB                          | Status    |
+| --- | ------------------- | -------------------------------------------------------------- | --------------------------- | --------- |
+| 1   | crossbeam-utils     | [#1203](https://github.com/crossbeam-rs/crossbeam/issues/1203) | dangling reference          | Denied    |
+| 2   | aliasable           | [#9](https://github.com/avitex/rust-aliasable/issues/9)        | pointer not deferencable    | Confirmed |
+| 3   | bitmaps             | [#33](https://github.com/bodil/bitmaps/issues/33)              | unavailable target features | Pending   |
+| 4   | apache/arraw-buffer | [#9286](https://github.com/apache/arrow-rs/issues/9286)        | pointer not deferencable    | Confirmed |
+| 5   | apache/arraw-buffer | [#9287](https://github.com/apache/arrow-rs/issues/9287)        | unaligned value             | Confirmed |
 
