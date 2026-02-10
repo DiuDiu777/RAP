@@ -1,5 +1,6 @@
 pub mod default;
 pub mod mfp;
+pub mod sta;
 use crate::utils::source::get_fn_name_byid;
 
 use super::super::Analysis;

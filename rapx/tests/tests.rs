@@ -241,6 +241,12 @@ fn test_alias_sub_scc2() {
 }
 
 #[test]
+fn test_alias_sub_scc3() {
+    let output = running_tests_with_arg("alias/alias_sub_scc3", "-alias");
+    assert_eq!(output.contains("foo\": (0,1), (0,3)"), true);
+}
+
+#[test]
 fn test_alias_switch() {
     let output = running_tests_with_arg("alias/alias_switch", "-alias");
     assert_eq!(output.contains("foo\": (0,1)"), true);

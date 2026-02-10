@@ -8,7 +8,7 @@ pub mod value;
 
 use super::{AliasAnalysis, AliasPair, FnAliasMap, FnAliasPairs};
 use crate::{
-    analysis::{Analysis, graphs::scc::Scc},
+    analysis::{Analysis, core::alias_analysis::sta::HierarchicalAnalyzer},
     def_id::*,
     utils::source::*,
 };
@@ -263,12 +263,14 @@ impl<'tcx> AliasAnalyzer<'tcx> {
 
         if self.tcx.is_mir_available(def_id) {
             let mut mop_graph = MopGraph::new(self.tcx, def_id);
-            rap_debug!("Mop graph crated: {}", mop_graph);
-            rap_debug!("Search scc components in the graph.");
-            mop_graph.find_scc();
-            rap_trace!("After searching scc: {}", mop_graph);
-            let mut recursion_set = HashSet::default();
-            mop_graph.check(0, &mut self.fn_map, &mut recursion_set);
+            let mut hierarchical_analyzer = HierarchicalAnalyzer::new(&mut mop_graph);
+            hierarchical_analyzer.run_analysis();
+            // rap_debug!("Mop graph crated: {}", mop_graph);
+            // rap_debug!("Search scc components in the graph.");
+            // mop_graph.find_scc();
+            // rap_trace!("After searching scc: {}", mop_graph);
+            // let mut recursion_set = HashSet::default();
+            // mop_graph.check(0, &mut self.fn_map, &mut recursion_set);
             if mop_graph.visit_times > VISIT_LIMIT {
                 rap_trace!("Over visited: {:?}", def_id);
             }
