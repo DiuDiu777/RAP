@@ -8,11 +8,11 @@ use syn::{
 pub struct ParsedProperty {
     pub tag: String,
     pub args: Vec<Expr>,
+    pub kind: Option<String>,
 }
 
 #[derive(Debug, Clone, Default)]
 pub struct ParsedRapxAttr {
-    pub kind: Option<String>,
     pub properties: Vec<ParsedProperty>,
 }
 
@@ -59,9 +59,11 @@ struct RapxOuterAttribute {
 impl Parse for RapxOuterAttribute {
     fn parse(input: ParseStream<'_>) -> SynResult<Self> {
         Ok(Self {
-            attr: input.call(syn::Attribute::parse_outer)?.into_iter().next().ok_or_else(|| {
-                input.error("expected exactly one outer attribute")
-            })?,
+            attr: input
+                .call(syn::Attribute::parse_outer)?
+                .into_iter()
+                .next()
+                .ok_or_else(|| input.error("expected exactly one outer attribute"))?,
         })
     }
 }
@@ -72,18 +74,31 @@ pub fn parse_rapx_attr(attr_str: &str, expected_name: &str) -> SynResult<ParsedR
         return Ok(ParsedRapxAttr::default());
     }
 
-    let mut parsed = ParsedRapxAttr::default();
-    let items = match &attr.meta {
-        syn::Meta::List(meta_list) => {
-            meta_list.parse_args_with(Punctuated::<RapxAttrItem, Token![,]>::parse_terminated)?
-        }
-        _ => return Ok(parsed),
+    let syn::Meta::List(meta_list) = &attr.meta else {
+        return Ok(ParsedRapxAttr::default());
     };
 
+    let items =
+        meta_list.parse_args_with(Punctuated::<RapxAttrItem, Token![,]>::parse_terminated)?;
+
+    let mut parsed = ParsedRapxAttr::default();
     for item in items {
         match item {
             RapxAttrItem::Property(property) => parsed.properties.push(property),
-            RapxAttrItem::Kind(kind) => parsed.kind = Some(kind),
+            RapxAttrItem::Kind(kind) => {
+                let last = parsed.properties.last_mut().ok_or_else(|| {
+                    syn::Error::new_spanned(&attr, "kind must follow a RAPx property")
+                })?;
+
+                if last.kind.is_some() {
+                    return Err(syn::Error::new_spanned(
+                        &attr,
+                        "duplicate kind for RAPx property",
+                    ));
+                }
+
+                last.kind = Some(kind);
+            }
         }
     }
 
@@ -91,14 +106,12 @@ pub fn parse_rapx_attr(attr_str: &str, expected_name: &str) -> SynResult<ParsedR
 }
 
 fn is_expected_syn_rapx_attr(attr: &syn::Attribute, expected_name: &str) -> bool {
-    let segments: Vec<_> = attr
-        .path()
-        .segments
-        .iter()
-        .map(|seg| seg.ident.to_string())
-        .collect();
-
-    segments.len() == 2 && segments[0] == "rapx" && segments[1] == expected_name
+    let mut segments = attr.path().segments.iter();
+    matches!(
+        (segments.next(), segments.next(), segments.next()),
+        (Some(first), Some(second), None)
+            if first.ident == "rapx" && second.ident == expected_name
+    )
 }
 
 fn parse_property_expr(expr: Expr) -> SynResult<ParsedProperty> {
@@ -121,6 +134,7 @@ fn parse_property_expr(expr: Expr) -> SynResult<ParsedProperty> {
             Ok(ParsedProperty {
                 tag,
                 args: args.into_iter().collect(),
+                kind: None,
             })
         }
         other => Err(syn::Error::new_spanned(
