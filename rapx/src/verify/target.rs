@@ -205,11 +205,11 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 }
 
 /// Analysis pass that finds all targets annotated with `#[rapx::verify]`.
-pub struct VerifyTargetAnalysis<'tcx> {
+pub struct PrepareTargets<'tcx> {
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'tcx> Analysis for VerifyTargetAnalysis<'tcx> {
+impl<'tcx> Analysis for PrepareTargets<'tcx> {
     fn name(&self) -> &'static str {
         "Verify Identify Targets Analysis"
     }
@@ -283,10 +283,10 @@ impl<'tcx> Analysis for VerifyTargetAnalysis<'tcx> {
     fn reset(&mut self) {}
 }
 
-impl<'tcx> VerifyTargetAnalysis<'tcx> {
+impl<'tcx> PrepareTargets<'tcx> {
     /// Creates a new analysis instance.
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        VerifyTargetAnalysis { tcx }
+        PrepareTargets { tcx }
     }
 
     /// Logs one function target and all contracts collected from its unsafe callees.

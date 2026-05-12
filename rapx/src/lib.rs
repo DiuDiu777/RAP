@@ -41,7 +41,7 @@ use crate::{
     },
     check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop, senryx::{CheckLevel, SenryxCheck}},
     cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptLevel, RapxArgs, VerifyArgs},
-    verify::target::VerifyTargetAnalysis,
+    verify::target::PrepareTargets,
 };
 use analysis::{
     Analysis,
@@ -291,9 +291,9 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
         },
 
-        Commands::Verify(VerifyArgs { identify_targets }) => {
-            if *identify_targets {
-                VerifyTargetAnalysis::new(tcx).run();
+        Commands::Verify(VerifyArgs { prepare_targets }) => {
+            if *prepare_targets {
+                PrepareTargets::new(tcx).run();
             }
         }
     }
