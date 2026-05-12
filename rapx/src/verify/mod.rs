@@ -1,3 +1,4 @@
+mod assets_parser;
 mod attr_parser;
 mod contract;
 mod helpers;

@@ -10,13 +10,13 @@ use rustc_middle::{
 };
 use rustc_span::{Span, Symbol};
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use syn::Expr;
 
 use super::{
+    assets_parser::*,
     attr_parser::parse_rapx_attr,
-    contract::{ContractEntry, Property},
-    helpers::{get_cleaned_def_path_name, get_unsafe_callees},
+    contract::Property,
+    helpers::get_unsafe_callees,
 };
 
 /// A list of parsed `requires` contracts.
@@ -98,7 +98,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                     requires = get_contract_from_entry(
                         self.tcx,
                         callee_def_id,
-                        get_std_backup_contracts(self.tcx, callee_def_id),
+                        get_std_contracts_from_assets(self.tcx, callee_def_id),
                     );
                 }
 
@@ -350,7 +350,7 @@ impl<'tcx> VerifyTargetAnalysis<'tcx> {
 fn get_contract_from_entry<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    contract_entries: &[ContractEntry],
+    contract_entries: &[PropertyEntry],
 ) -> FnContracts<'tcx> {
     let mut results = Vec::new();
     for entry in contract_entries {
@@ -466,52 +466,3 @@ fn get_struct_invariants_from_annotation<'tcx>(
     )
 }
 
-/// Lazily loads the backup contract database for standard-library APIs.
-fn get_verify_std_contracts_json() -> &'static HashMap<String, Vec<ContractEntry>> {
-    static STD_CONTRACTS: OnceLock<HashMap<String, Vec<ContractEntry>>> = OnceLock::new();
-    STD_CONTRACTS.get_or_init(|| {
-        let raw = include_str!("assets/std-contracts.json");
-        let normalized = normalize_json_trailing_commas(raw);
-        serde_json::from_str(normalized.as_str())
-            .unwrap_or_else(|err| panic!("failed to parse verify std contracts backup: {err}"))
-    })
-}
-
-/// Looks up backup contracts for a standard-library function by its normalized path.
-fn get_std_backup_contracts(tcx: TyCtxt<'_>, def_id: DefId) -> &'static [ContractEntry] {
-    let cleaned_path_name = get_cleaned_def_path_name(tcx, def_id);
-    get_verify_std_contracts_json()
-        .get(&cleaned_path_name)
-        .map(Vec::as_slice)
-        .unwrap_or(&[])
-}
-
-/// Removes trailing commas that appear immediately before `}` or `]` in JSON text.
-///
-/// This allows the embedded backup JSON file to remain slightly permissive while
-/// still being parsed by `serde_json`.
-fn normalize_json_trailing_commas(input: &str) -> String {
-    let mut normalized = String::with_capacity(input.len());
-    let mut iter = input.char_indices().peekable();
-
-    while let Some((_, ch)) = iter.next() {
-        if ch == ',' {
-            let mut lookahead = iter.clone();
-            while let Some((_, next_ch)) = lookahead.peek() {
-                if next_ch.is_whitespace() {
-                    lookahead.next();
-                } else {
-                    break;
-                }
-            }
-            if let Some((_, next_ch)) = lookahead.peek()
-                && (*next_ch == '}' || *next_ch == ']')
-            {
-                continue;
-            }
-        }
-        normalized.push(ch);
-    }
-
-    normalized
-}

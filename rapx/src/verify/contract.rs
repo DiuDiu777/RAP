@@ -2,18 +2,12 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::BinOp as MirBinOp;
 use rustc_middle::ty::{Ty, TyCtxt};
 use safety_parser::syn::{BinOp as SynBinOp, Expr, Lit, UnOp};
-use serde::{Deserialize, Serialize};
 
 use super::helpers::{
     access_ident_recursive, match_ty_with_ident, parse_expr_into_local_and_ty,
     parse_expr_into_number,
 };
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct ContractEntry {
-    pub tag: String,
-    pub args: Vec<String>,
-}
 
 #[derive(Clone, Debug)]
 pub enum PlaceBase {
