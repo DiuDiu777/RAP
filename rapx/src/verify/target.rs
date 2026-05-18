@@ -16,7 +16,7 @@ use super::{
     assets_parser::*,
     attr_parser::parse_rapx_attr,
     contract::Property,
-    helpers::{get_unsafe_callees, collect_unsafe_callsites},
+    helpers::{collect_unsafe_callsites, get_unsafe_callees},
     path::{PathKind, VerifyPathExtractor},
 };
 

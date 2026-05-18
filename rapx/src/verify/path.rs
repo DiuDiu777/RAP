@@ -8,58 +8,17 @@
 
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
-use rustc_middle::{
-    mir::{BasicBlock, TerminatorKind, UnwindAction},
-    ty::TyCtxt,
-};
+use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
 use crate::utils::scc::Scc;
 
-use super::helpers::Callsite;
+use super::helpers::{CFG, Callsite};
 
 /// Identifier for an unsafe callsite within one function body.
 pub type CallsiteId = usize;
 
 /// Identifier for a loop node within one function body.
 pub type LoopId = usize;
-
-/// A compact MIR CFG used by the verifier path extractor.
-#[derive(Clone, Debug)]
-pub struct MirCfg {
-    pub def_id: DefId,
-    pub entry: BasicBlock,
-    pub successors: Vec<Vec<BasicBlock>>,
-}
-
-impl MirCfg {
-    /// Build a successor graph from optimized MIR.
-    pub fn new(tcx: TyCtxt<'_>, def_id: DefId) -> Self {
-        let body = tcx.optimized_mir(def_id);
-        let successors = body
-            .basic_blocks
-            .iter()
-            .map(|block| terminator_successors(&block.terminator().kind))
-            .collect();
-        Self {
-            def_id,
-            entry: BasicBlock::from_usize(0),
-            successors,
-        }
-    }
-
-    /// Return successors of a block.
-    pub fn successors(&self, block: BasicBlock) -> &[BasicBlock] {
-        self.successors
-            .get(block.as_usize())
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
-    }
-
-    /// Return the number of basic blocks.
-    pub fn len(&self) -> usize {
-        self.successors.len()
-    }
-}
 
 /// A loop exit edge exposed as a path-class port.
 #[derive(Clone, Debug)]
@@ -148,7 +107,7 @@ impl VerifyPath {
 
 /// Extract loop-aware path skeletons for a function.
 pub struct VerifyPathExtractor {
-    cfg: MirCfg,
+    cfg: CFG,
     loops: Vec<LoopNode>,
     block_to_loop: FxHashMap<usize, LoopId>,
 }
@@ -156,7 +115,7 @@ pub struct VerifyPathExtractor {
 impl VerifyPathExtractor {
     /// Create a new extractor for `def_id`.
     pub fn new(tcx: TyCtxt<'_>, def_id: DefId) -> Self {
-        let cfg = MirCfg::new(tcx, def_id);
+        let cfg = CFG::new(tcx, def_id);
         let (loops, block_to_loop) = detect_loops(&cfg);
         Self {
             cfg,
@@ -432,7 +391,7 @@ fn contains_other_callsite(
 /// single block with a self-edge.  The returned map associates each loop body
 /// block with the corresponding loop id, allowing path construction to replace
 /// loop bodies with abstract exit-port items.
-fn detect_loops(cfg: &MirCfg) -> (Vec<LoopNode>, FxHashMap<usize, LoopId>) {
+fn detect_loops(cfg: &CFG) -> (Vec<LoopNode>, FxHashMap<usize, LoopId>) {
     let mut detector = SccDetector::new(cfg.successors.clone());
     detector.find_scc();
 
@@ -487,68 +446,6 @@ fn detect_loops(cfg: &MirCfg) -> (Vec<LoopNode>, FxHashMap<usize, LoopId>) {
     }
 
     (loops, block_to_loop)
-}
-
-/// Compute MIR successor blocks for one terminator.
-///
-/// The extractor includes normal successors and cleanup successors so the
-/// skeleton reflects all CFG edges that can affect reachability.  Later phases
-/// may decide whether a cleanup path is relevant to a particular obligation.
-fn terminator_successors(kind: &TerminatorKind<'_>) -> Vec<BasicBlock> {
-    let mut successors = Vec::new();
-    match kind {
-        TerminatorKind::Goto { target } => successors.push(*target),
-        TerminatorKind::SwitchInt { targets, .. } => {
-            successors.extend(targets.all_targets().iter().copied());
-        }
-        TerminatorKind::Drop { target, unwind, .. }
-        | TerminatorKind::Assert { target, unwind, .. } => {
-            successors.push(*target);
-            push_unwind_target(unwind, &mut successors);
-        }
-        TerminatorKind::Call { target, unwind, .. } => {
-            if let Some(target) = target {
-                successors.push(*target);
-            }
-            push_unwind_target(unwind, &mut successors);
-        }
-        TerminatorKind::Yield { resume, drop, .. } => {
-            successors.push(*resume);
-            if let Some(drop) = drop {
-                successors.push(*drop);
-            }
-        }
-        TerminatorKind::FalseEdge { real_target, .. } => successors.push(*real_target),
-        TerminatorKind::FalseUnwind {
-            real_target,
-            unwind,
-        } => {
-            successors.push(*real_target);
-            push_unwind_target(unwind, &mut successors);
-        }
-        TerminatorKind::InlineAsm {
-            targets, unwind, ..
-        } => {
-            successors.extend(targets.iter().copied());
-            push_unwind_target(unwind, &mut successors);
-        }
-        TerminatorKind::Return
-        | TerminatorKind::Unreachable
-        | TerminatorKind::UnwindResume
-        | TerminatorKind::UnwindTerminate(_)
-        | TerminatorKind::CoroutineDrop
-        | TerminatorKind::TailCall { .. } => {}
-    }
-    successors.sort_unstable_by_key(|bb| bb.as_usize());
-    successors.dedup();
-    successors
-}
-
-/// Append a cleanup unwind target when one exists.
-fn push_unwind_target(unwind: &UnwindAction, successors: &mut Vec<BasicBlock>) {
-    if let UnwindAction::Cleanup(target) = unwind {
-        successors.push(*target);
-    }
 }
 
 struct SccDetector {

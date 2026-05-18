@@ -1,7 +1,7 @@
 use rustc_abi::FieldIdx;
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::{
-    mir::{BasicBlock, Operand, TerminatorKind},
+    mir::{BasicBlock, Operand, TerminatorKind, UnwindAction},
     ty::{self, Ty, TyCtxt, TyKind},
 };
 use rustc_span::Span;
@@ -32,10 +32,7 @@ impl<'tcx> Callsite<'tcx> {
 }
 
 /// Collect all unsafe MIR callsites in `def_id`.
-pub fn collect_unsafe_callsites<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-) -> Vec<Callsite<'tcx>> {
+pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<Callsite<'tcx>> {
     let mut callsites = Vec::new();
     if !tcx.is_mir_available(def_id) {
         return callsites;
@@ -94,6 +91,106 @@ pub fn get_unsafe_callees(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<DefId> {
         }
     }
     unsafe_callees
+}
+
+/// A compact MIR CFG used by the verifier path extractor.
+#[derive(Clone, Debug)]
+pub struct CFG {
+    pub def_id: DefId,
+    pub entry: BasicBlock,
+    pub successors: Vec<Vec<BasicBlock>>,
+}
+
+impl CFG {
+    /// Build a successor graph from optimized MIR.
+    pub fn new(tcx: TyCtxt<'_>, def_id: DefId) -> Self {
+        let body = tcx.optimized_mir(def_id);
+        let successors = body
+            .basic_blocks
+            .iter()
+            .map(|block| terminator_successors(&block.terminator().kind))
+            .collect();
+        Self {
+            def_id,
+            entry: BasicBlock::from_usize(0),
+            successors,
+        }
+    }
+
+    /// Return successors of a block.
+    pub fn successors(&self, block: BasicBlock) -> &[BasicBlock] {
+        self.successors
+            .get(block.as_usize())
+            .map(Vec::as_slice)
+            .unwrap_or(&[])
+    }
+
+    /// Return the number of basic blocks.
+    pub fn len(&self) -> usize {
+        self.successors.len()
+    }
+}
+
+/// Compute MIR successor blocks for one terminator.
+///
+/// The extractor includes normal successors and cleanup successors so the
+/// skeleton reflects all CFG edges that can affect reachability.  Later phases
+/// may decide whether a cleanup path is relevant to a particular obligation.
+fn terminator_successors(kind: &TerminatorKind<'_>) -> Vec<BasicBlock> {
+    let mut successors = Vec::new();
+    match kind {
+        TerminatorKind::Goto { target } => successors.push(*target),
+        TerminatorKind::SwitchInt { targets, .. } => {
+            successors.extend(targets.all_targets().iter().copied());
+        }
+        TerminatorKind::Drop { target, unwind, .. }
+        | TerminatorKind::Assert { target, unwind, .. } => {
+            successors.push(*target);
+            push_unwind_target(unwind, &mut successors);
+        }
+        TerminatorKind::Call { target, unwind, .. } => {
+            if let Some(target) = target {
+                successors.push(*target);
+            }
+            push_unwind_target(unwind, &mut successors);
+        }
+        TerminatorKind::Yield { resume, drop, .. } => {
+            successors.push(*resume);
+            if let Some(drop) = drop {
+                successors.push(*drop);
+            }
+        }
+        TerminatorKind::FalseEdge { real_target, .. } => successors.push(*real_target),
+        TerminatorKind::FalseUnwind {
+            real_target,
+            unwind,
+        } => {
+            successors.push(*real_target);
+            push_unwind_target(unwind, &mut successors);
+        }
+        TerminatorKind::InlineAsm {
+            targets, unwind, ..
+        } => {
+            successors.extend(targets.iter().copied());
+            push_unwind_target(unwind, &mut successors);
+        }
+        TerminatorKind::Return
+        | TerminatorKind::Unreachable
+        | TerminatorKind::UnwindResume
+        | TerminatorKind::UnwindTerminate(_)
+        | TerminatorKind::CoroutineDrop
+        | TerminatorKind::TailCall { .. } => {}
+    }
+    successors.sort_unstable_by_key(|bb| bb.as_usize());
+    successors.dedup();
+    successors
+}
+
+/// Append a cleanup unwind target when one exists.
+fn push_unwind_target(unwind: &UnwindAction, successors: &mut Vec<BasicBlock>) {
+    if let UnwindAction::Cleanup(target) = unwind {
+        successors.push(*target);
+    }
 }
 
 pub fn get_cleaned_def_path_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
