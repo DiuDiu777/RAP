@@ -1,0 +1,60 @@
+{
+  "core::slice::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::slice::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::slice::index::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::slice::index::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::str::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::str::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::alloc::layout::from_size_align_unchecked": [
+    { "kind": "non_zero", "arg": 1 },
+    { "kind": "power_of_two", "arg": 1 }
+  ],
+  "core::char::from_u32_unchecked": [
+    { "kind": "unicode_scalar", "arg": 0 }
+  ],
+  "core::char::convert::from_u32_unchecked": [
+    { "kind": "unicode_scalar", "arg": 0 }
+  ],
+  "core::char::methods::from_u32_unchecked": [
+    { "kind": "unicode_scalar", "arg": 0 }
+  ],
+  "core::ptr::const_ptr::add": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::mut_ptr::add": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::non_null::add": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::const_ptr::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::mut_ptr::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::non_null::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ]
+}

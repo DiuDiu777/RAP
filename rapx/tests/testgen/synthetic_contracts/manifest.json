@@ -1,0 +1,111 @@
+{
+  "description": "Synthetic benchmark crates for contract-guided Rust test generation.",
+  "crates": [
+    {
+      "name": "layout_align_public",
+      "family": "Layout",
+      "sp": ["Align"],
+      "unsafe_api": "core::ptr::read",
+      "mutator": "public field ptr"
+    },
+    {
+      "name": "layout_bad_layout",
+      "family": "Layout",
+      "sp": ["Align", "ValidNum"],
+      "unsafe_api": "std::alloc::Layout::from_size_align_unchecked",
+      "mutator": "public fields size/align"
+    },
+    {
+      "name": "layout_offset_size",
+      "family": "Layout",
+      "sp": ["Size", "InBound"],
+      "unsafe_api": "core::ptr::offset_from",
+      "mutator": "public fields lhs/rhs"
+    },
+    {
+      "name": "pointer_inbound_index",
+      "family": "Pointer",
+      "sp": ["InBound"],
+      "unsafe_api": "core::slice::get_unchecked",
+      "mutator": "public field idx"
+    },
+    {
+      "name": "pointer_nonnull_public",
+      "family": "Pointer",
+      "sp": ["NonNull"],
+      "unsafe_api": "core::ptr::NonNull::new_unchecked",
+      "mutator": "public field ptr"
+    },
+    {
+      "name": "pointer_dangling_read",
+      "family": "Pointer",
+      "sp": ["ValidPtr", "Allocated", "Init"],
+      "unsafe_api": "core::ptr::read",
+      "mutator": "public field ptr"
+    },
+    {
+      "name": "content_utf8_public",
+      "family": "Content",
+      "sp": ["ValidString"],
+      "unsafe_api": "std::string::String::from_utf8_unchecked",
+      "mutator": "public field bytes"
+    },
+    {
+      "name": "content_cstr_public",
+      "family": "Content",
+      "sp": ["ValidCStr"],
+      "unsafe_api": "std::ffi::CStr::from_bytes_with_nul_unchecked",
+      "mutator": "public field bytes"
+    },
+    {
+      "name": "content_unwrap_public",
+      "family": "Content",
+      "sp": ["Unwrap"],
+      "unsafe_api": "core::option::Option::unwrap_unchecked",
+      "mutator": "public field value"
+    },
+    {
+      "name": "alias_box_from_raw",
+      "family": "AliasLifetime",
+      "sp": ["NotOwned", "Allocated"],
+      "unsafe_api": "std::boxed::Box::from_raw",
+      "mutator": "public field ptr"
+    },
+    {
+      "name": "alias_ptr_read",
+      "family": "AliasLifetime",
+      "sp": ["NotOwned", "Alias"],
+      "unsafe_api": "core::ptr::read",
+      "mutator": "public field ptr"
+    },
+    {
+      "name": "alias_mut_ref",
+      "family": "AliasLifetime",
+      "sp": ["Alias", "Alive"],
+      "unsafe_api": "core::ptr::mut_ptr::as_mut",
+      "mutator": "public field ptr"
+    },
+    {
+      "name": "misc_unreachable_public",
+      "family": "Misc",
+      "sp": ["Unreachable"],
+      "unsafe_api": "core::hint::unreachable_unchecked",
+      "mutator": "public field reachable"
+    },
+    {
+      "name": "misc_pin_public",
+      "family": "Misc",
+      "sp": ["Pinned"],
+      "unsafe_api": "std::pin::Pin::new_unchecked",
+      "mutator": "public field value"
+    },
+    {
+      "name": "misc_volatile_public",
+      "family": "Misc",
+      "sp": ["NonVolatile", "ValidPtr"],
+      "unsafe_api": "core::ptr::read_volatile",
+      "mutator": "public field ptr"
+    }
+  ]
+}
+

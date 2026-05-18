@@ -1,0 +1,25 @@
+{
+  "totals": {
+    "lifted": 1,
+    "attempted": 1,
+    "ub": 0
+  },
+  "per_sp": [
+    {
+      "name": "NonNull",
+      "family": "Pointer",
+      "lifted": 1,
+      "attempted": 1,
+      "ub": 0
+    }
+  ],
+  "per_family": [
+    {
+      "name": "Pointer",
+      "family": null,
+      "lifted": 1,
+      "attempted": 1,
+      "ub": 0
+    }
+  ]
+}

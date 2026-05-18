@@ -1,12 +1,15 @@
 use rand::{rngs::ThreadRng, seq::IndexedRandom, Rng};
 use rustc_abi::FIRST_VARIANT;
 use rustc_hir::LangItem;
-use rustc_middle::ty::{AdtDef, GenericArgsRef, Ty, TyCtxt, TyKind};
+use rustc_middle::ty::{AdtDef, GenericArgsRef, Mutability, Ty, TyCtxt, TyKind};
 use rustc_span::sym;
 use rustc_type_ir::{IntTy, UintTy};
 use std::ops::Range;
 
-use crate::analysis::testgen::{path::PathResolver, utils::is_fuzzable_ty};
+use crate::analysis::testgen::{
+    context::{InputHint, InputHintKind},
+    path::PathResolver,
+};
 
 // fn int_ty_suffix()
 
@@ -107,6 +110,17 @@ pub trait InputGen {
             _ => panic!("Unsupported type: {:?}", ty),
         }
     }
+
+    fn gen_with_hint<'tcx>(
+        &mut self,
+        ty: Ty<'tcx>,
+        hint: Option<&InputHint>,
+        tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
+    ) -> String {
+        let _ = hint;
+        self.gen(ty, tcx, resolver)
+    }
 }
 
 pub struct SillyInputGen;
@@ -201,6 +215,175 @@ fn gen_random_utf8_seq<R: Rng>(rng: &mut R, min_len: usize, max_len: usize) -> S
     rng.random_iter::<char>().take(len).collect()
 }
 
+fn ty_is_u8(ty: Ty<'_>) -> bool {
+    matches!(ty.kind(), TyKind::Uint(UintTy::U8))
+}
+
+fn array_len<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>) -> Option<u64> {
+    if let TyKind::Array(_, const_) = ty.kind() {
+        if let rustc_type_ir::ConstKind::Value(value) = const_.kind() {
+            return value.try_to_target_usize(tcx);
+        }
+    }
+    None
+}
+
+fn byte_exprs(bytes: &[u8]) -> Vec<String> {
+    bytes.iter().map(|byte| format!("0x{byte:02x}u8")).collect()
+}
+
+fn byte_vec_expr(bytes: &[u8]) -> String {
+    format!("vec![{}]", byte_exprs(bytes).join(", "))
+}
+
+fn byte_array_expr(bytes: &[u8], len: u64) -> String {
+    let len = len as usize;
+    if len == 0 {
+        return "[]".to_string();
+    }
+
+    let mut elements = Vec::with_capacity(len);
+    for idx in 0..len {
+        elements.push(bytes[idx % bytes.len()]);
+    }
+    format!("[{}]", byte_exprs(&elements).join(", "))
+}
+
+fn byte_string_literal(bytes: &[u8]) -> String {
+    let mut literal = String::from("b\"");
+    for byte in bytes {
+        match *byte {
+            b'\\' => literal.push_str("\\\\"),
+            b'"' => literal.push_str("\\\""),
+            0x20..=0x7e => literal.push(*byte as char),
+            _ => literal.push_str(&format!("\\x{byte:02x}")),
+        }
+    }
+    literal.push('"');
+    literal
+}
+
+fn byte_slice_expr(bytes: &[u8], mutability: Mutability) -> String {
+    let elements = byte_exprs(bytes).join(", ");
+    match mutability {
+        Mutability::Mut => format!("&mut [{elements}][..]"),
+        Mutability::Not => format!("&[{elements}][..]"),
+    }
+}
+
+fn raw_ptr_cast_expr<'tcx>(
+    address: usize,
+    inner_ty: Ty<'tcx>,
+    mutability: Mutability,
+    resolver: &PathResolver<'tcx>,
+) -> String {
+    let ptr_kind = match mutability {
+        Mutability::Mut => "*mut",
+        Mutability::Not => "*const",
+    };
+    format!("{address}usize as {ptr_kind} {}", resolver.ty_str(inner_ty))
+}
+
+fn null_ptr_expr<'tcx>(
+    inner_ty: Ty<'tcx>,
+    mutability: Mutability,
+    resolver: &PathResolver<'tcx>,
+) -> String {
+    let inner = resolver.ty_str(inner_ty);
+    match mutability {
+        Mutability::Mut => format!("std::ptr::null_mut::<{inner}>()"),
+        Mutability::Not => format!("std::ptr::null::<{inner}>()"),
+    }
+}
+
+fn cstr_raw_ptr_expr<'tcx>(
+    inner_ty: Ty<'tcx>,
+    mutability: Mutability,
+    resolver: &PathResolver<'tcx>,
+) -> String {
+    let ptr_kind = match mutability {
+        Mutability::Mut => "*mut",
+        Mutability::Not => "*const",
+    };
+    format!(
+        "b\"unterminated\".as_ptr() as {ptr_kind} {}",
+        resolver.ty_str(inner_ty)
+    )
+}
+
+fn adt_path_contains<'tcx>(tcx: TyCtxt<'tcx>, adt_def: AdtDef<'tcx>, needle: &str) -> bool {
+    tcx.def_path_str(adt_def.did()).contains(needle)
+}
+
+fn is_maybe_uninit<'tcx>(tcx: TyCtxt<'tcx>, adt_def: AdtDef<'tcx>) -> bool {
+    tcx.item_name(adt_def.did()).as_str() == "MaybeUninit" && adt_path_contains(tcx, adt_def, "mem")
+}
+
+fn is_range<'tcx>(tcx: TyCtxt<'tcx>, adt_def: AdtDef<'tcx>) -> bool {
+    adt_path_contains(tcx, adt_def, "ops::range::Range")
+}
+
+fn zero_one_range_for_ty(ty: Ty<'_>) -> Option<String> {
+    match ty.kind() {
+        TyKind::Int(int_ty) => Some(format!("0{}..1{}", int_ty.name_str(), int_ty.name_str())),
+        TyKind::Uint(uint_ty) => Some(format!("0{}..1{}", uint_ty.name_str(), uint_ty.name_str())),
+        TyKind::Float(float_ty) => Some(format!(
+            "0.0{}..1.0{}",
+            float_ty.name_str(),
+            float_ty.name_str()
+        )),
+        _ => None,
+    }
+}
+
+fn hinted_bytes_expr<'tcx>(
+    ty: Ty<'tcx>,
+    bytes: &[u8],
+    tcx: TyCtxt<'tcx>,
+    resolver: &PathResolver<'tcx>,
+) -> Option<String> {
+    match ty.kind() {
+        TyKind::Adt(adt_def, args) if tcx.is_diagnostic_item(sym::Vec, adt_def.did()) => {
+            if ty_is_u8(args.type_at(0)) {
+                return Some(byte_vec_expr(bytes));
+            }
+        }
+        TyKind::Array(inner_ty, _) if ty_is_u8(*inner_ty) => {
+            return Some(byte_array_expr(bytes, array_len(ty, tcx)?));
+        }
+        TyKind::Slice(inner_ty) if ty_is_u8(*inner_ty) => {
+            return Some(byte_array_expr(bytes, bytes.len() as u64));
+        }
+        TyKind::Ref(_, inner_ty, mutability) => match inner_ty.kind() {
+            TyKind::Slice(slice_ty) if ty_is_u8(*slice_ty) => {
+                return Some(byte_slice_expr(bytes, *mutability));
+            }
+            TyKind::Array(array_ty, _) if ty_is_u8(*array_ty) => {
+                let len = array_len(*inner_ty, tcx)?;
+                let array = byte_array_expr(bytes, len);
+                return Some(match mutability {
+                    Mutability::Mut => format!("&mut {array}"),
+                    Mutability::Not => format!("&{array}"),
+                });
+            }
+            _ => {}
+        },
+        TyKind::RawPtr(inner_ty, mutability) => {
+            let bytes = byte_string_literal(bytes);
+            return Some(match mutability {
+                Mutability::Mut => {
+                    format!("{bytes}.as_ptr() as *mut {}", resolver.ty_str(*inner_ty))
+                }
+                Mutability::Not => {
+                    format!("{bytes}.as_ptr() as *const {}", resolver.ty_str(*inner_ty))
+                }
+            });
+        }
+        _ => {}
+    }
+    None
+}
+
 impl<R: Rng> InputGen for RandomGen<R> {
     fn gen_bool(&mut self) -> bool {
         self.rng.random()
@@ -253,6 +436,107 @@ impl<R: Rng> InputGen for RandomGen<R> {
             }
         }
         None
+    }
+
+    fn gen_with_hint<'tcx>(
+        &mut self,
+        ty: Ty<'tcx>,
+        hint: Option<&InputHint>,
+        tcx: TyCtxt<'tcx>,
+        resolver: &PathResolver<'tcx>,
+    ) -> String {
+        if let Some(hint) = hint {
+            match &hint.kind {
+                InputHintKind::NullPtr => {
+                    if let TyKind::RawPtr(inner_ty, mutability) = ty.kind() {
+                        return null_ptr_expr(*inner_ty, *mutability, resolver);
+                    }
+                }
+                InputHintKind::DanglingPtr => {
+                    if let TyKind::RawPtr(inner_ty, mutability) = ty.kind() {
+                        return raw_ptr_cast_expr(1, *inner_ty, *mutability, resolver);
+                    }
+                }
+                InputHintKind::MisalignedPtr | InputHintKind::InvalidAlign => {
+                    if let TyKind::RawPtr(inner_ty, mutability) = ty.kind() {
+                        return raw_ptr_cast_expr(3, *inner_ty, *mutability, resolver);
+                    }
+                }
+                InputHintKind::UninitValue => {
+                    if let TyKind::Adt(adt_def, args) = ty.kind() {
+                        if is_maybe_uninit(tcx, *adt_def) {
+                            let inner_ty = args.type_at(0);
+                            return format!(
+                                "std::mem::MaybeUninit::<{}>::uninit()",
+                                resolver.ty_str(inner_ty)
+                            );
+                        }
+                    }
+                }
+                InputHintKind::InvalidUtf8 => {
+                    if let Some(expr) = hinted_bytes_expr(ty, &[0xff, 0xfe], tcx, resolver) {
+                        return expr;
+                    }
+                }
+                InputHintKind::InvalidCStr => match ty.kind() {
+                    TyKind::RawPtr(inner_ty, mutability) => {
+                        return cstr_raw_ptr_expr(*inner_ty, *mutability, resolver);
+                    }
+                    _ => {
+                        if let Some(expr) = hinted_bytes_expr(ty, b"unterminated", tcx, resolver) {
+                            return expr;
+                        }
+                    }
+                },
+                InputHintKind::NoneVariant => {
+                    if let TyKind::Adt(adt_def, args) = ty.kind() {
+                        if tcx.is_diagnostic_item(sym::Option, adt_def.did()) {
+                            return format!("None::<{}>", resolver.ty_str(args.type_at(0)));
+                        }
+                    }
+                }
+                InputHintKind::ErrVariant => {
+                    if let TyKind::Adt(adt_def, args) = ty.kind() {
+                        if tcx.is_diagnostic_item(sym::Result, adt_def.did()) {
+                            let ok_ty = args.type_at(0);
+                            let err_ty = args.type_at(1);
+                            let err_expr = self.gen(err_ty, tcx, resolver);
+                            return format!(
+                                "Err::<{}, {}>({})",
+                                resolver.ty_str(ok_ty),
+                                resolver.ty_str(err_ty),
+                                err_expr
+                            );
+                        }
+                    }
+                }
+                InputHintKind::OverlappingRange => {
+                    if let TyKind::Adt(adt_def, args) = ty.kind() {
+                        if is_range(tcx, *adt_def) {
+                            if let Some(expr) = zero_one_range_for_ty(args.type_at(0)) {
+                                return expr;
+                            }
+                        }
+                    }
+                }
+                InputHintKind::InvalidIndex | InputHintKind::Numeric(_) => {}
+            }
+
+            match ty.kind() {
+                TyKind::Int(int_ty) => {
+                    if let Some(value) = hint.gen_int(*int_ty, &mut self.rng) {
+                        return value;
+                    }
+                }
+                TyKind::Uint(uint_ty) => {
+                    if let Some(value) = hint.gen_uint(*uint_ty, &mut self.rng) {
+                        return value;
+                    }
+                }
+                _ => {}
+            }
+        }
+        self.gen(ty, tcx, resolver)
     }
 
     fn gen_adt<'tcx>(

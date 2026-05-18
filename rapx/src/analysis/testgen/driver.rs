@@ -2,11 +2,15 @@ use super::path::get_path_resolver;
 use crate::analysis::core::alias_analysis::{AAResultMap, AliasAnalysis};
 use crate::analysis::core::api_dependency::ApiDependencyAnalysis;
 use crate::analysis::core::{alias_analysis, api_dependency};
+use crate::analysis::testgen::contract::SafetyContractDb;
+use crate::analysis::testgen::coverage::{CaseMetadata, ContractCoverage, ContractInstancesFile};
 use crate::analysis::testgen::ltgen::LtGenBuilder;
 use crate::analysis::testgen::syn::impls::FuzzDriverSynImpl;
 use crate::analysis::testgen::syn::input::RandomGen;
 use crate::analysis::testgen::syn::project::{CargoProjectBuilder, PocProject, RsProjectOption};
 use crate::analysis::testgen::syn::{SynOption, Synthesizer};
+use crate::analysis::testgen::unsound::ContractGuide;
+use crate::analysis::testgen::utils;
 use crate::analysis::Analysis;
 use crate::{rap_error, rap_info, rap_warn};
 use rustc_hir::def_id::LOCAL_CRATE;
@@ -141,6 +145,20 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&workspace_dir)?;
     fs::create_dir_all(&poc_path)?;
 
+    match SafetyContractDb::load_default() {
+        Ok(contract_db) => {
+            let summary = contract_db.summary();
+            rap_info!("loaded std safety contract db: {}", summary.brief());
+            fs::write(
+                workspace_dir.join("contract_db_summary.txt"),
+                summary.to_report_string(),
+            )?;
+        }
+        Err(err) => {
+            rap_warn!("std safety contract db is unavailable: {}", err);
+        }
+    }
+
     let mut run_count = 0;
 
     let mut api_analyzer = api_dependency::ApiDependencyAnalyzer::new(
@@ -170,10 +188,32 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
 
     dump_alias_map(&alias_map, alias_file, tcx)?;
 
-    let mut ltgen = LtGenBuilder::new(tcx, &alias_map, api_dep_graph)
+    let mut ltgen_builder = LtGenBuilder::new(tcx, &alias_map, api_dep_graph)
         .max_complexity(config.max_complexity)
-        .max_iteration(config.max_iteration)
-        .build();
+        .max_iteration(config.max_iteration);
+    let mut contract_guide_for_coverage = None;
+    let mut contract_coverage = ContractCoverage::default();
+    let contract_coverage_path = workspace_dir.join("contract_coverage.json");
+
+    if !utils::is_env_var_exist("TESTGEN_DISABLE_UNSOUND") {
+        let guide = ContractGuide::analyze(tcx);
+        guide.dump_to(workspace_dir.join("unsound_guide.txt"), tcx)?;
+        guide.dump_instances_json(workspace_dir.join("contract_instances.json"), tcx)?;
+        contract_coverage = ContractCoverage::new(guide.contract_instance_records(tcx));
+        contract_coverage.write_json(&contract_coverage_path)?;
+        contract_guide_for_coverage = Some(guide.clone());
+        ltgen_builder = ltgen_builder.guide(Box::new(guide));
+    } else {
+        ContractInstancesFile {
+            db_loaded: false,
+            total: 0,
+            instances: Vec::new(),
+        }
+        .write_json(workspace_dir.join("contract_instances.json"))?;
+        contract_coverage.write_json(&contract_coverage_path)?;
+    }
+
+    let mut ltgen = ltgen_builder.build();
 
     ltgen.log_depth_map();
 
@@ -216,6 +256,11 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         let project_builder = CargoProjectBuilder::new(project_option);
         let project = project_builder.build()?;
         project.create_src_file("main.rs", &rs_str)?;
+        let mut case_metadata = match &contract_guide_for_coverage {
+            Some(guide) => guide.case_metadata(&project_name, &project_path, cx.cx(), tcx),
+            None => CaseMetadata::from_context(&project_name, &project_path, cx.cx(), tcx),
+        };
+
         // output debug file
         let mut file = std::fs::File::create(debug_path)?;
         cx.region_graph().dump(&mut file).unwrap();
@@ -226,19 +271,34 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(&mut report_file, "{}", delimeter)?;
 
         match check_and_evaluate(&project, &mut report_file, &config) {
-            Ok(EvalResult::UBDetected) => {
-                let new_project = project.copy_to(&poc_path)?;
-                rap_warn!(
-                    "copy project to {} and reduce",
-                    new_project.option().project_path.display()
+            Ok(eval_result) => {
+                case_metadata.set_eval_result(
+                    eval_result.name(),
+                    eval_result.compile_success(),
+                    eval_result.miri_ub(),
                 );
-                new_project.reduce()?;
-                if config.terminate_on_ub {
-                    rap_info!("terminate on first UB detection");
-                    break;
+                case_metadata.write_json(project_path.join("case_metadata.json"))?;
+                contract_coverage.record_case(&case_metadata);
+                contract_coverage.write_json(&contract_coverage_path)?;
+
+                if matches!(eval_result, EvalResult::UBDetected) {
+                    let new_project = project.copy_to(&poc_path)?;
+                    rap_warn!(
+                        "copy project to {} and reduce",
+                        new_project.option().project_path.display()
+                    );
+                    new_project.reduce()?;
+                    if config.terminate_on_ub {
+                        rap_info!("terminate on first UB detection");
+                        break;
+                    }
                 }
             }
             Err(err) => {
+                case_metadata.set_eval_error(err.to_string());
+                case_metadata.write_json(project_path.join("case_metadata.json"))?;
+                contract_coverage.record_case(&case_metadata);
+                contract_coverage.write_json(&contract_coverage_path)?;
                 rap_error!("evaluate project {} fail: {}", project_path.display(), err);
                 writeln!(
                     &mut report_file,
@@ -247,7 +307,6 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
                     err
                 )?;
             }
-            _ => {}
         }
 
         writeln!(&mut report_file, "{}", delimeter)?;
@@ -279,6 +338,26 @@ pub enum EvalResult {
     Timeout,
     CompileFailed,
     Other,
+}
+
+impl EvalResult {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::Success => "success",
+            Self::UBDetected => "ub_detected",
+            Self::Timeout => "timeout",
+            Self::CompileFailed => "compile_failed",
+            Self::Other => "other",
+        }
+    }
+
+    fn compile_success(&self) -> bool {
+        !matches!(self, Self::CompileFailed)
+    }
+
+    fn miri_ub(&self) -> bool {
+        matches!(self, Self::UBDetected)
+    }
 }
 
 fn check_and_evaluate(

@@ -263,13 +263,16 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                         .expect(&format!("visit unexpected node: {:?}", action.node))
                         as f32;
 
-                    let weight = global_penalty * arg_score;
+                    let base_weight = global_penalty * arg_score;
+                    let guide_bonus = self.guides.score_action(&action.call, builder);
+                    let weight = base_weight + guide_bonus;
 
                     rap_trace!(
-                        "weight of {} = {:.2} * {} = {:.2}",
+                        "weight of {} = {:.2} * {} + guide({:.2}) = {:.2}",
                         action.pretty_str(self.tcx),
                         global_penalty,
                         arg_score,
+                        guide_bonus,
                         weight
                     );
 

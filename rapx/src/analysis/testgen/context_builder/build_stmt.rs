@@ -1,7 +1,7 @@
 use super::folder::RidExtractFolder;
 use super::lifetime::{RegionNode, Rid};
 use crate::analysis::testgen::context::{
-    ApiCall, ExploitKind, StmtKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
+    ApiCall, ExploitKind, InputHint, StmtKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
 };
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
@@ -289,7 +289,15 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         self.try_add_input_stmts(ty, true)
     }
 
-    pub fn add_call_stmt(&mut self, mut call: ApiCall<'tcx>) -> Var {
+    pub fn add_call_stmt(&mut self, call: ApiCall<'tcx>) -> Var {
+        self.add_call_stmt_with_hints(call, Vec::new())
+    }
+
+    pub fn add_call_stmt_with_hints(
+        &mut self,
+        mut call: ApiCall<'tcx>,
+        input_hints: Vec<Option<InputHint>>,
+    ) -> Var {
         let tcx = self.tcx;
         let fn_did = call.fn_did;
         let fn_sig = utils::fn_sig_with_generic_args(fn_did, call.generic_args(), tcx);
@@ -300,6 +308,9 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             let arg = call.args[idx];
             if arg == DUMMY_INPUT_VAR {
                 let var = self.add_input_stmts(input_ty);
+                if let Some(Some(hint)) = input_hints.get(idx) {
+                    self.cx.set_input_hint(var, hint.clone());
+                }
                 call.args[idx] = var;
             }
             let arg = call.args[idx];

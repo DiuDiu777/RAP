@@ -1,10 +1,14 @@
 mod context;
 mod context_builder;
+mod contract;
+mod coverage;
 mod driver;
 mod generator;
+mod guide;
 mod ltgen;
 mod path;
 mod syn;
+mod unsound;
 mod utils;
 
 use crate::analysis::testgen::driver::driver_main;
@@ -30,6 +34,7 @@ impl<'tcx> Testgen<'tcx> {
             "TESTGEN_DISABLE_ALIAS",
             "TESTGEN_DISABLE_WEIGHT",
             "TESTGEN_DISABLE_INJECT",
+            "TESTGEN_DISABLE_UNSOUND",
         ] {
             rap_info!("env:{} = {}", env_var, utils::is_env_var_exist(env_var));
         }

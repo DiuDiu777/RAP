@@ -1,0 +1,8 @@
+max_complexity = 20
+max_iteration = 1000
+max_run = 3
+mode = "normal"
+override = true
+timeout = 10
+terminate_on_ub = false
+

@@ -1,0 +1,7 @@
+[package]
+name = "case0"
+edition = "2024"
+[dependencies]
+unsound_index = { path = "/Users/lemonj/Documents/code/RAP/rapx/tests/testgen/unsound_index" }
+
+[workspace]

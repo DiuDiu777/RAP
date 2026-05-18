@@ -1,0 +1,47 @@
+{
+  "case_name": "case0",
+  "case_path": "/Users/lemonj/Documents/code/RAP/rapx/tests/testgen/synthetic_contracts/pointer_nonnull_public/testgen/tests/case0",
+  "calls": [
+    "NonNullBox::new",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null",
+    "NonNullBox::non_null"
+  ],
+  "targets": [
+    {
+      "contract_id": 0,
+      "target_kind": "producer_sink",
+      "producer_fn": "NonNullBox::non_null",
+      "sink_fn": "NonNullBox::non_null",
+      "std_fn": "core::ptr::non_null::new_unchecked",
+      "sp": "NonNull",
+      "family": "Pointer",
+      "effect_kind": "WriteField",
+      "hint_param": null,
+      "hint_kind": null,
+      "reason": "WriteField on self.0 can break NonNull required by core::ptr::non_null::new_unchecked"
+    }
+  ],
+  "hints": [],
+  "compile_success": true,
+  "miri_ub": false,
+  "eval_result": "success",
+  "eval_error": null
+}

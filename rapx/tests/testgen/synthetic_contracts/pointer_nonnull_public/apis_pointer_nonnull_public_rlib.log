@@ -1,0 +1,5 @@
+API,	NonNullBox::new,	is_fuzzable = true
+TYPE,	&mut i32,	is_fuzzable = true
+TYPE,	NonNullBox,	is_fuzzable = false
+API,	NonNullBox::non_null,	is_fuzzable = false
+TYPE,	&NonNullBox,	is_fuzzable = false

@@ -1,0 +1,60 @@
+{
+  "nodes": [
+    {
+      "id": 0,
+      "kind": "api",
+      "path": "NonNullBox::new",
+      "args": []
+    },
+    {
+      "id": 1,
+      "kind": "type",
+      "path": "&mut i32",
+      "args": []
+    },
+    {
+      "id": 2,
+      "kind": "type",
+      "path": "NonNullBox",
+      "args": []
+    },
+    {
+      "id": 3,
+      "kind": "api",
+      "path": "NonNullBox::non_null",
+      "args": []
+    },
+    {
+      "id": 4,
+      "kind": "type",
+      "path": "&NonNullBox",
+      "args": []
+    }
+  ],
+  "edges": [
+    {
+      "id": 0,
+      "kind": "arg",
+      "from": 1,
+      "to": 0
+    },
+    {
+      "id": 1,
+      "kind": "arg",
+      "from": 0,
+      "to": 2
+    },
+    {
+      "id": 2,
+      "kind": "arg",
+      "from": 4,
+      "to": 3
+    },
+    {
+      "id": 3,
+      "kind": "arg",
+      "from": 2,
+      "to": 4
+    }
+  ]
+}

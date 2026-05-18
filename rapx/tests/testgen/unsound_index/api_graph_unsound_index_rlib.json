@@ -1,0 +1,96 @@
+{
+  "nodes": [
+    {
+      "id": 0,
+      "kind": "api",
+      "path": "IndexBox::new",
+      "args": []
+    },
+    {
+      "id": 1,
+      "kind": "type",
+      "path": "std::vec::Vec<i32>",
+      "args": []
+    },
+    {
+      "id": 2,
+      "kind": "type",
+      "path": "IndexBox",
+      "args": []
+    },
+    {
+      "id": 3,
+      "kind": "api",
+      "path": "IndexBox::set_idx",
+      "args": []
+    },
+    {
+      "id": 4,
+      "kind": "type",
+      "path": "&mut IndexBox",
+      "args": []
+    },
+    {
+      "id": 5,
+      "kind": "type",
+      "path": "usize",
+      "args": []
+    },
+    {
+      "id": 6,
+      "kind": "type",
+      "path": "&IndexBox",
+      "args": []
+    },
+    {
+      "id": 7,
+      "kind": "api",
+      "path": "IndexBox::get",
+      "args": []
+    }
+  ],
+  "edges": [
+    {
+      "id": 0,
+      "kind": "arg",
+      "from": 1,
+      "to": 0
+    },
+    {
+      "id": 1,
+      "kind": "arg",
+      "from": 0,
+      "to": 2
+    },
+    {
+      "id": 2,
+      "kind": "arg",
+      "from": 4,
+      "to": 3
+    },
+    {
+      "id": 3,
+      "kind": "arg",
+      "from": 5,
+      "to": 3
+    },
+    {
+      "id": 4,
+      "kind": "arg",
+      "from": 2,
+      "to": 6
+    },
+    {
+      "id": 5,
+      "kind": "arg",
+      "from": 6,
+      "to": 7
+    },
+    {
+      "id": 6,
+      "kind": "arg",
+      "from": 2,
+      "to": 4
+    }
+  ]
+}

@@ -1,8 +1,10 @@
+mod input_hint;
 mod stmt;
 mod var;
 mod var_set;
 
 use super::utils::{self};
+pub use input_hint::*;
 use itertools::Itertools;
 use rustc_middle::ty::{self, Ty, TyCtxt};
 use std::collections::HashMap;
@@ -15,6 +17,7 @@ pub struct Context<'tcx> {
     stmts: Vec<Stmt<'tcx>>,
     var_ty: HashMap<Var, Ty<'tcx>>,
     var_mut: HashMap<Var, ty::Mutability>,
+    input_hints: HashMap<Var, InputHint>,
     num_apicall: usize,
     tcx: TyCtxt<'tcx>,
 }
@@ -25,6 +28,7 @@ impl<'tcx> Context<'tcx> {
             stmts: Vec::new(),
             var_ty: HashMap::new(),
             var_mut: HashMap::new(),
+            input_hints: HashMap::new(),
             num_apicall: 0,
             tcx,
         }
@@ -66,6 +70,14 @@ impl<'tcx> Context<'tcx> {
 
     pub fn var_mutability(&self, var: Var) -> ty::Mutability {
         *self.var_mut.get(&var).unwrap_or(&ty::Mutability::Not)
+    }
+
+    pub fn set_input_hint(&mut self, var: Var, hint: InputHint) {
+        self.input_hints.insert(var, hint);
+    }
+
+    pub fn input_hint(&self, var: Var) -> Option<&InputHint> {
+        self.input_hints.get(&var)
     }
 
     pub fn type_of(&self, var: Var) -> Ty<'tcx> {

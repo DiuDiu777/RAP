@@ -4,6 +4,7 @@ use super::context_builder::ContextBuilder;
 use crate::analysis::core::alias_analysis::AAResultMap;
 use crate::analysis::core::api_dependency::{graph::TransformKind, ApiDependencyGraph, DepNode};
 use crate::analysis::testgen::context::DUMMY_INPUT_VAR;
+use crate::analysis::testgen::guide::{FuzzGuide, GuideSet};
 use crate::analysis::testgen::utils::{self};
 use crate::{rap_debug, rap_info};
 use itertools::Itertools;
@@ -22,6 +23,7 @@ pub struct LtGenBuilder<'tcx, 'a, R: Rng> {
     max_iteration: usize,
     alias_map: &'a AAResultMap,
     api_graph: ApiDependencyGraph<'tcx>,
+    guides: GuideSet<'tcx>,
 }
 
 impl<'tcx, 'a> LtGenBuilder<'tcx, 'a, ThreadRng> {
@@ -37,6 +39,7 @@ impl<'tcx, 'a> LtGenBuilder<'tcx, 'a, ThreadRng> {
             max_iteration: 1000,
             alias_map,
             api_graph: api_graph,
+            guides: GuideSet::new(),
         }
     }
 }
@@ -50,6 +53,7 @@ impl<'tcx, 'a, R: Rng> LtGenBuilder<'tcx, 'a, R> {
             self.max_complexity,
             self.max_iteration,
             self.api_graph,
+            self.guides,
         )
     }
 
@@ -65,6 +69,11 @@ impl<'tcx, 'a, R: Rng> LtGenBuilder<'tcx, 'a, R> {
 
     pub fn rng(mut self, rng: R) -> Self {
         self.rng = rng;
+        self
+    }
+
+    pub fn guide(mut self, guide: Box<dyn FuzzGuide<'tcx> + 'tcx>) -> Self {
+        self.guides.push(guide);
         self
     }
 }
@@ -127,6 +136,7 @@ pub struct LtGen<'tcx, 'a, R: Rng> {
     api_graph: ApiDependencyGraph<'tcx>,
     depth_map: HashMap<DepNode<'tcx>, usize>,
     global: GlobalState<'tcx>,
+    guides: GuideSet<'tcx>,
 }
 
 impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
@@ -137,6 +147,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         max_complexity: usize,
         max_iteration: usize,
         api_graph: ApiDependencyGraph<'tcx>,
+        guides: GuideSet<'tcx>,
     ) -> Self {
         let config = Config {
             max_complexity,
@@ -157,6 +168,7 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             api_graph,
             depth_map,
             global,
+            guides,
         }
     }
 
@@ -228,7 +240,8 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             self.global.reach(action.node());
             current_reach.insert(action.node());
 
-            let place = builder.add_call_stmt(call);
+            let input_hints = self.guides.input_hints_for_call(&call, &builder);
+            let place = builder.add_call_stmt_with_hints(call, input_hints);
 
             let drop_prob = self
                 .global
@@ -322,6 +335,11 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                 .map(|(did, args)| self.tcx.def_path_str_with_args(did, args))
                 .join(", "),
         );
+
+        if !self.guides.is_empty() {
+            s.push_str("\n\nguides:\n");
+            s.push_str(&self.guides.summary(self.tcx));
+        }
 
         s
     }

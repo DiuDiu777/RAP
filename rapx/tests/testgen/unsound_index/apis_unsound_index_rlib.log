@@ -1,0 +1,8 @@
+API,	IndexBox::new,	is_fuzzable = true
+TYPE,	std::vec::Vec<i32>,	is_fuzzable = true
+TYPE,	IndexBox,	is_fuzzable = false
+API,	IndexBox::set_idx,	is_fuzzable = false
+TYPE,	&mut IndexBox,	is_fuzzable = false
+TYPE,	usize,	is_fuzzable = true
+TYPE,	&IndexBox,	is_fuzzable = false
+API,	IndexBox::get,	is_fuzzable = false

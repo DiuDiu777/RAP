@@ -1,0 +1,22 @@
+{
+  "db_loaded": true,
+  "total": 1,
+  "instances": [
+    {
+      "id": 0,
+      "sink_fn": "NonNullBox::non_null",
+      "sink_def_id": "DefId(0:8 ~ pointer_nonnull_public[624f]::{impl#0}::non_null)",
+      "std_fn": "core::ptr::non_null::new_unchecked",
+      "std_fn_def_id": "DefId(2:2552 ~ core[4b77]::ptr::non_null::{impl#3}::new_unchecked)",
+      "adt_def": "NonNullBox",
+      "sp": "NonNull",
+      "family": "Pointer",
+      "raw_tag": "!Null",
+      "symbolic_args": [
+        "self.0"
+      ],
+      "usage": "precondition",
+      "numeric_template": null
+    }
+  ]
+}

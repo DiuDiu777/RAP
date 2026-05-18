@@ -1,0 +1,7 @@
+[package]
+name = "case1"
+edition = "2024"
+[dependencies]
+pointer_nonnull_public = { path = "/Users/lemonj/Documents/code/RAP/rapx/tests/testgen/synthetic_contracts/pointer_nonnull_public" }
+
+[workspace]
