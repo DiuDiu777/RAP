@@ -1,11 +1,10 @@
-use serde::{Deserialize, Serialize};
-use std::sync::OnceLock;
 use rustc_hir::def_id::DefId;
-use std::collections::HashMap;
 use rustc_middle::ty::TyCtxt;
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::sync::OnceLock;
 
 use super::helpers::get_cleaned_def_path_name;
-
 
 /// Structure of JSON entries.
 ///
@@ -34,7 +33,6 @@ fn get_std_contracts_from_json() -> &'static HashMap<String, Vec<PropertyEntry>>
             .unwrap_or_else(|err| panic!("failed to parse verify std contracts backup: {err}"))
     })
 }
-
 
 /// Removes trailing commas that appear immediately before `}` or `]` in JSON text.
 ///

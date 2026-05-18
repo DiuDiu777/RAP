@@ -39,7 +39,12 @@ use crate::{
         core::{alias_analysis::mfp::MfpAliasAnalyzer, api_dependency},
         scan::ScanAnalysis,
     },
-    check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop, senryx::{CheckLevel, SenryxCheck}},
+    check::{
+        opt::Opt,
+        rcanary::rCanary,
+        safedrop::SafeDrop,
+        senryx::{CheckLevel, SenryxCheck},
+    },
     cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptLevel, RapxArgs, VerifyArgs},
     verify::target::PrepareTargets,
 };

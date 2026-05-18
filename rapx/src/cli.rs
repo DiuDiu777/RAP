@@ -42,7 +42,10 @@ pub enum OptLevel {
 
 impl RapxArgs {
     pub fn init_env(&self) {
-        let Commands::Check(CheckArgs { uaf: Some(level), .. }) = &self.command else {
+        let Commands::Check(CheckArgs {
+            uaf: Some(level), ..
+        }) = &self.command
+        else {
             return;
         };
         unsafe {

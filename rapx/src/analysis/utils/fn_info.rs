@@ -1,9 +1,9 @@
 use super::draw_dot::render_dot_string;
+use crate::def_id::*;
 use crate::{
     analysis::core::dataflow::{DataFlowAnalysis, default::DataFlowAnalyzer},
     check::senryx::{callsite::has_unsafe_api_contract, contract::PropertyContract},
 };
-use crate::def_id::*;
 use crate::{rap_debug, rap_warn};
 use rustc_ast::ItemKind;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};

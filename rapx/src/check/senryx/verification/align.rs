@@ -23,9 +23,7 @@
 //! conservative alignment/stride candidate set.
 
 use crate::{
-    analysis::{
-        utils::fn_info::{get_pointee, is_ptr, is_ref},
-    },
+    analysis::utils::fn_info::{get_pointee, is_ptr, is_ref},
     check::senryx::{
         contract::{AlignState, PropertyContract},
         symbolic_analysis::{AnaOperand, SymbolicDef, verify_with_z3},

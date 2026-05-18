@@ -8,7 +8,6 @@ use super::helpers::{
     parse_expr_into_number,
 };
 
-
 #[derive(Clone, Debug)]
 pub enum PlaceBase {
     Return,

@@ -15,10 +15,10 @@ use rustc_middle::{
 
 use crate::utils::scc::Scc;
 
-use super::callsite::UnsafeCallsite;
+use super::helpers::Callsite;
 
 /// Identifier for an unsafe callsite within one function body.
-pub type UnsafeCallsiteId = usize;
+pub type CallsiteId = usize;
 
 /// Identifier for a loop node within one function body.
 pub type LoopId = usize;
@@ -87,7 +87,7 @@ pub struct LoopNode {
     pub body: Vec<BasicBlock>,
     pub exits: Vec<LoopExit>,
     pub backedges: Vec<(BasicBlock, BasicBlock)>,
-    pub internal_callsites: Vec<UnsafeCallsiteId>,
+    pub internal_callsites: Vec<CallsiteId>,
     pub transfer: LoopTransfer,
 }
 
@@ -100,10 +100,10 @@ pub enum PathItem {
         from: BasicBlock,
         to: BasicBlock,
     },
-    Callsite(UnsafeCallsiteId),
+    Callsite(CallsiteId),
     InternalLoopCallsite {
         loop_id: LoopId,
-        callsite: UnsafeCallsiteId,
+        callsite: CallsiteId,
     },
 }
 
@@ -117,7 +117,7 @@ pub enum PathKind {
 /// A finite path skeleton reaching one unsafe callsite.
 #[derive(Clone, Debug)]
 pub struct VerifyPath {
-    pub callsite: UnsafeCallsiteId,
+    pub callsite: CallsiteId,
     pub kind: PathKind,
     pub items: Vec<PathItem>,
 }
@@ -171,8 +171,8 @@ impl VerifyPathExtractor {
     }
 
     /// Extract paths for each unsafe callsite.
-    pub fn extract_paths<'tcx>(&self, callsites: &[UnsafeCallsite<'tcx>]) -> Vec<VerifyPath> {
-        let mut by_block: FxHashMap<usize, Vec<UnsafeCallsiteId>> = FxHashMap::default();
+    pub fn extract_paths<'tcx>(&self, callsites: &[Callsite<'tcx>]) -> Vec<VerifyPath> {
+        let mut by_block: FxHashMap<usize, Vec<CallsiteId>> = FxHashMap::default();
         for (id, callsite) in callsites.iter().enumerate() {
             by_block
                 .entry(callsite.block.as_usize())
@@ -198,9 +198,9 @@ impl VerifyPathExtractor {
     /// exit port instead.
     fn extract_entry_paths(
         &self,
-        callsite_id: UnsafeCallsiteId,
+        callsite_id: CallsiteId,
         target: BasicBlock,
-        by_block: &FxHashMap<usize, Vec<UnsafeCallsiteId>>,
+        by_block: &FxHashMap<usize, Vec<CallsiteId>>,
     ) -> Vec<VerifyPath> {
         const PATH_LIMIT: usize = 1024;
         let mut results = Vec::new();
@@ -229,8 +229,8 @@ impl VerifyPathExtractor {
         &self,
         current: BasicBlock,
         target: BasicBlock,
-        callsite_id: UnsafeCallsiteId,
-        by_block: &FxHashMap<usize, Vec<UnsafeCallsiteId>>,
+        callsite_id: CallsiteId,
+        by_block: &FxHashMap<usize, Vec<CallsiteId>>,
         visited: &mut FxHashSet<usize>,
         stack: &mut Vec<PathItem>,
         results: &mut Vec<VerifyPath>,
@@ -328,7 +328,7 @@ impl VerifyPathExtractor {
     fn extract_intra_loop_paths(
         &self,
         loop_id: LoopId,
-        callsite_id: UnsafeCallsiteId,
+        callsite_id: CallsiteId,
         target: BasicBlock,
     ) -> Vec<VerifyPath> {
         const PATH_LIMIT: usize = 1024;
@@ -362,7 +362,7 @@ impl VerifyPathExtractor {
         loop_id: LoopId,
         current: BasicBlock,
         target: BasicBlock,
-        callsite_id: UnsafeCallsiteId,
+        callsite_id: CallsiteId,
         body: &FxHashSet<usize>,
         visited: &mut FxHashSet<usize>,
         stack: &mut Vec<PathItem>,
@@ -417,8 +417,8 @@ impl VerifyPathExtractor {
 /// callsite first, which would blur the verification unit boundary.
 fn contains_other_callsite(
     block: BasicBlock,
-    target_callsite: UnsafeCallsiteId,
-    by_block: &FxHashMap<usize, Vec<UnsafeCallsiteId>>,
+    target_callsite: CallsiteId,
+    by_block: &FxHashMap<usize, Vec<CallsiteId>>,
 ) -> bool {
     by_block
         .get(&block.as_usize())

@@ -15,9 +15,8 @@ use syn::Expr;
 use super::{
     assets_parser::*,
     attr_parser::parse_rapx_attr,
-    callsite::collect_unsafe_callsites,
     contract::Property,
-    helpers::get_unsafe_callees,
+    helpers::{get_unsafe_callees, collect_unsafe_callsites},
     path::{PathKind, VerifyPathExtractor},
 };
 
