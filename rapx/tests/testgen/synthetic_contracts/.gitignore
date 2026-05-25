@@ -1,2 +1,6 @@
 **/target/
 **/Cargo.lock
+**/testgen/
+**/api_graph_*_*.json
+**/api_graph_*_*.dot
+**/apis_*_*.log

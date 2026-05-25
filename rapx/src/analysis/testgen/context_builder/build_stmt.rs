@@ -1,7 +1,7 @@
 use super::folder::RidExtractFolder;
 use super::lifetime::{RegionNode, Rid};
 use crate::analysis::testgen::context::{
-    ApiCall, ExploitKind, InputHint, StmtKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
+    ApiCall, ExploitKind, InputHint, InputHintKind, StmtKind, DUMMY_INPUT_VAR, DUMMY_UNIT_VAR,
 };
 use crate::analysis::testgen::context::{Stmt, Var};
 use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
@@ -55,7 +55,12 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
                         .fold(0, |acc, &arg| acc + self.step_of(arg))
                         + 1
                 }
-                StmtKind::Comment(_) | StmtKind::Exploit(..) => unreachable!(),
+                StmtKind::RawExpr(_) => 1,
+                StmtKind::Comment(_)
+                | StmtKind::Exploit(..)
+                | StmtKind::FieldAssign { .. }
+                | StmtKind::RawStmt(_)
+                | StmtKind::SinkMarker { .. } => unreachable!(),
                 StmtKind::Ctor(ctor_dict) => todo!(),
             };
             self.set_step_of(place, num_steps);
@@ -93,6 +98,49 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
 
     pub fn add_comment_stmt(&mut self, comment: String) {
         self.add_stmt(Stmt::comment(comment));
+    }
+
+    pub fn add_sink_marker_stmt(&mut self, contract_id: usize, sink: impl Into<String>) {
+        self.add_stmt(Stmt::sink_marker(contract_id, sink));
+    }
+
+    pub fn add_raw_expr_stmt(&mut self, ty: Ty<'tcx>, expr: impl Into<String>) -> Var {
+        let var = self.mk_var(ty, false);
+        self.add_stmt(Stmt::raw_expr(var, expr));
+        var
+    }
+
+    pub fn add_raw_stmt(&mut self, stmt: impl Into<String>) {
+        self.add_stmt(Stmt::raw_stmt(stmt));
+    }
+
+    pub fn add_field_assign_stmt(
+        &mut self,
+        base: Var,
+        field_name: impl Into<String>,
+        field_ty: Ty<'tcx>,
+        hint: Option<InputHint>,
+    ) -> Option<Var> {
+        if field_ty.is_unit() || !self.var_state(base).is_live() {
+            return None;
+        }
+
+        self.cx.lift_mutability(base, ty::Mutability::Mut);
+        let value = hint
+            .as_ref()
+            .and_then(|hint| self.try_add_resource_recipe_value(field_ty, hint))
+            .unwrap_or_else(|| {
+                let value = self.add_input_stmts(field_ty);
+                if let Some(hint) = hint {
+                    self.cx.set_input_hint(value, hint);
+                }
+                value
+            });
+        if is_ty_move_on_call(field_ty, self.tcx) || value.is_from_input() {
+            self.move_var(value);
+        }
+        self.add_stmt(Stmt::field_assign(base, field_name, value));
+        Some(value)
     }
 
     pub fn add_box_stmt(&mut self, boxed: Var) -> Var {
@@ -307,10 +355,16 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             let input_ty = fn_sig.inputs()[idx];
             let arg = call.args[idx];
             if arg == DUMMY_INPUT_VAR {
-                let var = self.add_input_stmts(input_ty);
-                if let Some(Some(hint)) = input_hints.get(idx) {
-                    self.cx.set_input_hint(var, hint.clone());
-                }
+                let hint = input_hints.get(idx).and_then(Option::as_ref);
+                let var = hint
+                    .and_then(|hint| self.try_add_resource_recipe_value(input_ty, hint))
+                    .unwrap_or_else(|| {
+                        let var = self.add_input_stmts(input_ty);
+                        if let Some(hint) = hint {
+                            self.cx.set_input_hint(var, hint.clone());
+                        }
+                        var
+                    });
                 call.args[idx] = var;
             }
             let arg = call.args[idx];
@@ -383,6 +437,87 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         let new_var = self.mk_var(ref_slice_ty, false);
         self.add_stmt(Stmt::slice_ref(new_var, var, mutability));
         new_var
+    }
+
+    fn try_add_resource_recipe_value(&mut self, ty: Ty<'tcx>, hint: &InputHint) -> Option<Var> {
+        match hint.kind {
+            InputHintKind::DanglingPtr => self.add_dangling_ptr_recipe(ty),
+            InputHintKind::NullPtr => self.add_null_ptr_recipe(ty),
+            InputHintKind::MisalignedPtr | InputHintKind::InvalidAlign => {
+                self.add_addr_cast_ptr_recipe(ty, 3)
+            }
+            InputHintKind::OverlappingRange => self.add_addr_cast_ptr_recipe(ty, 0x1000),
+            InputHintKind::UninitValue => self.add_uninit_value_recipe(ty),
+            _ => None,
+        }
+    }
+
+    fn add_null_ptr_recipe(&mut self, ty: Ty<'tcx>) -> Option<Var> {
+        let TyKind::RawPtr(inner_ty, mutability) = ty.kind() else {
+            return None;
+        };
+        let expr = match mutability {
+            ty::Mutability::Mut => format!("std::ptr::null_mut::<{}>()", inner_ty),
+            ty::Mutability::Not => format!("std::ptr::null::<{}>()", inner_ty),
+        };
+        Some(self.add_raw_expr_stmt(ty, expr))
+    }
+
+    fn add_addr_cast_ptr_recipe(&mut self, ty: Ty<'tcx>, addr: usize) -> Option<Var> {
+        let TyKind::RawPtr(inner_ty, mutability) = ty.kind() else {
+            return None;
+        };
+        let ptr_kind = match mutability {
+            ty::Mutability::Mut => "*mut",
+            ty::Mutability::Not => "*const",
+        };
+        Some(self.add_raw_expr_stmt(ty, format!("{addr}usize as {ptr_kind} {inner_ty}")))
+    }
+
+    fn add_dangling_ptr_recipe(&mut self, ty: Ty<'tcx>) -> Option<Var> {
+        let TyKind::RawPtr(inner_ty, mutability) = ty.kind() else {
+            return None;
+        };
+
+        let inner = self.add_input_stmts(*inner_ty);
+        let boxed = self.add_box_stmt(inner);
+
+        let expr = match mutability {
+            ty::Mutability::Mut => {
+                self.cx.lift_mutability(boxed, ty::Mutability::Mut);
+                format!("&mut *{boxed} as *mut {inner_ty}")
+            }
+            ty::Mutability::Not => format!("&*{boxed} as *const {inner_ty}"),
+        };
+        let ptr = self.add_raw_expr_stmt(ty, expr);
+        self.add_raw_stmt(format!("drop({boxed})"));
+        self.move_var(boxed);
+        Some(ptr)
+    }
+
+    fn add_uninit_value_recipe(&mut self, ty: Ty<'tcx>) -> Option<Var> {
+        if let TyKind::RawPtr(inner_ty, mutability) = ty.kind() {
+            let ptr_kind = match mutability {
+                ty::Mutability::Mut => "*mut",
+                ty::Mutability::Not => "*const",
+            };
+            return Some(self.add_raw_expr_stmt(
+                ty,
+                format!(
+                    "Box::into_raw(Box::new(std::mem::MaybeUninit::<{}>::uninit())) as {ptr_kind} {}",
+                    inner_ty, inner_ty
+                ),
+            ));
+        }
+
+        let TyKind::Adt(adt_def, _) = ty.kind() else {
+            return None;
+        };
+        let is_maybe_uninit = self.tcx.def_path_str(adt_def.did()).contains("MaybeUninit");
+        if !is_maybe_uninit {
+            return None;
+        }
+        Some(self.add_raw_expr_stmt(ty, "std::mem::MaybeUninit::uninit()"))
     }
 }
 

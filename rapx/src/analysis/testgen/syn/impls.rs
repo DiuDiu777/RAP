@@ -114,6 +114,23 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
             StmtKind::Comment(comment) => {
                 format!("// {}", comment)
             }
+            StmtKind::FieldAssign {
+                base,
+                field_name,
+                value,
+            } => {
+                format!(
+                    "{}.{} = {}",
+                    self.var_str(*base),
+                    field_name,
+                    self.var_str(*value)
+                )
+            }
+            StmtKind::RawExpr(expr) => expr.clone(),
+            StmtKind::RawStmt(stmt) => stmt.clone(),
+            StmtKind::SinkMarker { contract_id, .. } => {
+                format!("eprintln!(\"RAP_CONTRACT_ENTER:{contract_id}\")")
+            }
 
             StmtKind::Ctor(dict) => {
                 let adt_def = dict.adt_def;
@@ -144,7 +161,7 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
 
     fn need_explicit_type_annotation(&self, stmt: &Stmt<'_>) -> bool {
         match stmt.kind() {
-            StmtKind::Ref(_, _) => true,
+            StmtKind::Ref(_, _) | StmtKind::RawExpr(_) => true,
             _ => false,
         }
     }

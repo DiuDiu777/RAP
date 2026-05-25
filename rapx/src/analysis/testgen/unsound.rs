@@ -1,24 +1,24 @@
-use crate::analysis::testgen::context::{ApiCall, InputHint, StmtKind, Var, DUMMY_INPUT_VAR};
+use crate::analysis::testgen::context::{ApiCall, InputHint, Stmt, StmtKind, Var, DUMMY_INPUT_VAR};
 use crate::analysis::testgen::context_builder::ContextBuilder;
 use crate::analysis::testgen::contract::{PrimitiveSpKind, SafetyContractDb};
 use crate::analysis::testgen::coverage::{
-    def_id_str, sp_family_name, sp_name, CaseMetadata, CaseTargetRecord, ContractInstanceRecord,
-    ContractInstancesFile,
+    def_id_str, sp_family_name, sp_name, CaseMetadata, CaseTargetRecord, CcagEdgeRecord, CcagFile,
+    CcagNodeRecord, ContractInstanceRecord, ContractInstancesFile,
 };
-use crate::analysis::testgen::guide::{FuzzGuide, GuidedAction};
+use crate::analysis::testgen::guide::{ContractTarget, FuzzGuide, GuidedAction};
 use crate::analysis::testgen::utils::is_def_id_public;
 use crate::analysis::utils::fn_info::{
     check_safety, get_adt_def_id_by_adt_method, get_cleaned_def_path_name,
 };
 use itertools::Itertools;
 use rustc_hir::def_id::DefId;
-use rustc_hir::BodyOwnerKind;
+use rustc_hir::{BodyOwnerKind, LangItem};
 use rustc_middle::mir::{
     Const, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
 };
-use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::File;
 use std::io::{self, Write};
 use std::path::Path;
@@ -164,6 +164,7 @@ impl ContractInstance {
             PrimitiveSpKind::Null => Some(InputHint::dangling_ptr(reason)),
             PrimitiveSpKind::Allocated
             | PrimitiveSpKind::Alive
+            | PrimitiveSpKind::NotOwned
             | PrimitiveSpKind::ValidPtr
             | PrimitiveSpKind::ValidPtr2Ref
             | PrimitiveSpKind::ValidSlice => Some(InputHint::dangling_ptr(reason)),
@@ -177,7 +178,9 @@ impl ContractInstance {
                     Some(InputHint::none_variant(reason))
                 }
             }
-            PrimitiveSpKind::NonOverlap => Some(InputHint::overlapping_range(reason)),
+            PrimitiveSpKind::NonOverlap | PrimitiveSpKind::Alias => {
+                Some(InputHint::overlapping_range(reason))
+            }
             _ => None,
         }
     }
@@ -288,9 +291,22 @@ struct DirectSinkHint {
     reason: String,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+#[derive(Debug, Clone)]
+struct PublicFieldTarget {
+    contract_id: usize,
+    sink_fn: DefId,
+    adt_def: DefId,
+    field_index: usize,
+    field_name: String,
+    place: SymbolicPlace,
+    sp: PrimitiveSpKind,
+    hint: Option<InputHint>,
+    reason: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
-enum StdNumericPreconditionAnnotation {
+enum StdContractBinding {
     LtLen {
         value_arg: usize,
         container_arg: usize,
@@ -308,16 +324,35 @@ enum StdNumericPreconditionAnnotation {
         offset_arg: usize,
         ptr_arg: usize,
     },
+    Arg {
+        arg: usize,
+        sp: Option<String>,
+    },
 }
 
-impl StdNumericPreconditionAnnotation {
-    fn kind(self) -> NumericPreconditionKind {
+impl StdContractBinding {
+    fn numeric_kind(&self) -> Option<NumericPreconditionKind> {
         match self {
-            Self::LtLen { .. } => NumericPreconditionKind::LessThanLen,
-            Self::NonZero { .. } => NumericPreconditionKind::NonZero,
-            Self::PowerOfTwo { .. } => NumericPreconditionKind::PowerOfTwo,
-            Self::UnicodeScalar { .. } => NumericPreconditionKind::UnicodeScalar,
-            Self::OffsetInAlloc { .. } => NumericPreconditionKind::OffsetInAllocation,
+            Self::LtLen { .. } => Some(NumericPreconditionKind::LessThanLen),
+            Self::NonZero { .. } => Some(NumericPreconditionKind::NonZero),
+            Self::PowerOfTwo { .. } => Some(NumericPreconditionKind::PowerOfTwo),
+            Self::UnicodeScalar { .. } => Some(NumericPreconditionKind::UnicodeScalar),
+            Self::OffsetInAlloc { .. } => Some(NumericPreconditionKind::OffsetInAllocation),
+            Self::Arg { .. } => None,
+        }
+    }
+
+    fn matches_sp(&self, sp: &PrimitiveSpKind) -> bool {
+        if let Some(kind) = self.numeric_kind() {
+            return kind.sp_kind() == *sp;
+        }
+
+        match self {
+            Self::Arg {
+                sp: Some(raw_tag), ..
+            } => PrimitiveSpKind::from_tag(raw_tag) == *sp,
+            Self::Arg { sp: None, .. } => true,
+            _ => false,
         }
     }
 }
@@ -364,10 +399,12 @@ impl PlaceResolver {
 
 #[derive(Clone)]
 pub struct ContractGuide<'tcx> {
+    tcx: TyCtxt<'tcx>,
     instances: Vec<ContractInstance>,
     effects: Vec<ContractEffect>,
     pairs: Vec<ConflictPair>,
     direct_hints: Vec<DirectSinkHint>,
+    public_field_targets: Vec<PublicFieldTarget>,
     contract_db_loaded: bool,
     _marker: std::marker::PhantomData<&'tcx ()>,
 }
@@ -379,11 +416,14 @@ impl<'tcx> ContractGuide<'tcx> {
                 let instances = collect_lifted_preconditions(tcx, &db);
                 let effects = collect_effects(tcx);
                 let (pairs, direct_hints) = build_conflicts(&instances, &effects);
+                let public_field_targets = collect_public_field_targets(tcx, &instances);
                 return Self {
+                    tcx,
                     instances,
                     effects,
                     pairs,
                     direct_hints,
+                    public_field_targets,
                     contract_db_loaded: true,
                     _marker: std::marker::PhantomData,
                 };
@@ -394,11 +434,14 @@ impl<'tcx> ContractGuide<'tcx> {
         let instances = collect_lifted_preconditions(tcx, &contract_db);
         let effects = collect_effects(tcx);
         let (pairs, direct_hints) = build_conflicts(&instances, &effects);
+        let public_field_targets = collect_public_field_targets(tcx, &instances);
         Self {
+            tcx,
             instances,
             effects,
             pairs,
             direct_hints,
+            public_field_targets,
             contract_db_loaded: false,
             _marker: std::marker::PhantomData,
         }
@@ -447,6 +490,251 @@ impl<'tcx> ContractGuide<'tcx> {
         self.contract_instances_file(tcx).write_json(path)
     }
 
+    pub fn ccag_file(&self, tcx: TyCtxt<'tcx>) -> CcagFile {
+        let mut nodes = BTreeMap::new();
+        let mut edges = Vec::new();
+
+        for (contract_id, instance) in self.instances.iter().enumerate() {
+            let sink_id = api_node_id(instance.sink_fn);
+            insert_ccag_node(
+                &mut nodes,
+                sink_id.clone(),
+                "api",
+                tcx.def_path_str(instance.sink_fn),
+                attrs(&[("def_id", def_id_str(instance.sink_fn))]),
+            );
+
+            let std_id = api_node_id(instance.std_fn);
+            insert_ccag_node(
+                &mut nodes,
+                std_id.clone(),
+                "std_api",
+                instance.std_fn_name.clone(),
+                attrs(&[("def_id", def_id_str(instance.std_fn))]),
+            );
+
+            let contract_id_str = contract_node_id(contract_id);
+            insert_ccag_node(
+                &mut nodes,
+                contract_id_str.clone(),
+                "contract",
+                format!("{}:{}", sp_name(&instance.sp), contract_id),
+                attrs(&[
+                    ("sp", sp_name(&instance.sp)),
+                    ("family", sp_family_name(&instance.sp)),
+                    ("usage", instance.usage.name().to_owned()),
+                    ("raw_tag", instance.raw_tag.clone()),
+                    ("std_fn", instance.std_fn_name.clone()),
+                ]),
+            );
+
+            edges.push(ccag_edge(
+                sink_id,
+                contract_id_str.clone(),
+                "reaches",
+                "reaches",
+                BTreeMap::new(),
+            ));
+            edges.push(ccag_edge(
+                contract_id_str.clone(),
+                std_id,
+                "calls_std",
+                "calls",
+                BTreeMap::new(),
+            ));
+
+            for (arg_idx, place) in instance.symbolic_args.iter().enumerate() {
+                let place_id = place_node_id(place);
+                insert_ccag_node(
+                    &mut nodes,
+                    place_id.clone(),
+                    "symbolic_place",
+                    place.pretty(),
+                    BTreeMap::new(),
+                );
+                edges.push(ccag_edge(
+                    contract_id_str.clone(),
+                    place_id,
+                    "binds",
+                    format!("arg{arg_idx}"),
+                    attrs(&[("role", format!("arg{arg_idx}"))]),
+                ));
+            }
+        }
+
+        for pair in &self.pairs {
+            let producer_id = api_node_id(pair.producer_fn);
+            insert_ccag_node(
+                &mut nodes,
+                producer_id.clone(),
+                "api",
+                tcx.def_path_str(pair.producer_fn),
+                attrs(&[("def_id", def_id_str(pair.producer_fn))]),
+            );
+
+            let mutator_id = api_mutator_node_id(pair);
+            insert_ccag_node(
+                &mut nodes,
+                mutator_id.clone(),
+                "mutator",
+                format!(
+                    "{} mutates {}",
+                    tcx.def_path_str(pair.producer_fn),
+                    pair.place.pretty()
+                ),
+                attrs(&[
+                    ("source", "api_call".to_owned()),
+                    ("effect", pair.effect_kind.to_owned()),
+                    ("contract_id", pair.contract_id.to_string()),
+                    ("reason", pair.reason.clone()),
+                ]),
+            );
+            edges.push(ccag_edge(
+                producer_id,
+                mutator_id.clone(),
+                "api_mutator",
+                "mutates",
+                BTreeMap::new(),
+            ));
+            edges.push(ccag_edge(
+                mutator_id.clone(),
+                place_node_id(&pair.place),
+                "writes",
+                "writes",
+                BTreeMap::new(),
+            ));
+            edges.push(ccag_edge(
+                mutator_id.clone(),
+                contract_node_id(pair.contract_id),
+                "may_violate",
+                "may violate",
+                attrs(&[("sp", sp_name(&pair.sp))]),
+            ));
+            if let Some(hint) = &pair.hint {
+                let recipe_id = recipe_node_id(pair.contract_id, &format!("{:?}", hint.kind));
+                insert_ccag_node(
+                    &mut nodes,
+                    recipe_id.clone(),
+                    "recipe",
+                    format!("{:?}", hint.kind),
+                    attrs(&[("reason", hint.reason.clone())]),
+                );
+                edges.push(ccag_edge(
+                    recipe_id,
+                    mutator_id,
+                    "realizes",
+                    "realizes",
+                    BTreeMap::new(),
+                ));
+            }
+        }
+
+        for target in &self.public_field_targets {
+            let type_id = type_node_id(target.adt_def);
+            insert_ccag_node(
+                &mut nodes,
+                type_id.clone(),
+                "type",
+                tcx.def_path_str(target.adt_def),
+                attrs(&[("def_id", def_id_str(target.adt_def))]),
+            );
+
+            let mutator_id = public_field_mutator_node_id(target);
+            insert_ccag_node(
+                &mut nodes,
+                mutator_id.clone(),
+                "mutator",
+                format!("{}.{}", tcx.def_path_str(target.adt_def), target.field_name),
+                attrs(&[
+                    ("source", "public_field".to_owned()),
+                    ("field", target.field_name.clone()),
+                    ("effect", "PublicFieldWrite".to_owned()),
+                    ("contract_id", target.contract_id.to_string()),
+                    ("reason", target.reason.clone()),
+                ]),
+            );
+            edges.push(ccag_edge(
+                type_id,
+                mutator_id.clone(),
+                "exposes",
+                "exposes",
+                BTreeMap::new(),
+            ));
+            edges.push(ccag_edge(
+                mutator_id.clone(),
+                place_node_id(&target.place),
+                "writes",
+                "writes",
+                BTreeMap::new(),
+            ));
+            edges.push(ccag_edge(
+                mutator_id.clone(),
+                contract_node_id(target.contract_id),
+                "may_violate",
+                "may violate",
+                attrs(&[("sp", sp_name(&target.sp))]),
+            ));
+            if let Some(hint) = &target.hint {
+                let recipe_id = recipe_node_id(target.contract_id, &format!("{:?}", hint.kind));
+                insert_ccag_node(
+                    &mut nodes,
+                    recipe_id.clone(),
+                    "recipe",
+                    format!("{:?}", hint.kind),
+                    attrs(&[("reason", hint.reason.clone())]),
+                );
+                edges.push(ccag_edge(
+                    recipe_id,
+                    mutator_id,
+                    "realizes",
+                    "realizes",
+                    BTreeMap::new(),
+                ));
+            }
+        }
+
+        for direct in &self.direct_hints {
+            let recipe_id = recipe_node_id(direct.contract_id, &format!("{:?}", direct.hint.kind));
+            insert_ccag_node(
+                &mut nodes,
+                recipe_id.clone(),
+                "recipe",
+                format!("{:?}", direct.hint.kind),
+                attrs(&[("reason", direct.reason.clone())]),
+            );
+            edges.push(ccag_edge(
+                recipe_id,
+                contract_node_id(direct.contract_id),
+                "direct_input",
+                format!("arg{}", direct.param_idx),
+                attrs(&[("param", direct.param_idx.to_string())]),
+            ));
+        }
+
+        CcagFile {
+            version: 1,
+            nodes: nodes.into_values().collect(),
+            edges,
+        }
+    }
+
+    pub fn dump_ccag_json(&self, path: impl AsRef<Path>, tcx: TyCtxt<'tcx>) -> io::Result<()> {
+        self.ccag_file(tcx).write_json(path)
+    }
+
+    pub fn violation_edge_contract_ids(&self) -> BTreeSet<usize> {
+        self.pairs
+            .iter()
+            .map(|pair| pair.contract_id)
+            .chain(self.direct_hints.iter().map(|hint| hint.contract_id))
+            .chain(
+                self.public_field_targets
+                    .iter()
+                    .map(|target| target.contract_id),
+            )
+            .collect()
+    }
+
     pub fn case_metadata(
         &self,
         case_name: impl Into<String>,
@@ -465,11 +753,20 @@ impl<'tcx> ContractGuide<'tcx> {
         tcx: TyCtxt<'tcx>,
     ) -> Vec<CaseTargetRecord> {
         let mut call_positions: HashMap<DefId, Vec<usize>> = HashMap::new();
+        let ref_source = ref_source_map(cx.stmts());
+        let mut field_assign_positions = Vec::new();
         for (idx, stmt) in cx.stmts().iter().enumerate() {
-            let StmtKind::Call(call) = stmt.kind() else {
-                continue;
-            };
-            call_positions.entry(call.fn_did()).or_default().push(idx);
+            match stmt.kind() {
+                StmtKind::Call(call) => {
+                    call_positions.entry(call.fn_did()).or_default().push(idx);
+                }
+                StmtKind::FieldAssign {
+                    base, field_name, ..
+                } => {
+                    field_assign_positions.push((idx, *base, field_name.clone()));
+                }
+                _ => {}
+            }
         }
 
         let mut targets = Vec::new();
@@ -524,6 +821,58 @@ impl<'tcx> ContractGuide<'tcx> {
                 hint_param: Some(direct.param_idx),
                 hint_kind: Some(format!("{:?}", direct.hint.kind)),
                 reason: direct.reason.clone(),
+            });
+        }
+
+        for public_field in &self.public_field_targets {
+            let Some(instance) = self.instances.get(public_field.contract_id) else {
+                continue;
+            };
+            let mut matched = false;
+            for (assign_idx, assigned_base, field_name) in &field_assign_positions {
+                if field_name != &public_field.field_name {
+                    continue;
+                }
+                for (sink_idx, stmt) in cx.stmts().iter().enumerate() {
+                    if sink_idx < *assign_idx {
+                        continue;
+                    }
+                    let StmtKind::Call(call) = stmt.kind() else {
+                        continue;
+                    };
+                    if call.fn_did() != public_field.sink_fn {
+                        continue;
+                    }
+                    let Some(receiver) = call.args().first().copied() else {
+                        continue;
+                    };
+                    if normalize_ref_var(receiver, &ref_source) == *assigned_base {
+                        matched = true;
+                        break;
+                    }
+                }
+                if matched {
+                    break;
+                }
+            }
+            if !matched {
+                continue;
+            }
+            targets.push(CaseTargetRecord {
+                contract_id: public_field.contract_id,
+                target_kind: "public_field".to_owned(),
+                producer_fn: None,
+                sink_fn: tcx.def_path_str(public_field.sink_fn),
+                std_fn: instance.std_fn_name.clone(),
+                sp: sp_name(&instance.sp),
+                family: sp_family_name(&instance.sp),
+                effect_kind: Some("PublicFieldWrite".to_owned()),
+                hint_param: None,
+                hint_kind: public_field
+                    .hint
+                    .as_ref()
+                    .map(|hint| format!("{:?}", hint.kind)),
+                reason: public_field.reason.clone(),
             });
         }
 
@@ -615,6 +964,74 @@ impl<'tcx> ContractGuide<'tcx> {
             normalize(producer_receiver) == receiver
         })
     }
+
+    fn has_prior_public_field_assignment(
+        &self,
+        builder: &ContextBuilder<'tcx, '_>,
+        target: &PublicFieldTarget,
+        receiver: Var,
+    ) -> bool {
+        builder.cx().stmts().iter().any(|stmt| {
+            let StmtKind::FieldAssign {
+                base, field_name, ..
+            } = stmt.kind()
+            else {
+                return false;
+            };
+            *base == receiver && field_name == &target.field_name
+        })
+    }
+
+    fn try_insert_public_field_mutation(
+        &self,
+        call: &ApiCall<'tcx>,
+        builder: &mut ContextBuilder<'tcx, '_>,
+    ) {
+        let Some(receiver) = call.args().first().copied() else {
+            return;
+        };
+        if receiver == DUMMY_INPUT_VAR {
+            return;
+        }
+
+        let ref_source = ref_source_map(builder.cx().stmts());
+        let receiver = normalize_ref_var(receiver, &ref_source);
+        if !builder.var_state(receiver).is_live() {
+            return;
+        }
+
+        let mut mutated_fields = BTreeSet::new();
+        for target in self
+            .public_field_targets
+            .iter()
+            .filter(|target| target.sink_fn == call.fn_did())
+        {
+            if mutated_fields.contains(&target.field_name) {
+                continue;
+            }
+            if self.has_prior_public_field_assignment(builder, target, receiver) {
+                continue;
+            }
+            let Some(field_ty) = field_ty_for_base(self.tcx(), builder, receiver, target) else {
+                continue;
+            };
+            if builder
+                .add_field_assign_stmt(
+                    receiver,
+                    target.field_name.clone(),
+                    field_ty,
+                    target.hint.clone(),
+                )
+                .is_some()
+            {
+                mutated_fields.insert(target.field_name.clone());
+            }
+        }
+    }
+
+    fn tcx(&self) -> TyCtxt<'tcx> {
+        self.tcx
+    }
 }
 
 impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
@@ -661,6 +1078,20 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
             }
         }
 
+        for target in &self.public_field_targets {
+            if target.sink_fn == fn_did {
+                let receiver = action.call.args().first().copied();
+                let ready = receiver
+                    .map(|var| {
+                        let ref_source = ref_source_map(builder.cx().stmts());
+                        let receiver = normalize_ref_var(var, &ref_source);
+                        self.has_prior_public_field_assignment(builder, target, receiver)
+                    })
+                    .unwrap_or(false);
+                score += if ready { 260.0 } else { 120.0 };
+            }
+        }
+
         score
     }
 
@@ -672,15 +1103,65 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
         merge_hints(self.hints_for_pairs(call), self.hints_for_direct_sink(call))
     }
 
+    fn before_call(&self, call: &ApiCall<'tcx>, builder: &mut ContextBuilder<'tcx, '_>) {
+        self.try_insert_public_field_mutation(call, builder);
+        for (contract_id, instance) in self
+            .instances
+            .iter()
+            .enumerate()
+            .filter(|(_, instance)| instance.sink_fn == call.fn_did())
+        {
+            builder.add_sink_marker_stmt(contract_id, self.tcx.def_path_str(instance.sink_fn));
+        }
+    }
+
+    fn contract_targets(&self, builder: &ContextBuilder<'tcx, '_>) -> Vec<ContractTarget> {
+        let mut priorities = BTreeMap::new();
+        for (contract_id, instance) in self.instances.iter().enumerate() {
+            let already_called = builder.cx().stmts().iter().any(|stmt| {
+                matches!(stmt.kind(), StmtKind::Call(call) if call.fn_did() == instance.sink_fn)
+            });
+            if already_called {
+                continue;
+            }
+            priorities.insert(contract_id, (instance.sink_fn, 10.0));
+        }
+        for direct in &self.direct_hints {
+            priorities
+                .entry(direct.contract_id)
+                .and_modify(|(_, priority)| *priority += 180.0);
+        }
+        for pair in &self.pairs {
+            priorities
+                .entry(pair.contract_id)
+                .and_modify(|(_, priority)| *priority += 120.0);
+        }
+        for target in &self.public_field_targets {
+            priorities
+                .entry(target.contract_id)
+                .and_modify(|(_, priority)| *priority += 220.0);
+        }
+
+        priorities
+            .into_iter()
+            .map(|(contract_id, (sink_fn, priority))| ContractTarget {
+                contract_id,
+                sink_fn,
+                priority,
+            })
+            .collect()
+    }
+
     fn summary(&self, tcx: TyCtxt<'tcx>) -> String {
         let mut s = String::new();
         s.push_str(&format!(
-            "contract: db_loaded={}, instances={}, effects={}, pairs={}, direct_hints={}\n",
+            "contract: db_loaded={}, instances={}, effects={}, pairs={}, direct_hints={}, public_field_targets={}\n",
             self.contract_db_loaded,
             self.instances.len(),
             self.effects.len(),
             self.pairs.len(),
-            self.direct_hints.len()
+            self.direct_hints.len(),
+            self.public_field_targets.len()
         ));
 
         if !self.instances.is_empty() {
@@ -742,6 +1223,20 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
             }
         }
 
+        if !self.public_field_targets.is_empty() {
+            s.push_str("public field targets:\n");
+            for target in self.public_field_targets.iter().take(96) {
+                s.push_str(&format!(
+                    "  {}.{} -> {} violates {} ({})\n",
+                    tcx.def_path_str(target.adt_def),
+                    target.field_name,
+                    tcx.def_path_str(target.sink_fn),
+                    target.sp,
+                    target.reason
+                ));
+            }
+        }
+
         s
     }
 }
@@ -759,16 +1254,235 @@ fn merge_hints(lhs: Vec<Option<InputHint>>, rhs: Vec<Option<InputHint>>) -> Vec<
     res
 }
 
-fn load_std_numeric_annotations() -> HashMap<String, Vec<StdNumericPreconditionAnnotation>> {
-    serde_json::from_str(include_str!("data/std_numeric_preconditions.json"))
-        .expect("Unable to parse std numeric precondition annotations")
+fn attrs(entries: &[(&str, String)]) -> BTreeMap<String, String> {
+    entries
+        .iter()
+        .map(|(key, value)| ((*key).to_owned(), value.clone()))
+        .collect()
+}
+
+fn insert_ccag_node(
+    nodes: &mut BTreeMap<String, CcagNodeRecord>,
+    id: String,
+    kind: impl Into<String>,
+    label: impl Into<String>,
+    attrs: BTreeMap<String, String>,
+) {
+    nodes.entry(id.clone()).or_insert(CcagNodeRecord {
+        id,
+        kind: kind.into(),
+        label: label.into(),
+        attrs,
+    });
+}
+
+fn ccag_edge(
+    source: String,
+    target: String,
+    kind: impl Into<String>,
+    label: impl Into<String>,
+    attrs: BTreeMap<String, String>,
+) -> CcagEdgeRecord {
+    CcagEdgeRecord {
+        source,
+        target,
+        kind: kind.into(),
+        label: label.into(),
+        attrs,
+    }
+}
+
+fn api_node_id(def_id: DefId) -> String {
+    format!("api:{def_id:?}")
+}
+
+fn type_node_id(def_id: DefId) -> String {
+    format!("type:{def_id:?}")
+}
+
+fn contract_node_id(contract_id: usize) -> String {
+    format!("contract:{contract_id}")
+}
+
+fn place_node_id(place: &SymbolicPlace) -> String {
+    format!("place:{}", place.pretty())
+}
+
+fn api_mutator_node_id(pair: &ConflictPair) -> String {
+    format!(
+        "mutator:api:{:?}:{}:{}",
+        pair.producer_fn,
+        pair.contract_id,
+        pair.place.pretty()
+    )
+}
+
+fn public_field_mutator_node_id(target: &PublicFieldTarget) -> String {
+    format!(
+        "mutator:public-field:{:?}:{}:{}",
+        target.adt_def, target.field_name, target.contract_id
+    )
+}
+
+fn recipe_node_id(contract_id: usize, hint_kind: &str) -> String {
+    format!("recipe:{contract_id}:{hint_kind}")
+}
+
+fn ref_source_map<'tcx>(stmts: &[Stmt<'tcx>]) -> HashMap<Var, Var> {
+    let mut ref_source = HashMap::new();
+    for stmt in stmts {
+        if let StmtKind::Ref(source, _) | StmtKind::SliceRef(source, _) = stmt.kind() {
+            ref_source.insert(stmt.place(), *source);
+        }
+    }
+    ref_source
+}
+
+fn normalize_ref_var(mut var: Var, ref_source: &HashMap<Var, Var>) -> Var {
+    while let Some(source) = ref_source.get(&var).copied() {
+        var = source;
+    }
+    var
+}
+
+fn field_name_for_index(tcx: TyCtxt<'_>, adt_def: DefId, field_index: usize) -> Option<String> {
+    let adt = tcx.adt_def(adt_def);
+    if !adt.is_struct() {
+        return None;
+    }
+    adt.non_enum_variant()
+        .fields
+        .iter()
+        .nth(field_index)
+        .map(|field| field.name.to_string())
+}
+
+fn is_public_field(tcx: TyCtxt<'_>, adt_def: DefId, field_index: usize) -> bool {
+    let adt = tcx.adt_def(adt_def);
+    if !adt.is_struct() {
+        return false;
+    }
+    adt.non_enum_variant()
+        .fields
+        .iter()
+        .nth(field_index)
+        .map(|field| tcx.visibility(field.did).is_public())
+        .unwrap_or(false)
+}
+
+fn field_ty_for_base<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    builder: &ContextBuilder<'tcx, '_>,
+    base: Var,
+    target: &PublicFieldTarget,
+) -> Option<Ty<'tcx>> {
+    let base_ty = builder.cx().type_of(base);
+    let (adt_def, args) = match base_ty.kind() {
+        ty::Adt(adt_def, args) if adt_def.did() == target.adt_def => (*adt_def, *args),
+        ty::Adt(box_def, box_args) if tcx.is_lang_item(box_def.did(), LangItem::OwnedBox) => {
+            let inner_ty = box_args.type_at(0);
+            let ty::Adt(inner_adt, inner_args) = inner_ty.kind() else {
+                return None;
+            };
+            if inner_adt.did() != target.adt_def {
+                return None;
+            }
+            (*inner_adt, *inner_args)
+        }
+        ty::Ref(_, inner_ty, _) => {
+            let ty::Adt(adt_def, args) = inner_ty.kind() else {
+                return None;
+            };
+            if adt_def.did() != target.adt_def {
+                return None;
+            }
+            (*adt_def, *args)
+        }
+        _ => return None,
+    };
+    if !adt_def.is_struct() {
+        return None;
+    }
+    adt_def
+        .non_enum_variant()
+        .fields
+        .iter()
+        .nth(target.field_index)
+        .map(|field| field.ty(tcx, args))
+}
+
+fn collect_public_field_targets<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instances: &[ContractInstance],
+) -> Vec<PublicFieldTarget> {
+    let mut targets = Vec::new();
+
+    for (contract_id, instance) in instances.iter().enumerate() {
+        let Some(adt_def) = instance.adt_def else {
+            continue;
+        };
+        for place in instance
+            .sensitive_place()
+            .into_iter()
+            .filter(|place| place.is_receiver_field())
+        {
+            if place.fields.len() != 1 {
+                continue;
+            }
+            let field_index = place.fields[0];
+            if !is_public_field(tcx, adt_def, field_index) {
+                continue;
+            }
+            let Some(field_name) = field_name_for_index(tcx, adt_def, field_index) else {
+                continue;
+            };
+            let reason = format!(
+                "public field {}.{} can break {} required by {}",
+                tcx.def_path_str(adt_def),
+                field_name,
+                instance.sp,
+                instance.std_fn_name
+            );
+            targets.push(PublicFieldTarget {
+                contract_id,
+                sink_fn: instance.sink_fn,
+                adt_def,
+                field_index,
+                field_name,
+                place: place.clone(),
+                sp: instance.sp.clone(),
+                hint: instance.invalid_hint(reason.clone()),
+                reason,
+            });
+        }
+    }
+
+    targets.sort_by_key(|target| {
+        (
+            format!("{:?}", target.sink_fn),
+            target.contract_id,
+            target.field_index,
+        )
+    });
+    targets.dedup_by(|lhs, rhs| {
+        lhs.contract_id == rhs.contract_id
+            && lhs.sink_fn == rhs.sink_fn
+            && lhs.adt_def == rhs.adt_def
+            && lhs.field_index == rhs.field_index
+    });
+    targets
+}
+
+fn load_std_contract_bindings() -> HashMap<String, Vec<StdContractBinding>> {
+    serde_json::from_str(include_str!("data/std_contract_bindings.json"))
+        .expect("Unable to parse std contract bindings")
 }
 
 fn collect_lifted_preconditions<'tcx>(
     tcx: TyCtxt<'tcx>,
     contract_db: &SafetyContractDb,
 ) -> Vec<ContractInstance> {
-    let numeric_annotations = load_std_numeric_annotations();
+    let contract_bindings = load_std_contract_bindings();
     let mut instances = Vec::new();
 
     for local_def_id in tcx.hir_body_owners() {
@@ -797,7 +1511,7 @@ fn collect_lifted_preconditions<'tcx>(
             let Some(contract) = contract_db.get(&callee_name) else {
                 continue;
             };
-            let templates = numeric_annotations.get(&callee_name);
+            let bindings = contract_bindings.get(&callee_name);
             for properties in contract.sites().values() {
                 for property in properties {
                     instances.extend(lift_property_instances(
@@ -808,7 +1522,7 @@ fn collect_lifted_preconditions<'tcx>(
                         &callee_name,
                         property.raw_tag(),
                         property.kind().clone(),
-                        templates.map(Vec::as_slice).unwrap_or(&[]),
+                        bindings.map(Vec::as_slice).unwrap_or(&[]),
                         args,
                         &resolver,
                     ));
@@ -828,19 +1542,14 @@ fn lift_property_instances<'tcx>(
     std_fn_name: &str,
     raw_tag: &str,
     sp: PrimitiveSpKind,
-    templates: &[StdNumericPreconditionAnnotation],
+    bindings: &[StdContractBinding],
     args: &[rustc_span::source_map::Spanned<Operand<'tcx>>],
     resolver: &PlaceResolver,
 ) -> Vec<ContractInstance> {
     let mut instances = Vec::new();
 
-    for template in templates
-        .iter()
-        .copied()
-        .filter(|template| template.kind().sp_kind() == sp)
-    {
-        let Some(symbolic_args) =
-            lift_numeric_template_args(tcx, sink_fn, template, args, resolver)
+    for binding in bindings.iter().filter(|binding| binding.matches_sp(&sp)) {
+        let Some(symbolic_args) = lift_contract_binding_args(tcx, sink_fn, binding, args, resolver)
         else {
             continue;
         };
@@ -853,7 +1562,7 @@ fn lift_property_instances<'tcx>(
             raw_tag: raw_tag.to_owned(),
             symbolic_args,
             usage: ContractUsage::Precondition,
-            numeric_kind: Some(template.kind()),
+            numeric_kind: binding.numeric_kind(),
         });
     }
 
@@ -880,26 +1589,27 @@ fn lift_property_instances<'tcx>(
     instances
 }
 
-fn lift_numeric_template_args<'tcx>(
+fn lift_contract_binding_args<'tcx>(
     tcx: TyCtxt<'tcx>,
     fn_did: DefId,
-    template: StdNumericPreconditionAnnotation,
+    binding: &StdContractBinding,
     args: &[rustc_span::source_map::Spanned<Operand<'tcx>>],
     resolver: &PlaceResolver,
 ) -> Option<Vec<SymbolicPlace>> {
     let resolve = |idx| resolve_arg_symbolic(tcx, fn_did, args, idx, resolver);
-    match template {
-        StdNumericPreconditionAnnotation::LtLen {
+    match binding {
+        StdContractBinding::LtLen {
             value_arg,
             container_arg,
-        } => Some(vec![resolve(value_arg)?, resolve(container_arg)?]),
-        StdNumericPreconditionAnnotation::NonZero { arg }
-        | StdNumericPreconditionAnnotation::PowerOfTwo { arg }
-        | StdNumericPreconditionAnnotation::UnicodeScalar { arg } => Some(vec![resolve(arg)?]),
-        StdNumericPreconditionAnnotation::OffsetInAlloc {
+        } => Some(vec![resolve(*value_arg)?, resolve(*container_arg)?]),
+        StdContractBinding::NonZero { arg }
+        | StdContractBinding::PowerOfTwo { arg }
+        | StdContractBinding::UnicodeScalar { arg }
+        | StdContractBinding::Arg { arg, .. } => Some(vec![resolve(*arg)?]),
+        StdContractBinding::OffsetInAlloc {
             offset_arg,
             ptr_arg,
-        } => Some(vec![resolve(offset_arg)?, resolve(ptr_arg)?]),
+        } => Some(vec![resolve(*offset_arg)?, resolve(*ptr_arg)?]),
     }
 }
 
@@ -974,7 +1684,7 @@ fn collect_assignment_effect<'tcx>(
         return;
     };
     let (lhs, rvalue) = &**assign;
-    let Some(field) = resolver.resolve_place(tcx, fn_did, lhs) else {
+    let Some(field) = raw_symbolic_place(tcx, fn_did, lhs) else {
         return;
     };
     if !field.is_receiver_field() {

@@ -1,0 +1,161 @@
+{
+  "core::slice::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::slice::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::slice::index::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::slice::index::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
+  ],
+  "core::str::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::str::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::str::traits::get_unchecked": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::str::traits::get_unchecked_mut": [
+    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
+  ],
+  "core::alloc::layout::from_size_align_unchecked": [
+    { "kind": "non_zero", "arg": 1 },
+    { "kind": "power_of_two", "arg": 1 }
+  ],
+  "core::char::from_u32_unchecked": [
+    { "kind": "unicode_scalar", "arg": 0 }
+  ],
+  "core::char::convert::from_u32_unchecked": [
+    { "kind": "unicode_scalar", "arg": 0 }
+  ],
+  "core::char::methods::from_u32_unchecked": [
+    { "kind": "unicode_scalar", "arg": 0 }
+  ],
+  "core::ptr::const_ptr::add": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::mut_ptr::add": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::non_null::add": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::const_ptr::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::mut_ptr::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::non_null::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::offset": [
+    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  ],
+  "core::ptr::read": [
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "Init", "arg": 0 }
+  ],
+  "core::ptr::read_volatile": [
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "Init", "arg": 0 }
+  ],
+  "core::ptr::write": [
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Aligned", "arg": 0 }
+  ],
+  "core::ptr::write_volatile": [
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Aligned", "arg": 0 }
+  ],
+  "core::intrinsics::copy_nonoverlapping": [
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "NonOverlap", "arg": 0 },
+    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
+    { "kind": "arg", "sp": "Aligned", "arg": 1 },
+    { "kind": "arg", "sp": "NonOverlap", "arg": 1 }
+  ],
+  "core::ptr::copy_nonoverlapping": [
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "NonOverlap", "arg": 0 },
+    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
+    { "kind": "arg", "sp": "Aligned", "arg": 1 },
+    { "kind": "arg", "sp": "NonOverlap", "arg": 1 }
+  ],
+  "alloc::boxed::from_raw": [
+    { "kind": "arg", "sp": "Allocated", "arg": 0 },
+    { "kind": "arg", "sp": "Ownning", "arg": 0 },
+    { "kind": "arg", "sp": "Alias", "arg": 0 }
+  ],
+  "alloc::boxed::from_raw_in": [
+    { "kind": "arg", "sp": "Allocated", "arg": 0 },
+    { "kind": "arg", "sp": "Ownning", "arg": 0 },
+    { "kind": "arg", "sp": "Alias", "arg": 0 }
+  ],
+  "core::ffi::c_str::from_bytes_with_nul_unchecked": [
+    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  ],
+  "std::ffi::c_str::from_bytes_with_nul_unchecked": [
+    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  ],
+  "core::str::converts::from_utf8_unchecked": [
+    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  ],
+  "core::str::converts::from_utf8_unchecked_mut": [
+    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  ],
+  "alloc::string::from_utf8_unchecked": [
+    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  ],
+  "alloc::string::String::from_utf8_unchecked": [
+    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  ],
+  "std::string::String::from_utf8_unchecked": [
+    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  ],
+  "core::option::unwrap_unchecked": [
+    { "kind": "arg", "sp": "Unwrap", "arg": 0 }
+  ],
+  "core::result::unwrap_unchecked": [
+    { "kind": "arg", "sp": "Unwrap", "arg": 0 }
+  ],
+  "core::result::unwrap_err_unchecked": [
+    { "kind": "arg", "sp": "Unwrap", "arg": 0 }
+  ],
+  "core::ptr::non_null::new_unchecked": [
+    { "kind": "arg", "sp": "!Null", "arg": 0 }
+  ],
+  "std::ptr::non_null::new_unchecked": [
+    { "kind": "arg", "sp": "!Null", "arg": 0 }
+  ],
+  "core::num::nonzero::new_unchecked": [
+    { "kind": "non_zero", "arg": 0 }
+  ],
+  "core::mem::maybe_uninit::assume_init": [
+    { "kind": "arg", "sp": "Init", "arg": 0 }
+  ],
+  "core::mem::maybe_uninit::assume_init_read": [
+    { "kind": "arg", "sp": "Init", "arg": 0 }
+  ],
+  "core::mem::maybe_uninit::assume_init_ref": [
+    { "kind": "arg", "sp": "Init", "arg": 0 }
+  ],
+  "core::mem::maybe_uninit::assume_init_mut": [
+    { "kind": "arg", "sp": "Init", "arg": 0 }
+  ]
+}

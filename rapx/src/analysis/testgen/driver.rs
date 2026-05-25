@@ -3,7 +3,9 @@ use crate::analysis::core::alias_analysis::{AAResultMap, AliasAnalysis};
 use crate::analysis::core::api_dependency::ApiDependencyAnalysis;
 use crate::analysis::core::{alias_analysis, api_dependency};
 use crate::analysis::testgen::contract::SafetyContractDb;
-use crate::analysis::testgen::coverage::{CaseMetadata, ContractCoverage, ContractInstancesFile};
+use crate::analysis::testgen::coverage::{
+    CaseMetadata, CcagFile, ContractCoverage, ContractInstancesFile,
+};
 use crate::analysis::testgen::ltgen::LtGenBuilder;
 use crate::analysis::testgen::syn::impls::FuzzDriverSynImpl;
 use crate::analysis::testgen::syn::input::RandomGen;
@@ -16,6 +18,7 @@ use crate::{rap_error, rap_info, rap_warn};
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_middle::ty::TyCtxt;
 use serde::Deserialize;
+use std::collections::BTreeSet;
 use std::io::Write;
 use std::path::Path;
 use std::{fs, io};
@@ -199,7 +202,11 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         let guide = ContractGuide::analyze(tcx);
         guide.dump_to(workspace_dir.join("unsound_guide.txt"), tcx)?;
         guide.dump_instances_json(workspace_dir.join("contract_instances.json"), tcx)?;
-        contract_coverage = ContractCoverage::new(guide.contract_instance_records(tcx));
+        guide.dump_ccag_json(workspace_dir.join("ccag.json"), tcx)?;
+        contract_coverage = ContractCoverage::new_with_static(
+            guide.contract_instance_records(tcx),
+            guide.violation_edge_contract_ids(),
+        );
         contract_coverage.write_json(&contract_coverage_path)?;
         contract_guide_for_coverage = Some(guide.clone());
         ltgen_builder = ltgen_builder.guide(Box::new(guide));
@@ -210,6 +217,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
             instances: Vec::new(),
         }
         .write_json(workspace_dir.join("contract_instances.json"))?;
+        CcagFile::empty().write_json(workspace_dir.join("ccag.json"))?;
         contract_coverage.write_json(&contract_coverage_path)?;
     }
 
@@ -271,11 +279,13 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         writeln!(&mut report_file, "{}", delimeter)?;
 
         match check_and_evaluate(&project, &mut report_file, &config) {
-            Ok(eval_result) => {
+            Ok(eval_outcome) => {
+                let eval_result = eval_outcome.result;
                 case_metadata.set_eval_result(
                     eval_result.name(),
                     eval_result.compile_success(),
                     eval_result.miri_ub(),
+                    eval_outcome.executed_contracts,
                 );
                 case_metadata.write_json(project_path.join("case_metadata.json"))?;
                 contract_coverage.record_case(&case_metadata);
@@ -340,6 +350,11 @@ pub enum EvalResult {
     Other,
 }
 
+pub struct EvalOutcome {
+    result: EvalResult,
+    executed_contracts: BTreeSet<usize>,
+}
+
 impl EvalResult {
     fn name(&self) -> &'static str {
         match self {
@@ -360,11 +375,28 @@ impl EvalResult {
     }
 }
 
+const CONTRACT_ENTER_PREFIX: &str = "RAP_CONTRACT_ENTER:";
+
+fn parse_executed_contracts(stdout: &[u8], stderr: &[u8]) -> BTreeSet<usize> {
+    String::from_utf8_lossy(stdout)
+        .lines()
+        .chain(String::from_utf8_lossy(stderr).lines())
+        .filter_map(|line| {
+            let (_, tail) = line.split_once(CONTRACT_ENTER_PREFIX)?;
+            let id = tail
+                .chars()
+                .take_while(|ch| ch.is_ascii_digit())
+                .collect::<String>();
+            id.parse::<usize>().ok()
+        })
+        .collect()
+}
+
 fn check_and_evaluate(
     project: &PocProject,
     log: &mut impl Write,
     config: &Config,
-) -> io::Result<EvalResult> {
+) -> io::Result<EvalOutcome> {
     let project_path = &project.option().project_path;
 
     // run `cargo check`
@@ -373,14 +405,20 @@ fn check_and_evaluate(
         rap_error!("running `cargo check` fail: {:?}", result.retcode);
         rap_error!("project {} compile fail", project_path.display());
         writeln!(log, "{}", result.brief())?;
-        return Ok(EvalResult::CompileFailed);
+        return Ok(EvalOutcome {
+            result: EvalResult::CompileFailed,
+            executed_contracts: BTreeSet::new(),
+        });
     } else {
         rap_info!("`cargo check` success");
     }
 
     // if this is dryrun, skip evaluataion
     if config.mode.is_dryrun() {
-        return Ok(EvalResult::Success);
+        return Ok(EvalOutcome {
+            result: EvalResult::Success,
+            executed_contracts: BTreeSet::new(),
+        });
     }
 
     let mut eval_result = EvalResult::Success;
@@ -388,6 +426,7 @@ fn check_and_evaluate(
     // run `cargo miri run`
     let result = project.run_cargo_cmd(&["miri", "run"], miri_env_vars(), config.timeout)?;
     writeln!(log, "{}", result.brief())?;
+    let executed_contracts = parse_executed_contracts(&result.stdout, &result.stderr);
     if result.success() {
         rap_info!("`cargo miri run` success, nothing interested happen");
     } else {
@@ -422,5 +461,8 @@ fn check_and_evaluate(
     //     }
     // }
 
-    Ok(eval_result)
+    Ok(EvalOutcome {
+        result: eval_result,
+        executed_contracts,
+    })
 }

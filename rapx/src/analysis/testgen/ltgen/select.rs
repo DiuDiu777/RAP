@@ -2,6 +2,7 @@ use crate::analysis::core::api_dependency::graph::{TransformKind, TyWrapper};
 use crate::analysis::core::api_dependency::DepNode;
 use crate::analysis::testgen::context::{ApiCall, Var};
 use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
+use crate::analysis::testgen::guide::ContractTarget;
 use crate::analysis::testgen::ltgen::LtGen;
 use crate::analysis::testgen::utils;
 use itertools::Itertools;
@@ -56,6 +57,106 @@ fn top_k_idx_by_weight(actions: &[Action], weights: &[f32], top_k: usize) -> Vec
 }
 
 impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
+    fn action_weights(&self, builder: &ContextBuilder<'tcx, 'a>) -> (Vec<Action<'tcx>>, Vec<f32>) {
+        let (actions, mut weights) = if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
+            self.eligable_actions_with_weights(builder)
+        } else {
+            let (actions, _) = self.eligable_actions_with_weights(builder);
+            let weights = vec![1.0; actions.len()];
+            (actions, weights)
+        };
+
+        weights.iter_mut().for_each(|weight| {
+            *weight = weight.clamp(0.0, 1000.0);
+        });
+
+        (actions, weights)
+    }
+
+    fn choose_contract_target<'b>(
+        &mut self,
+        targets: &'b [ContractTarget],
+        actions: &[Action<'tcx>],
+    ) -> Option<&'b ContractTarget> {
+        let viable_targets = targets
+            .iter()
+            .filter(|target| {
+                actions
+                    .iter()
+                    .any(|action| action.call.fn_did() == target.sink_fn)
+            })
+            .collect_vec();
+        if viable_targets.is_empty() {
+            return None;
+        }
+
+        let weights = viable_targets
+            .iter()
+            .map(|target| target.priority.clamp(1.0, 1000.0))
+            .collect_vec();
+        let dist = WeightedIndex::new(&weights).ok()?;
+        let idx = self.rng.borrow_mut().sample(dist);
+        Some(viable_targets[idx])
+    }
+
+    fn select_action_for_contract(
+        &mut self,
+        target: ContractTarget,
+        actions: &[Action<'tcx>],
+        weights: &[f32],
+    ) -> Option<Action<'tcx>> {
+        let mut candidate_indices = actions
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, action)| {
+                if action.call.fn_did() == target.sink_fn {
+                    Some(idx)
+                } else {
+                    None
+                }
+            })
+            .collect_vec();
+        if candidate_indices.is_empty() {
+            return None;
+        }
+
+        candidate_indices
+            .sort_by(|lhs, rhs| weights[*lhs].partial_cmp(&weights[*rhs]).unwrap().reverse());
+        candidate_indices.truncate(self.config.top_k.min(candidate_indices.len()));
+
+        let candidate_weights = candidate_indices
+            .iter()
+            .map(|&idx| (weights[idx] + target.priority).clamp(1.0, 2000.0))
+            .collect_vec();
+        let dist = WeightedIndex::new(&candidate_weights).ok()?;
+        let idx = self.rng.borrow_mut().sample(dist);
+        Some(actions[candidate_indices[idx]].clone())
+    }
+
+    fn next_contract_targeted(
+        &mut self,
+        builder: &ContextBuilder<'tcx, 'a>,
+    ) -> Option<Action<'tcx>> {
+        let targets = self.guides.contract_targets(builder);
+        if targets.is_empty() {
+            return None;
+        }
+
+        let (actions, weights) = self.action_weights(builder);
+        if actions.is_empty() {
+            return None;
+        }
+
+        let target = *self.choose_contract_target(&targets, &actions)?;
+        let action = self.select_action_for_contract(target, &actions, &weights)?;
+        rap_debug!(
+            "contract-targeted action: contract#{} -> {}",
+            target.contract_id,
+            action.pretty_str(self.tcx)
+        );
+        Some(action)
+    }
+
     fn sample_eligable_calls(
         &self,
         list_of_providers: &[Vec<Var>],
@@ -316,19 +417,13 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
         rap_debug!("live state: {:?}", builder.live_state());
 
-        let mut weights;
+        if !utils::is_env_var_exist("TESTGEN_DISABLE_CONTRACT_TARGET") {
+            if let Some(action) = self.next_contract_targeted(builder) {
+                return Some(action);
+            }
+        }
 
-        let actions;
-        if !utils::is_env_var_exist("TESTGEN_DISABLE_WEIGHT") {
-            (actions, weights) = self.eligable_actions_with_weights(builder);
-        } else {
-            (actions, _) = self.eligable_actions_with_weights(builder);
-            weights = vec![1.0; actions.len()];
-        };
-
-        weights.iter_mut().for_each(|weight| {
-            *weight = weight.clamp(0.0, 1000.0);
-        });
+        let (actions, weights) = self.action_weights(builder);
 
         rap_debug!("# eligible actions = {}", actions.len());
 

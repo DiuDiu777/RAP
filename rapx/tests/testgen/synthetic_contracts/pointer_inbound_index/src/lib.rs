@@ -1,5 +1,5 @@
 pub struct IndexBox {
-    pub data: Vec<i32>,
+    data: Vec<i32>,
     pub idx: usize,
 }
 

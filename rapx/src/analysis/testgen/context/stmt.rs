@@ -64,6 +64,17 @@ pub enum StmtKind<'tcx> {
     SpecialCall(String, Vec<Var>),
     Ref(Var, ty::Mutability), // a -> &(mut) b
     Ctor(CtorDict<'tcx>),
+    FieldAssign {
+        base: Var,
+        field_name: String,
+        value: Var,
+    },
+    RawExpr(String),
+    RawStmt(String),
+    SinkMarker {
+        contract_id: usize,
+        sink: String,
+    },
     Comment(String),
     // Deref(Box<Var>, ty::Mutability), // &T -> &U
     Exploit(Var, ExploitKind),
@@ -168,6 +179,41 @@ impl<'tcx> Stmt<'tcx> {
         Stmt {
             kind: StmtKind::Exploit(var, use_kind),
             place,
+        }
+    }
+
+    pub fn field_assign(base: Var, field_name: impl Into<String>, value: Var) -> Stmt<'tcx> {
+        Stmt {
+            kind: StmtKind::FieldAssign {
+                base,
+                field_name: field_name.into(),
+                value,
+            },
+            place: DUMMY_UNIT_VAR,
+        }
+    }
+
+    pub fn raw_expr(place: Var, expr: impl Into<String>) -> Stmt<'tcx> {
+        Stmt {
+            kind: StmtKind::RawExpr(expr.into()),
+            place,
+        }
+    }
+
+    pub fn raw_stmt(stmt: impl Into<String>) -> Stmt<'tcx> {
+        Stmt {
+            kind: StmtKind::RawStmt(stmt.into()),
+            place: DUMMY_UNIT_VAR,
+        }
+    }
+
+    pub fn sink_marker(contract_id: usize, sink: impl Into<String>) -> Stmt<'tcx> {
+        Stmt {
+            kind: StmtKind::SinkMarker {
+                contract_id,
+                sink: sink.into(),
+            },
+            place: DUMMY_UNIT_VAR,
         }
     }
 

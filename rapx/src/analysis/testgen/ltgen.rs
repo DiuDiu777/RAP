@@ -217,6 +217,8 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
                     .def_path_str_with_args(call.fn_did(), self.tcx.mk_args(call.generic_args()))
             );
 
+            self.guides.before_call(&call, &mut builder);
+
             // first build transform stmts for vars
 
             for (var, transforms) in call.args_mut().iter_mut().zip(action.transforms()) {

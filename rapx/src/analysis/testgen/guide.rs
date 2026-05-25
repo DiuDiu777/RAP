@@ -1,10 +1,18 @@
 use crate::analysis::testgen::context::{ApiCall, InputHint};
 use crate::analysis::testgen::context_builder::ContextBuilder;
+use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
 #[derive(Clone, Copy)]
 pub struct GuidedAction<'a, 'tcx> {
     pub call: &'a ApiCall<'tcx>,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct ContractTarget {
+    pub contract_id: usize,
+    pub sink_fn: DefId,
+    pub priority: f32,
 }
 
 /// Pluggable fuzzing guidance. Analyses can stay independent and only expose
@@ -23,6 +31,12 @@ pub trait FuzzGuide<'tcx> {
         call: &ApiCall<'tcx>,
         builder: &ContextBuilder<'tcx, '_>,
     ) -> Vec<Option<InputHint>>;
+
+    fn before_call(&self, _call: &ApiCall<'tcx>, _builder: &mut ContextBuilder<'tcx, '_>) {}
+
+    fn contract_targets(&self, _builder: &ContextBuilder<'tcx, '_>) -> Vec<ContractTarget> {
+        Vec::new()
+    }
 
     fn summary(&self, _tcx: TyCtxt<'tcx>) -> String {
         format!("{}: no summary", self.name())
@@ -73,6 +87,19 @@ impl<'tcx> GuideSet<'tcx> {
             }
         }
         hints
+    }
+
+    pub fn before_call(&self, call: &ApiCall<'tcx>, builder: &mut ContextBuilder<'tcx, '_>) {
+        for guide in &self.guides {
+            guide.before_call(call, builder);
+        }
+    }
+
+    pub fn contract_targets(&self, builder: &ContextBuilder<'tcx, '_>) -> Vec<ContractTarget> {
+        self.guides
+            .iter()
+            .flat_map(|guide| guide.contract_targets(builder))
+            .collect()
     }
 
     pub fn summary(&self, tcx: TyCtxt<'tcx>) -> String {
