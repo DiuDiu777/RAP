@@ -2,7 +2,7 @@ use crate::analysis::core::api_dependency::graph::{TransformKind, TyWrapper};
 use crate::analysis::core::api_dependency::DepNode;
 use crate::analysis::testgen::context::{ApiCall, Var};
 use crate::analysis::testgen::context_builder::{is_ty_move_on_call, ContextBuilder};
-use crate::analysis::testgen::guide::ContractTarget;
+use crate::analysis::testgen::guide::{ContractGenericPreference, ContractTarget};
 use crate::analysis::testgen::ltgen::LtGen;
 use crate::analysis::testgen::utils;
 use itertools::Itertools;
@@ -11,7 +11,8 @@ use petgraph::visit::EdgeRef;
 use rand::distr::weighted::WeightedIndex;
 use rand::{self, Rng};
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, GenericArgsRef, Ty, TyCtxt, TyKind};
+use rustc_type_ir::{FloatTy, IntTy, UintTy};
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Debug)]
@@ -81,9 +82,9 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let viable_targets = targets
             .iter()
             .filter(|target| {
-                actions
-                    .iter()
-                    .any(|action| action.call.fn_did() == target.sink_fn)
+                actions.iter().any(|action| {
+                    action.call.fn_did() == target.sink_fn && action_matches_target(action, target)
+                })
             })
             .collect_vec();
         if viable_targets.is_empty() {
@@ -109,7 +110,8 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             .iter()
             .enumerate()
             .filter_map(|(idx, action)| {
-                if action.call.fn_did() == target.sink_fn {
+                if action.call.fn_did() == target.sink_fn && action_matches_target(action, &target)
+                {
                     Some(idx)
                 } else {
                     None
@@ -471,5 +473,69 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let idx = self.rng.borrow_mut().sample(dist);
 
         Some(actions[top_k[idx]].clone())
+    }
+}
+
+fn action_matches_target<'tcx>(action: &Action<'tcx>, target: &ContractTarget) -> bool {
+    match target.generic_preference {
+        ContractGenericPreference::Any => true,
+        ContractGenericPreference::HighAlignment => {
+            high_alignment_generic_score(action.call.generic_args()) > 0.0
+        }
+    }
+}
+
+fn high_alignment_generic_score(args: GenericArgsRef<'_>) -> f32 {
+    let score = args
+        .iter()
+        .filter_map(|arg| arg.as_type())
+        .map(high_alignment_ty_score)
+        .fold(0.0, f32::max);
+    if score > 0.0 {
+        return score;
+    }
+
+    let rendered = format!("{args:?}");
+    if rendered.contains("i128")
+        || rendered.contains("u128")
+        || rendered.contains("I128")
+        || rendered.contains("U128")
+    {
+        1.0
+    } else if rendered.contains("i64")
+        || rendered.contains("u64")
+        || rendered.contains("isize")
+        || rendered.contains("usize")
+        || rendered.contains("f64")
+        || rendered.contains("I64")
+        || rendered.contains("U64")
+    {
+        0.5
+    } else {
+        0.0
+    }
+}
+
+fn high_alignment_ty_score(ty: Ty<'_>) -> f32 {
+    let score = match ty.kind() {
+        TyKind::Int(IntTy::I128) | TyKind::Uint(UintTy::U128) => 1.0,
+        TyKind::Int(IntTy::I64)
+        | TyKind::Uint(UintTy::U64)
+        | TyKind::Int(IntTy::Isize)
+        | TyKind::Uint(UintTy::Usize)
+        | TyKind::Float(FloatTy::F64) => 0.5,
+        TyKind::Array(inner, _) | TyKind::Slice(inner) => high_alignment_ty_score(*inner),
+        TyKind::Ref(_, inner, _) | TyKind::RawPtr(inner, _) => high_alignment_ty_score(*inner),
+        TyKind::Adt(_, args) => high_alignment_generic_score(args),
+        _ => 0.0,
+    };
+    if score > 0.0 {
+        return score;
+    }
+
+    match ty.to_string().as_str() {
+        "i128" | "u128" => 1.0,
+        "i64" | "u64" | "isize" | "usize" | "f64" => 0.5,
+        _ => 0.0,
     }
 }

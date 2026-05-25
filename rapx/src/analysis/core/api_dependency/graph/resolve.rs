@@ -10,7 +10,6 @@ use crate::analysis::core::api_dependency::utils::{
 use crate::analysis::core::api_dependency::visitor::FnVisitor;
 use crate::analysis::core::api_dependency::ApiDependencyGraph;
 use crate::analysis::core::api_dependency::{mono, utils};
-use crate::analysis::utils::def_path::path_str_def_id;
 use crate::utils::fs::rap_create_file;
 use crate::{rap_debug, rap_info, rap_trace};
 use petgraph::dot;
@@ -20,8 +19,9 @@ use petgraph::Direction;
 use petgraph::Graph;
 use rand::Rng;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{self, GenericArgsRef, TraitRef, Ty, TyCtxt};
+use rustc_middle::ty::{self, GenericArgsRef, TraitRef, Ty, TyCtxt, TyKind};
 use rustc_span::sym::{self, require};
+use rustc_type_ir::{FloatTy, IntTy, UintTy};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::collections::VecDeque;
@@ -156,6 +156,8 @@ impl<'tcx> TypeCandidates<'tcx> {
             tcx.types.u32,
             tcx.types.i64,
             tcx.types.u64,
+            tcx.types.i128,
+            tcx.types.u128,
             tcx.types.isize,
             tcx.types.usize,
         ];
@@ -359,7 +361,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
                         let size = impls
                             .iter()
                             .fold(0, |cnt, did| cnt + (!impl_entry.contains(did)) as usize);
-                        if *count_entry == 0 || size > 0 {
+                        if *count_entry == 0 || size > 0 || has_high_alignment_generic_args(args) {
                             *count_entry += 1;
                             impls.iter().for_each(|did| {
                                 impl_entry.insert(*did);
@@ -386,6 +388,18 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
                     "[propagate_reserved] reserve: {:?}",
                     self.graph.node_weight(node).unwrap()
                 );
+            }
+        }
+    }
+
+    pub fn reserve_high_alignment_generic_apis(&self, reserved: &mut [bool]) {
+        for node in self.graph.node_indices() {
+            let DepNode::Api(fn_did, args) = self.graph[node] else {
+                continue;
+            };
+            let pretty = self.tcx.def_path_str_with_args(fn_did, args);
+            if has_high_alignment_generic_args(args) || mentions_high_alignment_ty(&pretty) {
+                reserved[node.index()] = true;
             }
         }
     }
@@ -448,6 +462,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
 
         // heuristic strategy
         self.heuristic_select(&mut reserved);
+        self.reserve_high_alignment_generic_apis(&mut reserved);
 
         // traverse from start node, if a node can achieve a reserved node,
         // this node should be reserved as well
@@ -521,6 +536,50 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
             );
         }
         reserved[node.index()]
+    }
+}
+
+fn has_high_alignment_generic_args(args: GenericArgsRef<'_>) -> bool {
+    if args
+        .iter()
+        .filter_map(|arg| arg.as_type())
+        .any(|ty| high_alignment_ty_score(ty) > 0.0)
+    {
+        return true;
+    }
+
+    mentions_high_alignment_ty(&format!("{args:?}"))
+}
+
+fn mentions_high_alignment_ty(text: &str) -> bool {
+    text.contains("i128") || text.contains("u128") || text.contains("I128") || text.contains("U128")
+}
+
+fn high_alignment_ty_score(ty: Ty<'_>) -> f32 {
+    let score = match ty.kind() {
+        TyKind::Int(IntTy::I128) | TyKind::Uint(UintTy::U128) => 1.0,
+        TyKind::Int(IntTy::I64)
+        | TyKind::Uint(UintTy::U64)
+        | TyKind::Int(IntTy::Isize)
+        | TyKind::Uint(UintTy::Usize)
+        | TyKind::Float(FloatTy::F64) => 0.5,
+        TyKind::Array(inner, _) | TyKind::Slice(inner) => high_alignment_ty_score(*inner),
+        TyKind::Ref(_, inner, _) | TyKind::RawPtr(inner, _) => high_alignment_ty_score(*inner),
+        TyKind::Adt(_, args) => args
+            .iter()
+            .filter_map(|arg| arg.as_type())
+            .map(high_alignment_ty_score)
+            .fold(0.0, f32::max),
+        _ => 0.0,
+    };
+    if score > 0.0 {
+        return score;
+    }
+
+    match ty.to_string().as_str() {
+        "i128" | "u128" => 1.0,
+        "i64" | "u64" | "isize" | "usize" | "f64" => 0.5,
+        _ => 0.0,
     }
 }
 

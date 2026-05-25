@@ -1,6 +1,5 @@
 use super::graph::TyWrapper;
 use super::utils::{self, fn_sig_with_generic_args};
-use crate::analysis::utils::def_path::path_str_def_id;
 use crate::{rap_debug, rap_trace};
 use rand::seq::SliceRandom;
 use rand::Rng;
@@ -12,6 +11,7 @@ use rustc_infer::traits::{ImplSource, Obligation, ObligationCause};
 use rustc_middle::ty::{self, GenericArgsRef, Ty, TyCtxt, TypeVisitableExt, TypingEnv};
 use rustc_span::DUMMY_SP;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _;
+use rustc_type_ir::{IntTy, UintTy};
 use std::collections::HashSet;
 
 static MAX_STEP_SET_SIZE: usize = 1000;
@@ -600,6 +600,8 @@ pub fn get_unbound_generic_candidates<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<ty::Ty<'tc
         tcx.types.i8,
         tcx.types.i32,
         tcx.types.u32,
+        Ty::new_int(tcx, IntTy::I128),
+        Ty::new_uint(tcx, UintTy::U128),
         // tcx.types.i64,
         // tcx.types.u64,
         tcx.types.f32,

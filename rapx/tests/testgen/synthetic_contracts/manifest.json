@@ -23,6 +23,13 @@
       "mutator": "public fields lhs/rhs"
     },
     {
+      "name": "generic_align_from_raw_parts",
+      "family": "Layout",
+      "sp": ["Align", "ValidPtr", "Init"],
+      "unsafe_api": "core::slice::from_raw_parts",
+      "mutator": "generic constructor chooses high-alignment T over i32-backed buffer"
+    },
+    {
       "name": "pointer_inbound_index",
       "family": "Pointer",
       "sp": ["InBound"],
@@ -108,4 +115,3 @@
     }
   ]
 }
-

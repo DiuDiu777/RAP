@@ -9,10 +9,17 @@ pub struct GuidedAction<'a, 'tcx> {
 }
 
 #[derive(Clone, Copy, Debug)]
+pub enum ContractGenericPreference {
+    Any,
+    HighAlignment,
+}
+
+#[derive(Clone, Copy, Debug)]
 pub struct ContractTarget {
     pub contract_id: usize,
     pub sink_fn: DefId,
     pub priority: f32,
+    pub generic_preference: ContractGenericPreference,
 }
 
 /// Pluggable fuzzing guidance. Analyses can stay independent and only expose

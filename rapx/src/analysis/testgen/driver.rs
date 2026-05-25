@@ -203,6 +203,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         guide.dump_to(workspace_dir.join("unsound_guide.txt"), tcx)?;
         guide.dump_instances_json(workspace_dir.join("contract_instances.json"), tcx)?;
         guide.dump_ccag_json(workspace_dir.join("ccag.json"), tcx)?;
+        guide.dump_ccag_dot(workspace_dir.join("ccag.dot"), tcx)?;
         contract_coverage = ContractCoverage::new_with_static(
             guide.contract_instance_records(tcx),
             guide.violation_edge_contract_ids(),
@@ -217,7 +218,9 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
             instances: Vec::new(),
         }
         .write_json(workspace_dir.join("contract_instances.json"))?;
-        CcagFile::empty().write_json(workspace_dir.join("ccag.json"))?;
+        let empty_ccag = CcagFile::empty();
+        empty_ccag.write_json(workspace_dir.join("ccag.json"))?;
+        empty_ccag.write_dot(workspace_dir.join("ccag.dot"))?;
         contract_coverage.write_json(&contract_coverage_path)?;
     }
 

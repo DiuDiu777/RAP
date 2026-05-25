@@ -22,3 +22,6 @@ cd tests/testgen/synthetic_contracts/content_utf8_public
 cargo rapx -testgen
 ```
 
+`generic_align_from_raw_parts` models generic alignment bugs such as building a
+high-alignment view (`BufferBuilder<i128>`) over a buffer allocated for a lower
+alignment element type (`Vec<i32>`).

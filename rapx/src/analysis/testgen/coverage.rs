@@ -5,7 +5,7 @@ use rustc_middle::ty::TyCtxt;
 use serde::Serialize;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs::File;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Debug, Serialize)]
@@ -13,6 +13,9 @@ pub struct ContractInstanceRecord {
     pub id: usize,
     pub sink_fn: String,
     pub sink_def_id: String,
+    pub sink_self_ty: Option<String>,
+    pub sink_signature: String,
+    pub sink_requires_monomorphization: bool,
     pub std_fn: String,
     pub std_fn_def_id: String,
     pub adt_def: Option<String>,
@@ -37,6 +40,120 @@ impl ContractInstancesFile {
         serde_json::to_writer_pretty(file, self)?;
         Ok(())
     }
+}
+
+struct DotNodeStyle {
+    shape: &'static str,
+    fill: &'static str,
+    color: &'static str,
+}
+
+impl DotNodeStyle {
+    fn for_kind(kind: &str) -> Self {
+        match kind {
+            "api" => Self {
+                shape: "box",
+                fill: "#E8F1FF",
+                color: "#2F5F9F",
+            },
+            "std_api" => Self {
+                shape: "box",
+                fill: "#F3F3F3",
+                color: "#666666",
+            },
+            "contract" => Self {
+                shape: "diamond",
+                fill: "#FFF2CC",
+                color: "#A66A00",
+            },
+            "symbolic_place" => Self {
+                shape: "ellipse",
+                fill: "#EAF7EA",
+                color: "#3F7F3F",
+            },
+            "mutator" => Self {
+                shape: "box",
+                fill: "#FCE4EC",
+                color: "#A33A5B",
+            },
+            "recipe" => Self {
+                shape: "note",
+                fill: "#EFE7FF",
+                color: "#6A4AA1",
+            },
+            "type" => Self {
+                shape: "component",
+                fill: "#E0F7FA",
+                color: "#227C8A",
+            },
+            _ => Self {
+                shape: "box",
+                fill: "#FFFFFF",
+                color: "#777777",
+            },
+        }
+    }
+}
+
+struct DotEdgeStyle {
+    color: &'static str,
+}
+
+impl DotEdgeStyle {
+    fn for_kind(kind: &str) -> Self {
+        let color = match kind {
+            "reaches" => "#2F5F9F",
+            "calls_std" => "#666666",
+            "binds" => "#3F7F3F",
+            "api_mutator" | "exposes" => "#A33A5B",
+            "writes" => "#7A4B00",
+            "may_violate" => "#D12B2B",
+            "realizes" | "direct_input" => "#6A4AA1",
+            _ => "#777777",
+        };
+        Self { color }
+    }
+}
+
+fn dot_node_label(node: &CcagNodeRecord) -> String {
+    let mut lines = vec![node.label.clone(), format!("kind={}", node.kind)];
+    match node.kind.as_str() {
+        "contract" => {
+            push_attr_line(&mut lines, &node.attrs, "sp");
+            push_attr_line(&mut lines, &node.attrs, "family");
+            push_attr_line(&mut lines, &node.attrs, "generic_preference");
+        }
+        "mutator" => {
+            push_attr_line(&mut lines, &node.attrs, "source");
+            push_attr_line(&mut lines, &node.attrs, "effect");
+        }
+        "recipe" => {
+            push_attr_line(&mut lines, &node.attrs, "reason");
+        }
+        "api" => {
+            push_attr_line(&mut lines, &node.attrs, "self_ty");
+        }
+        _ => {}
+    }
+    lines.join("\\n")
+}
+
+fn push_attr_line(lines: &mut Vec<String>, attrs: &BTreeMap<String, String>, key: &str) {
+    if let Some(value) = attrs.get(key).filter(|value| !value.is_empty()) {
+        lines.push(format!("{key}={value}"));
+    }
+}
+
+fn dot_escape(raw: &str) -> String {
+    raw.chars()
+        .flat_map(|ch| match ch {
+            '\\' => "\\\\".chars().collect::<Vec<_>>(),
+            '"' => "\\\"".chars().collect(),
+            '\n' => "\\n".chars().collect(),
+            '\r' => Vec::new(),
+            _ => vec![ch],
+        })
+        .collect()
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -75,6 +192,50 @@ impl CcagFile {
     pub fn write_json(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let file = File::create(path)?;
         serde_json::to_writer_pretty(file, self)?;
+        Ok(())
+    }
+
+    pub fn write_dot(&self, path: impl AsRef<Path>) -> io::Result<()> {
+        let mut file = File::create(path)?;
+        writeln!(file, "digraph CCAG {{")?;
+        writeln!(file, "  rankdir=LR;")?;
+        writeln!(
+            file,
+            "  graph [fontname=\"Menlo\", fontsize=10, labelloc=t, label=\"Contract-Conditioned API Graph\"];"
+        )?;
+        writeln!(
+            file,
+            "  node [fontname=\"Menlo\", fontsize=10, style=\"filled,rounded\"];"
+        )?;
+        writeln!(file, "  edge [fontname=\"Menlo\", fontsize=9];")?;
+
+        for node in &self.nodes {
+            let style = DotNodeStyle::for_kind(&node.kind);
+            writeln!(
+                file,
+                "  \"{}\" [label=\"{}\", shape=\"{}\", fillcolor=\"{}\", color=\"{}\"]",
+                dot_escape(&node.id),
+                dot_escape(&dot_node_label(node)),
+                style.shape,
+                style.fill,
+                style.color
+            )?;
+        }
+
+        for edge in &self.edges {
+            let style = DotEdgeStyle::for_kind(&edge.kind);
+            writeln!(
+                file,
+                "  \"{}\" -> \"{}\" [label=\"{}\", color=\"{}\", fontcolor=\"{}\"]",
+                dot_escape(&edge.source),
+                dot_escape(&edge.target),
+                dot_escape(&edge.label),
+                style.color,
+                style.color
+            )?;
+        }
+
+        writeln!(file, "}}")?;
         Ok(())
     }
 }
@@ -145,7 +306,9 @@ impl CaseMetadata {
             .stmts()
             .iter()
             .filter_map(|stmt| match stmt.kind() {
-                StmtKind::Call(call) => Some(tcx.def_path_str(call.fn_did())),
+                StmtKind::Call(call) => Some(
+                    tcx.def_path_str_with_args(call.fn_did(), tcx.mk_args(call.generic_args())),
+                ),
                 _ => None,
             })
             .collect();

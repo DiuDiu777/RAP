@@ -97,6 +97,30 @@
     { "kind": "arg", "sp": "Aligned", "arg": 1 },
     { "kind": "arg", "sp": "NonOverlap", "arg": 1 }
   ],
+  "core::slice::raw::from_raw_parts": [
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Init", "arg": 0 },
+    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
+  ],
+  "core::slice::raw::from_raw_parts_mut": [
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Init", "arg": 0 },
+    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
+  ],
+  "core::slice::from_raw_parts": [
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Init", "arg": 0 },
+    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
+  ],
+  "core::slice::from_raw_parts_mut": [
+    { "kind": "arg", "sp": "Aligned", "arg": 0 },
+    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
+    { "kind": "arg", "sp": "Init", "arg": 0 },
+    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
+  ],
   "alloc::boxed::from_raw": [
     { "kind": "arg", "sp": "Allocated", "arg": 0 },
     { "kind": "arg", "sp": "Ownning", "arg": 0 },
