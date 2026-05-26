@@ -8,9 +8,22 @@ use std::fs::File;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
+pub const TESTGEN_ARTIFACT_SCHEMA_VERSION: usize = 2;
+
+#[derive(Clone, Debug, Default, Serialize)]
+pub struct ArtifactSummary {
+    pub node_count: usize,
+    pub edge_count: usize,
+    pub contract_count: usize,
+    pub mutator_count: usize,
+    pub recipe_count: usize,
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ContractInstanceRecord {
+    pub schema_version: usize,
     pub id: usize,
+    pub stable_id: String,
     pub sink_fn: String,
     pub sink_def_id: String,
     pub sink_self_ty: Option<String>,
@@ -25,10 +38,12 @@ pub struct ContractInstanceRecord {
     pub symbolic_args: Vec<String>,
     pub usage: String,
     pub numeric_template: Option<String>,
+    pub binding_role: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ContractInstancesFile {
+    pub schema_version: usize,
     pub db_loaded: bool,
     pub total: usize,
     pub instances: Vec<ContractInstanceRecord>,
@@ -175,7 +190,9 @@ pub struct CcagEdgeRecord {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct CcagFile {
-    pub version: usize,
+    pub schema_version: usize,
+    pub graph_kind: String,
+    pub summary: ArtifactSummary,
     pub nodes: Vec<CcagNodeRecord>,
     pub edges: Vec<CcagEdgeRecord>,
 }
@@ -183,10 +200,44 @@ pub struct CcagFile {
 impl CcagFile {
     pub fn empty() -> Self {
         Self {
-            version: 1,
+            schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
+            graph_kind: "contract_conditioned_api_graph".to_owned(),
+            summary: ArtifactSummary::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
         }
+    }
+
+    pub fn from_parts(nodes: Vec<CcagNodeRecord>, edges: Vec<CcagEdgeRecord>) -> Self {
+        let mut file = Self {
+            schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
+            graph_kind: "contract_conditioned_api_graph".to_owned(),
+            summary: ArtifactSummary::default(),
+            nodes,
+            edges,
+        };
+        file.refresh_summary();
+        file
+    }
+
+    fn refresh_summary(&mut self) {
+        self.summary.node_count = self.nodes.len();
+        self.summary.edge_count = self.edges.len();
+        self.summary.contract_count = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "contract")
+            .count();
+        self.summary.mutator_count = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "mutator")
+            .count();
+        self.summary.recipe_count = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "recipe")
+            .count();
     }
 
     pub fn write_json(&self, path: impl AsRef<Path>) -> io::Result<()> {
@@ -243,6 +294,7 @@ impl CcagFile {
 #[derive(Clone, Debug, Serialize)]
 pub struct CaseTargetRecord {
     pub contract_id: usize,
+    pub contract_stable_id: String,
     pub target_kind: String,
     pub producer_fn: Option<String>,
     pub sink_fn: String,
@@ -250,6 +302,7 @@ pub struct CaseTargetRecord {
     pub sp: String,
     pub family: String,
     pub effect_kind: Option<String>,
+    pub effect_confidence: Option<String>,
     pub hint_param: Option<usize>,
     pub hint_kind: Option<String>,
     pub reason: String,
@@ -265,6 +318,7 @@ pub struct CaseHintRecord {
 
 #[derive(Clone, Debug, Serialize)]
 pub struct CaseMetadata {
+    pub schema_version: usize,
     pub case_name: String,
     pub case_path: String,
     pub calls: Vec<String>,
@@ -281,6 +335,7 @@ pub struct CaseMetadata {
 impl CaseMetadata {
     pub fn empty(case_name: impl Into<String>, case_path: impl Into<PathBuf>) -> Self {
         Self {
+            schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
             case_name: case_name.into(),
             case_path: case_path.into().display().to_string(),
             calls: Vec::new(),
@@ -397,6 +452,7 @@ pub struct CoverageTotals {
 
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ContractCoverageReport {
+    pub schema_version: usize,
     pub totals: CoverageTotals,
     pub per_sp: Vec<CoverageBucket>,
     pub per_family: Vec<CoverageBucket>,
@@ -540,6 +596,7 @@ impl ContractCoverage {
         }
 
         ContractCoverageReport {
+            schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
             totals: CoverageTotals {
                 reached: self.instances.len(),
                 lifted: self.instances.len(),

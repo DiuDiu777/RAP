@@ -141,7 +141,7 @@ impl InputHint {
             InputHintKind::InvalidCStr => vec![NumericHint::One],
             InputHintKind::NoneVariant | InputHintKind::ErrVariant => vec![],
             InputHintKind::UninitValue => vec![NumericHint::Zero],
-            InputHintKind::OverlappingRange => vec![NumericHint::Zero, NumericHint::One],
+            InputHintKind::OverlappingRange => vec![NumericHint::One],
         }
     }
 }

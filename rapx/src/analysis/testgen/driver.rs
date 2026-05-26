@@ -5,6 +5,7 @@ use crate::analysis::core::{alias_analysis, api_dependency};
 use crate::analysis::testgen::contract::SafetyContractDb;
 use crate::analysis::testgen::coverage::{
     CaseMetadata, CcagFile, ContractCoverage, ContractInstancesFile,
+    TESTGEN_ARTIFACT_SCHEMA_VERSION,
 };
 use crate::analysis::testgen::ltgen::LtGenBuilder;
 use crate::analysis::testgen::syn::impls::FuzzDriverSynImpl;
@@ -213,6 +214,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         ltgen_builder = ltgen_builder.guide(Box::new(guide));
     } else {
         ContractInstancesFile {
+            schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
             db_loaded: false,
             total: 0,
             instances: Vec::new(),

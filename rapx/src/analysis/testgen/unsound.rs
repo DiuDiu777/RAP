@@ -3,7 +3,7 @@ use crate::analysis::testgen::context_builder::ContextBuilder;
 use crate::analysis::testgen::contract::{PrimitiveSpKind, SafetyContractDb};
 use crate::analysis::testgen::coverage::{
     def_id_str, sp_family_name, sp_name, CaseMetadata, CaseTargetRecord, CcagEdgeRecord, CcagFile,
-    CcagNodeRecord, ContractInstanceRecord, ContractInstancesFile,
+    CcagNodeRecord, ContractInstanceRecord, ContractInstancesFile, TESTGEN_ARTIFACT_SCHEMA_VERSION,
 };
 use crate::analysis::testgen::guide::{
     ContractGenericPreference, ContractTarget, FuzzGuide, GuidedAction,
@@ -56,6 +56,12 @@ impl SymbolicPlace {
         let mut place = self.clone();
         place.fields.extend_from_slice(fields);
         place
+    }
+
+    fn is_prefix_of(&self, other: &SymbolicPlace) -> bool {
+        self.root == other.root
+            && self.fields.len() <= other.fields.len()
+            && other.fields.starts_with(&self.fields)
     }
 
     fn pretty(&self) -> String {
@@ -149,6 +155,7 @@ struct ContractInstance {
     symbolic_args: Vec<SymbolicPlace>,
     usage: ContractUsage,
     numeric_kind: Option<NumericPreconditionKind>,
+    binding_role: Option<String>,
 }
 
 impl ContractInstance {
@@ -167,7 +174,10 @@ impl ContractInstance {
             PrimitiveSpKind::Align | PrimitiveSpKind::DoubleAlign => {
                 Some(InputHint::misaligned_ptr(reason))
             }
-            PrimitiveSpKind::ValidNum => Some(InputHint::invalid_align(reason)),
+            PrimitiveSpKind::Size
+            | PrimitiveSpKind::NonZeroSize
+            | PrimitiveSpKind::Layout
+            | PrimitiveSpKind::ValidNum => Some(InputHint::invalid_align(reason)),
             PrimitiveSpKind::NonNull => Some(InputHint::null_ptr(reason)),
             PrimitiveSpKind::Null => Some(InputHint::dangling_ptr(reason)),
             PrimitiveSpKind::Allocated
@@ -237,7 +247,25 @@ enum EffectKind {
     },
     ConstructAdt {
         output: SymbolicPlace,
+        inputs: Vec<SymbolicPlace>,
     },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum EffectConfidence {
+    Exact,
+    Flow,
+    Approximate,
+}
+
+impl EffectConfidence {
+    fn name(self) -> &'static str {
+        match self {
+            Self::Exact => "exact",
+            Self::Flow => "flow",
+            Self::Approximate => "approximate",
+        }
+    }
 }
 
 impl EffectKind {
@@ -250,7 +278,7 @@ impl EffectKind {
             | Self::SetLen { place, .. }
             | Self::AssumeInit { place } => place,
             Self::CreateAlias { lhs, .. } => lhs,
-            Self::ConstructAdt { output } => output,
+            Self::ConstructAdt { output, .. } => output,
         }
     }
 
@@ -280,6 +308,7 @@ struct ContractEffect {
     fn_did: DefId,
     adt_def: Option<DefId>,
     kind: EffectKind,
+    confidence: EffectConfidence,
 }
 
 #[derive(Debug, Clone)]
@@ -290,6 +319,7 @@ struct ConflictPair {
     place: SymbolicPlace,
     sp: PrimitiveSpKind,
     effect_kind: &'static str,
+    effect_confidence: &'static str,
     hint_param: Option<usize>,
     hint: Option<InputHint>,
     reason: String,
@@ -309,7 +339,7 @@ struct PublicFieldTarget {
     contract_id: usize,
     sink_fn: DefId,
     adt_def: DefId,
-    field_index: usize,
+    field_path: Vec<usize>,
     field_name: String,
     place: SymbolicPlace,
     sp: PrimitiveSpKind,
@@ -340,6 +370,15 @@ enum StdContractBinding {
     Arg {
         arg: usize,
         sp: Option<String>,
+        role: Option<String>,
+    },
+    Args {
+        args: Vec<usize>,
+        sp: Option<String>,
+        role: Option<String>,
+    },
+    NoArgs {
+        sp: Option<String>,
     },
 }
 
@@ -351,7 +390,7 @@ impl StdContractBinding {
             Self::PowerOfTwo { .. } => Some(NumericPreconditionKind::PowerOfTwo),
             Self::UnicodeScalar { .. } => Some(NumericPreconditionKind::UnicodeScalar),
             Self::OffsetInAlloc { .. } => Some(NumericPreconditionKind::OffsetInAllocation),
-            Self::Arg { .. } => None,
+            Self::Arg { .. } | Self::Args { .. } | Self::NoArgs { .. } => None,
         }
     }
 
@@ -363,9 +402,24 @@ impl StdContractBinding {
         match self {
             Self::Arg {
                 sp: Some(raw_tag), ..
+            }
+            | Self::Args {
+                sp: Some(raw_tag), ..
+            }
+            | Self::NoArgs {
+                sp: Some(raw_tag), ..
             } => PrimitiveSpKind::from_tag(raw_tag) == *sp,
-            Self::Arg { sp: None, .. } => true,
+            Self::Arg { sp: None, .. }
+            | Self::Args { sp: None, .. }
+            | Self::NoArgs { sp: None } => true,
             _ => false,
+        }
+    }
+
+    fn role(&self) -> Option<&str> {
+        match self {
+            Self::Arg { role, .. } | Self::Args { role, .. } => role.as_deref(),
+            _ => None,
         }
     }
 }
@@ -470,7 +524,9 @@ impl<'tcx> ContractGuide<'tcx> {
             .iter()
             .enumerate()
             .map(|(id, instance)| ContractInstanceRecord {
+                schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
                 id,
+                stable_id: contract_stable_id(tcx, id, instance),
                 sink_fn: tcx.def_path_str(instance.sink_fn),
                 sink_def_id: def_id_str(instance.sink_fn),
                 sink_self_ty: instance.sink_self_ty.clone(),
@@ -489,6 +545,7 @@ impl<'tcx> ContractGuide<'tcx> {
                     .collect(),
                 usage: instance.usage.name().to_owned(),
                 numeric_template: instance.numeric_kind.map(|kind| kind.name().to_owned()),
+                binding_role: instance.binding_role.clone(),
             })
             .collect()
     }
@@ -496,6 +553,7 @@ impl<'tcx> ContractGuide<'tcx> {
     pub fn contract_instances_file(&self, tcx: TyCtxt<'tcx>) -> ContractInstancesFile {
         let instances = self.contract_instance_records(tcx);
         ContractInstancesFile {
+            schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
             db_loaded: self.contract_db_loaded,
             total: instances.len(),
             instances,
@@ -549,6 +607,10 @@ impl<'tcx> ContractGuide<'tcx> {
                     ("usage", instance.usage.name().to_owned()),
                     ("raw_tag", instance.raw_tag.clone()),
                     ("std_fn", instance.std_fn_name.clone()),
+                    (
+                        "binding_role",
+                        instance.binding_role.clone().unwrap_or_default(),
+                    ),
                     ("sink_signature", instance.sink_signature.clone()),
                     (
                         "generic_preference",
@@ -614,6 +676,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 attrs(&[
                     ("source", "api_call".to_owned()),
                     ("effect", pair.effect_kind.to_owned()),
+                    ("confidence", pair.effect_confidence.to_owned()),
                     ("contract_id", pair.contract_id.to_string()),
                     ("reason", pair.reason.clone()),
                 ]),
@@ -625,6 +688,13 @@ impl<'tcx> ContractGuide<'tcx> {
                 "mutates",
                 BTreeMap::new(),
             ));
+            insert_ccag_node(
+                &mut nodes,
+                place_node_id(&pair.place),
+                "symbolic_place",
+                pair.place.pretty(),
+                BTreeMap::new(),
+            );
             edges.push(ccag_edge(
                 mutator_id.clone(),
                 place_node_id(&pair.place),
@@ -677,6 +747,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 attrs(&[
                     ("source", "public_field".to_owned()),
                     ("field", target.field_name.clone()),
+                    ("field_path", format!("{:?}", target.field_path)),
                     ("effect", "PublicFieldWrite".to_owned()),
                     ("contract_id", target.contract_id.to_string()),
                     ("reason", target.reason.clone()),
@@ -740,11 +811,7 @@ impl<'tcx> ContractGuide<'tcx> {
             ));
         }
 
-        CcagFile {
-            version: 1,
-            nodes: nodes.into_values().collect(),
-            edges,
-        }
+        CcagFile::from_parts(nodes.into_values().collect(), edges)
     }
 
     pub fn dump_ccag_json(&self, path: impl AsRef<Path>, tcx: TyCtxt<'tcx>) -> io::Result<()> {
@@ -838,6 +905,7 @@ impl<'tcx> ContractGuide<'tcx> {
             }
             targets.push(CaseTargetRecord {
                 contract_id: pair.contract_id,
+                contract_stable_id: contract_stable_id(tcx, pair.contract_id, instance),
                 target_kind: "producer_sink".to_owned(),
                 producer_fn: Some(tcx.def_path_str(pair.producer_fn)),
                 sink_fn: tcx.def_path_str(pair.sink_fn),
@@ -845,6 +913,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 sp: sp_name(&instance.sp),
                 family: sp_family_name(&instance.sp),
                 effect_kind: Some(pair.effect_kind.to_owned()),
+                effect_confidence: Some(pair.effect_confidence.to_owned()),
                 hint_param: pair.hint_param,
                 hint_kind: pair.hint.as_ref().map(|hint| format!("{:?}", hint.kind)),
                 reason: pair.reason.clone(),
@@ -875,6 +944,7 @@ impl<'tcx> ContractGuide<'tcx> {
             }
             targets.push(CaseTargetRecord {
                 contract_id: direct.contract_id,
+                contract_stable_id: contract_stable_id(tcx, direct.contract_id, instance),
                 target_kind: "direct_sink".to_owned(),
                 producer_fn: None,
                 sink_fn: tcx.def_path_str(direct.sink_fn),
@@ -882,6 +952,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 sp: sp_name(&instance.sp),
                 family: sp_family_name(&instance.sp),
                 effect_kind: None,
+                effect_confidence: None,
                 hint_param: Some(direct.param_idx),
                 hint_kind: Some(format!("{:?}", direct.hint.kind)),
                 reason: direct.reason.clone(),
@@ -924,6 +995,7 @@ impl<'tcx> ContractGuide<'tcx> {
             }
             targets.push(CaseTargetRecord {
                 contract_id: public_field.contract_id,
+                contract_stable_id: contract_stable_id(tcx, public_field.contract_id, instance),
                 target_kind: "public_field".to_owned(),
                 producer_fn: None,
                 sink_fn: tcx.def_path_str(public_field.sink_fn),
@@ -931,6 +1003,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 sp: sp_name(&instance.sp),
                 family: sp_family_name(&instance.sp),
                 effect_kind: Some("PublicFieldWrite".to_owned()),
+                effect_confidence: Some("exact".to_owned()),
                 hint_param: None,
                 hint_kind: public_field
                     .hint
@@ -1478,16 +1551,37 @@ fn normalize_ref_var(mut var: Var, ref_source: &HashMap<Var, Var>) -> Var {
     var
 }
 
-fn field_name_for_index(tcx: TyCtxt<'_>, adt_def: DefId, field_index: usize) -> Option<String> {
-    let adt = tcx.adt_def(adt_def);
-    if !adt.is_struct() {
-        return None;
+fn public_field_path_name(
+    tcx: TyCtxt<'_>,
+    root_adt_def: DefId,
+    field_path: &[usize],
+) -> Option<String> {
+    let mut adt_def = tcx.adt_def(root_adt_def);
+    let mut args = ty::GenericArgs::identity_for_item(tcx, root_adt_def);
+    let mut names = Vec::new();
+
+    for (idx, field_index) in field_path.iter().copied().enumerate() {
+        if !adt_def.is_struct() {
+            return None;
+        }
+        let field = adt_def.non_enum_variant().fields.iter().nth(field_index)?;
+        if !tcx.visibility(field.did).is_public() {
+            return None;
+        }
+        names.push(field.name.to_string());
+        if idx + 1 == field_path.len() {
+            break;
+        }
+
+        let field_ty = field.ty(tcx, args);
+        let TyKind::Adt(next_adt, next_args) = field_ty.kind() else {
+            return None;
+        };
+        adt_def = *next_adt;
+        args = *next_args;
     }
-    adt.non_enum_variant()
-        .fields
-        .iter()
-        .nth(field_index)
-        .map(|field| field.name.to_string())
+
+    Some(names.join("."))
 }
 
 fn is_public_field(tcx: TyCtxt<'_>, adt_def: DefId, field_index: usize) -> bool {
@@ -1533,15 +1627,34 @@ fn field_ty_for_base<'tcx>(
         }
         _ => return None,
     };
-    if !adt_def.is_struct() {
-        return None;
+    field_ty_for_path(tcx, adt_def.did(), args, &target.field_path)
+}
+
+fn field_ty_for_path<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    root_adt_def: DefId,
+    root_args: ty::GenericArgsRef<'tcx>,
+    field_path: &[usize],
+) -> Option<Ty<'tcx>> {
+    let mut adt_def = tcx.adt_def(root_adt_def);
+    let mut args = root_args;
+    let mut ty = None;
+
+    for field_index in field_path {
+        if !adt_def.is_struct() {
+            return None;
+        }
+        let field = adt_def.non_enum_variant().fields.iter().nth(*field_index)?;
+        let field_ty = field.ty(tcx, args);
+        ty = Some(field_ty);
+
+        if let TyKind::Adt(next_adt, next_args) = field_ty.kind() {
+            adt_def = *next_adt;
+            args = *next_args;
+        }
     }
-    adt_def
-        .non_enum_variant()
-        .fields
-        .iter()
-        .nth(target.field_index)
-        .map(|field| field.ty(tcx, args))
+
+    ty
 }
 
 fn output_constructs_adt(ty: Ty<'_>, adt_def_id: DefId) -> bool {
@@ -1664,14 +1777,11 @@ fn collect_public_field_targets<'tcx>(
             .into_iter()
             .filter(|place| place.is_receiver_field())
         {
-            if place.fields.len() != 1 {
-                continue;
-            }
             let field_index = place.fields[0];
             if !is_public_field(tcx, adt_def, field_index) {
                 continue;
             }
-            let Some(field_name) = field_name_for_index(tcx, adt_def, field_index) else {
+            let Some(field_name) = public_field_path_name(tcx, adt_def, &place.fields) else {
                 continue;
             };
             let reason = format!(
@@ -1685,7 +1795,7 @@ fn collect_public_field_targets<'tcx>(
                 contract_id,
                 sink_fn: instance.sink_fn,
                 adt_def,
-                field_index,
+                field_path: place.fields.clone(),
                 field_name,
                 place: place.clone(),
                 sp: instance.sp.clone(),
@@ -1699,14 +1809,14 @@ fn collect_public_field_targets<'tcx>(
         (
             format!("{:?}", target.sink_fn),
             target.contract_id,
-            target.field_index,
+            target.field_path.clone(),
         )
     });
     targets.dedup_by(|lhs, rhs| {
         lhs.contract_id == rhs.contract_id
             && lhs.sink_fn == rhs.sink_fn
             && lhs.adt_def == rhs.adt_def
-            && lhs.field_index == rhs.field_index
+            && lhs.field_path == rhs.field_path
     });
     targets
 }
@@ -1714,6 +1824,15 @@ fn collect_public_field_targets<'tcx>(
 fn load_std_contract_bindings() -> HashMap<String, Vec<StdContractBinding>> {
     serde_json::from_str(include_str!("data/std_contract_bindings.json"))
         .expect("Unable to parse std contract bindings")
+}
+
+fn contract_stable_id(tcx: TyCtxt<'_>, id: usize, instance: &ContractInstance) -> String {
+    format!(
+        "contract:{id}:{}:{}:{}",
+        instance.sp,
+        tcx.def_path_str(instance.sink_fn),
+        instance.std_fn_name
+    )
 }
 
 fn collect_lifted_preconditions<'tcx>(
@@ -1804,6 +1923,7 @@ fn lift_property_instances<'tcx>(
             symbolic_args,
             usage: ContractUsage::Precondition,
             numeric_kind: binding.numeric_kind(),
+            binding_role: binding.role().map(str::to_owned),
         });
     }
 
@@ -1829,6 +1949,7 @@ fn lift_property_instances<'tcx>(
         symbolic_args,
         usage: ContractUsage::Precondition,
         numeric_kind: None,
+        binding_role: None,
     });
     instances
 }
@@ -1850,6 +1971,11 @@ fn lift_contract_binding_args<'tcx>(
         | StdContractBinding::PowerOfTwo { arg }
         | StdContractBinding::UnicodeScalar { arg }
         | StdContractBinding::Arg { arg, .. } => Some(vec![resolve(*arg)?]),
+        StdContractBinding::Args { args: indices, .. } => indices
+            .iter()
+            .map(|idx| resolve(*idx))
+            .collect::<Option<Vec<_>>>(),
+        StdContractBinding::NoArgs { .. } => Some(Vec::new()),
         StdContractBinding::OffsetInAlloc {
             offset_arg,
             ptr_arg,
@@ -1939,8 +2065,35 @@ fn collect_constructor_effect<'tcx>(
                 root: PlaceRoot::Return,
                 fields: Vec::new(),
             },
+            inputs: Vec::new(),
         },
+        confidence: EffectConfidence::Approximate,
     });
+
+    let body = tcx.optimized_mir(fn_did);
+    let mut resolver = PlaceResolver::default();
+    for block in body.basic_blocks.iter() {
+        for stmt in block.statements.iter() {
+            collect_alias_from_statement(tcx, fn_did, &mut resolver, &stmt.kind);
+            let StatementKind::Assign(assign) = &stmt.kind else {
+                continue;
+            };
+            let (lhs, rvalue) = &**assign;
+            let Some(output) = raw_symbolic_place(tcx, fn_did, lhs) else {
+                continue;
+            };
+            if !matches!(output.root, PlaceRoot::Return) || output.fields.is_empty() {
+                continue;
+            }
+            let inputs = symbolic_places_from_rvalue(tcx, fn_did, rvalue, &resolver);
+            effects.push(ContractEffect {
+                fn_did,
+                adt_def: Some(output_adt),
+                kind: EffectKind::ConstructAdt { output, inputs },
+                confidence: EffectConfidence::Flow,
+            });
+        }
+    }
 }
 
 fn collect_assignment_effect<'tcx>(
@@ -1966,6 +2119,7 @@ fn collect_assignment_effect<'tcx>(
         fn_did,
         adt_def,
         kind: EffectKind::WriteField { field, value },
+        confidence: EffectConfidence::Exact,
     });
 }
 
@@ -1994,24 +2148,28 @@ fn collect_call_effects<'tcx>(
                 place: first_place,
                 value,
             },
+            confidence: EffectConfidence::Exact,
         });
     } else if callee_name.ends_with("::as_mut_vec") || callee_name.ends_with("::as_bytes_mut") {
         effects.push(ContractEffect {
             fn_did,
             adt_def,
             kind: EffectKind::InvalidateUtf8 { place: first_place },
+            confidence: EffectConfidence::Approximate,
         });
     } else if is_free_allocation_call(callee_name) {
         effects.push(ContractEffect {
             fn_did,
             adt_def,
             kind: EffectKind::FreeAllocation { place: first_place },
+            confidence: EffectConfidence::Approximate,
         });
     } else if callee_name.contains("::assume_init") {
         effects.push(ContractEffect {
             fn_did,
             adt_def,
             kind: EffectKind::AssumeInit { place: first_place },
+            confidence: EffectConfidence::Approximate,
         });
     }
 }
@@ -2029,7 +2187,20 @@ fn build_conflicts(
     let mut direct_hints = Vec::new();
 
     for (contract_id, instance) in instances.iter().enumerate() {
-        if let Some(param_idx) = instance.sensitive_place().and_then(SymbolicPlace::is_param) {
+        let direct_hint_params = if matches!(instance.sp, PrimitiveSpKind::NonOverlap) {
+            instance
+                .symbolic_args
+                .iter()
+                .filter_map(SymbolicPlace::is_param)
+                .collect_vec()
+        } else {
+            instance
+                .sensitive_place()
+                .and_then(SymbolicPlace::is_param)
+                .into_iter()
+                .collect_vec()
+        };
+        for param_idx in direct_hint_params {
             let reason = format!("{} contract of {}", instance.sp, instance.std_fn_name);
             if let Some(hint) = instance.invalid_hint(reason.clone()) {
                 direct_hints.push(DirectSinkHint {
@@ -2050,10 +2221,19 @@ fn build_conflicts(
                 continue;
             }
             let place = effect.kind.primary_place().clone();
+            let flow_note = match &effect.kind {
+                EffectKind::ConstructAdt { inputs, .. } if !inputs.is_empty() => {
+                    format!(
+                        " from {}",
+                        inputs.iter().map(SymbolicPlace::pretty).join(", ")
+                    )
+                }
+                _ => String::new(),
+            };
             let reason = format!(
                 "{} on {} can break {} required by {}",
                 effect.kind.name(),
-                place.pretty(),
+                format!("{}{}", place.pretty(), flow_note),
                 instance.sp,
                 instance.std_fn_name
             );
@@ -2079,6 +2259,7 @@ fn build_conflicts(
                 place,
                 sp: instance.sp.clone(),
                 effect_kind: effect.kind.name(),
+                effect_confidence: effect.confidence.name(),
                 hint_param,
                 hint,
                 reason,
@@ -2218,7 +2399,10 @@ fn write_field_can_violate(sp: &PrimitiveSpKind) -> bool {
 }
 
 fn instance_mentions_place(instance: &ContractInstance, place: &SymbolicPlace) -> bool {
-    instance.symbolic_args.iter().any(|arg| arg == place)
+    instance
+        .symbolic_args
+        .iter()
+        .any(|arg| place.is_prefix_of(arg) || arg.is_prefix_of(place))
 }
 
 fn const_may_violate_instance(instance: &ContractInstance, value: i128) -> bool {
@@ -2272,6 +2456,44 @@ fn collect_alias_from_statement<'tcx>(
     if let Some(rhs) = rhs {
         resolver.record_alias(lhs, rhs);
     }
+}
+
+fn symbolic_places_from_rvalue<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    fn_did: DefId,
+    rvalue: &Rvalue<'tcx>,
+    resolver: &PlaceResolver,
+) -> Vec<SymbolicPlace> {
+    let mut places = Vec::new();
+    let mut push_operand = |operand: &Operand<'tcx>| {
+        if let Some(place) = resolver.resolve_operand(tcx, fn_did, operand) {
+            places.push(place);
+        }
+    };
+
+    match rvalue {
+        Rvalue::Use(operand) | Rvalue::Cast(_, operand, _) => push_operand(operand),
+        Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) | Rvalue::CopyForDeref(place) => {
+            if let Some(place) = resolver.resolve_place(tcx, fn_did, place) {
+                places.push(place);
+            }
+        }
+        Rvalue::BinaryOp(_, operands) => {
+            let (lhs, rhs) = &**operands;
+            push_operand(lhs);
+            push_operand(rhs);
+        }
+        Rvalue::Aggregate(_, operands) => {
+            for operand in operands.iter() {
+                push_operand(operand);
+            }
+        }
+        _ => {}
+    }
+
+    places.sort_by_key(SymbolicPlace::pretty);
+    places.dedup();
+    places
 }
 
 fn raw_symbolic_place(tcx: TyCtxt<'_>, fn_did: DefId, place: &Place<'_>) -> Option<SymbolicPlace> {
