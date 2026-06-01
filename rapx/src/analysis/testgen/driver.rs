@@ -203,6 +203,9 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         let guide = ContractGuide::analyze(tcx);
         guide.dump_to(workspace_dir.join("unsound_guide.txt"), tcx)?;
         guide.dump_instances_json(workspace_dir.join("contract_instances.json"), tcx)?;
+        guide.dump_cgag_json(workspace_dir.join("cgag.json"), tcx)?;
+        guide.dump_cgag_dot(workspace_dir.join("cgag.dot"), tcx)?;
+        // Compatibility aliases for older experiment scripts.
         guide.dump_ccag_json(workspace_dir.join("ccag.json"), tcx)?;
         guide.dump_ccag_dot(workspace_dir.join("ccag.dot"), tcx)?;
         contract_coverage = ContractCoverage::new_with_static(
@@ -221,6 +224,8 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         }
         .write_json(workspace_dir.join("contract_instances.json"))?;
         let empty_ccag = CcagFile::empty();
+        empty_ccag.write_json(workspace_dir.join("cgag.json"))?;
+        empty_ccag.write_dot(workspace_dir.join("cgag.dot"))?;
         empty_ccag.write_json(workspace_dir.join("ccag.json"))?;
         empty_ccag.write_dot(workspace_dir.join("ccag.dot"))?;
         contract_coverage.write_json(&contract_coverage_path)?;

@@ -14,6 +14,10 @@ pub const TESTGEN_ARTIFACT_SCHEMA_VERSION: usize = 2;
 pub struct ArtifactSummary {
     pub node_count: usize,
     pub edge_count: usize,
+    pub action_count: usize,
+    pub state_field_count: usize,
+    pub contract_edge_count: usize,
+    pub mutation_edge_count: usize,
     pub contract_count: usize,
     pub mutator_count: usize,
     pub recipe_count: usize,
@@ -24,6 +28,7 @@ pub struct ContractInstanceRecord {
     pub schema_version: usize,
     pub id: usize,
     pub stable_id: String,
+    pub contract_edge_id: String,
     pub sink_fn: String,
     pub sink_def_id: String,
     pub sink_self_ty: Option<String>,
@@ -66,6 +71,16 @@ struct DotNodeStyle {
 impl DotNodeStyle {
     fn for_kind(kind: &str) -> Self {
         match kind {
+            "action" => Self {
+                shape: "box",
+                fill: "#E8F1FF",
+                color: "#2F5F9F",
+            },
+            "state_field" => Self {
+                shape: "ellipse",
+                fill: "#EAF7EA",
+                color: "#3F7F3F",
+            },
             "api" => Self {
                 shape: "box",
                 fill: "#E8F1FF",
@@ -117,6 +132,10 @@ struct DotEdgeStyle {
 impl DotEdgeStyle {
     fn for_kind(kind: &str) -> Self {
         let color = match kind {
+            "mutates" => "#A33A5B",
+            "uses" => "#2F5F9F",
+            "contains" => "#3F7F3F",
+            "contract" => "#D12B2B",
             "reaches" => "#2F5F9F",
             "calls_std" => "#666666",
             "binds" => "#3F7F3F",
@@ -131,32 +150,50 @@ impl DotEdgeStyle {
 }
 
 fn dot_node_label(node: &CcagNodeRecord) -> String {
-    let mut lines = vec![node.label.clone(), format!("kind={}", node.kind)];
-    match node.kind.as_str() {
-        "contract" => {
-            push_attr_line(&mut lines, &node.attrs, "sp");
-            push_attr_line(&mut lines, &node.attrs, "family");
-            push_attr_line(&mut lines, &node.attrs, "generic_preference");
-        }
-        "mutator" => {
-            push_attr_line(&mut lines, &node.attrs, "source");
-            push_attr_line(&mut lines, &node.attrs, "effect");
-        }
-        "recipe" => {
-            push_attr_line(&mut lines, &node.attrs, "reason");
-        }
-        "api" => {
-            push_attr_line(&mut lines, &node.attrs, "self_ty");
-        }
-        _ => {}
+    let label = compact_dot_label(&node.label, 42);
+    match (
+        node.kind.as_str(),
+        node.attrs.get("action_kind").map(String::as_str),
+    ) {
+        ("action", Some("public_field_assignment")) => format!("write {label}"),
+        ("action", Some("resource_recipe")) => format!("recipe {label}"),
+        _ => label,
     }
-    lines.join("\\n")
 }
 
-fn push_attr_line(lines: &mut Vec<String>, attrs: &BTreeMap<String, String>, key: &str) {
-    if let Some(value) = attrs.get(key).filter(|value| !value.is_empty()) {
-        lines.push(format!("{key}={value}"));
+fn dot_edge_label(edge: &CcagEdgeRecord) -> String {
+    match edge.kind.as_str() {
+        "uses" => edge
+            .attrs
+            .get("role")
+            .filter(|role| !role.is_empty())
+            .map(|role| format!("uses {role}"))
+            .unwrap_or_else(|| "uses".to_owned()),
+        "contract" => compact_dot_label(&edge.label, 28),
+        "mutates" => match edge.label.as_str() {
+            "WriteField" => "writes".to_owned(),
+            "PublicFieldWrite" => "public write".to_owned(),
+            "ConstructAdt" => "constructs".to_owned(),
+            "recipe" => "recipe".to_owned(),
+            other => compact_dot_label(other, 28),
+        },
+        "contains" => "contains".to_owned(),
+        other => compact_dot_label(other, 28),
     }
+}
+
+fn compact_dot_label(raw: &str, max_chars: usize) -> String {
+    let normalized = raw.split_whitespace().collect::<Vec<_>>().join(" ");
+    if normalized.chars().count() <= max_chars {
+        return normalized;
+    }
+
+    let mut truncated = normalized
+        .chars()
+        .take(max_chars.saturating_sub(3))
+        .collect::<String>();
+    truncated.push_str("...");
+    truncated
 }
 
 fn dot_escape(raw: &str) -> String {
@@ -201,7 +238,7 @@ impl CcagFile {
     pub fn empty() -> Self {
         Self {
             schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
-            graph_kind: "contract_conditioned_api_graph".to_owned(),
+            graph_kind: "contract_guided_api_graph".to_owned(),
             summary: ArtifactSummary::default(),
             nodes: Vec::new(),
             edges: Vec::new(),
@@ -209,9 +246,20 @@ impl CcagFile {
     }
 
     pub fn from_parts(nodes: Vec<CcagNodeRecord>, edges: Vec<CcagEdgeRecord>) -> Self {
+        let mut seen_edges = BTreeSet::new();
+        let edges = edges
+            .into_iter()
+            .filter(|edge| {
+                let key = format!(
+                    "{}\u{1f}{}\u{1f}{}\u{1f}{}\u{1f}{:?}",
+                    edge.source, edge.target, edge.kind, edge.label, edge.attrs
+                );
+                seen_edges.insert(key)
+            })
+            .collect();
         let mut file = Self {
             schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
-            graph_kind: "contract_conditioned_api_graph".to_owned(),
+            graph_kind: "contract_guided_api_graph".to_owned(),
             summary: ArtifactSummary::default(),
             nodes,
             edges,
@@ -223,6 +271,26 @@ impl CcagFile {
     fn refresh_summary(&mut self) {
         self.summary.node_count = self.nodes.len();
         self.summary.edge_count = self.edges.len();
+        self.summary.action_count = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "action")
+            .count();
+        self.summary.state_field_count = self
+            .nodes
+            .iter()
+            .filter(|node| node.kind == "state_field")
+            .count();
+        self.summary.contract_edge_count = self
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == "contract")
+            .count();
+        self.summary.mutation_edge_count = self
+            .edges
+            .iter()
+            .filter(|edge| edge.kind == "mutates")
+            .count();
         self.summary.contract_count = self
             .nodes
             .iter()
@@ -248,24 +316,34 @@ impl CcagFile {
 
     pub fn write_dot(&self, path: impl AsRef<Path>) -> io::Result<()> {
         let mut file = File::create(path)?;
-        writeln!(file, "digraph CCAG {{")?;
+        writeln!(file, "digraph CGAG {{")?;
         writeln!(file, "  rankdir=LR;")?;
         writeln!(
             file,
-            "  graph [fontname=\"Menlo\", fontsize=10, labelloc=t, label=\"Contract-Conditioned API Graph\"];"
+            "  graph [fontname=\"Helvetica\", fontsize=16, labelloc=t, label=\"Contract-Guided API Graph\"];"
         )?;
         writeln!(
             file,
-            "  node [fontname=\"Menlo\", fontsize=10, style=\"filled,rounded\"];"
+            "  node [fontname=\"Helvetica\", fontsize=11, style=\"filled,rounded\", penwidth=1.4];"
         )?;
-        writeln!(file, "  edge [fontname=\"Menlo\", fontsize=9];")?;
+        writeln!(
+            file,
+            "  edge [fontname=\"Helvetica\", fontsize=10, arrowsize=0.75, penwidth=1.3];"
+        )?;
+
+        let node_aliases = self
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(idx, node)| (node.id.clone(), format!("n{idx}")))
+            .collect::<BTreeMap<_, _>>();
 
         for node in &self.nodes {
             let style = DotNodeStyle::for_kind(&node.kind);
             writeln!(
                 file,
                 "  \"{}\" [label=\"{}\", shape=\"{}\", fillcolor=\"{}\", color=\"{}\"]",
-                dot_escape(&node.id),
+                dot_escape(node_aliases.get(&node.id).map_or(&node.id, |alias| alias)),
                 dot_escape(&dot_node_label(node)),
                 style.shape,
                 style.fill,
@@ -273,14 +351,31 @@ impl CcagFile {
             )?;
         }
 
+        let mut rendered_edges = BTreeSet::new();
         for edge in &self.edges {
+            let label = dot_edge_label(edge);
+            let key = format!(
+                "{}\u{1f}{}\u{1f}{}\u{1f}{}",
+                edge.source, edge.target, edge.kind, label
+            );
+            if !rendered_edges.insert(key) {
+                continue;
+            }
             let style = DotEdgeStyle::for_kind(&edge.kind);
             writeln!(
                 file,
                 "  \"{}\" -> \"{}\" [label=\"{}\", color=\"{}\", fontcolor=\"{}\"]",
-                dot_escape(&edge.source),
-                dot_escape(&edge.target),
-                dot_escape(&edge.label),
+                dot_escape(
+                    node_aliases
+                        .get(&edge.source)
+                        .map_or(&edge.source, |alias| alias)
+                ),
+                dot_escape(
+                    node_aliases
+                        .get(&edge.target)
+                        .map_or(&edge.target, |alias| alias)
+                ),
+                dot_escape(&label),
                 style.color,
                 style.color
             )?;
@@ -295,6 +390,7 @@ impl CcagFile {
 pub struct CaseTargetRecord {
     pub contract_id: usize,
     pub contract_stable_id: String,
+    pub contract_edge_id: String,
     pub target_kind: String,
     pub producer_fn: Option<String>,
     pub sink_fn: String,

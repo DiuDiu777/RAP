@@ -30,6 +30,13 @@
       "mutator": "generic constructor chooses high-alignment T over i32-backed buffer"
     },
     {
+      "name": "cgag_field_mutation",
+      "family": "Pointer",
+      "sp": ["InBound"],
+      "unsafe_api": "core::slice::get_unchecked",
+      "mutator": "method set_idx and public field idx"
+    },
+    {
       "name": "pointer_inbound_index",
       "family": "Pointer",
       "sp": ["InBound"],

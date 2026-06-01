@@ -527,6 +527,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 schema_version: TESTGEN_ARTIFACT_SCHEMA_VERSION,
                 id,
                 stable_id: contract_stable_id(tcx, id, instance),
+                contract_edge_id: contract_edge_id(tcx, id, instance),
                 sink_fn: tcx.def_path_str(instance.sink_fn),
                 sink_def_id: def_id_str(instance.sink_fn),
                 sink_self_ty: instance.sink_self_ty.clone(),
@@ -564,18 +565,19 @@ impl<'tcx> ContractGuide<'tcx> {
         self.contract_instances_file(tcx).write_json(path)
     }
 
-    pub fn ccag_file(&self, tcx: TyCtxt<'tcx>) -> CcagFile {
+    pub fn cgag_file(&self, tcx: TyCtxt<'tcx>) -> CcagFile {
         let mut nodes = BTreeMap::new();
         let mut edges = Vec::new();
 
         for (contract_id, instance) in self.instances.iter().enumerate() {
-            let sink_id = api_node_id(instance.sink_fn);
+            let sink_id = action_api_node_id(instance.sink_fn);
             insert_ccag_node(
                 &mut nodes,
                 sink_id.clone(),
-                "api",
+                "action",
                 tcx.def_path_str(instance.sink_fn),
                 attrs(&[
+                    ("action_kind", "public_api".to_owned()),
                     ("def_id", def_id_str(instance.sink_fn)),
                     ("self_ty", instance.sink_self_ty.clone().unwrap_or_default()),
                     ("signature", instance.sink_signature.clone()),
@@ -586,166 +588,136 @@ impl<'tcx> ContractGuide<'tcx> {
                 ]),
             );
 
-            let std_id = api_node_id(instance.std_fn);
-            insert_ccag_node(
-                &mut nodes,
-                std_id.clone(),
-                "std_api",
-                instance.std_fn_name.clone(),
-                attrs(&[("def_id", def_id_str(instance.std_fn))]),
-            );
+            for (arg_idx, place) in instance.symbolic_args.iter().enumerate() {
+                let place_id = insert_state_field_path(&mut nodes, &mut edges, place);
+                edges.push(ccag_edge(
+                    sink_id.clone(),
+                    place_id.clone(),
+                    "uses",
+                    format!("uses arg{arg_idx}"),
+                    attrs(&[
+                        (
+                            "contract_edge_id",
+                            contract_edge_id(tcx, contract_id, instance),
+                        ),
+                        ("role", format!("arg{arg_idx}")),
+                    ]),
+                ));
+            }
 
-            let contract_id_str = contract_node_id(contract_id);
-            insert_ccag_node(
-                &mut nodes,
-                contract_id_str.clone(),
+            let primary_place = instance
+                .sensitive_place()
+                .cloned()
+                .unwrap_or_else(|| implicit_contract_place(contract_id));
+            let primary_place_id = insert_state_field_path(&mut nodes, &mut edges, &primary_place);
+            edges.push(ccag_edge(
+                primary_place_id,
+                sink_id,
                 "contract",
-                format!("{}:{}", sp_name(&instance.sp), contract_id),
+                sp_name(&instance.sp),
                 attrs(&[
+                    ("contract_id", contract_id.to_string()),
+                    (
+                        "contract_edge_id",
+                        contract_edge_id(tcx, contract_id, instance),
+                    ),
                     ("sp", sp_name(&instance.sp)),
                     ("family", sp_family_name(&instance.sp)),
                     ("usage", instance.usage.name().to_owned()),
                     ("raw_tag", instance.raw_tag.clone()),
                     ("std_fn", instance.std_fn_name.clone()),
+                    ("std_fn_def_id", def_id_str(instance.std_fn)),
                     (
                         "binding_role",
                         instance.binding_role.clone().unwrap_or_default(),
                     ),
-                    ("sink_signature", instance.sink_signature.clone()),
+                    ("roles", instance.args_pretty()),
                     (
                         "generic_preference",
                         format!("{:?}", generic_preference_for_instance(instance)),
                     ),
                 ]),
-            );
-
-            edges.push(ccag_edge(
-                sink_id,
-                contract_id_str.clone(),
-                "reaches",
-                "reaches",
-                BTreeMap::new(),
             ));
-            edges.push(ccag_edge(
-                contract_id_str.clone(),
-                std_id,
-                "calls_std",
-                "calls",
-                BTreeMap::new(),
-            ));
-
-            for (arg_idx, place) in instance.symbolic_args.iter().enumerate() {
-                let place_id = place_node_id(place);
-                insert_ccag_node(
-                    &mut nodes,
-                    place_id.clone(),
-                    "symbolic_place",
-                    place.pretty(),
-                    BTreeMap::new(),
-                );
-                edges.push(ccag_edge(
-                    contract_id_str.clone(),
-                    place_id,
-                    "binds",
-                    format!("arg{arg_idx}"),
-                    attrs(&[("role", format!("arg{arg_idx}"))]),
-                ));
-            }
         }
 
         for pair in &self.pairs {
-            let producer_id = api_node_id(pair.producer_fn);
+            let producer_id = action_api_node_id(pair.producer_fn);
             insert_ccag_node(
                 &mut nodes,
                 producer_id.clone(),
-                "api",
+                "action",
                 tcx.def_path_str(pair.producer_fn),
-                attrs(&[("def_id", def_id_str(pair.producer_fn))]),
-            );
-
-            let mutator_id = api_mutator_node_id(pair);
-            insert_ccag_node(
-                &mut nodes,
-                mutator_id.clone(),
-                "mutator",
-                format!(
-                    "{} mutates {}",
-                    tcx.def_path_str(pair.producer_fn),
-                    pair.place.pretty()
-                ),
                 attrs(&[
-                    ("source", "api_call".to_owned()),
+                    ("action_kind", "public_api".to_owned()),
+                    ("def_id", def_id_str(pair.producer_fn)),
                     ("effect", pair.effect_kind.to_owned()),
                     ("confidence", pair.effect_confidence.to_owned()),
-                    ("contract_id", pair.contract_id.to_string()),
-                    ("reason", pair.reason.clone()),
                 ]),
             );
+            let place_id = insert_state_field_path(&mut nodes, &mut edges, &pair.place);
             edges.push(ccag_edge(
                 producer_id,
-                mutator_id.clone(),
-                "api_mutator",
+                place_id,
                 "mutates",
-                BTreeMap::new(),
-            ));
-            insert_ccag_node(
-                &mut nodes,
-                place_node_id(&pair.place),
-                "symbolic_place",
-                pair.place.pretty(),
-                BTreeMap::new(),
-            );
-            edges.push(ccag_edge(
-                mutator_id.clone(),
-                place_node_id(&pair.place),
-                "writes",
-                "writes",
-                BTreeMap::new(),
-            ));
-            edges.push(ccag_edge(
-                mutator_id.clone(),
-                contract_node_id(pair.contract_id),
-                "may_violate",
-                "may violate",
-                attrs(&[("sp", sp_name(&pair.sp))]),
+                pair.effect_kind,
+                attrs(&[
+                    ("source", "method".to_owned()),
+                    ("contract_id", pair.contract_id.to_string()),
+                    (
+                        "contract_edge_id",
+                        contract_edge_id(tcx, pair.contract_id, &self.instances[pair.contract_id]),
+                    ),
+                    ("sp", sp_name(&pair.sp)),
+                    ("confidence", pair.effect_confidence.to_owned()),
+                    ("reason", pair.reason.clone()),
+                ]),
             ));
             if let Some(hint) = &pair.hint {
-                let recipe_id = recipe_node_id(pair.contract_id, &format!("{:?}", hint.kind));
+                let recipe_id =
+                    recipe_action_node_id(pair.contract_id, &format!("{:?}", hint.kind));
                 insert_ccag_node(
                     &mut nodes,
                     recipe_id.clone(),
-                    "recipe",
+                    "action",
                     format!("{:?}", hint.kind),
-                    attrs(&[("reason", hint.reason.clone())]),
+                    attrs(&[
+                        ("action_kind", "resource_recipe".to_owned()),
+                        ("reason", hint.reason.clone()),
+                    ]),
                 );
                 edges.push(ccag_edge(
                     recipe_id,
-                    mutator_id,
-                    "realizes",
-                    "realizes",
-                    BTreeMap::new(),
+                    place_node_id(&pair.place),
+                    "mutates",
+                    "recipe",
+                    attrs(&[
+                        ("source", "recipe".to_owned()),
+                        ("contract_id", pair.contract_id.to_string()),
+                        (
+                            "contract_edge_id",
+                            contract_edge_id(
+                                tcx,
+                                pair.contract_id,
+                                &self.instances[pair.contract_id],
+                            ),
+                        ),
+                        ("hint", format!("{:?}", hint.kind)),
+                        ("reason", hint.reason.clone()),
+                    ]),
                 ));
             }
         }
 
         for target in &self.public_field_targets {
-            let type_id = type_node_id(target.adt_def);
-            insert_ccag_node(
-                &mut nodes,
-                type_id.clone(),
-                "type",
-                tcx.def_path_str(target.adt_def),
-                attrs(&[("def_id", def_id_str(target.adt_def))]),
-            );
-
-            let mutator_id = public_field_mutator_node_id(target);
+            let mutator_id = public_field_action_node_id(target);
             insert_ccag_node(
                 &mut nodes,
                 mutator_id.clone(),
-                "mutator",
+                "action",
                 format!("{}.{}", tcx.def_path_str(target.adt_def), target.field_name),
                 attrs(&[
-                    ("source", "public_field".to_owned()),
+                    ("action_kind", "public_field_assignment".to_owned()),
+                    ("adt_def", tcx.def_path_str(target.adt_def)),
                     ("field", target.field_name.clone()),
                     ("field_path", format!("{:?}", target.field_path)),
                     ("effect", "PublicFieldWrite".to_owned()),
@@ -753,65 +725,118 @@ impl<'tcx> ContractGuide<'tcx> {
                     ("reason", target.reason.clone()),
                 ]),
             );
-            edges.push(ccag_edge(
-                type_id,
-                mutator_id.clone(),
-                "exposes",
-                "exposes",
-                BTreeMap::new(),
-            ));
+            let place_id = insert_state_field_path(&mut nodes, &mut edges, &target.place);
             edges.push(ccag_edge(
                 mutator_id.clone(),
-                place_node_id(&target.place),
-                "writes",
-                "writes",
-                BTreeMap::new(),
-            ));
-            edges.push(ccag_edge(
-                mutator_id.clone(),
-                contract_node_id(target.contract_id),
-                "may_violate",
-                "may violate",
-                attrs(&[("sp", sp_name(&target.sp))]),
+                place_id.clone(),
+                "mutates",
+                "public field write",
+                attrs(&[
+                    ("source", "public_field".to_owned()),
+                    ("contract_id", target.contract_id.to_string()),
+                    (
+                        "contract_edge_id",
+                        contract_edge_id(
+                            tcx,
+                            target.contract_id,
+                            &self.instances[target.contract_id],
+                        ),
+                    ),
+                    ("sp", sp_name(&target.sp)),
+                    ("field", target.field_name.clone()),
+                    ("field_path", format!("{:?}", target.field_path)),
+                    ("reason", target.reason.clone()),
+                ]),
             ));
             if let Some(hint) = &target.hint {
-                let recipe_id = recipe_node_id(target.contract_id, &format!("{:?}", hint.kind));
+                let recipe_id =
+                    recipe_action_node_id(target.contract_id, &format!("{:?}", hint.kind));
                 insert_ccag_node(
                     &mut nodes,
                     recipe_id.clone(),
-                    "recipe",
+                    "action",
                     format!("{:?}", hint.kind),
-                    attrs(&[("reason", hint.reason.clone())]),
+                    attrs(&[
+                        ("action_kind", "resource_recipe".to_owned()),
+                        ("reason", hint.reason.clone()),
+                    ]),
                 );
                 edges.push(ccag_edge(
                     recipe_id,
-                    mutator_id,
-                    "realizes",
-                    "realizes",
-                    BTreeMap::new(),
+                    place_id,
+                    "mutates",
+                    "recipe",
+                    attrs(&[
+                        ("source", "recipe".to_owned()),
+                        ("contract_id", target.contract_id.to_string()),
+                        (
+                            "contract_edge_id",
+                            contract_edge_id(
+                                tcx,
+                                target.contract_id,
+                                &self.instances[target.contract_id],
+                            ),
+                        ),
+                        ("hint", format!("{:?}", hint.kind)),
+                        ("reason", hint.reason.clone()),
+                    ]),
                 ));
             }
         }
 
         for direct in &self.direct_hints {
-            let recipe_id = recipe_node_id(direct.contract_id, &format!("{:?}", direct.hint.kind));
+            let Some(instance) = self.instances.get(direct.contract_id) else {
+                continue;
+            };
+            let recipe_id =
+                recipe_action_node_id(direct.contract_id, &format!("{:?}", direct.hint.kind));
             insert_ccag_node(
                 &mut nodes,
                 recipe_id.clone(),
-                "recipe",
+                "action",
                 format!("{:?}", direct.hint.kind),
-                attrs(&[("reason", direct.reason.clone())]),
+                attrs(&[
+                    ("action_kind", "resource_recipe".to_owned()),
+                    ("reason", direct.reason.clone()),
+                ]),
             );
+            let place = instance
+                .sensitive_place()
+                .cloned()
+                .unwrap_or_else(|| implicit_contract_place(direct.contract_id));
+            let place_id = insert_state_field_path(&mut nodes, &mut edges, &place);
             edges.push(ccag_edge(
                 recipe_id,
-                contract_node_id(direct.contract_id),
-                "direct_input",
+                place_id,
+                "mutates",
                 format!("arg{}", direct.param_idx),
-                attrs(&[("param", direct.param_idx.to_string())]),
+                attrs(&[
+                    ("source", "direct_input".to_owned()),
+                    ("param", direct.param_idx.to_string()),
+                    ("contract_id", direct.contract_id.to_string()),
+                    (
+                        "contract_edge_id",
+                        contract_edge_id(tcx, direct.contract_id, instance),
+                    ),
+                    ("hint", format!("{:?}", direct.hint.kind)),
+                    ("reason", direct.reason.clone()),
+                ]),
             ));
         }
 
         CcagFile::from_parts(nodes.into_values().collect(), edges)
+    }
+
+    pub fn ccag_file(&self, tcx: TyCtxt<'tcx>) -> CcagFile {
+        self.cgag_file(tcx)
+    }
+
+    pub fn dump_cgag_json(&self, path: impl AsRef<Path>, tcx: TyCtxt<'tcx>) -> io::Result<()> {
+        self.cgag_file(tcx).write_json(path)
+    }
+
+    pub fn dump_cgag_dot(&self, path: impl AsRef<Path>, tcx: TyCtxt<'tcx>) -> io::Result<()> {
+        self.cgag_file(tcx).write_dot(path)
     }
 
     pub fn dump_ccag_json(&self, path: impl AsRef<Path>, tcx: TyCtxt<'tcx>) -> io::Result<()> {
@@ -906,6 +931,7 @@ impl<'tcx> ContractGuide<'tcx> {
             targets.push(CaseTargetRecord {
                 contract_id: pair.contract_id,
                 contract_stable_id: contract_stable_id(tcx, pair.contract_id, instance),
+                contract_edge_id: contract_edge_id(tcx, pair.contract_id, instance),
                 target_kind: "producer_sink".to_owned(),
                 producer_fn: Some(tcx.def_path_str(pair.producer_fn)),
                 sink_fn: tcx.def_path_str(pair.sink_fn),
@@ -945,6 +971,7 @@ impl<'tcx> ContractGuide<'tcx> {
             targets.push(CaseTargetRecord {
                 contract_id: direct.contract_id,
                 contract_stable_id: contract_stable_id(tcx, direct.contract_id, instance),
+                contract_edge_id: contract_edge_id(tcx, direct.contract_id, instance),
                 target_kind: "direct_sink".to_owned(),
                 producer_fn: None,
                 sink_fn: tcx.def_path_str(direct.sink_fn),
@@ -996,6 +1023,7 @@ impl<'tcx> ContractGuide<'tcx> {
             targets.push(CaseTargetRecord {
                 contract_id: public_field.contract_id,
                 contract_stable_id: contract_stable_id(tcx, public_field.contract_id, instance),
+                contract_edge_id: contract_edge_id(tcx, public_field.contract_id, instance),
                 target_kind: "public_field".to_owned(),
                 producer_fn: None,
                 sink_fn: tcx.def_path_str(public_field.sink_fn),
@@ -1498,40 +1526,87 @@ fn ccag_edge(
     }
 }
 
-fn api_node_id(def_id: DefId) -> String {
-    format!("api:{def_id:?}")
-}
-
-fn type_node_id(def_id: DefId) -> String {
-    format!("type:{def_id:?}")
-}
-
-fn contract_node_id(contract_id: usize) -> String {
-    format!("contract:{contract_id}")
+fn action_api_node_id(def_id: DefId) -> String {
+    format!("action:api:{def_id:?}")
 }
 
 fn place_node_id(place: &SymbolicPlace) -> String {
-    format!("place:{}", place.pretty())
+    format!("field:{}", place.pretty())
 }
 
-fn api_mutator_node_id(pair: &ConflictPair) -> String {
-    format!(
-        "mutator:api:{:?}:{}:{}",
-        pair.producer_fn,
-        pair.contract_id,
-        pair.place.pretty()
-    )
+fn field_root_name(root: PlaceRoot) -> String {
+    match root {
+        PlaceRoot::Return => "return".to_owned(),
+        PlaceRoot::Receiver => "self".to_owned(),
+        PlaceRoot::Param(idx) => format!("arg{idx}"),
+        PlaceRoot::Local(idx) => format!("local{idx}"),
+    }
 }
 
-fn public_field_mutator_node_id(target: &PublicFieldTarget) -> String {
+fn insert_state_field_path(
+    nodes: &mut BTreeMap<String, CcagNodeRecord>,
+    edges: &mut Vec<CcagEdgeRecord>,
+    place: &SymbolicPlace,
+) -> String {
+    let mut current = SymbolicPlace {
+        root: place.root,
+        fields: Vec::new(),
+    };
+    let root_id = place_node_id(&current);
+    insert_ccag_node(
+        nodes,
+        root_id.clone(),
+        "state_field",
+        current.pretty(),
+        attrs(&[
+            ("root", field_root_name(current.root)),
+            ("field_path", "[]".to_owned()),
+        ]),
+    );
+
+    let mut parent_id = root_id;
+    for field in &place.fields {
+        current.fields.push(*field);
+        let current_id = place_node_id(&current);
+        insert_ccag_node(
+            nodes,
+            current_id.clone(),
+            "state_field",
+            current.pretty(),
+            attrs(&[
+                ("root", field_root_name(current.root)),
+                ("field_path", format!("{:?}", current.fields)),
+            ]),
+        );
+        edges.push(ccag_edge(
+            parent_id,
+            current_id.clone(),
+            "contains",
+            "contains",
+            BTreeMap::new(),
+        ));
+        parent_id = current_id;
+    }
+
+    parent_id
+}
+
+fn implicit_contract_place(contract_id: usize) -> SymbolicPlace {
+    SymbolicPlace {
+        root: PlaceRoot::Local(10_000 + contract_id),
+        fields: Vec::new(),
+    }
+}
+
+fn public_field_action_node_id(target: &PublicFieldTarget) -> String {
     format!(
-        "mutator:public-field:{:?}:{}:{}",
+        "action:public-field:{:?}:{}:{}",
         target.adt_def, target.field_name, target.contract_id
     )
 }
 
-fn recipe_node_id(contract_id: usize, hint_kind: &str) -> String {
-    format!("recipe:{contract_id}:{hint_kind}")
+fn recipe_action_node_id(contract_id: usize, hint_kind: &str) -> String {
+    format!("action:recipe:{contract_id}:{hint_kind}")
 }
 
 fn ref_source_map<'tcx>(stmts: &[Stmt<'tcx>]) -> HashMap<Var, Var> {
@@ -1827,8 +1902,12 @@ fn load_std_contract_bindings() -> HashMap<String, Vec<StdContractBinding>> {
 }
 
 fn contract_stable_id(tcx: TyCtxt<'_>, id: usize, instance: &ContractInstance) -> String {
+    contract_edge_id(tcx, id, instance)
+}
+
+fn contract_edge_id(tcx: TyCtxt<'_>, id: usize, instance: &ContractInstance) -> String {
     format!(
-        "contract:{id}:{}:{}:{}",
+        "contract-edge:{id}:{}:{}:{}",
         instance.sp,
         tcx.def_path_str(instance.sink_fn),
         instance.std_fn_name
