@@ -37,6 +37,13 @@
       "mutator": "method set_idx and public field idx"
     },
     {
+      "name": "ordered_two_field_index",
+      "family": "Pointer",
+      "sp": ["InBound"],
+      "unsafe_api": "core::slice::get_unchecked",
+      "mutator": "ordered method chain: set_pending_idx then commit_idx"
+    },
+    {
       "name": "pointer_inbound_index",
       "family": "Pointer",
       "sp": ["InBound"],

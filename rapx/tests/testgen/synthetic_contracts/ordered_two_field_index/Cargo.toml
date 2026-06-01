@@ -1,0 +1,7 @@
+[package]
+name = "ordered_two_field_index"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"

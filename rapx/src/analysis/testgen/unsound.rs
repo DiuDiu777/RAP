@@ -1,3 +1,5 @@
+use crate::analysis::core::dataflow::default::DataFlowAnalyzer;
+use crate::analysis::core::dataflow::{DataFlowAnalysis, DataFlowGraph, DataFlowGraphMap, EdgeOp};
 use crate::analysis::testgen::context::{ApiCall, InputHint, Stmt, StmtKind, Var, DUMMY_INPUT_VAR};
 use crate::analysis::testgen::context_builder::ContextBuilder;
 use crate::analysis::testgen::contract::{PrimitiveSpKind, SafetyContractDb};
@@ -16,7 +18,7 @@ use itertools::Itertools;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{BodyOwnerKind, LangItem};
 use rustc_middle::mir::{
-    Const, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
+    Const, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
 };
 use rustc_middle::ty::{self, GenericArgsRef, Ty, TyCtxt, TyKind};
 use rustc_type_ir::{FloatTy, IntTy, UintTy};
@@ -203,10 +205,10 @@ impl ContractInstance {
         }
     }
 
-    fn args_pretty(&self) -> String {
+    fn args_display(&self, tcx: TyCtxt<'_>) -> String {
         self.symbolic_args
             .iter()
-            .map(SymbolicPlace::pretty)
+            .map(|place| symbolic_place_display(tcx, self.adt_def, place))
             .join(", ")
     }
 }
@@ -224,6 +226,7 @@ enum EffectKind {
     WriteField {
         field: SymbolicPlace,
         value: EffectValue,
+        inputs: Vec<SymbolicPlace>,
     },
     InvalidateUtf8 {
         place: SymbolicPlace,
@@ -286,6 +289,13 @@ impl EffectKind {
         match self {
             Self::WriteField { value, .. } | Self::SetLen { value, .. } => Some(*value),
             _ => None,
+        }
+    }
+
+    fn input_places(&self) -> &[SymbolicPlace] {
+        match self {
+            Self::WriteField { inputs, .. } | Self::ConstructAdt { inputs, .. } => inputs,
+            _ => &[],
         }
     }
 
@@ -427,9 +437,21 @@ impl StdContractBinding {
 #[derive(Default)]
 struct PlaceResolver {
     aliases: HashMap<usize, SymbolicPlace>,
+    flow_aliases: HashMap<usize, SymbolicPlace>,
 }
 
 impl PlaceResolver {
+    fn for_fn(tcx: TyCtxt<'_>, fn_did: DefId, dataflow_graphs: Option<&DataFlowGraphMap>) -> Self {
+        let flow_aliases = dataflow_graphs
+            .and_then(|graphs| graphs.get(&fn_did))
+            .map(|graph| dataflow_flow_aliases(tcx, fn_did, graph))
+            .unwrap_or_default();
+        Self {
+            aliases: HashMap::new(),
+            flow_aliases,
+        }
+    }
+
     fn resolve_place(
         &self,
         tcx: TyCtxt<'_>,
@@ -439,6 +461,9 @@ impl PlaceResolver {
         let raw = raw_symbolic_place(tcx, fn_did, place)?;
         if let PlaceRoot::Local(local) = raw.root {
             if let Some(alias) = self.aliases.get(&local) {
+                return Some(alias.appended(&raw.fields));
+            }
+            if let Some(alias) = self.flow_aliases.get(&local) {
                 return Some(alias.appended(&raw.fields));
             }
         }
@@ -464,6 +489,108 @@ impl PlaceResolver {
     }
 }
 
+fn dataflow_flow_aliases(
+    tcx: TyCtxt<'_>,
+    fn_did: DefId,
+    graph: &DataFlowGraph,
+) -> HashMap<usize, SymbolicPlace> {
+    let body = tcx.optimized_mir(fn_did);
+    let n_locals = body.local_decls.len();
+    let mut aliases = HashMap::new();
+
+    for local_idx in 0..n_locals {
+        if !matches!(
+            place_root_for_local(tcx, fn_did, local_idx),
+            PlaceRoot::Local(_)
+        ) {
+            continue;
+        }
+
+        let local = Local::from_usize(local_idx);
+        let mut visited = BTreeSet::new();
+        if let Some(origin) = dataflow_origin_for_local(
+            tcx,
+            fn_did,
+            graph,
+            n_locals,
+            local,
+            Vec::new(),
+            &mut visited,
+        ) {
+            if !matches!(origin.root, PlaceRoot::Local(_)) || !origin.fields.is_empty() {
+                aliases.insert(local_idx, origin);
+            }
+        }
+    }
+
+    aliases
+}
+
+fn dataflow_origin_for_local(
+    tcx: TyCtxt<'_>,
+    fn_did: DefId,
+    graph: &DataFlowGraph,
+    n_locals: usize,
+    local: Local,
+    suffix_fields: Vec<usize>,
+    visited: &mut BTreeSet<(usize, Vec<usize>)>,
+) -> Option<SymbolicPlace> {
+    if local.as_usize() >= graph.nodes.len() {
+        return None;
+    }
+    if !visited.insert((local.as_usize(), suffix_fields.clone())) {
+        return None;
+    }
+
+    let mut candidates = Vec::new();
+    for edge_idx in graph.nodes[local].in_edges.iter().copied() {
+        let edge = &graph.edges[edge_idx];
+        let mut next_suffix = suffix_fields.clone();
+        if let EdgeOp::Field(raw_field) = &edge.op {
+            let Some(field_idx) = parse_dataflow_field_index(raw_field) else {
+                continue;
+            };
+            next_suffix.insert(0, field_idx);
+        }
+
+        if let Some(origin) =
+            dataflow_origin_for_local(tcx, fn_did, graph, n_locals, edge.src, next_suffix, visited)
+        {
+            candidates.push(origin);
+        }
+    }
+
+    if local.as_usize() < n_locals {
+        let root = place_root_for_local(tcx, fn_did, local.as_usize());
+        if !matches!(root, PlaceRoot::Local(_)) || !suffix_fields.is_empty() {
+            candidates.push(SymbolicPlace {
+                root,
+                fields: suffix_fields,
+            });
+        }
+    }
+
+    candidates.into_iter().max_by_key(symbolic_origin_score)
+}
+
+fn parse_dataflow_field_index(raw_field: &str) -> Option<usize> {
+    let digits = raw_field
+        .chars()
+        .filter(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse().ok()
+}
+
+fn symbolic_origin_score(place: &SymbolicPlace) -> (usize, usize) {
+    let root_score = match place.root {
+        PlaceRoot::Receiver => 4,
+        PlaceRoot::Param(_) => 3,
+        PlaceRoot::Return => 2,
+        PlaceRoot::Local(_) => 1,
+    };
+    (root_score, place.fields.len())
+}
+
 #[derive(Clone)]
 pub struct ContractGuide<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -478,11 +605,12 @@ pub struct ContractGuide<'tcx> {
 
 impl<'tcx> ContractGuide<'tcx> {
     pub fn analyze(tcx: TyCtxt<'tcx>) -> Self {
+        let dataflow_graphs = build_dataflow_graphs(tcx);
         let contract_db = match SafetyContractDb::load_default() {
             Ok(db) => {
-                let instances = collect_lifted_preconditions(tcx, &db);
-                let effects = collect_effects(tcx);
-                let (pairs, direct_hints) = build_conflicts(&instances, &effects);
+                let instances = collect_lifted_preconditions(tcx, &db, &dataflow_graphs);
+                let effects = collect_effects(tcx, &dataflow_graphs);
+                let (pairs, direct_hints) = build_conflicts(tcx, &instances, &effects);
                 let public_field_targets = collect_public_field_targets(tcx, &instances);
                 return Self {
                     tcx,
@@ -498,9 +626,9 @@ impl<'tcx> ContractGuide<'tcx> {
             Err(_) => SafetyContractDb::default(),
         };
 
-        let instances = collect_lifted_preconditions(tcx, &contract_db);
-        let effects = collect_effects(tcx);
-        let (pairs, direct_hints) = build_conflicts(&instances, &effects);
+        let instances = collect_lifted_preconditions(tcx, &contract_db, &dataflow_graphs);
+        let effects = collect_effects(tcx, &dataflow_graphs);
+        let (pairs, direct_hints) = build_conflicts(tcx, &instances, &effects);
         let public_field_targets = collect_public_field_targets(tcx, &instances);
         Self {
             tcx,
@@ -542,7 +670,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 symbolic_args: instance
                     .symbolic_args
                     .iter()
-                    .map(SymbolicPlace::pretty)
+                    .map(|place| symbolic_place_display(tcx, instance.adt_def, place))
                     .collect(),
                 usage: instance.usage.name().to_owned(),
                 numeric_template: instance.numeric_kind.map(|kind| kind.name().to_owned()),
@@ -589,7 +717,8 @@ impl<'tcx> ContractGuide<'tcx> {
             );
 
             for (arg_idx, place) in instance.symbolic_args.iter().enumerate() {
-                let place_id = insert_state_field_path(&mut nodes, &mut edges, place);
+                let place_id =
+                    insert_state_field_path(tcx, &mut nodes, &mut edges, place, instance.adt_def);
                 edges.push(ccag_edge(
                     sink_id.clone(),
                     place_id.clone(),
@@ -609,7 +738,13 @@ impl<'tcx> ContractGuide<'tcx> {
                 .sensitive_place()
                 .cloned()
                 .unwrap_or_else(|| implicit_contract_place(contract_id));
-            let primary_place_id = insert_state_field_path(&mut nodes, &mut edges, &primary_place);
+            let primary_place_id = insert_state_field_path(
+                tcx,
+                &mut nodes,
+                &mut edges,
+                &primary_place,
+                instance.adt_def,
+            );
             edges.push(ccag_edge(
                 primary_place_id,
                 sink_id,
@@ -631,13 +766,63 @@ impl<'tcx> ContractGuide<'tcx> {
                         "binding_role",
                         instance.binding_role.clone().unwrap_or_default(),
                     ),
-                    ("roles", instance.args_pretty()),
+                    ("roles", instance.args_display(tcx)),
                     (
                         "generic_preference",
                         format!("{:?}", generic_preference_for_instance(instance)),
                     ),
                 ]),
             ));
+        }
+
+        for effect in &self.effects {
+            let action_id = action_api_node_id(effect.fn_did);
+            insert_ccag_node(
+                &mut nodes,
+                action_id.clone(),
+                "action",
+                tcx.def_path_str(effect.fn_did),
+                attrs(&[
+                    ("action_kind", "public_api".to_owned()),
+                    ("def_id", def_id_str(effect.fn_did)),
+                    ("effect", effect.kind.name().to_owned()),
+                    ("confidence", effect.confidence.name().to_owned()),
+                ]),
+            );
+
+            let output = effect.kind.primary_place();
+            let output_id =
+                insert_state_field_path(tcx, &mut nodes, &mut edges, output, effect.adt_def);
+            edges.push(ccag_edge(
+                action_id.clone(),
+                output_id,
+                "mutates",
+                effect.kind.name(),
+                attrs(&[
+                    ("source", "method".to_owned()),
+                    ("confidence", effect.confidence.name().to_owned()),
+                ]),
+            ));
+
+            for input in effect
+                .kind
+                .input_places()
+                .iter()
+                .filter(|place| place.is_receiver_field())
+            {
+                let input_id =
+                    insert_state_field_path(tcx, &mut nodes, &mut edges, input, effect.adt_def);
+                edges.push(ccag_edge(
+                    action_id.clone(),
+                    input_id,
+                    "uses",
+                    "uses field",
+                    attrs(&[
+                        ("source", "method_effect_input".to_owned()),
+                        ("confidence", effect.confidence.name().to_owned()),
+                    ]),
+                ));
+            }
         }
 
         for pair in &self.pairs {
@@ -654,7 +839,13 @@ impl<'tcx> ContractGuide<'tcx> {
                     ("confidence", pair.effect_confidence.to_owned()),
                 ]),
             );
-            let place_id = insert_state_field_path(&mut nodes, &mut edges, &pair.place);
+            let pair_adt_def = self
+                .instances
+                .get(pair.contract_id)
+                .and_then(|instance| instance.adt_def)
+                .or_else(|| get_adt_def_id_by_adt_method(tcx, pair.producer_fn));
+            let place_id =
+                insert_state_field_path(tcx, &mut nodes, &mut edges, &pair.place, pair_adt_def);
             edges.push(ccag_edge(
                 producer_id,
                 place_id,
@@ -725,7 +916,13 @@ impl<'tcx> ContractGuide<'tcx> {
                     ("reason", target.reason.clone()),
                 ]),
             );
-            let place_id = insert_state_field_path(&mut nodes, &mut edges, &target.place);
+            let place_id = insert_state_field_path(
+                tcx,
+                &mut nodes,
+                &mut edges,
+                &target.place,
+                Some(target.adt_def),
+            );
             edges.push(ccag_edge(
                 mutator_id.clone(),
                 place_id.clone(),
@@ -804,7 +1001,8 @@ impl<'tcx> ContractGuide<'tcx> {
                 .sensitive_place()
                 .cloned()
                 .unwrap_or_else(|| implicit_contract_place(direct.contract_id));
-            let place_id = insert_state_field_path(&mut nodes, &mut edges, &place);
+            let place_id =
+                insert_state_field_path(tcx, &mut nodes, &mut edges, &place, instance.adt_def);
             edges.push(ccag_edge(
                 recipe_id,
                 place_id,
@@ -1407,7 +1605,7 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
                     instance.std_fn_name,
                     instance.std_fn,
                     instance.sp,
-                    instance.args_pretty(),
+                    instance.args_display(tcx),
                     instance.usage.name(),
                     instance
                         .numeric_kind
@@ -1425,7 +1623,7 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
                     "  {}: {} on {}\n",
                     tcx.def_path_str(effect.fn_did),
                     effect.kind.name(),
-                    effect.kind.primary_place().pretty()
+                    symbolic_place_display(tcx, effect.adt_def, effect.kind.primary_place())
                 ));
             }
         }
@@ -1433,11 +1631,16 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
         if !self.pairs.is_empty() {
             s.push_str("pairs:\n");
             for pair in self.pairs.iter().take(96) {
+                let pair_adt_def = self
+                    .instances
+                    .get(pair.contract_id)
+                    .and_then(|instance| instance.adt_def)
+                    .or_else(|| get_adt_def_id_by_adt_method(tcx, pair.producer_fn));
                 s.push_str(&format!(
                     "  {} -> {} on {} via {} violates {} ({})\n",
                     tcx.def_path_str(pair.producer_fn),
                     tcx.def_path_str(pair.sink_fn),
-                    pair.place.pretty(),
+                    symbolic_place_display(tcx, pair_adt_def, &pair.place),
                     pair.effect_kind,
                     pair.sp,
                     pair.reason
@@ -1543,24 +1746,53 @@ fn field_root_name(root: PlaceRoot) -> String {
     }
 }
 
+fn symbolic_place_display(
+    tcx: TyCtxt<'_>,
+    receiver_adt_def: Option<DefId>,
+    place: &SymbolicPlace,
+) -> String {
+    let root = field_root_name(place.root);
+    if place.fields.is_empty() {
+        return root;
+    }
+
+    if matches!(place.root, PlaceRoot::Receiver) {
+        if let Some(adt_def) = receiver_adt_def {
+            if let Some(path) = field_path_name(tcx, adt_def, &place.fields) {
+                return format!("{root}.{path}");
+            }
+        }
+    }
+
+    format!(
+        "{}.{}",
+        root,
+        place.fields.iter().map(|field| field.to_string()).join(".")
+    )
+}
+
 fn insert_state_field_path(
+    tcx: TyCtxt<'_>,
     nodes: &mut BTreeMap<String, CcagNodeRecord>,
     edges: &mut Vec<CcagEdgeRecord>,
     place: &SymbolicPlace,
+    receiver_adt_def: Option<DefId>,
 ) -> String {
     let mut current = SymbolicPlace {
         root: place.root,
         fields: Vec::new(),
     };
     let root_id = place_node_id(&current);
+    let root_label = symbolic_place_display(tcx, receiver_adt_def, &current);
     insert_ccag_node(
         nodes,
         root_id.clone(),
         "state_field",
-        current.pretty(),
+        root_label.clone(),
         attrs(&[
             ("root", field_root_name(current.root)),
             ("field_path", "[]".to_owned()),
+            ("display", root_label),
         ]),
     );
 
@@ -1568,14 +1800,16 @@ fn insert_state_field_path(
     for field in &place.fields {
         current.fields.push(*field);
         let current_id = place_node_id(&current);
+        let current_label = symbolic_place_display(tcx, receiver_adt_def, &current);
         insert_ccag_node(
             nodes,
             current_id.clone(),
             "state_field",
-            current.pretty(),
+            current_label.clone(),
             attrs(&[
                 ("root", field_root_name(current.root)),
                 ("field_path", format!("{:?}", current.fields)),
+                ("display", current_label),
             ]),
         );
         edges.push(ccag_edge(
@@ -1624,6 +1858,32 @@ fn normalize_ref_var(mut var: Var, ref_source: &HashMap<Var, Var>) -> Var {
         var = source;
     }
     var
+}
+
+fn field_path_name(tcx: TyCtxt<'_>, root_adt_def: DefId, field_path: &[usize]) -> Option<String> {
+    let mut adt_def = tcx.adt_def(root_adt_def);
+    let mut args = ty::GenericArgs::identity_for_item(tcx, root_adt_def);
+    let mut names = Vec::new();
+
+    for (idx, field_index) in field_path.iter().copied().enumerate() {
+        if !adt_def.is_struct() {
+            return None;
+        }
+        let field = adt_def.non_enum_variant().fields.iter().nth(field_index)?;
+        names.push(field.name.to_string());
+        if idx + 1 == field_path.len() {
+            break;
+        }
+
+        let field_ty = field.ty(tcx, args);
+        let TyKind::Adt(next_adt, next_args) = field_ty.kind() else {
+            return None;
+        };
+        adt_def = *next_adt;
+        args = *next_args;
+    }
+
+    Some(names.join("."))
 }
 
 fn public_field_path_name(
@@ -1914,9 +2174,24 @@ fn contract_edge_id(tcx: TyCtxt<'_>, id: usize, instance: &ContractInstance) -> 
     )
 }
 
+fn build_dataflow_graphs(tcx: TyCtxt<'_>) -> DataFlowGraphMap {
+    let mut analyzer = DataFlowAnalyzer::new(tcx, false);
+    for local_def_id in tcx.hir_body_owners() {
+        if !matches!(tcx.hir_body_owner_kind(local_def_id), BodyOwnerKind::Fn) {
+            continue;
+        }
+        let def_id = local_def_id.to_def_id();
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            analyzer.build_graph(def_id);
+        }));
+    }
+    analyzer.get_all_dataflow()
+}
+
 fn collect_lifted_preconditions<'tcx>(
     tcx: TyCtxt<'tcx>,
     contract_db: &SafetyContractDb,
+    dataflow_graphs: &DataFlowGraphMap,
 ) -> Vec<ContractInstance> {
     let contract_bindings = load_std_contract_bindings();
     let mut instances = Vec::new();
@@ -1931,7 +2206,7 @@ fn collect_lifted_preconditions<'tcx>(
         }
         let adt_def = get_adt_def_id_by_adt_method(tcx, fn_did);
         let body = tcx.optimized_mir(fn_did);
-        let mut resolver = PlaceResolver::default();
+        let mut resolver = PlaceResolver::for_fn(tcx, fn_did, Some(dataflow_graphs));
         for block in body.basic_blocks.iter() {
             for stmt in block.statements.iter() {
                 collect_alias_from_statement(tcx, fn_did, &mut resolver, &stmt.kind);
@@ -2073,7 +2348,10 @@ fn resolve_all_symbolic_args<'tcx>(
         .collect()
 }
 
-fn collect_effects<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<ContractEffect> {
+fn collect_effects<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    dataflow_graphs: &DataFlowGraphMap,
+) -> Vec<ContractEffect> {
     let mut effects = Vec::new();
     for local_def_id in tcx.hir_body_owners() {
         if !matches!(tcx.hir_body_owner_kind(local_def_id), BodyOwnerKind::Fn) {
@@ -2084,9 +2362,9 @@ fn collect_effects<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<ContractEffect> {
             continue;
         }
         let adt_def = get_adt_def_id_by_adt_method(tcx, fn_did);
-        collect_constructor_effect(tcx, fn_did, &mut effects);
+        collect_constructor_effect(tcx, fn_did, dataflow_graphs, &mut effects);
         let body = tcx.optimized_mir(fn_did);
-        let mut resolver = PlaceResolver::default();
+        let mut resolver = PlaceResolver::for_fn(tcx, fn_did, Some(dataflow_graphs));
         for block in body.basic_blocks.iter() {
             for stmt in block.statements.iter() {
                 collect_alias_from_statement(tcx, fn_did, &mut resolver, &stmt.kind);
@@ -2125,6 +2403,7 @@ fn collect_effects<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<ContractEffect> {
 fn collect_constructor_effect<'tcx>(
     tcx: TyCtxt<'tcx>,
     fn_did: DefId,
+    dataflow_graphs: &DataFlowGraphMap,
     effects: &mut Vec<ContractEffect>,
 ) {
     let sig = tcx.fn_sig(fn_did).skip_binder();
@@ -2150,7 +2429,7 @@ fn collect_constructor_effect<'tcx>(
     });
 
     let body = tcx.optimized_mir(fn_did);
-    let mut resolver = PlaceResolver::default();
+    let mut resolver = PlaceResolver::for_fn(tcx, fn_did, Some(dataflow_graphs));
     for block in body.basic_blocks.iter() {
         for stmt in block.statements.iter() {
             collect_alias_from_statement(tcx, fn_did, &mut resolver, &stmt.kind);
@@ -2194,10 +2473,15 @@ fn collect_assignment_effect<'tcx>(
         return;
     }
     let value = effect_value_from_rvalue(tcx, fn_did, rvalue, resolver);
+    let inputs = symbolic_places_from_rvalue(tcx, fn_did, rvalue, resolver);
     effects.push(ContractEffect {
         fn_did,
         adt_def,
-        kind: EffectKind::WriteField { field, value },
+        kind: EffectKind::WriteField {
+            field,
+            value,
+            inputs,
+        },
         confidence: EffectConfidence::Exact,
     });
 }
@@ -2259,6 +2543,7 @@ fn is_free_allocation_call(callee_name: &str) -> bool {
 }
 
 fn build_conflicts(
+    tcx: TyCtxt<'_>,
     instances: &[ContractInstance],
     effects: &[ContractEffect],
 ) -> (Vec<ConflictPair>, Vec<DirectSinkHint>) {
@@ -2304,15 +2589,20 @@ fn build_conflicts(
                 EffectKind::ConstructAdt { inputs, .. } if !inputs.is_empty() => {
                     format!(
                         " from {}",
-                        inputs.iter().map(SymbolicPlace::pretty).join(", ")
+                        inputs
+                            .iter()
+                            .map(|place| symbolic_place_display(tcx, effect.adt_def, place))
+                            .join(", ")
                     )
                 }
                 _ => String::new(),
             };
+            let place_display =
+                symbolic_place_display(tcx, effect.adt_def.or(instance.adt_def), &place);
             let reason = format!(
                 "{} on {} can break {} required by {}",
                 effect.kind.name(),
-                format!("{}{}", place.pretty(), flow_note),
+                format!("{place_display}{flow_note}"),
                 instance.sp,
                 instance.std_fn_name
             );
@@ -2577,12 +2867,26 @@ fn symbolic_places_from_rvalue<'tcx>(
 
 fn raw_symbolic_place(tcx: TyCtxt<'_>, fn_did: DefId, place: &Place<'_>) -> Option<SymbolicPlace> {
     let local_idx = place.local.as_usize();
+    let root = place_root_for_local(tcx, fn_did, local_idx);
+
+    let mut fields = Vec::new();
+    for proj in place.projection.iter() {
+        match proj {
+            ProjectionElem::Deref => {}
+            ProjectionElem::Field(field, _) => fields.push(field.index()),
+            _ => return None,
+        }
+    }
+    Some(SymbolicPlace { root, fields })
+}
+
+fn place_root_for_local(tcx: TyCtxt<'_>, fn_did: DefId, local_idx: usize) -> PlaceRoot {
     let has_self = tcx
         .opt_associated_item(fn_did)
         .map(|item| matches!(item.kind, ty::AssocKind::Fn { has_self: true, .. }))
         .unwrap_or(false);
 
-    let root = if local_idx == 0 {
+    if local_idx == 0 {
         PlaceRoot::Return
     } else if has_self && local_idx == 1 {
         PlaceRoot::Receiver
@@ -2598,17 +2902,7 @@ fn raw_symbolic_place(tcx: TyCtxt<'_>, fn_did: DefId, place: &Place<'_>) -> Opti
         PlaceRoot::Param(local_idx - 1)
     } else {
         PlaceRoot::Local(local_idx)
-    };
-
-    let mut fields = Vec::new();
-    for proj in place.projection.iter() {
-        match proj {
-            ProjectionElem::Deref => {}
-            ProjectionElem::Field(field, _) => fields.push(field.index()),
-            _ => return None,
-        }
     }
-    Some(SymbolicPlace { root, fields })
 }
 
 fn effect_value_from_rvalue<'tcx>(
