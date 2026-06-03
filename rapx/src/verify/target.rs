@@ -13,8 +13,8 @@ use std::collections::{HashMap, HashSet};
 use syn::Expr;
 
 use super::{
-    assets_parser::*,
-    attr_parser::parse_rapx_attr,
+    attribute::assets_parser::*,
+    attribute::attr_parser::parse_rapx_attr,
     contract::Property,
     helpers::{Callsite, collect_unsafe_callsites},
     path::{PathExtractor, PathStart},
