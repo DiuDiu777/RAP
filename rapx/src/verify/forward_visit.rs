@@ -20,6 +20,7 @@ use rustc_middle::{
 
 use super::{
     backward_visit::{BackwardItem, ForgetReason, KeepReason, PlaceKey, RelevantMirItems},
+    call_summary::{self, CallEffect, CallEffectSummary},
     contract::Property,
     helpers::CallsiteLocation,
     path::{Path, PathStep},
@@ -137,26 +138,43 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     .iter()
                     .map(|arg| value_from_operand(&arg.node))
                     .collect();
+                let effect_summary = call_summary::effect_summary(
+                    self.tcx,
+                    result.callsite.caller,
+                    func,
+                    destination.local,
+                );
                 let call = CallSummary {
                     destination: destination.local,
-                    func: format!("{func:?}"),
+                    func: call_summary::call_name(self.tcx, func),
                     arg_count: args.len(),
                     args: arg_values,
+                    effects: effect_summary.effects.clone(),
+                    unsupported: effect_summary.unsupported,
                 };
                 result
                     .values
                     .insert(destination.local, AbstractValue::CallResult(call.clone()));
                 result.facts.push(StateFact::Call(call));
+                self.apply_call_effects(&effect_summary, args, result);
             }
             TerminatorKind::SwitchInt { discr, .. } => {
-                result
-                    .facts
-                    .push(StateFact::PathCondition(format!("{discr:?}")));
+                if let Some(equals) = chosen_switch_value(&result.path, block, terminator) {
+                    result.facts.push(StateFact::BranchEq {
+                        value: value_from_operand(discr),
+                        equals,
+                    });
+                } else {
+                    result
+                        .facts
+                        .push(StateFact::PathCondition(format!("{discr:?}")));
+                }
             }
-            TerminatorKind::Assert { cond, .. } => {
-                result
-                    .facts
-                    .push(StateFact::PathCondition(format!("assert({cond:?})")));
+            TerminatorKind::Assert { cond, expected, .. } => {
+                result.facts.push(StateFact::BranchEq {
+                    value: value_from_operand(cond),
+                    equals: u128::from(*expected),
+                });
             }
             TerminatorKind::Drop { place, .. } => {
                 result
@@ -245,6 +263,61 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 });
             }
             _ => {}
+        }
+    }
+
+    /// Apply a summarized call effect to the path-local abstract state.
+    fn apply_call_effects(
+        &self,
+        summary: &CallEffectSummary,
+        args: &[rustc_span::source_map::Spanned<Operand<'tcx>>],
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        result.facts.push(StateFact::CallEffect(summary.clone()));
+        let Some(destination) = summary.destination else {
+            return;
+        };
+        let destination_place = PlaceKey {
+            base: super::backward_visit::PlaceBaseKey::Local(destination.as_usize()),
+            fields: Vec::new(),
+        };
+
+        for effect in &summary.effects {
+            match effect {
+                CallEffect::ReturnAliasArg { arg } | CallEffect::ReturnPointerFromArg { arg } => {
+                    if let Some(source) = args.get(*arg).and_then(|arg| operand_place(&arg.node)) {
+                        result.facts.push(StateFact::PointsTo {
+                            pointer: destination_place.clone(),
+                            source,
+                        });
+                    }
+                }
+                CallEffect::ReturnPointerAdd { .. } => {}
+                CallEffect::ReturnNonZero => result.facts.push(StateFact::KnownNonZero {
+                    place: destination_place.clone(),
+                    reason: format!("returned by {}", summary.name),
+                }),
+                CallEffect::ReturnAligned { align, ty_name } => {
+                    result.facts.push(StateFact::KnownAligned {
+                        place: destination_place.clone(),
+                        align: *align,
+                        ty_name: ty_name.clone(),
+                        reason: format!("returned by {}", summary.name),
+                    });
+                }
+                CallEffect::ReadMemory { .. } => {}
+                CallEffect::ReturnLengthOfArg { .. } => {}
+                CallEffect::ForgetArgFacts { reason, .. } => {
+                    result.forgets.push(reason.clone());
+                }
+            }
+        }
+
+        if summary.unsupported {
+            result.forgets.push(ForgetReason::UnknownCall);
+            result
+                .notes
+                .push(format!("unsupported call effect: {}", summary.name));
         }
     }
 }
@@ -337,6 +410,7 @@ pub enum AbstractValue<'tcx> {
     Ref(PlaceKey),
     RawPtr(PlaceKey),
     ThreadLocal(String),
+    ConstInt(u128),
     Const(String),
     Repeat(Box<AbstractValue<'tcx>>),
     Cast(Box<AbstractValue<'tcx>>, Ty<'tcx>),
@@ -368,10 +442,25 @@ pub enum StateFact<'tcx> {
         lhs: AbstractValue<'tcx>,
         rhs: AbstractValue<'tcx>,
     },
+    BranchEq {
+        value: AbstractValue<'tcx>,
+        equals: u128,
+    },
     PathCondition(String),
     Drop(PlaceKey),
     LocalDead(Local),
     Call(CallSummary<'tcx>),
+    CallEffect(CallEffectSummary),
+    KnownNonZero {
+        place: PlaceKey,
+        reason: String,
+    },
+    KnownAligned {
+        place: PlaceKey,
+        align: u64,
+        ty_name: String,
+        reason: String,
+    },
 }
 
 /// Summary for a retained call terminator.
@@ -381,6 +470,8 @@ pub struct CallSummary<'tcx> {
     pub func: String,
     pub arg_count: usize,
     pub args: Vec<AbstractValue<'tcx>>,
+    pub effects: Vec<CallEffect>,
+    pub unsupported: bool,
 }
 
 /// Computes representative concrete types for generic parameters.
@@ -503,8 +594,105 @@ fn value_from_operand<'tcx>(operand: &Operand<'tcx>) -> AbstractValue<'tcx> {
         Operand::Copy(place) | Operand::Move(place) => {
             AbstractValue::Place(PlaceKey::from_mir_place(place))
         }
-        Operand::Constant(constant) => AbstractValue::Const(format!("{:?}", constant.const_)),
+        Operand::Constant(constant) => {
+            let text = format!("{:?}", constant.const_);
+            const_int_from_debug(&text)
+                .map(AbstractValue::ConstInt)
+                .unwrap_or(AbstractValue::Const(text))
+        }
     }
+}
+
+/// Convert an operand into a place key when it names a MIR place.
+fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => Some(PlaceKey::from_mir_place(place)),
+        Operand::Constant(_) => None,
+    }
+}
+
+/// Extract a small integer constant from rustc's debug representation.
+fn const_int_from_debug(text: &str) -> Option<u128> {
+    let text = text.trim();
+    if text == "const true" {
+        return Some(1);
+    }
+    if text == "const false" {
+        return Some(0);
+    }
+    if let Some(rest) = text.strip_prefix("const ") {
+        let digits = rest
+            .chars()
+            .take_while(|ch| ch.is_ascii_digit())
+            .collect::<String>();
+        if digits.is_empty() {
+            return None;
+        }
+        return digits.parse().ok();
+    }
+
+    let scalar = text.strip_prefix("Val(Scalar(0x")?;
+    let digits = scalar
+        .chars()
+        .take_while(|ch| ch.is_ascii_hexdigit())
+        .collect::<String>();
+    if digits.is_empty() {
+        None
+    } else {
+        u128::from_str_radix(&digits, 16).ok()
+    }
+}
+
+/// Return the concrete SwitchInt value that selects the next path block.
+fn chosen_switch_value(
+    path: &Path,
+    block: BasicBlock,
+    terminator: &Terminator<'_>,
+) -> Option<u128> {
+    let TerminatorKind::SwitchInt { targets, .. } = &terminator.kind else {
+        return None;
+    };
+    let chosen = chosen_successor(path, block)?;
+    let mut explicit_values = Vec::new();
+    for (value, target) in targets.iter() {
+        explicit_values.push(value);
+        if target == chosen {
+            return Some(value);
+        }
+    }
+
+    if targets.otherwise() == chosen && explicit_values.len() == 1 {
+        return match explicit_values[0] {
+            0 => Some(1),
+            1 => Some(0),
+            _ => None,
+        };
+    }
+
+    None
+}
+
+/// Return the next MIR block after `block` in a finite verification path.
+fn chosen_successor(path: &Path, block: BasicBlock) -> Option<BasicBlock> {
+    let mut previous = None;
+    for step in path.entry_prefix.iter().chain(path.steps.iter()) {
+        match step {
+            PathStep::Block(current) => {
+                if previous == Some(block) {
+                    return Some(*current);
+                }
+                previous = Some(*current);
+            }
+            PathStep::SccExit { to, .. } => {
+                if previous == Some(block) {
+                    return Some(*to);
+                }
+                previous = Some(*to);
+            }
+            PathStep::Callsite(_) => return None,
+        }
+    }
+    None
 }
 
 /// Return a compact aggregate kind name.
