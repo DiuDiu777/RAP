@@ -130,9 +130,9 @@ fn record_member_nodes<'tcx>(
                     .exits
                     .insert(SccExit::new(node, next));
             }
-            // Any edge back to the root is tracked as a back edge source.
-            if next == root {
-                graph.block_mut(root).scc.backnodes.insert(node);
+            // Any edge back to the root is tracked as a back edge.
+            if next == root && !graph.block(root).scc.backedges.contains(&(node, root)) {
+                graph.block_mut(root).scc.backedges.push((node, root));
             }
         }
     }
@@ -142,7 +142,7 @@ fn record_member_nodes<'tcx>(
 ///
 /// Isolates the SCC rooted at `root` by:
 /// 1. Redirecting block 0 to point only to `root`.
-/// 2. Removing back edges from backnodes to `root`.
+/// 2. Removing back edges to `root`.
 /// 3. Cutting all outgoing edges from SCC exit targets.
 ///
 /// After re-running SCC discovery, all edges are restored.
@@ -152,7 +152,7 @@ fn rerun_scc_in_isolation<'tcx>(
     scc_components: &[usize],
 ) {
     let scc_exits = graph.block(root).scc.exits.clone();
-    let backnodes = graph.block(root).scc.backnodes.clone();
+    let backedges = graph.block(root).scc.backedges.clone();
     let mut backups: Vec<(usize, FxHashSet<usize>)> = Vec::new();
 
     // Temporarily redirect entry block 0 to this SCC root only.
@@ -162,13 +162,14 @@ fn rerun_scc_in_isolation<'tcx>(
     block0.next.clear();
     block0.next.insert(root);
 
-    // Temporarily remove back edges from SCC backnodes to the root.
-    for &node in &scc_components[1..] {
-        if backnodes.contains(&node) {
-            let block = graph.block_mut(node);
-            backups.push((node, block.next.clone()));
-            block.next.remove(&root);
+    // Temporarily remove back edges to the root.
+    for &(node, target) in &backedges {
+        if target != root {
+            continue;
         }
+        let block = graph.block_mut(node);
+        backups.push((node, block.next.clone()));
+        block.next.remove(&root);
     }
 
     // Temporarily cut all outgoing edges from SCC exit targets.
