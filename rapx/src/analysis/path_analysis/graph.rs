@@ -4,8 +4,11 @@ use crate::graphs::{
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::{
-    mir::{BasicBlock, Rvalue, StatementKind, Terminator, TerminatorKind, UnwindAction},
-    ty::TyCtxt,
+    mir::{
+        BasicBlock, Local, Operand, Rvalue, StatementKind, SwitchTargets, Terminator,
+        TerminatorKind, UnwindAction,
+    },
+    ty::{TyCtxt, TyKind, TypingEnv},
 };
 use rustc_span::def_id::DefId;
 use std::cell::RefCell;
@@ -140,7 +143,11 @@ impl SccPathTraversalState {
         next_state
     }
 
-    pub fn with_spliced_path(&self, spliced_path: Vec<usize>, skip_child_enter: Option<usize>) -> Self {
+    pub fn with_spliced_path(
+        &self,
+        spliced_path: Vec<usize>,
+        skip_child_enter: Option<usize>,
+    ) -> Self {
         let mut visited_since_enter = self.visited_since_enter.clone();
         for node in &spliced_path {
             visited_since_enter.insert(*node);
@@ -297,7 +304,8 @@ fn enumerate_scc_paths_inner<C>(
         return;
     }
 
-    if state.exceeds_complexity_limits(config.max_path_len, config.max_seen_paths, seen_paths.len()) {
+    if state.exceeds_complexity_limits(config.max_path_len, config.max_seen_paths, seen_paths.len())
+    {
         return;
     }
 
@@ -344,7 +352,9 @@ fn enumerate_scc_paths_inner<C>(
 
             let mut new_path = state.path.clone();
             new_path.extend(&sub_path.blocks[1..]);
-            let new_cur = *new_path.last().expect("spliced child path must be non-empty");
+            let new_cur = *new_path
+                .last()
+                .expect("spliced child path must be non-empty");
             let next_skip_child_enter = if new_cur == child_enter {
                 Some(child_enter)
             } else {
@@ -598,6 +608,197 @@ impl<'tcx> PathGraph<'tcx> {
         all_paths
     }
 
+    /// Verify whether a given path (sequence of block indices) is reachable.
+    ///
+    /// The path can contain arbitrary loops. The verification uses
+    /// discriminant/constant-based filtering: it tracks concrete values for
+    /// enum discriminants across `SwitchInt` branches, invalidates them when
+    /// the corresponding local is reassigned, and rejects transitions that
+    /// contradict known constraints.
+    ///
+    /// Returns `false` if the path is empty, does not start at block `0`,
+    /// or contains a transition that is provably unreachable.
+    pub fn is_path_reachable(&self, path: &[usize]) -> bool {
+        if path.is_empty() {
+            return false;
+        }
+        // Every function entry is block 0.
+        if path[0] != 0 {
+            return false;
+        }
+        if path.len() == 1 {
+            return true;
+        }
+
+        // constraints: local → concrete discriminant value
+        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
+
+        for i in 0..path.len() - 1 {
+            let cur = path[i];
+            let next = path[i + 1];
+
+            if cur >= self.cfg.blocks.len() || next >= self.cfg.blocks.len() {
+                return false;
+            }
+
+            // Invalidate constraints for locals assigned in the current block.
+            if let Some(assigned) = self.assigned_locals.get(cur) {
+                for local in assigned {
+                    constraints.remove(local);
+                }
+            }
+
+            let successors = &self.cfg.block(cur).next;
+
+            // Fast path: if next is not even a CFG successor, it's impossible.
+            if !successors.contains(&next) {
+                // Cleanup blocks can be special; if this is a call/drop terminator,
+                // also check unwind targets that may not be in `next` of the cfg block.
+                if !self.is_unwind_target(cur, next) {
+                    return false;
+                }
+            }
+
+            // Handle SwitchInt with constraint tracking.
+            if !self.check_switch_transition(cur, next, &mut constraints) {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// Check whether `cur → next` is a valid `SwitchInt` transition given
+    /// current discriminant constraints. Returns `false` when the transition
+    /// contradicts a known discriminant value. Also records newly learned
+    /// constraints from the taken branch into `constraints`.
+    fn check_switch_transition(
+        &self,
+        cur: usize,
+        next: usize,
+        constraints: &mut FxHashMap<usize, usize>,
+    ) -> bool {
+        let Some(terminator) = self.cfg.terminator(cur) else {
+            return true;
+        };
+
+        match &terminator.kind {
+            TerminatorKind::SwitchInt { discr, targets } => {
+                let discr_local = discr.place().map(|p| p.local.as_usize());
+                let constraint_local = discr_local
+                    .and_then(|l| self.discriminants.get(&l).copied())
+                    .or(discr_local);
+
+                // Collect all possible successor blocks for this switch.
+                let all_targets: FxHashSet<usize> = targets
+                    .iter()
+                    .map(|(_, bb)| bb.as_usize())
+                    .chain(std::iter::once(targets.otherwise().as_usize()))
+                    .collect();
+
+                if !all_targets.contains(&next) {
+                    return false;
+                }
+
+                // Try to evaluate a concrete constant for the discriminant.
+                let const_val = match discr {
+                    Operand::Constant(c) => c
+                        .const_
+                        .try_eval_target_usize(
+                            self.cfg.tcx,
+                            TypingEnv::post_analysis(self.cfg.tcx, self.cfg.def_id),
+                        )
+                        .map(|v| v as usize),
+                    _ => None,
+                };
+
+                if let Some(val) = const_val {
+                    // Discriminant is a literal constant — only one target is
+                    // reachable.
+                    let expected = resolve_switch_target(targets, val as u128);
+                    if next != expected {
+                        return false;
+                    }
+                    if let Some(local) = constraint_local {
+                        constraints.insert(local, val);
+                    }
+                    return true;
+                }
+
+                if let Some(local) = constraint_local {
+                    if let Some(&known_val) = constraints.get(&local) {
+                        let expected = resolve_switch_target(targets, known_val as u128);
+                        if next != expected {
+                            return false;
+                        }
+                        return true;
+                    }
+                }
+
+                // No prior constraint — conservatively allow any valid target
+                // and record the newly learned constraint from the taken branch.
+                if let Some(local) = constraint_local {
+                    if let Some((val, _)) = targets.iter().find(|(_, bb)| bb.as_usize() == next) {
+                        constraints.insert(local, val as usize);
+                    } else {
+                        if let Some(inferred) = self.infer_otherwise_value(targets, local) {
+                            constraints.insert(local, inferred);
+                        }
+                    }
+                }
+
+                true
+            }
+            _ => true,
+        }
+    }
+
+    /// For the "otherwise" branch of a `SwitchInt`, try to infer the single
+    /// concrete value that the discriminant must have (because all other
+    /// possible values are covered by explicit targets).
+    fn infer_otherwise_value(&self, targets: &SwitchTargets, discr_local: usize) -> Option<usize> {
+        let body = self.cfg.tcx.optimized_mir(self.cfg.def_id);
+        let discr_ty = body.local_decls[Local::from_usize(discr_local)].ty;
+
+        let possible_values: Vec<usize> = match discr_ty.kind() {
+            TyKind::Bool => vec![0, 1],
+            TyKind::Adt(adt_def, _) if adt_def.is_enum() => (0..adt_def.variants().len()).collect(),
+            _ => return None,
+        };
+
+        let explicit_values: FxHashSet<usize> = targets.iter().map(|(v, _)| v as usize).collect();
+        let remaining: Vec<usize> = possible_values
+            .into_iter()
+            .filter(|v| !explicit_values.contains(v))
+            .collect();
+
+        if remaining.len() == 1 {
+            Some(remaining[0])
+        } else {
+            None
+        }
+    }
+
+    /// Check whether `next` is an unwind target reachable from `cur` via a
+    /// call or drop terminator (may not be recorded as a normal CFG successor).
+    fn is_unwind_target(&self, cur: usize, next: usize) -> bool {
+        let Some(terminator) = self.cfg.terminator(cur) else {
+            return false;
+        };
+
+        let unwind = match &terminator.kind {
+            TerminatorKind::Call { unwind, .. }
+            | TerminatorKind::Drop { unwind, .. }
+            | TerminatorKind::Assert { unwind, .. } => unwind,
+            _ => return false,
+        };
+
+        if let UnwindAction::Cleanup(target) = unwind {
+            return target.as_usize() == next;
+        }
+        false
+    }
+
     pub fn sort_scc_tree(&mut self, scc: &SccInfo) -> SccInfo {
         self.populate_child_sccs(scc.enter);
         self.cfg.block(scc.enter).scc.clone()
@@ -649,12 +850,93 @@ impl<'tcx> PathGraph<'tcx> {
         let mut actions = vec![SccPathAction::RecordExit {
             constraints: constraints.clone(),
         }];
-        for next in self.cfg.block(state.cur).next.clone() {
-            actions.push(SccPathAction::Traverse {
-                next,
-                constraints: constraints.clone(),
-            });
+
+        let Some(terminator) = self.cfg.terminator(state.cur) else {
+            for next in self.cfg.block(state.cur).next.clone() {
+                actions.push(SccPathAction::Traverse {
+                    next,
+                    constraints: constraints.clone(),
+                });
+            }
+            return actions;
+        };
+
+        match &terminator.kind {
+            TerminatorKind::SwitchInt { discr, targets } => {
+                let discr_local = discr.place().map(|p| p.local.as_usize());
+                let constraint_local = discr_local
+                    .and_then(|l| self.discriminants.get(&l).copied())
+                    .or(discr_local);
+
+                let otherwise_val = self.unique_otherwise_value(discr, targets);
+
+                // Case 1: known constraint — follow only the matching target.
+                if let Some(local) = constraint_local {
+                    if let Some(&constant) = constraints.get(&local) {
+                        if constant == usize::MAX {
+                            actions.push(SccPathAction::Traverse {
+                                next: targets.otherwise().as_usize(),
+                                constraints: constraints.clone(),
+                            });
+                            return actions;
+                        }
+                        let target = switch_target_for_value(targets, constant as u128);
+                        actions.push(SccPathAction::Traverse {
+                            next: target,
+                            constraints: constraints.clone(),
+                        });
+                        return actions;
+                    }
+                }
+
+                // Case 2: Bool / enum type — enumerate all possible values.
+                if let Some(local) = constraint_local {
+                    if let Some(values) =
+                        possible_switch_values_for_local(self.cfg.tcx, self.cfg.def_id, local)
+                    {
+                        for val in values {
+                            let mut new_constraints = constraints.clone();
+                            new_constraints.insert(local, val);
+                            actions.push(SccPathAction::Traverse {
+                                next: switch_target_for_value(targets, val as u128),
+                                constraints: new_constraints,
+                            });
+                        }
+                        return actions;
+                    }
+                }
+
+                // Case 3: fallback — enumerate all targets with constraints.
+                for (val, bb) in targets.iter() {
+                    let mut new_constraints = constraints.clone();
+                    if let Some(local) = constraint_local {
+                        new_constraints.insert(local, val as usize);
+                    }
+                    actions.push(SccPathAction::Traverse {
+                        next: bb.as_usize(),
+                        constraints: new_constraints,
+                    });
+                }
+
+                let mut otherwise_constraints = constraints.clone();
+                if let Some(local) = constraint_local {
+                    otherwise_constraints.insert(local, otherwise_val.unwrap_or(usize::MAX));
+                }
+                actions.push(SccPathAction::Traverse {
+                    next: targets.otherwise().as_usize(),
+                    constraints: otherwise_constraints,
+                });
+            }
+            _ => {
+                for next in self.cfg.block(state.cur).next.clone() {
+                    actions.push(SccPathAction::Traverse {
+                        next,
+                        constraints: constraints.clone(),
+                    });
+                }
+            }
         }
+
         actions
     }
 
@@ -797,6 +1079,76 @@ impl<'tcx> PathGraph<'tcx> {
         for &child_enter in &self.cfg.block(enter).scc.child_sccs.clone() {
             self.populate_child_sccs(child_enter);
         }
+    }
+
+    /// Infer the single concrete value the otherwise branch must represent
+    /// (all other possible values are covered by explicit targets).
+    fn unique_otherwise_value(
+        &self,
+        discr: &Operand<'tcx>,
+        targets: &SwitchTargets,
+    ) -> Option<usize> {
+        let local_decls = &self.cfg.tcx.optimized_mir(self.cfg.def_id).local_decls;
+        let place = discr.place()?;
+        let place_ty = place.ty(local_decls, self.cfg.tcx).ty;
+
+        let possible_values: Vec<usize> = match place_ty.kind() {
+            TyKind::Bool => vec![0, 1],
+            TyKind::Adt(adt_def, _) if adt_def.is_enum() => (0..adt_def.variants().len()).collect(),
+            _ => return None,
+        };
+
+        let explicit: FxHashSet<usize> = targets.iter().map(|(v, _)| v as usize).collect();
+        let remaining: Vec<usize> = possible_values
+            .into_iter()
+            .filter(|v| !explicit.contains(v))
+            .collect();
+
+        if remaining.len() == 1 {
+            Some(remaining[0])
+        } else {
+            None
+        }
+    }
+}
+
+/// Resolve a concrete discriminant value to the corresponding `SwitchInt`
+/// successor block index.
+fn resolve_switch_target(targets: &SwitchTargets, val: u128) -> usize {
+    targets
+        .iter()
+        .find(|(v, _)| *v == val)
+        .map(|(_, bb)| bb.as_usize())
+        .unwrap_or_else(|| targets.otherwise().as_usize())
+}
+
+/// Find the target block for a specific `SwitchInt` value.
+fn switch_target_for_value(targets: &SwitchTargets, value: u128) -> usize {
+    targets
+        .iter()
+        .find(|(v, _)| *v == value)
+        .map(|(_, bb)| bb.as_usize())
+        .unwrap_or_else(|| targets.otherwise().as_usize())
+}
+
+/// Return all possible discriminant values for a local (Bool → [0,1],
+/// enum → [0..N]), or `None` for unconstrained types.
+fn possible_switch_values_for_local(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+    discr_local: usize,
+) -> Option<Vec<usize>> {
+    let local_decls = &tcx.optimized_mir(def_id).local_decls;
+    if discr_local >= local_decls.len() {
+        return None;
+    }
+    let ty = local_decls[Local::from_usize(discr_local)].ty;
+    match ty.kind() {
+        TyKind::Bool => Some(vec![0, 1]),
+        TyKind::Adt(adt_def, _) if adt_def.is_enum() => {
+            Some((0..adt_def.variants().len()).collect())
+        }
+        _ => None,
     }
 }
 

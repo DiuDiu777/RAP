@@ -1,4 +1,4 @@
-use crate::analysis::{Analysis, core::path_analysis::graph::PathGraph};
+use crate::analysis::{Analysis, path_analysis::graph::PathGraph};
 use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::{def::DefKind, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
@@ -67,6 +67,15 @@ impl<'tcx> PathAnalyzer<'tcx> {
                 let _ = self.start_path_analysis_for_defid(def_id);
             }
         }
+    }
+
+    /// Verify whether a given path is reachable for the specified function.
+    ///
+    /// The path is a sequence of MIR block indices (can include loops).
+    /// Uses discriminant/constant-based filtering to reject infeasible paths.
+    pub fn check_path_reachability(&self, def_id: DefId, path: &[usize]) -> bool {
+        let graph = PathGraph::new(self.tcx, def_id);
+        graph.is_path_reachable(path)
     }
 }
 

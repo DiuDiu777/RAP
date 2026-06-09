@@ -1,10 +1,7 @@
 use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
 use crate::{
-    analysis::core::path_analysis::graph::PathGraph,
-    graphs::{
-        cfg::CfgBlock,
-        scc::SccInfo,
-    },
+    analysis::path_analysis::graph::PathGraph,
+    graphs::{cfg::CfgBlock, scc::SccInfo},
     utils::source::*,
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
