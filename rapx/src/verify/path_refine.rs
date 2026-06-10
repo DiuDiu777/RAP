@@ -9,13 +9,12 @@
 use std::fmt::Write;
 
 use rustc_middle::mir::{BasicBlock, Operand, StatementKind, TerminatorKind};
+use rustc_middle::mir::Body;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::Spanned;
 
-    use crate::analysis::dataflow::graph::build_dataflow_graph;
+use crate::analysis::dataflow::graph::build_dataflow_graph;
 use crate::graphs::dataflow::DataflowGraph;
-
-use rustc_middle::mir::Body;
 
 use super::{
     call_summary,
@@ -66,7 +65,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
         property: &super::contract::Property<'tcx>,
     ) -> RelevantMirItems<'tcx> {
         let mut visit = self.start_visit(callsite.location(), path, property);
-        bind_callsite_roots(&mut visit.roots, callsite);
+        bind_callsite_roots(self.tcx, &mut visit.roots, callsite);
 
         let mut relevant = visit.roots.clone();
         let mut items = Vec::new();
@@ -306,7 +305,11 @@ impl<'tcx> BackwardVisitor<'tcx> {
             args.get(*index)
                 .is_some_and(|arg| operand_uses(&arg.node).intersects(relevant))
         });
-        if relevant_written_arg || (summary.unsupported && arg_uses.intersects(relevant)) {
+        let summarized_write = !summary.may_write_args.is_empty();
+        if relevant_written_arg
+            || summarized_write
+            || (summary.unsupported && arg_uses.intersects(relevant))
+        {
             if summary.unsupported {
                 items.push(BackwardItem::Forget {
                     reason: ForgetReason::UnknownCall,
@@ -314,8 +317,13 @@ impl<'tcx> BackwardVisitor<'tcx> {
             }
             items.push(BackwardItem::Terminator {
                 block,
-                kind: KeepReason::UnknownEffect,
+                kind: if summary.unsupported {
+                    KeepReason::UnknownEffect
+                } else {
+                    KeepReason::PointerFlow
+                },
             });
+            relevant.extend(call_args_uses_at(args, &summary.may_write_args));
         }
     }
 }
