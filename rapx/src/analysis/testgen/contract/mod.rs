@@ -1,11 +1,13 @@
 #![allow(dead_code, unused_imports)]
 
 mod db;
+mod expr;
 mod primitive;
 
 pub use db::{
     ContractDbError, ContractDbSummary, FunctionContract, SafetyContractDb, SafetyProperty,
 };
+pub use expr::{BinaryOp, ContractExpr, PredicateArg, SafetyPredicate};
 pub use primitive::{normalize_tag, PrimitiveSpFamily, PrimitiveSpKind};
 
 use std::fmt;

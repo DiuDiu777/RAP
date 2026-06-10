@@ -397,6 +397,7 @@ pub struct CaseTargetRecord {
     pub std_fn: String,
     pub sp: String,
     pub family: String,
+    pub usage: String,
     pub effect_kind: Option<String>,
     pub effect_confidence: Option<String>,
     pub hint_param: Option<usize>,

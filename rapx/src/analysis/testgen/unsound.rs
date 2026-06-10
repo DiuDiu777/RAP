@@ -1,8 +1,12 @@
+use crate::analysis::core::api_dependency::ApiDependencyGraph;
 use crate::analysis::core::dataflow::default::DataFlowAnalyzer;
-use crate::analysis::core::dataflow::{DataFlowAnalysis, DataFlowGraph, DataFlowGraphMap, EdgeOp};
-use crate::analysis::testgen::context::{ApiCall, InputHint, Stmt, StmtKind, Var, DUMMY_INPUT_VAR};
+use crate::analysis::core::dataflow::{DataFlowGraph, EdgeOp};
+use crate::analysis::testgen::chain::{ChainScheduler, ChainStrategy, HazardTemporalPlan};
+use crate::analysis::testgen::context::{
+    ApiCall, InputHint, NumericHint, Stmt, StmtKind, Var, DUMMY_INPUT_VAR,
+};
 use crate::analysis::testgen::context_builder::ContextBuilder;
-use crate::analysis::testgen::contract::{PrimitiveSpKind, SafetyContractDb};
+use crate::analysis::testgen::contract::{PrimitiveSpKind, SafetyContractDb, SafetyPredicate};
 use crate::analysis::testgen::coverage::{
     def_id_str, sp_family_name, sp_name, CaseMetadata, CaseTargetRecord, CcagEdgeRecord, CcagFile,
     CcagNodeRecord, ContractInstanceRecord, ContractInstancesFile, TESTGEN_ARTIFACT_SCHEMA_VERSION,
@@ -10,10 +14,10 @@ use crate::analysis::testgen::coverage::{
 use crate::analysis::testgen::guide::{
     ContractGenericPreference, ContractTarget, FuzzGuide, GuidedAction,
 };
-use crate::analysis::testgen::utils::{self, is_def_id_public};
-use crate::analysis::utils::fn_info::{
-    check_safety, get_adt_def_id_by_adt_method, get_cleaned_def_path_name,
-};
+use crate::analysis::testgen::utils;
+use crate::analysis::testgen::value_plan::{direct_numeric_hint_for_predicate, TypeSizeEnv};
+use crate::analysis::utils::fn_info::{get_adt_def_id_by_adt_method, get_cleaned_def_path_name};
+use crate::rap_info;
 use itertools::Itertools;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{BodyOwnerKind, LangItem};
@@ -21,12 +25,15 @@ use rustc_middle::mir::{
     Const, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
 };
 use rustc_middle::ty::{self, GenericArgsRef, Ty, TyCtxt, TyKind};
+use rustc_span::{FileName, FileNameDisplayPreference};
 use rustc_type_ir::{FloatTy, IntTy, UintTy};
 use serde::Deserialize;
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::fs::File;
+use std::env;
+use std::fs::{self, File};
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
 enum PlaceRoot {
@@ -85,11 +92,14 @@ impl SymbolicPlace {
     }
 }
 
-#[derive(Debug, Clone, Copy, Eq, Hash, PartialEq)]
+#[derive(Debug, Clone, Copy, Deserialize, Eq, Hash, PartialEq)]
+#[serde(rename_all = "snake_case")]
 #[allow(dead_code)]
 enum ContractUsage {
+    #[serde(alias = "precond")]
     Precondition,
     Hazard,
+    #[serde(alias = "optional")]
     Option,
     Unknown,
 }
@@ -105,13 +115,14 @@ impl ContractUsage {
     }
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
 enum NumericPreconditionKind {
     LessThanLen,
     NonZero,
     PowerOfTwo,
     UnicodeScalar,
     OffsetInAllocation,
+    Expression,
 }
 
 impl NumericPreconditionKind {
@@ -121,6 +132,9 @@ impl NumericPreconditionKind {
             Self::NonZero | Self::PowerOfTwo => InputHint::invalid_align(reason),
             Self::UnicodeScalar => InputHint::invalid_unicode_scalar(reason),
             Self::OffsetInAllocation => InputHint::negative_offset(reason),
+            Self::Expression => {
+                InputHint::numeric(reason, vec![NumericHint::Max, NumericHint::Literal(1024)])
+            }
         }
     }
 
@@ -131,6 +145,7 @@ impl NumericPreconditionKind {
             Self::PowerOfTwo => "power_of_two",
             Self::UnicodeScalar => "unicode_scalar",
             Self::OffsetInAllocation => "offset_in_allocation",
+            Self::Expression => "expression",
         }
     }
 
@@ -139,6 +154,7 @@ impl NumericPreconditionKind {
             Self::LessThanLen | Self::OffsetInAllocation => PrimitiveSpKind::InBound,
             Self::NonZero | Self::PowerOfTwo => PrimitiveSpKind::ValidNum,
             Self::UnicodeScalar => PrimitiveSpKind::ValidString,
+            Self::Expression => PrimitiveSpKind::ValidNum,
         }
     }
 }
@@ -168,6 +184,11 @@ impl ContractInstance {
     fn invalid_hint(&self, reason: impl Into<String>) -> Option<InputHint> {
         let reason = reason.into();
         if let Some(kind) = self.numeric_kind {
+            if matches!(kind, NumericPreconditionKind::Expression) {
+                if let Some(hints) = numeric_hints_for_expression_predicate(&self.raw_tag) {
+                    return Some(InputHint::numeric(reason, hints));
+                }
+            }
             return Some(kind.invalid_hint(reason));
         }
 
@@ -357,42 +378,114 @@ struct PublicFieldTarget {
     reason: String,
 }
 
+#[derive(Debug, Clone)]
+struct HazardTarget {
+    contract_id: usize,
+    sink_fn: DefId,
+    post_fn: DefId,
+    place: SymbolicPlace,
+    sp: PrimitiveSpKind,
+    effect_kind: &'static str,
+    effect_confidence: &'static str,
+    reason: String,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 enum StdContractBinding {
     LtLen {
         value_arg: usize,
         container_arg: usize,
+        usage: Option<ContractUsage>,
     },
     NonZero {
         arg: usize,
+        usage: Option<ContractUsage>,
     },
     PowerOfTwo {
         arg: usize,
+        usage: Option<ContractUsage>,
     },
     UnicodeScalar {
         arg: usize,
+        usage: Option<ContractUsage>,
     },
     OffsetInAlloc {
         offset_arg: usize,
         ptr_arg: usize,
+        usage: Option<ContractUsage>,
     },
     Arg {
         arg: usize,
         sp: Option<String>,
         role: Option<String>,
+        usage: Option<ContractUsage>,
     },
     Args {
         args: Vec<usize>,
         sp: Option<String>,
         role: Option<String>,
+        usage: Option<ContractUsage>,
+    },
+    Predicate {
+        predicate: SafetyPredicate,
+        role: Option<String>,
+        usage: Option<ContractUsage>,
     },
     NoArgs {
         sp: Option<String>,
+        usage: Option<ContractUsage>,
     },
 }
 
+#[derive(Debug, Clone)]
+struct BindingContractSpec {
+    raw_tag: String,
+    sp: PrimitiveSpKind,
+    usage: ContractUsage,
+}
+
 impl StdContractBinding {
+    fn usage(&self) -> ContractUsage {
+        let explicit = match self {
+            Self::LtLen { usage, .. }
+            | Self::NonZero { usage, .. }
+            | Self::PowerOfTwo { usage, .. }
+            | Self::UnicodeScalar { usage, .. }
+            | Self::OffsetInAlloc { usage, .. }
+            | Self::Arg { usage, .. }
+            | Self::Args { usage, .. }
+            | Self::Predicate { usage, .. }
+            | Self::NoArgs { usage, .. } => *usage,
+        };
+        explicit.unwrap_or_else(|| {
+            self.binding_sp()
+                .map(|sp| default_contract_usage_for_sp(&sp))
+                .unwrap_or(ContractUsage::Precondition)
+        })
+    }
+
+    fn binding_sp(&self) -> Option<PrimitiveSpKind> {
+        match self {
+            Self::Predicate { predicate, .. } => Some(predicate.kind().clone()),
+            Self::LtLen { .. } | Self::OffsetInAlloc { .. } => Some(PrimitiveSpKind::InBound),
+            Self::NonZero { .. } | Self::PowerOfTwo { .. } => Some(PrimitiveSpKind::ValidNum),
+            Self::UnicodeScalar { .. } => Some(PrimitiveSpKind::ValidString),
+            Self::Arg {
+                sp: Some(raw_tag), ..
+            }
+            | Self::Args {
+                sp: Some(raw_tag), ..
+            }
+            | Self::NoArgs {
+                sp: Some(raw_tag), ..
+            } => Some(PrimitiveSpKind::from_tag(raw_tag)),
+            Self::Arg { sp: None, .. }
+            | Self::Args { sp: None, .. }
+            | Self::NoArgs { sp: None, .. } => None,
+        }
+    }
+
     fn numeric_kind(&self) -> Option<NumericPreconditionKind> {
         match self {
             Self::LtLen { .. } => Some(NumericPreconditionKind::LessThanLen),
@@ -400,11 +493,20 @@ impl StdContractBinding {
             Self::PowerOfTwo { .. } => Some(NumericPreconditionKind::PowerOfTwo),
             Self::UnicodeScalar { .. } => Some(NumericPreconditionKind::UnicodeScalar),
             Self::OffsetInAlloc { .. } => Some(NumericPreconditionKind::OffsetInAllocation),
-            Self::Arg { .. } | Self::Args { .. } | Self::NoArgs { .. } => None,
+            Self::Predicate { predicate, .. } if predicate.kind() == &PrimitiveSpKind::ValidNum => {
+                Some(NumericPreconditionKind::Expression)
+            }
+            Self::Arg { .. } | Self::Args { .. } | Self::Predicate { .. } | Self::NoArgs { .. } => {
+                None
+            }
         }
     }
 
     fn matches_sp(&self, sp: &PrimitiveSpKind) -> bool {
+        if let Self::Predicate { predicate, .. } = self {
+            return predicate.kind() == sp;
+        }
+
         if let Some(kind) = self.numeric_kind() {
             return kind.sp_kind() == *sp;
         }
@@ -421,16 +523,88 @@ impl StdContractBinding {
             } => PrimitiveSpKind::from_tag(raw_tag) == *sp,
             Self::Arg { sp: None, .. }
             | Self::Args { sp: None, .. }
-            | Self::NoArgs { sp: None } => true,
+            | Self::NoArgs { sp: None, .. } => true,
             _ => false,
         }
     }
 
     fn role(&self) -> Option<&str> {
         match self {
-            Self::Arg { role, .. } | Self::Args { role, .. } => role.as_deref(),
+            Self::Arg { role, .. } | Self::Args { role, .. } | Self::Predicate { role, .. } => {
+                role.as_deref()
+            }
             _ => None,
         }
+    }
+
+    fn arg_indices(&self) -> Vec<usize> {
+        match self {
+            Self::LtLen {
+                value_arg,
+                container_arg,
+                ..
+            } => vec![*value_arg, *container_arg],
+            Self::NonZero { arg, .. }
+            | Self::PowerOfTwo { arg, .. }
+            | Self::UnicodeScalar { arg, .. }
+            | Self::Arg { arg, .. } => vec![*arg],
+            Self::Args { args, .. } => args.clone(),
+            Self::Predicate { predicate, .. } => predicate.arg_indices(),
+            Self::NoArgs { .. } => Vec::new(),
+            Self::OffsetInAlloc {
+                offset_arg,
+                ptr_arg,
+                ..
+            } => vec![*offset_arg, *ptr_arg],
+        }
+    }
+
+    fn contract_spec(&self) -> Option<BindingContractSpec> {
+        match self {
+            Self::Predicate { predicate, .. } => Some(BindingContractSpec {
+                raw_tag: predicate.raw().to_owned(),
+                sp: predicate.kind().clone(),
+                usage: self.usage(),
+            }),
+            Self::LtLen { .. } | Self::OffsetInAlloc { .. } => Some(BindingContractSpec {
+                raw_tag: "InBounded".to_owned(),
+                sp: PrimitiveSpKind::InBound,
+                usage: self.usage(),
+            }),
+            Self::NonZero { .. } | Self::PowerOfTwo { .. } => Some(BindingContractSpec {
+                raw_tag: "ValidNum".to_owned(),
+                sp: PrimitiveSpKind::ValidNum,
+                usage: self.usage(),
+            }),
+            Self::UnicodeScalar { .. } => Some(BindingContractSpec {
+                raw_tag: "ValidString".to_owned(),
+                sp: PrimitiveSpKind::ValidString,
+                usage: self.usage(),
+            }),
+            Self::Arg {
+                sp: Some(raw_tag), ..
+            }
+            | Self::Args {
+                sp: Some(raw_tag), ..
+            }
+            | Self::NoArgs {
+                sp: Some(raw_tag), ..
+            } => Some(BindingContractSpec {
+                raw_tag: raw_tag.clone(),
+                sp: PrimitiveSpKind::from_tag(raw_tag),
+                usage: self.usage(),
+            }),
+            Self::Arg { sp: None, .. }
+            | Self::Args { sp: None, .. }
+            | Self::NoArgs { sp: None, .. } => None,
+        }
+    }
+}
+
+fn default_contract_usage_for_sp(sp: &PrimitiveSpKind) -> ContractUsage {
+    match sp {
+        PrimitiveSpKind::TraitCopy => ContractUsage::Option,
+        _ => ContractUsage::Precondition,
     }
 }
 
@@ -440,11 +614,45 @@ struct PlaceResolver {
     flow_aliases: HashMap<usize, SymbolicPlace>,
 }
 
+struct LazyDataFlowGraphs<'tcx> {
+    analyzer: RefCell<DataFlowAnalyzer<'tcx>>,
+    cache: RefCell<HashMap<DefId, Option<DataFlowGraph>>>,
+}
+
+impl<'tcx> LazyDataFlowGraphs<'tcx> {
+    fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self {
+            analyzer: RefCell::new(DataFlowAnalyzer::new(tcx, false)),
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    fn get(&self, fn_did: DefId) -> Option<DataFlowGraph> {
+        if let Some(cached) = self.cache.borrow().get(&fn_did) {
+            return cached.clone();
+        }
+
+        let graph = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            self.analyzer
+                .borrow_mut()
+                .get_or_build_fn_dataflow_lightweight(fn_did)
+        }))
+        .ok()
+        .flatten();
+        self.cache.borrow_mut().insert(fn_did, graph.clone());
+        graph
+    }
+}
+
 impl PlaceResolver {
-    fn for_fn(tcx: TyCtxt<'_>, fn_did: DefId, dataflow_graphs: Option<&DataFlowGraphMap>) -> Self {
+    fn for_fn(
+        tcx: TyCtxt<'_>,
+        fn_did: DefId,
+        dataflow_graphs: Option<&LazyDataFlowGraphs<'_>>,
+    ) -> Self {
         let flow_aliases = dataflow_graphs
-            .and_then(|graphs| graphs.get(&fn_did))
-            .map(|graph| dataflow_flow_aliases(tcx, fn_did, graph))
+            .and_then(|graphs| graphs.get(fn_did))
+            .map(|graph| dataflow_flow_aliases(tcx, fn_did, &graph))
             .unwrap_or_default();
         Self {
             aliases: HashMap::new(),
@@ -494,6 +702,9 @@ fn dataflow_flow_aliases(
     fn_did: DefId,
     graph: &DataFlowGraph,
 ) -> HashMap<usize, SymbolicPlace> {
+    const MAX_ORIGIN_DEPTH: usize = 64;
+    const MAX_SUFFIX_FIELDS: usize = 8;
+
     let body = tcx.optimized_mir(fn_did);
     let n_locals = body.local_decls.len();
     let mut aliases = HashMap::new();
@@ -516,6 +727,9 @@ fn dataflow_flow_aliases(
             local,
             Vec::new(),
             &mut visited,
+            0,
+            MAX_ORIGIN_DEPTH,
+            MAX_SUFFIX_FIELDS,
         ) {
             if !matches!(origin.root, PlaceRoot::Local(_)) || !origin.fields.is_empty() {
                 aliases.insert(local_idx, origin);
@@ -534,7 +748,13 @@ fn dataflow_origin_for_local(
     local: Local,
     suffix_fields: Vec<usize>,
     visited: &mut BTreeSet<(usize, Vec<usize>)>,
+    depth: usize,
+    max_depth: usize,
+    max_suffix_fields: usize,
 ) -> Option<SymbolicPlace> {
+    if depth > max_depth || suffix_fields.len() > max_suffix_fields {
+        return None;
+    }
     if local.as_usize() >= graph.nodes.len() {
         return None;
     }
@@ -553,9 +773,18 @@ fn dataflow_origin_for_local(
             next_suffix.insert(0, field_idx);
         }
 
-        if let Some(origin) =
-            dataflow_origin_for_local(tcx, fn_did, graph, n_locals, edge.src, next_suffix, visited)
-        {
+        if let Some(origin) = dataflow_origin_for_local(
+            tcx,
+            fn_did,
+            graph,
+            n_locals,
+            edge.src,
+            next_suffix,
+            visited,
+            depth + 1,
+            max_depth,
+            max_suffix_fields,
+        ) {
             candidates.push(origin);
         }
     }
@@ -598,27 +827,70 @@ pub struct ContractGuide<'tcx> {
     effects: Vec<ContractEffect>,
     pairs: Vec<ConflictPair>,
     direct_hints: Vec<DirectSinkHint>,
+    hazard_targets: Vec<HazardTarget>,
+    hazard_temporal_plans: Vec<HazardTemporalPlan>,
     public_field_targets: Vec<PublicFieldTarget>,
+    chain_scheduler: ChainScheduler,
     contract_db_loaded: bool,
     _marker: std::marker::PhantomData<&'tcx ()>,
 }
 
 impl<'tcx> ContractGuide<'tcx> {
+    #[allow(dead_code)]
     pub fn analyze(tcx: TyCtxt<'tcx>) -> Self {
-        let dataflow_graphs = build_dataflow_graphs(tcx);
+        let candidates = local_fn_candidates(tcx);
+        Self::analyze_with_candidates(tcx, &candidates)
+    }
+
+    pub fn analyze_from_api_graph(tcx: TyCtxt<'tcx>, api_graph: &ApiDependencyGraph<'tcx>) -> Self {
+        let candidates = api_graph.api_def_ids();
+        rap_info!(
+            "contract guide: use {} API dependency candidates",
+            candidates.len()
+        );
+        Self::analyze_with_candidates(tcx, &candidates)
+    }
+
+    fn analyze_with_candidates(tcx: TyCtxt<'tcx>, candidate_fns: &[DefId]) -> Self {
+        rap_info!("contract guide: initialize lazy dataflow cache");
+        let dataflow_graphs = LazyDataFlowGraphs::new(tcx);
         let contract_db = match SafetyContractDb::load_default() {
             Ok(db) => {
-                let instances = collect_lifted_preconditions(tcx, &db, &dataflow_graphs);
-                let effects = collect_effects(tcx, &dataflow_graphs);
-                let (pairs, direct_hints) = build_conflicts(tcx, &instances, &effects);
+                rap_info!("contract guide: collect lifted contracts");
+                let instances = collect_lifted_contracts(tcx, &db, &dataflow_graphs, candidate_fns);
+                rap_info!(
+                    "contract guide: collected {} lifted contracts",
+                    instances.len()
+                );
+                rap_info!("contract guide: collect mutating effects");
+                let effects = collect_effects(tcx, &dataflow_graphs, candidate_fns);
+                rap_info!("contract guide: collected {} effects", effects.len());
+                rap_info!("contract guide: build conflicts");
+                let (pairs, direct_hints, hazard_targets) =
+                    build_conflicts(tcx, &instances, &effects);
+                rap_info!(
+                    "contract guide: built {} pairs, {} direct hints, and {} hazard targets",
+                    pairs.len(),
+                    direct_hints.len(),
+                    hazard_targets.len()
+                );
+                rap_info!("contract guide: collect public field targets");
                 let public_field_targets = collect_public_field_targets(tcx, &instances);
+                rap_info!(
+                    "contract guide: collected {} public field targets",
+                    public_field_targets.len()
+                );
+                let hazard_temporal_plans = build_hazard_temporal_plans(tcx, &hazard_targets);
                 return Self {
                     tcx,
                     instances,
                     effects,
                     pairs,
                     direct_hints,
+                    hazard_targets,
+                    hazard_temporal_plans,
                     public_field_targets,
+                    chain_scheduler: ChainScheduler::default(),
                     contract_db_loaded: true,
                     _marker: std::marker::PhantomData,
                 };
@@ -626,17 +898,41 @@ impl<'tcx> ContractGuide<'tcx> {
             Err(_) => SafetyContractDb::default(),
         };
 
-        let instances = collect_lifted_preconditions(tcx, &contract_db, &dataflow_graphs);
-        let effects = collect_effects(tcx, &dataflow_graphs);
-        let (pairs, direct_hints) = build_conflicts(tcx, &instances, &effects);
+        rap_info!("contract guide: collect lifted contracts without std db");
+        let instances =
+            collect_lifted_contracts(tcx, &contract_db, &dataflow_graphs, candidate_fns);
+        rap_info!(
+            "contract guide: collected {} lifted contracts",
+            instances.len()
+        );
+        rap_info!("contract guide: collect mutating effects");
+        let effects = collect_effects(tcx, &dataflow_graphs, candidate_fns);
+        rap_info!("contract guide: collected {} effects", effects.len());
+        rap_info!("contract guide: build conflicts");
+        let (pairs, direct_hints, hazard_targets) = build_conflicts(tcx, &instances, &effects);
+        rap_info!(
+            "contract guide: built {} pairs, {} direct hints, and {} hazard targets",
+            pairs.len(),
+            direct_hints.len(),
+            hazard_targets.len()
+        );
+        rap_info!("contract guide: collect public field targets");
         let public_field_targets = collect_public_field_targets(tcx, &instances);
+        rap_info!(
+            "contract guide: collected {} public field targets",
+            public_field_targets.len()
+        );
+        let hazard_temporal_plans = build_hazard_temporal_plans(tcx, &hazard_targets);
         Self {
             tcx,
             instances,
             effects,
             pairs,
             direct_hints,
+            hazard_targets,
+            hazard_temporal_plans,
             public_field_targets,
+            chain_scheduler: ChainScheduler::default(),
             contract_db_loaded: false,
             _marker: std::marker::PhantomData,
         }
@@ -899,6 +1195,50 @@ impl<'tcx> ContractGuide<'tcx> {
             }
         }
 
+        for target in &self.hazard_targets {
+            let Some(instance) = self.instances.get(target.contract_id) else {
+                continue;
+            };
+            let post_id = action_api_node_id(target.post_fn);
+            insert_ccag_node(
+                &mut nodes,
+                post_id.clone(),
+                "action",
+                tcx.def_path_str(target.post_fn),
+                attrs(&[
+                    ("action_kind", "public_api".to_owned()),
+                    ("def_id", def_id_str(target.post_fn)),
+                    ("effect", target.effect_kind.to_owned()),
+                    ("confidence", target.effect_confidence.to_owned()),
+                    ("phase", "after_hazard_sink".to_owned()),
+                ]),
+            );
+            let target_adt_def = instance
+                .adt_def
+                .or_else(|| get_adt_def_id_by_adt_method(tcx, target.post_fn));
+            let place_id =
+                insert_state_field_path(tcx, &mut nodes, &mut edges, &target.place, target_adt_def);
+            edges.push(ccag_edge(
+                post_id,
+                place_id,
+                "mutates",
+                target.effect_kind,
+                attrs(&[
+                    ("source", "hazard_post_call".to_owned()),
+                    ("phase", "after_hazard_sink".to_owned()),
+                    ("usage", instance.usage.name().to_owned()),
+                    ("contract_id", target.contract_id.to_string()),
+                    (
+                        "contract_edge_id",
+                        contract_edge_id(tcx, target.contract_id, instance),
+                    ),
+                    ("sp", sp_name(&target.sp)),
+                    ("confidence", target.effect_confidence.to_owned()),
+                    ("reason", target.reason.clone()),
+                ]),
+            ));
+        }
+
         for target in &self.public_field_targets {
             let mutator_id = public_field_action_node_id(target);
             insert_ccag_node(
@@ -1050,6 +1390,7 @@ impl<'tcx> ContractGuide<'tcx> {
             .iter()
             .map(|pair| pair.contract_id)
             .chain(self.direct_hints.iter().map(|hint| hint.contract_id))
+            .chain(self.hazard_targets.iter().map(|target| target.contract_id))
             .chain(
                 self.public_field_targets
                     .iter()
@@ -1136,6 +1477,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 std_fn: instance.std_fn_name.clone(),
                 sp: sp_name(&instance.sp),
                 family: sp_family_name(&instance.sp),
+                usage: instance.usage.name().to_owned(),
                 effect_kind: Some(pair.effect_kind.to_owned()),
                 effect_confidence: Some(pair.effect_confidence.to_owned()),
                 hint_param: pair.hint_param,
@@ -1176,11 +1518,74 @@ impl<'tcx> ContractGuide<'tcx> {
                 std_fn: instance.std_fn_name.clone(),
                 sp: sp_name(&instance.sp),
                 family: sp_family_name(&instance.sp),
+                usage: instance.usage.name().to_owned(),
                 effect_kind: None,
                 effect_confidence: None,
                 hint_param: Some(direct.param_idx),
                 hint_kind: Some(format!("{:?}", direct.hint.kind)),
                 reason: direct.reason.clone(),
+            });
+        }
+
+        for hazard in &self.hazard_targets {
+            let Some(instance) = self.instances.get(hazard.contract_id) else {
+                continue;
+            };
+            let Some(post_positions) = call_positions.get(&hazard.post_fn) else {
+                continue;
+            };
+            let mut matched = false;
+            for &post_idx in post_positions {
+                let Some(post_receiver) = cx.stmts().get(post_idx).and_then(|stmt| {
+                    let StmtKind::Call(call) = stmt.kind() else {
+                        return None;
+                    };
+                    call.args().first().copied()
+                }) else {
+                    continue;
+                };
+                let post_receiver = normalize_ref_var(post_receiver, &ref_source);
+                for (sink_idx, stmt) in cx.stmts().iter().enumerate() {
+                    if sink_idx > post_idx {
+                        break;
+                    }
+                    let StmtKind::Call(call) = stmt.kind() else {
+                        continue;
+                    };
+                    if !call_matches_contract_instance(instance, call) {
+                        continue;
+                    }
+                    let Some(sink_receiver) = call.args().first().copied() else {
+                        continue;
+                    };
+                    if normalize_ref_var(sink_receiver, &ref_source) == post_receiver {
+                        matched = true;
+                        break;
+                    }
+                }
+                if matched {
+                    break;
+                }
+            }
+            if !matched {
+                continue;
+            }
+            targets.push(CaseTargetRecord {
+                contract_id: hazard.contract_id,
+                contract_stable_id: contract_stable_id(tcx, hazard.contract_id, instance),
+                contract_edge_id: contract_edge_id(tcx, hazard.contract_id, instance),
+                target_kind: "hazard_post".to_owned(),
+                producer_fn: Some(tcx.def_path_str(hazard.post_fn)),
+                sink_fn: tcx.def_path_str(hazard.sink_fn),
+                std_fn: instance.std_fn_name.clone(),
+                sp: sp_name(&instance.sp),
+                family: sp_family_name(&instance.sp),
+                usage: instance.usage.name().to_owned(),
+                effect_kind: Some(hazard.effect_kind.to_owned()),
+                effect_confidence: Some(hazard.effect_confidence.to_owned()),
+                hint_param: None,
+                hint_kind: None,
+                reason: hazard.reason.clone(),
             });
         }
 
@@ -1228,6 +1633,7 @@ impl<'tcx> ContractGuide<'tcx> {
                 std_fn: instance.std_fn_name.clone(),
                 sp: sp_name(&instance.sp),
                 family: sp_family_name(&instance.sp),
+                usage: instance.usage.name().to_owned(),
                 effect_kind: Some("PublicFieldWrite".to_owned()),
                 effect_confidence: Some("exact".to_owned()),
                 hint_param: None,
@@ -1270,7 +1676,18 @@ impl<'tcx> ContractGuide<'tcx> {
                 hints.resize(param_idx + 1, None);
             }
             if hints[param_idx].is_none() {
-                hints[param_idx] = pair.hint.clone();
+                hints[param_idx] = self
+                    .instances
+                    .get(pair.contract_id)
+                    .and_then(|instance| {
+                        self.expression_hint_for_call(
+                            instance,
+                            call,
+                            format!("{} via {}", pair.reason, pair.effect_kind),
+                        )
+                        .map(|(_, hint)| hint)
+                    })
+                    .or_else(|| pair.hint.clone());
             }
         }
         hints
@@ -1283,14 +1700,36 @@ impl<'tcx> ContractGuide<'tcx> {
             .iter()
             .filter(|direct| direct.sink_fn == call.fn_did())
         {
-            if hints.len() <= direct.param_idx {
-                hints.resize(direct.param_idx + 1, None);
+            let (param_idx, hint) = self
+                .instances
+                .get(direct.contract_id)
+                .and_then(|instance| {
+                    self.expression_hint_for_call(instance, call, direct.reason.clone())
+                })
+                .unwrap_or((direct.param_idx, direct.hint.clone()));
+            if hints.len() <= param_idx {
+                hints.resize(param_idx + 1, None);
             }
-            if hints[direct.param_idx].is_none() {
-                hints[direct.param_idx] = Some(direct.hint.clone());
+            if hints[param_idx].is_none() {
+                hints[param_idx] = Some(hint);
             }
         }
         hints
+    }
+
+    fn expression_hint_for_call(
+        &self,
+        instance: &ContractInstance,
+        call: &ApiCall<'tcx>,
+        reason: impl Into<String>,
+    ) -> Option<(usize, InputHint)> {
+        if instance.sp != PrimitiveSpKind::ValidNum {
+            return None;
+        }
+        let env = TypeSizeEnv::from_generic_args(self.tcx, call.generic_args());
+        let (param_idx, mut hint) = direct_numeric_hint_for_predicate(&instance.raw_tag, &env)?;
+        hint.reason = reason.into();
+        Some((param_idx, hint))
     }
 
     fn has_prior_producer_for_receiver(
@@ -1346,6 +1785,129 @@ impl<'tcx> ContractGuide<'tcx> {
             };
             *base == receiver && field_name == &target.field_name
         })
+    }
+
+    fn prior_hazard_witness_for_receiver(
+        &self,
+        builder: &ContextBuilder<'tcx, '_>,
+        target: &HazardTarget,
+        receiver: Var,
+    ) -> Option<Var> {
+        let Some(instance) = self.instances.get(target.contract_id) else {
+            return None;
+        };
+        let ref_source = ref_source_map(builder.cx().stmts());
+        let receiver = normalize_ref_var(receiver, &ref_source);
+
+        for stmt in builder.cx().stmts().iter().rev() {
+            let StmtKind::Call(call) = stmt.kind() else {
+                continue;
+            };
+            if !call_matches_contract_instance(instance, call) {
+                continue;
+            }
+            let Some(sink_receiver) = call.args().first().copied() else {
+                continue;
+            };
+            if normalize_ref_var(sink_receiver, &ref_source) != receiver {
+                continue;
+            }
+            let witness = stmt.place();
+            if builder.var_state(witness).is_live() {
+                return Some(witness);
+            }
+        }
+
+        None
+    }
+
+    fn has_prior_hazard_witness_for_receiver(
+        &self,
+        builder: &ContextBuilder<'tcx, '_>,
+        target: &HazardTarget,
+        receiver: Var,
+    ) -> bool {
+        self.prior_hazard_witness_for_receiver(builder, target, receiver)
+            .is_some()
+    }
+
+    fn try_insert_hazard_post_call(
+        &self,
+        call: &ApiCall<'tcx>,
+        witness: Var,
+        builder: &mut ContextBuilder<'tcx, '_>,
+    ) {
+        let Some(receiver) = call.args().first().copied() else {
+            return;
+        };
+        let receiver_ty = builder.cx().type_of(receiver);
+        for target in self
+            .hazard_targets
+            .iter()
+            .filter(|target| target.sink_fn == call.fn_did())
+        {
+            if target.post_fn == target.sink_fn
+                || self
+                    .tcx
+                    .generics_of(target.post_fn)
+                    .requires_monomorphization(self.tcx)
+            {
+                continue;
+            }
+            let generic_args = self.tcx.mk_args(&[]);
+            let fn_sig = utils::fn_sig_with_generic_args(target.post_fn, generic_args, self.tcx);
+            let inputs = fn_sig.inputs();
+            let Some(post_receiver_ty) = inputs.first() else {
+                continue;
+            };
+            if !utils::is_ty_eq(*post_receiver_ty, receiver_ty, self.tcx) {
+                continue;
+            }
+            let mut args = vec![receiver];
+            args.extend((1..inputs.len()).map(|_| DUMMY_INPUT_VAR));
+            let post_call = ApiCall {
+                fn_did: target.post_fn,
+                args,
+                generic_args,
+            };
+            builder.add_call_stmt_with_hints(post_call, Vec::new());
+            builder.add_sink_marker_stmt(target.contract_id, self.tcx.def_path_str(target.sink_fn));
+            builder.try_add_exploit_stmt_for(witness);
+            break;
+        }
+    }
+
+    fn has_called_contract_instance(
+        &self,
+        builder: &ContextBuilder<'tcx, '_>,
+        instance: &ContractInstance,
+    ) -> bool {
+        builder.cx().stmts().iter().any(|stmt| {
+            let StmtKind::Call(call) = stmt.kind() else {
+                return false;
+            };
+            call_matches_contract_instance(instance, call)
+        })
+    }
+
+    fn contract_target_for(
+        &self,
+        contract_id: usize,
+        sink_fn: DefId,
+        priority: f32,
+        strategy: ChainStrategy,
+    ) -> ContractTarget {
+        ContractTarget {
+            contract_id,
+            sink_fn,
+            priority: priority * self.chain_scheduler.priority_multiplier(strategy),
+            generic_preference: self
+                .instances
+                .get(contract_id)
+                .map(generic_preference_for_instance)
+                .unwrap_or(ContractGenericPreference::Any),
+            strategy,
+        }
     }
 
     fn try_insert_public_field_mutation(
@@ -1432,6 +1994,19 @@ impl<'tcx> ContractGuide<'tcx> {
     }
 }
 
+#[allow(dead_code)]
+fn local_fn_candidates(tcx: TyCtxt<'_>) -> Vec<DefId> {
+    tcx.hir_body_owners()
+        .filter(|local_def_id| matches!(tcx.hir_body_owner_kind(*local_def_id), BodyOwnerKind::Fn))
+        .map(|local_def_id| local_def_id.to_def_id())
+        .filter(|fn_did| is_local_mir_fn(tcx, *fn_did))
+        .collect()
+}
+
+fn is_local_mir_fn(tcx: TyCtxt<'_>, fn_did: DefId) -> bool {
+    fn_did.is_local() && tcx.is_mir_available(fn_did)
+}
+
 impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
     fn name(&self) -> &'static str {
         "contract"
@@ -1489,6 +2064,25 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
             }
         }
 
+        for target in &self.hazard_targets {
+            let Some(instance) = self.instances.get(target.contract_id) else {
+                continue;
+            };
+            if target.sink_fn == fn_did {
+                if !call_matches_contract_instance(instance, action.call) {
+                    continue;
+                }
+                score += 180.0;
+            }
+            if target.post_fn == fn_did {
+                let receiver = action.call.args().first().copied();
+                let ready = receiver
+                    .map(|var| self.has_prior_hazard_witness_for_receiver(builder, target, var))
+                    .unwrap_or(false);
+                score += if ready { 300.0 } else { 20.0 };
+            }
+        }
+
         for target in &self.public_field_targets {
             if target.sink_fn == fn_did {
                 let Some(instance) = self.instances.get(target.contract_id) else {
@@ -1534,62 +2128,136 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
         }
     }
 
+    fn after_call(&self, call: &ApiCall<'tcx>, place: Var, builder: &mut ContextBuilder<'tcx, '_>) {
+        self.try_insert_hazard_post_call(call, place, builder);
+
+        for target in self
+            .hazard_targets
+            .iter()
+            .filter(|target| target.post_fn == call.fn_did())
+        {
+            let Some(receiver) = call.args().first().copied() else {
+                continue;
+            };
+            let Some(witness) = self.prior_hazard_witness_for_receiver(builder, target, receiver)
+            else {
+                continue;
+            };
+            builder.add_sink_marker_stmt(target.contract_id, self.tcx.def_path_str(target.sink_fn));
+            builder.try_add_exploit_stmt_for(witness);
+        }
+    }
+
     fn contract_targets(&self, builder: &ContextBuilder<'tcx, '_>) -> Vec<ContractTarget> {
-        let mut priorities = BTreeMap::new();
+        let mut targets = Vec::new();
         for (contract_id, instance) in self.instances.iter().enumerate() {
+            if matches!(instance.usage, ContractUsage::Option) {
+                continue;
+            }
             let already_called = builder.cx().stmts().iter().any(|stmt| {
                 let StmtKind::Call(call) = stmt.kind() else {
                     return false;
                 };
                 call_matches_contract_instance(instance, call)
             });
-            if already_called {
+            if already_called && !matches!(instance.usage, ContractUsage::Hazard) {
                 continue;
             }
-            priorities.insert(contract_id, (instance.sink_fn, 10.0));
+            targets.push(self.contract_target_for(
+                contract_id,
+                instance.sink_fn,
+                10.0,
+                ChainStrategy::DirectSink,
+            ));
         }
         for direct in &self.direct_hints {
-            priorities
-                .entry(direct.contract_id)
-                .and_modify(|(_, priority)| *priority += 180.0);
+            targets.push(self.contract_target_for(
+                direct.contract_id,
+                direct.sink_fn,
+                180.0,
+                ChainStrategy::DirectSink,
+            ));
         }
         for pair in &self.pairs {
-            priorities
-                .entry(pair.contract_id)
-                .and_modify(|(_, priority)| *priority += 120.0);
+            let next_fn = self
+                .instances
+                .get(pair.contract_id)
+                .and_then(|instance| {
+                    let called = self.has_called_contract_instance(builder, instance);
+                    (!called).then_some(pair.producer_fn)
+                })
+                .unwrap_or(pair.sink_fn);
+            targets.push(self.contract_target_for(
+                pair.contract_id,
+                next_fn,
+                120.0,
+                ChainStrategy::OneHop,
+            ));
+            targets.push(self.contract_target_for(
+                pair.contract_id,
+                pair.producer_fn,
+                45.0,
+                ChainStrategy::MultiHop,
+            ));
         }
         for target in &self.public_field_targets {
-            priorities
-                .entry(target.contract_id)
-                .and_modify(|(_, priority)| *priority += 220.0);
+            targets.push(self.contract_target_for(
+                target.contract_id,
+                target.sink_fn,
+                220.0,
+                ChainStrategy::OneHop,
+            ));
+        }
+        for target in &self.hazard_targets {
+            let Some(instance) = self.instances.get(target.contract_id) else {
+                continue;
+            };
+            let (next_fn, priority) = if self.has_called_contract_instance(builder, instance) {
+                (target.post_fn, 260.0)
+            } else {
+                (target.sink_fn, 160.0)
+            };
+            targets.push(self.contract_target_for(
+                target.contract_id,
+                next_fn,
+                priority,
+                ChainStrategy::HazardTemporal,
+            ));
         }
 
-        priorities
-            .into_iter()
-            .map(|(contract_id, (sink_fn, priority))| ContractTarget {
-                contract_id,
-                sink_fn,
-                priority,
-                generic_preference: self
-                    .instances
-                    .get(contract_id)
-                    .map(generic_preference_for_instance)
-                    .unwrap_or(ContractGenericPreference::Any),
-            })
-            .collect()
+        targets.sort_by_key(|target| {
+            (
+                target.contract_id,
+                target.strategy,
+                format!("{:?}", target.sink_fn),
+            )
+        });
+        targets.dedup_by(|lhs, rhs| {
+            lhs.contract_id == rhs.contract_id
+                && lhs.strategy == rhs.strategy
+                && lhs.sink_fn == rhs.sink_fn
+        });
+        targets
+    }
+
+    fn record_case_feedback(&mut self, metadata: &CaseMetadata) {
+        self.chain_scheduler.record_case(metadata);
     }
 
     fn summary(&self, tcx: TyCtxt<'tcx>) -> String {
         let mut s = String::new();
         s.push_str(&format!(
-            "contract: db_loaded={}, instances={}, effects={}, pairs={}, direct_hints={}, public_field_targets={}\n",
+            "contract: db_loaded={}, instances={}, effects={}, pairs={}, direct_hints={}, hazard_targets={}, hazard_temporal_plans={}, public_field_targets={}\n",
             self.contract_db_loaded,
             self.instances.len(),
             self.effects.len(),
             self.pairs.len(),
             self.direct_hints.len(),
+            self.hazard_targets.len(),
+            self.hazard_temporal_plans.len(),
             self.public_field_targets.len()
         ));
+        s.push_str(&self.chain_scheduler.summary());
 
         if !self.instances.is_empty() {
             s.push_str("instances:\n");
@@ -1660,6 +2328,26 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
             }
         }
 
+        if !self.hazard_targets.is_empty() {
+            s.push_str("hazard targets:\n");
+            for target in self.hazard_targets.iter().take(96) {
+                s.push_str(&format!(
+                    "  {} -> {} after sink on {} violates {} ({})\n",
+                    tcx.def_path_str(target.sink_fn),
+                    tcx.def_path_str(target.post_fn),
+                    symbolic_place_display(
+                        tcx,
+                        self.instances
+                            .get(target.contract_id)
+                            .and_then(|instance| instance.adt_def),
+                        &target.place
+                    ),
+                    target.sp,
+                    target.reason
+                ));
+            }
+        }
+
         if !self.public_field_targets.is_empty() {
             s.push_str("public field targets:\n");
             for target in self.public_field_targets.iter().take(96) {
@@ -1670,6 +2358,16 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
                     tcx.def_path_str(target.sink_fn),
                     target.sp,
                     target.reason
+                ));
+            }
+        }
+
+        if !self.hazard_temporal_plans.is_empty() {
+            s.push_str("hazard temporal plans:\n");
+            for plan in self.hazard_temporal_plans.iter().take(96) {
+                s.push_str(&format!(
+                    "  contract#{} {} -> {} -> {:?}\n",
+                    plan.contract_id, plan.source_fn, plan.invalidator_fn, plan.observer
                 ));
             }
         }
@@ -2104,6 +2802,12 @@ fn collect_public_field_targets<'tcx>(
     let mut targets = Vec::new();
 
     for (contract_id, instance) in instances.iter().enumerate() {
+        if !matches!(
+            instance.usage,
+            ContractUsage::Precondition | ContractUsage::Unknown
+        ) {
+            continue;
+        }
         let Some(adt_def) = instance.adt_def else {
             continue;
         };
@@ -2156,9 +2860,109 @@ fn collect_public_field_targets<'tcx>(
     targets
 }
 
+const LOCAL_CONTRACT_BINDINGS_ENV: &str = "TESTGEN_CONTRACT_BINDINGS";
+const LOCAL_CONTRACT_BINDINGS_FILE: &str = "testgen_contract_bindings.json";
+
 fn load_std_contract_bindings() -> HashMap<String, Vec<StdContractBinding>> {
     serde_json::from_str(include_str!("data/std_contract_bindings.json"))
         .expect("Unable to parse std contract bindings")
+}
+
+fn load_contract_bindings(
+    tcx: TyCtxt<'_>,
+    candidate_fns: &[DefId],
+) -> HashMap<String, Vec<StdContractBinding>> {
+    let mut bindings = load_std_contract_bindings();
+    let local_paths = local_contract_binding_paths(tcx, candidate_fns);
+    if env::var("TESTGEN_DEBUG_CONTRACT_BINDINGS").is_ok() {
+        rap_info!(
+            "contract guide: local contract binding candidates: {}",
+            local_paths.iter().map(|path| path.display()).join(", ")
+        );
+    }
+    for path in local_paths {
+        if !path.exists() {
+            continue;
+        }
+        let input = fs::read_to_string(&path).unwrap_or_else(|err| {
+            panic!(
+                "Unable to read local testgen contract bindings from {}: {err}",
+                path.display()
+            )
+        });
+        let local: HashMap<String, Vec<StdContractBinding>> = serde_json::from_str(&input)
+            .unwrap_or_else(|err| {
+                panic!(
+                    "Unable to parse local testgen contract bindings from {}: {err}",
+                    path.display()
+                )
+            });
+        rap_info!(
+            "contract guide: loaded local contract bindings from {}",
+            path.display()
+        );
+        for (function, mut entries) in local {
+            bindings.entry(function).or_default().append(&mut entries);
+        }
+    }
+    bindings
+}
+
+fn local_contract_binding_paths(tcx: TyCtxt<'_>, candidate_fns: &[DefId]) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if let Ok(path) = env::var(LOCAL_CONTRACT_BINDINGS_ENV) {
+        push_unique_path(&mut paths, PathBuf::from(path));
+        return paths;
+    }
+
+    if let Ok(current_dir) = env::current_dir() {
+        push_local_contract_binding_ancestors(&mut paths, &current_dir);
+    }
+    if let Ok(manifest_dir) = env::var("CARGO_MANIFEST_DIR") {
+        push_local_contract_binding_ancestors(&mut paths, Path::new(&manifest_dir));
+    }
+    push_source_contract_binding_ancestors(&mut paths, tcx, candidate_fns);
+    paths
+}
+
+fn push_local_contract_binding_ancestors(paths: &mut Vec<PathBuf>, start: &Path) {
+    for ancestor in start.ancestors() {
+        push_unique_path(paths, ancestor.join(LOCAL_CONTRACT_BINDINGS_FILE));
+    }
+}
+
+fn push_unique_path(paths: &mut Vec<PathBuf>, path: PathBuf) {
+    let normalized = path.canonicalize().unwrap_or_else(|_| path.clone());
+    let already_present = paths
+        .iter()
+        .any(|existing| existing.canonicalize().unwrap_or_else(|_| existing.clone()) == normalized);
+    if !already_present {
+        paths.push(path);
+    }
+}
+
+fn push_source_contract_binding_ancestors(
+    paths: &mut Vec<PathBuf>,
+    tcx: TyCtxt<'_>,
+    candidate_fns: &[DefId],
+) {
+    let source_map = tcx.sess.source_map();
+    for &fn_did in candidate_fns {
+        if !fn_did.is_local() {
+            continue;
+        }
+        let FileName::Real(real_path) = source_map.span_to_filename(tcx.def_span(fn_did)) else {
+            continue;
+        };
+        let path = PathBuf::from(
+            real_path
+                .to_string_lossy(FileNameDisplayPreference::Local)
+                .into_owned(),
+        );
+        if let Some(parent) = path.parent() {
+            push_local_contract_binding_ancestors(paths, parent);
+        }
+    }
 }
 
 fn contract_stable_id(tcx: TyCtxt<'_>, id: usize, instance: &ContractInstance) -> String {
@@ -2174,38 +2978,129 @@ fn contract_edge_id(tcx: TyCtxt<'_>, id: usize, instance: &ContractInstance) -> 
     )
 }
 
-fn build_dataflow_graphs(tcx: TyCtxt<'_>) -> DataFlowGraphMap {
-    let mut analyzer = DataFlowAnalyzer::new(tcx, false);
-    for local_def_id in tcx.hir_body_owners() {
-        if !matches!(tcx.hir_body_owner_kind(local_def_id), BodyOwnerKind::Fn) {
-            continue;
-        }
-        let def_id = local_def_id.to_def_id();
-        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            analyzer.build_graph(def_id);
-        }));
+fn std_contract_callee_name(tcx: TyCtxt<'_>, callee_def_id: DefId) -> Option<String> {
+    let raw = format!("{:?}", callee_def_id);
+    if raw.contains("~ core[") || raw.contains("~ std[") || raw.contains("~ alloc[") {
+        Some(get_cleaned_def_path_name(tcx, callee_def_id))
+    } else {
+        None
     }
-    analyzer.get_all_dataflow()
 }
 
-fn collect_lifted_preconditions<'tcx>(
+fn contract_callee_name(
+    tcx: TyCtxt<'_>,
+    callee_def_id: DefId,
+    contract_db: &SafetyContractDb,
+    contract_bindings: &HashMap<String, Vec<StdContractBinding>>,
+) -> Option<String> {
+    if let Some(std_name) = std_contract_callee_name(tcx, callee_def_id) {
+        return Some(std_name);
+    }
+
+    let local_name = tcx.def_path_str(callee_def_id);
+    if let Some(contract_key) = matching_contract_db_key(contract_db, &local_name) {
+        Some(contract_key)
+    } else if let Some(binding_key) = matching_contract_binding_key(contract_bindings, &local_name)
+    {
+        Some(binding_key)
+    } else {
+        if env::var("TESTGEN_DEBUG_CONTRACT_BINDINGS").is_ok() {
+            rap_info!("contract guide: local callee has no contract binding: {local_name}");
+        }
+        None
+    }
+}
+
+fn contract_key_matches(callee_name: &str, contract_key: &str) -> bool {
+    callee_name == contract_key
+        || callee_name
+            .strip_suffix(contract_key)
+            .is_some_and(|prefix| prefix.ends_with("::"))
+        || contract_key
+            .strip_suffix(callee_name)
+            .is_some_and(|prefix| prefix.ends_with("::"))
+}
+
+fn matching_contract_db_key(contract_db: &SafetyContractDb, callee_name: &str) -> Option<String> {
+    if contract_db.get(callee_name).is_some() {
+        return Some(callee_name.to_owned());
+    }
+    contract_db
+        .iter()
+        .find(|(function, _)| contract_key_matches(callee_name, function))
+        .map(|(function, _)| function.to_owned())
+}
+
+fn matching_contract_binding_key(
+    contract_bindings: &HashMap<String, Vec<StdContractBinding>>,
+    callee_name: &str,
+) -> Option<String> {
+    if contract_bindings.contains_key(callee_name) {
+        return Some(callee_name.to_owned());
+    }
+    contract_bindings
+        .keys()
+        .find(|function| contract_key_matches(callee_name, function))
+        .cloned()
+}
+
+fn callee_has_contract(
+    contract_db: &SafetyContractDb,
+    contract_bindings: &HashMap<String, Vec<StdContractBinding>>,
+    callee_name: &str,
+) -> bool {
+    contract_db.get(callee_name).is_some()
+        || contract_bindings.get(callee_name).is_some_and(|bindings| {
+            bindings
+                .iter()
+                .any(|binding| binding.contract_spec().is_some())
+        })
+}
+
+fn binding_contract_specs(bindings: &[StdContractBinding]) -> Vec<BindingContractSpec> {
+    bindings
+        .iter()
+        .filter_map(StdContractBinding::contract_spec)
+        .collect()
+}
+
+fn should_lift_binding_contract_spec(has_db_contract: bool, spec: &BindingContractSpec) -> bool {
+    !(has_db_contract && matches!(spec.usage, ContractUsage::Precondition))
+}
+
+fn collect_lifted_contracts<'tcx>(
     tcx: TyCtxt<'tcx>,
     contract_db: &SafetyContractDb,
-    dataflow_graphs: &DataFlowGraphMap,
+    dataflow_graphs: &LazyDataFlowGraphs<'tcx>,
+    candidate_fns: &[DefId],
 ) -> Vec<ContractInstance> {
-    let contract_bindings = load_std_contract_bindings();
+    let contract_bindings = load_contract_bindings(tcx, candidate_fns);
     let mut instances = Vec::new();
 
-    for local_def_id in tcx.hir_body_owners() {
-        if !matches!(tcx.hir_body_owner_kind(local_def_id), BodyOwnerKind::Fn) {
-            continue;
-        }
-        let fn_did = local_def_id.to_def_id();
-        if !is_def_id_public(fn_did, tcx) || check_safety(tcx, fn_did) {
+    for &fn_did in candidate_fns {
+        if !is_local_mir_fn(tcx, fn_did) {
             continue;
         }
         let adt_def = get_adt_def_id_by_adt_method(tcx, fn_did);
         let body = tcx.optimized_mir(fn_did);
+        let has_contract_call = body.basic_blocks.iter().any(|block| {
+            let terminator = block.terminator();
+            let TerminatorKind::Call { func, .. } = &terminator.kind else {
+                return false;
+            };
+            let Some(callee_def_id) = operand_fn_def(func) else {
+                return false;
+            };
+            let Some(callee_name) =
+                contract_callee_name(tcx, callee_def_id, contract_db, &contract_bindings)
+            else {
+                return false;
+            };
+            callee_has_contract(contract_db, &contract_bindings, &callee_name)
+        });
+        if !has_contract_call {
+            continue;
+        }
         let mut resolver = PlaceResolver::for_fn(tcx, fn_did, Some(dataflow_graphs));
         for block in body.basic_blocks.iter() {
             for stmt in block.statements.iter() {
@@ -2218,22 +3113,62 @@ fn collect_lifted_preconditions<'tcx>(
             let Some(callee_def_id) = operand_fn_def(func) else {
                 continue;
             };
-            let callee_name = get_cleaned_def_path_name(tcx, callee_def_id);
-            let Some(contract) = contract_db.get(&callee_name) else {
+            let Some(callee_name) =
+                contract_callee_name(tcx, callee_def_id, contract_db, &contract_bindings)
+            else {
                 continue;
             };
             let bindings = contract_bindings.get(&callee_name);
-            for properties in contract.sites().values() {
-                for property in properties {
+            let mut lifted_specs = BTreeSet::new();
+            let has_db_contract = contract_db.get(&callee_name).is_some();
+            if let Some(contract) = contract_db.get(&callee_name) {
+                for properties in contract.sites().values() {
+                    for property in properties {
+                        lifted_specs.insert((
+                            property.kind().to_string(),
+                            property.raw_tag().to_owned(),
+                            default_contract_usage_for_sp(property.kind())
+                                .name()
+                                .to_owned(),
+                        ));
+                        instances.extend(lift_property_instances(
+                            tcx,
+                            fn_did,
+                            adt_def,
+                            callee_def_id,
+                            &callee_name,
+                            property.raw_tag(),
+                            property.kind().clone(),
+                            default_contract_usage_for_sp(property.kind()),
+                            bindings.map(Vec::as_slice).unwrap_or(&[]),
+                            args,
+                            &resolver,
+                        ));
+                    }
+                }
+            }
+            if let Some(bindings) = bindings {
+                for spec in binding_contract_specs(bindings) {
+                    if !should_lift_binding_contract_spec(has_db_contract, &spec) {
+                        continue;
+                    }
+                    if !lifted_specs.insert((
+                        spec.sp.to_string(),
+                        spec.raw_tag.clone(),
+                        spec.usage.name().to_owned(),
+                    )) {
+                        continue;
+                    }
                     instances.extend(lift_property_instances(
                         tcx,
                         fn_did,
                         adt_def,
                         callee_def_id,
                         &callee_name,
-                        property.raw_tag(),
-                        property.kind().clone(),
-                        bindings.map(Vec::as_slice).unwrap_or(&[]),
+                        &spec.raw_tag,
+                        spec.sp,
+                        spec.usage,
+                        bindings,
                         args,
                         &resolver,
                     ));
@@ -2253,6 +3188,7 @@ fn lift_property_instances<'tcx>(
     std_fn_name: &str,
     raw_tag: &str,
     sp: PrimitiveSpKind,
+    fallback_usage: ContractUsage,
     bindings: &[StdContractBinding],
     args: &[rustc_span::source_map::Spanned<Operand<'tcx>>],
     resolver: &PlaceResolver,
@@ -2275,7 +3211,7 @@ fn lift_property_instances<'tcx>(
             sp: sp.clone(),
             raw_tag: raw_tag.to_owned(),
             symbolic_args,
-            usage: ContractUsage::Precondition,
+            usage: binding.usage(),
             numeric_kind: binding.numeric_kind(),
             binding_role: binding.role().map(str::to_owned),
         });
@@ -2301,7 +3237,7 @@ fn lift_property_instances<'tcx>(
         sp,
         raw_tag: raw_tag.to_owned(),
         symbolic_args,
-        usage: ContractUsage::Precondition,
+        usage: fallback_usage,
         numeric_kind: None,
         binding_role: None,
     });
@@ -2316,25 +3252,11 @@ fn lift_contract_binding_args<'tcx>(
     resolver: &PlaceResolver,
 ) -> Option<Vec<SymbolicPlace>> {
     let resolve = |idx| resolve_arg_symbolic(tcx, fn_did, args, idx, resolver);
-    match binding {
-        StdContractBinding::LtLen {
-            value_arg,
-            container_arg,
-        } => Some(vec![resolve(*value_arg)?, resolve(*container_arg)?]),
-        StdContractBinding::NonZero { arg }
-        | StdContractBinding::PowerOfTwo { arg }
-        | StdContractBinding::UnicodeScalar { arg }
-        | StdContractBinding::Arg { arg, .. } => Some(vec![resolve(*arg)?]),
-        StdContractBinding::Args { args: indices, .. } => indices
-            .iter()
-            .map(|idx| resolve(*idx))
-            .collect::<Option<Vec<_>>>(),
-        StdContractBinding::NoArgs { .. } => Some(Vec::new()),
-        StdContractBinding::OffsetInAlloc {
-            offset_arg,
-            ptr_arg,
-        } => Some(vec![resolve(*offset_arg)?, resolve(*ptr_arg)?]),
-    }
+    binding
+        .arg_indices()
+        .into_iter()
+        .map(|idx| resolve(idx))
+        .collect::<Option<Vec<_>>>()
 }
 
 fn resolve_all_symbolic_args<'tcx>(
@@ -2350,15 +3272,12 @@ fn resolve_all_symbolic_args<'tcx>(
 
 fn collect_effects<'tcx>(
     tcx: TyCtxt<'tcx>,
-    dataflow_graphs: &DataFlowGraphMap,
+    dataflow_graphs: &LazyDataFlowGraphs<'tcx>,
+    candidate_fns: &[DefId],
 ) -> Vec<ContractEffect> {
     let mut effects = Vec::new();
-    for local_def_id in tcx.hir_body_owners() {
-        if !matches!(tcx.hir_body_owner_kind(local_def_id), BodyOwnerKind::Fn) {
-            continue;
-        }
-        let fn_did = local_def_id.to_def_id();
-        if !is_def_id_public(fn_did, tcx) || check_safety(tcx, fn_did) {
+    for &fn_did in candidate_fns {
+        if !is_local_mir_fn(tcx, fn_did) {
             continue;
         }
         let adt_def = get_adt_def_id_by_adt_method(tcx, fn_did);
@@ -2403,7 +3322,7 @@ fn collect_effects<'tcx>(
 fn collect_constructor_effect<'tcx>(
     tcx: TyCtxt<'tcx>,
     fn_did: DefId,
-    dataflow_graphs: &DataFlowGraphMap,
+    dataflow_graphs: &LazyDataFlowGraphs<'tcx>,
     effects: &mut Vec<ContractEffect>,
 ) {
     let sig = tcx.fn_sig(fn_did).skip_binder();
@@ -2466,7 +3385,7 @@ fn collect_assignment_effect<'tcx>(
         return;
     };
     let (lhs, rvalue) = &**assign;
-    let Some(field) = raw_symbolic_place(tcx, fn_did, lhs) else {
+    let Some(field) = resolver.resolve_place(tcx, fn_did, lhs) else {
         return;
     };
     if !field.is_receiver_field() {
@@ -2546,11 +3465,51 @@ fn build_conflicts(
     tcx: TyCtxt<'_>,
     instances: &[ContractInstance],
     effects: &[ContractEffect],
-) -> (Vec<ConflictPair>, Vec<DirectSinkHint>) {
+) -> (Vec<ConflictPair>, Vec<DirectSinkHint>, Vec<HazardTarget>) {
     let mut pairs = Vec::new();
     let mut direct_hints = Vec::new();
+    let mut hazard_targets = Vec::new();
 
     for (contract_id, instance) in instances.iter().enumerate() {
+        if matches!(instance.usage, ContractUsage::Option) {
+            continue;
+        }
+
+        if matches!(instance.usage, ContractUsage::Hazard) {
+            for effect in effects {
+                if effect.fn_did == instance.sink_fn {
+                    continue;
+                }
+                if instance.adt_def.is_some() && effect.adt_def != instance.adt_def {
+                    continue;
+                }
+                if !effect_may_violate_contract(effect, instance) {
+                    continue;
+                }
+                let place = effect.kind.primary_place().clone();
+                let place_display =
+                    symbolic_place_display(tcx, effect.adt_def.or(instance.adt_def), &place);
+                let reason = format!(
+                    "post-call {} on {} can trigger {} hazard created by {}",
+                    effect.kind.name(),
+                    place_display,
+                    instance.sp,
+                    instance.std_fn_name
+                );
+                hazard_targets.push(HazardTarget {
+                    contract_id,
+                    sink_fn: instance.sink_fn,
+                    post_fn: effect.fn_did,
+                    place,
+                    sp: instance.sp.clone(),
+                    effect_kind: effect.kind.name(),
+                    effect_confidence: effect.confidence.name(),
+                    reason,
+                });
+            }
+            continue;
+        }
+
         let direct_hint_params = if matches!(instance.sp, PrimitiveSpKind::NonOverlap) {
             instance
                 .symbolic_args
@@ -2668,7 +3627,54 @@ fn build_conflicts(
             && lhs.param_idx == rhs.param_idx
     });
 
-    (pairs, direct_hints)
+    hazard_targets.sort_by_key(|target| {
+        (
+            format!("{:?}", target.sink_fn),
+            format!("{:?}", target.post_fn),
+            target.contract_id,
+            target.place.pretty(),
+            target.sp.to_string(),
+        )
+    });
+    hazard_targets.dedup_by(|lhs, rhs| {
+        lhs.sink_fn == rhs.sink_fn
+            && lhs.post_fn == rhs.post_fn
+            && lhs.contract_id == rhs.contract_id
+            && lhs.place == rhs.place
+            && lhs.sp == rhs.sp
+    });
+
+    (pairs, direct_hints, hazard_targets)
+}
+
+fn build_hazard_temporal_plans(
+    tcx: TyCtxt<'_>,
+    hazard_targets: &[HazardTarget],
+) -> Vec<HazardTemporalPlan> {
+    let mut plans = hazard_targets
+        .iter()
+        .map(|target| {
+            HazardTemporalPlan::new(
+                target.contract_id,
+                tcx.def_path_str(target.sink_fn),
+                tcx.def_path_str(target.post_fn),
+            )
+        })
+        .collect_vec();
+    plans.sort_by(|lhs, rhs| {
+        (
+            lhs.contract_id,
+            lhs.source_fn.as_str(),
+            lhs.invalidator_fn.as_str(),
+        )
+            .cmp(&(
+                rhs.contract_id,
+                rhs.source_fn.as_str(),
+                rhs.invalidator_fn.as_str(),
+            ))
+    });
+    plans.dedup();
+    plans
 }
 
 fn effect_may_violate_contract(effect: &ContractEffect, instance: &ContractInstance) -> bool {
@@ -2971,6 +3977,16 @@ fn const_may_violate_numeric(kind: NumericPreconditionKind, value: i128) -> bool
             (0xD800..=0xDFFF).contains(&value) || value > 0x10FFFF
         }
         NumericPreconditionKind::OffsetInAllocation => value < 0 || value > 1024,
+        NumericPreconditionKind::Expression => value == 0 || value > 1024,
+    }
+}
+
+fn numeric_hints_for_expression_predicate(raw: &str) -> Option<Vec<NumericHint>> {
+    let env = TypeSizeEnv::default().with_size("T", 16);
+    let (_, hint) = direct_numeric_hint_for_predicate(raw, &env)?;
+    match hint.kind {
+        crate::analysis::testgen::context::InputHintKind::Numeric(hints) => Some(hints),
+        _ => None,
     }
 }
 
@@ -2982,4 +3998,190 @@ fn operand_fn_def(operand: &Operand<'_>) -> Option<DefId> {
         return None;
     };
     Some(*callee_def_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn predicate_binding_deserializes_compound_valid_num() {
+        let binding: StdContractBinding = serde_json::from_str(
+            r#"{
+                "kind": "predicate",
+                "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+                "role": "slice_total_size"
+            }"#,
+        )
+        .expect("predicate binding should deserialize");
+
+        assert!(binding.matches_sp(&PrimitiveSpKind::ValidNum));
+        assert_eq!(binding.role(), Some("slice_total_size"));
+        assert_eq!(
+            binding.numeric_kind(),
+            Some(NumericPreconditionKind::Expression)
+        );
+        assert_eq!(binding.arg_indices(), vec![1]);
+    }
+
+    #[test]
+    fn predicate_binding_deserializes_typed_inbound() {
+        let binding: StdContractBinding = serde_json::from_str(
+            r#"{
+                "kind": "predicate",
+                "predicate": "InBound(arg0, arg1, T)",
+                "role": "ptr_len_object"
+            }"#,
+        )
+        .expect("predicate binding should deserialize");
+
+        assert!(binding.matches_sp(&PrimitiveSpKind::InBound));
+        assert_eq!(binding.role(), Some("ptr_len_object"));
+        assert_eq!(binding.arg_indices(), vec![0, 1]);
+    }
+
+    #[test]
+    fn binding_deserializes_usage() {
+        let binding: StdContractBinding = serde_json::from_str(
+            r#"{
+                "kind": "arg",
+                "sp": "Alias",
+                "arg": 0,
+                "usage": "hazard",
+                "role": "post_ref_alias"
+            }"#,
+        )
+        .expect("binding usage should deserialize");
+
+        assert!(binding.matches_sp(&PrimitiveSpKind::Alias));
+        assert_eq!(binding.usage(), ContractUsage::Hazard);
+        assert_eq!(binding.role(), Some("post_ref_alias"));
+    }
+
+    #[test]
+    fn bundled_std_bindings_include_from_raw_parts_range_predicates() {
+        let bindings = load_std_contract_bindings();
+        let from_raw_parts = bindings
+            .get("core::slice::raw::from_raw_parts")
+            .expect("from_raw_parts binding should be bundled");
+
+        assert!(from_raw_parts.iter().any(|binding| matches!(
+            binding,
+            StdContractBinding::Predicate { predicate, .. }
+                if predicate.raw() == "InBound(arg0, arg1, T)"
+        )));
+        assert!(from_raw_parts.iter().any(|binding| matches!(
+            binding,
+            StdContractBinding::Predicate { predicate, .. }
+                if predicate.raw() == "ValidNum(arg1 * size_of(T) <= isize::MAX)"
+        )));
+    }
+
+    #[test]
+    fn bundled_std_bindings_include_hazard_and_option_usage() {
+        let bindings = load_std_contract_bindings();
+        let as_ref = bindings
+            .get("core::ptr::mut_ptr::as_ref")
+            .expect("mut_ptr::as_ref binding should be bundled");
+        assert!(as_ref.iter().any(|binding| {
+            binding.matches_sp(&PrimitiveSpKind::Alias) && binding.usage() == ContractUsage::Hazard
+        }));
+
+        let as_mut_vec = bindings
+            .get("alloc::string::as_mut_vec")
+            .expect("String::as_mut_vec binding should be bundled");
+        assert!(as_mut_vec.iter().any(|binding| {
+            binding.matches_sp(&PrimitiveSpKind::ValidString)
+                && binding.usage() == ContractUsage::Hazard
+        }));
+
+        let ptr_read = bindings
+            .get("core::ptr::read")
+            .expect("ptr::read binding should be bundled");
+        assert!(ptr_read.iter().any(|binding| {
+            binding.matches_sp(&PrimitiveSpKind::TraitCopy)
+                && binding.usage() == ContractUsage::Option
+        }));
+    }
+
+    #[test]
+    fn json_hazard_bindings_are_lifted_even_when_std_db_has_preconditions() {
+        let bindings = load_std_contract_bindings();
+        let as_ref = bindings
+            .get("core::ptr::mut_ptr::as_ref")
+            .expect("mut_ptr::as_ref binding should be bundled");
+        let lifted = binding_contract_specs(as_ref)
+            .into_iter()
+            .filter(|spec| should_lift_binding_contract_spec(true, spec))
+            .collect_vec();
+
+        assert!(
+            lifted.iter().any(|spec| {
+                spec.sp == PrimitiveSpKind::Alias && spec.usage == ContractUsage::Hazard
+            }),
+            "JSON-only Alias hazard should survive when the std contract DB supplies preconditions"
+        );
+        assert!(
+            lifted
+                .iter()
+                .all(|spec| !matches!(spec.usage, ContractUsage::Precondition)),
+            "precondition specs from JSON should not duplicate std contract DB properties"
+        );
+    }
+
+    #[test]
+    fn alias_hazard_matches_post_write_to_same_symbolic_place() {
+        let dummy = rustc_hir::def_id::LOCAL_CRATE.as_def_id();
+        let ptr_field = SymbolicPlace {
+            root: PlaceRoot::Receiver,
+            fields: vec![0],
+        };
+        let instance = ContractInstance {
+            sink_fn: dummy,
+            adt_def: Some(dummy),
+            sink_self_ty: Some("&Cell".to_owned()),
+            sink_signature: "fn(&Cell) -> &i32".to_owned(),
+            sink_requires_monomorphization: false,
+            std_fn: dummy,
+            std_fn_name: "core::ptr::mut_ptr::as_ref".to_owned(),
+            sp: PrimitiveSpKind::Alias,
+            raw_tag: "Alias".to_owned(),
+            symbolic_args: vec![ptr_field.clone()],
+            usage: ContractUsage::Hazard,
+            numeric_kind: None,
+            binding_role: Some("post_ref_alias".to_owned()),
+        };
+        let effect = ContractEffect {
+            fn_did: dummy,
+            adt_def: Some(dummy),
+            kind: EffectKind::WriteField {
+                field: ptr_field,
+                value: EffectValue::Param(1),
+                inputs: Vec::new(),
+            },
+            confidence: EffectConfidence::Exact,
+        };
+
+        assert!(effect_may_violate_contract(&effect, &instance));
+    }
+
+    #[test]
+    fn valid_num_expression_generates_negated_boundary_hints() {
+        assert_eq!(
+            numeric_hints_for_expression_predicate("ValidNum(arg1 != 0)"),
+            Some(vec![NumericHint::Zero])
+        );
+        assert_eq!(
+            numeric_hints_for_expression_predicate("ValidNum(arg1 <= 3)"),
+            Some(vec![NumericHint::Literal(4)])
+        );
+        assert_eq!(
+            numeric_hints_for_expression_predicate("ValidNum(arg1 < 3)"),
+            Some(vec![NumericHint::Three, NumericHint::Literal(4)])
+        );
+        assert_eq!(
+            numeric_hints_for_expression_predicate("ValidNum(arg1 * size_of(T) <= isize::MAX)"),
+            Some(vec![NumericHint::Literal((isize::MAX as i128) / 16 + 1)])
+        );
+    }
 }

@@ -4,6 +4,7 @@ use crate::analysis::core::dataflow::*;
 pub struct DataFlowAnalyzer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub graphs: HashMap<DefId, Graph>,
+    building: HashSet<DefId>,
     pub debug: bool,
 }
 
@@ -58,6 +59,7 @@ impl<'tcx> Analysis for DataFlowAnalyzer<'tcx> {
 
     fn reset(&mut self) {
         self.graphs.clear();
+        self.building.clear();
     }
 }
 
@@ -66,6 +68,7 @@ impl<'tcx> DataFlowAnalyzer<'tcx> {
         Self {
             tcx: tcx,
             graphs: HashMap::new(),
+            building: HashSet::new(),
             debug,
         }
     }
@@ -90,9 +93,14 @@ impl<'tcx> DataFlowAnalyzer<'tcx> {
     }
 
     pub fn build_graph(&mut self, def_id: DefId) {
-        if self.graphs.contains_key(&def_id) {
+        self.build_graph_with_options(def_id, true);
+    }
+
+    fn build_graph_with_options(&mut self, def_id: DefId, include_closures: bool) {
+        if self.graphs.contains_key(&def_id) || self.building.contains(&def_id) {
             return;
         }
+        self.building.insert(def_id);
         let body: &Body = self.tcx.optimized_mir(def_id);
         let mut graph = Graph::new(def_id, body.span, body.arg_count, body.local_decls.len());
         let basic_blocks = &body.basic_blocks;
@@ -104,10 +112,21 @@ impl<'tcx> DataFlowAnalyzer<'tcx> {
                 graph.add_terminator_to_graph(&terminator);
             }
         }
-        for closure_id in graph.closures.iter() {
-            self.build_graph(*closure_id);
+        if include_closures {
+            for closure_id in graph.closures.iter() {
+                self.build_graph_with_options(*closure_id, true);
+            }
         }
         self.graphs.insert(def_id, graph);
+        self.building.remove(&def_id);
+    }
+
+    pub fn get_or_build_fn_dataflow_lightweight(&mut self, def_id: DefId) -> Option<DataFlowGraph> {
+        self.build_graph_with_options(def_id, false);
+        self.graphs
+            .get(&def_id)
+            .cloned()
+            .map(Graph::into_dataflow_graph_without_param_deps)
     }
 
     pub fn draw_graphs(&self) {

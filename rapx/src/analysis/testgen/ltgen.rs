@@ -4,6 +4,7 @@ use super::context_builder::ContextBuilder;
 use crate::analysis::core::alias_analysis::AAResultMap;
 use crate::analysis::core::api_dependency::{graph::TransformKind, ApiDependencyGraph, DepNode};
 use crate::analysis::testgen::context::DUMMY_INPUT_VAR;
+use crate::analysis::testgen::coverage::CaseMetadata;
 use crate::analysis::testgen::guide::{FuzzGuide, GuideSet};
 use crate::analysis::testgen::utils::{self};
 use crate::{rap_debug, rap_info};
@@ -244,6 +245,16 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
             let input_hints = self.guides.input_hints_for_call(&call, &builder);
             let place = builder.add_call_stmt_with_hints(call, input_hints);
+            let call = builder
+                .cx()
+                .stmts()
+                .last()
+                .and_then(|stmt| match stmt.kind() {
+                    crate::analysis::testgen::context::StmtKind::Call(call) => Some(call.clone()),
+                    _ => None,
+                })
+                .expect("last statement after add_call_stmt_with_hints should be a call");
+            self.guides.after_call(&call, place, &mut builder);
 
             let drop_prob = self
                 .global
@@ -311,6 +322,10 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
             }
         }
         res
+    }
+
+    pub fn record_case_feedback(&mut self, metadata: &CaseMetadata) {
+        self.guides.record_case_feedback(metadata);
     }
 
     pub fn statistic_str(&self) -> String {

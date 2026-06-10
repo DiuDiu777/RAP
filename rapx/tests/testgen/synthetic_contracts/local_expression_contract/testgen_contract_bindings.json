@@ -1,0 +1,10 @@
+{
+  "local_expression_contract::raw_len_sink": [
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 != 0)",
+      "usage": "precondition",
+      "role": "nonzero_len_expression"
+    }
+  ]
+}

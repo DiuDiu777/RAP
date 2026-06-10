@@ -170,7 +170,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
         api_dependency::Config {
             pub_only: true,
             resolve_generic: true,
-            ignore_const_generic: true,
+            ignore_const_generic: utils::is_env_var_exist("TESTGEN_IGNORE_CONST_GENERIC"),
             include_unsafe: false,
             include_drop: false,
         },
@@ -192,7 +192,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
 
     dump_alias_map(&alias_map, alias_file, tcx)?;
 
-    let mut ltgen_builder = LtGenBuilder::new(tcx, &alias_map, api_dep_graph)
+    let mut ltgen_builder = LtGenBuilder::new(tcx, &alias_map, api_dep_graph.clone())
         .max_complexity(config.max_complexity)
         .max_iteration(config.max_iteration);
     let mut contract_guide_for_coverage = None;
@@ -200,7 +200,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
     let contract_coverage_path = workspace_dir.join("contract_coverage.json");
 
     if !utils::is_env_var_exist("TESTGEN_DISABLE_UNSOUND") {
-        let guide = ContractGuide::analyze(tcx);
+        let guide = ContractGuide::analyze_from_api_graph(tcx, &api_dep_graph);
         guide.dump_to(workspace_dir.join("unsound_guide.txt"), tcx)?;
         guide.dump_instances_json(workspace_dir.join("contract_instances.json"), tcx)?;
         guide.dump_cgag_json(workspace_dir.join("cgag.json"), tcx)?;
@@ -300,6 +300,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
                 case_metadata.write_json(project_path.join("case_metadata.json"))?;
                 contract_coverage.record_case(&case_metadata);
                 contract_coverage.write_json(&contract_coverage_path)?;
+                ltgen.record_case_feedback(&case_metadata);
 
                 if matches!(eval_result, EvalResult::UBDetected) {
                     let new_project = project.copy_to(&poc_path)?;
@@ -319,6 +320,7 @@ pub fn driver_main(tcx: TyCtxt<'_>) -> Result<(), Box<dyn std::error::Error>> {
                 case_metadata.write_json(project_path.join("case_metadata.json"))?;
                 contract_coverage.record_case(&case_metadata);
                 contract_coverage.write_json(&contract_coverage_path)?;
+                ltgen.record_case_feedback(&case_metadata);
                 rap_error!("evaluate project {} fail: {}", project_path.display(), err);
                 writeln!(
                     &mut report_file,

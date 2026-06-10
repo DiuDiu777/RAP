@@ -78,6 +78,22 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         self.graph[index]
     }
 
+    pub fn api_def_ids(&self) -> Vec<DefId> {
+        let mut seen = HashSet::new();
+        let mut api_def_ids = Vec::new();
+
+        for index in self.api_nodes.iter().copied() {
+            let DepNode::Api(def_id, _) = self.graph[index] else {
+                continue;
+            };
+            if def_id.is_local() && seen.insert(def_id) {
+                api_def_ids.push(def_id);
+            }
+        }
+
+        api_def_ids
+    }
+
     fn tcx(&self) -> TyCtxt<'tcx> {
         self.tcx
     }

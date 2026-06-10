@@ -152,8 +152,9 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
         let target = *self.choose_contract_target(&targets, &actions)?;
         let action = self.select_action_for_contract(target, &actions, &weights)?;
         rap_debug!(
-            "contract-targeted action: contract#{} -> {}",
+            "contract-targeted action: contract#{} [{}] -> {}",
             target.contract_id,
+            target.strategy.name(),
             action.pretty_str(self.tcx)
         );
         Some(action)
@@ -368,14 +369,16 @@ impl<'tcx, 'a, R: Rng> LtGen<'tcx, 'a, R> {
 
                     let base_weight = global_penalty * arg_score;
                     let guide_bonus = self.guides.score_action(&action.call, builder);
-                    let weight = base_weight + guide_bonus;
+                    let const_bonus = const_generic_boundary_score(action.call.generic_args());
+                    let weight = base_weight + guide_bonus + const_bonus;
 
                     rap_trace!(
-                        "weight of {} = {:.2} * {} + guide({:.2}) = {:.2}",
+                        "weight of {} = {:.2} * {} + guide({:.2}) + const({:.2}) = {:.2}",
                         action.pretty_str(self.tcx),
                         global_penalty,
                         arg_score,
                         guide_bonus,
+                        const_bonus,
                         weight
                     );
 
@@ -481,7 +484,39 @@ fn action_matches_target<'tcx>(action: &Action<'tcx>, target: &ContractTarget) -
         ContractGenericPreference::Any => true,
         ContractGenericPreference::HighAlignment => {
             high_alignment_generic_score(action.call.generic_args()) > 0.0
+                || const_generic_boundary_score(action.call.generic_args()) > 0.0
         }
+    }
+}
+
+fn const_generic_boundary_score(args: GenericArgsRef<'_>) -> f32 {
+    let score = args
+        .iter()
+        .filter_map(|arg| arg.as_const())
+        .filter_map(|ct| parse_const_arg_value(&ct.to_string()))
+        .map(boundary_const_score)
+        .fold(0.0, f32::max);
+    if score > 0.0 {
+        return score * 80.0;
+    }
+    0.0
+}
+
+fn parse_const_arg_value(raw: &str) -> Option<u128> {
+    let digits = raw
+        .chars()
+        .skip_while(|ch| !ch.is_ascii_digit())
+        .take_while(|ch| ch.is_ascii_digit())
+        .collect::<String>();
+    digits.parse().ok()
+}
+
+fn boundary_const_score(value: u128) -> f32 {
+    match value {
+        0 | 1 => 1.0,
+        2 | 3 | 4 => 0.8,
+        8 | 16 => 0.6,
+        _ => 0.0,
     }
 }
 

@@ -13,6 +13,7 @@ use rustc_span::DUMMY_SP;
 use rustc_trait_selection::traits::query::evaluate_obligation::InferCtxtExt as _;
 use rustc_type_ir::{IntTy, UintTy};
 use std::collections::HashSet;
+use std::panic::{catch_unwind, AssertUnwindSafe};
 
 static MAX_STEP_SET_SIZE: usize = 1000;
 
@@ -235,46 +236,66 @@ fn is_args_fit_trait_bound<'tcx>(
     args: &[ty::GenericArg<'tcx>],
     tcx: TyCtxt<'tcx>,
 ) -> bool {
-    let args = tcx.mk_args(args);
-    // rap_info!(
-    //     "fn: {:?} args: {:?} identity: {:?}",
-    //     fn_did,
-    //     args,
-    //     ty::GenericArgs::identity_for_item(tcx, fn_did)
-    // );
-    let infcx = tcx.infer_ctxt().build(ty::TypingMode::PostAnalysis);
-    let pred = tcx.predicates_of(fn_did);
-    let inst_pred = pred.instantiate(tcx, args);
-    let param_env = tcx.param_env(fn_did);
-    rap_trace!(
-        "[trait bound] check {}",
-        tcx.def_path_str_with_args(fn_did, args)
-    );
+    let expected_len = ty::GenericArgs::identity_for_item(tcx, fn_did).len();
+    if args.len() != expected_len {
+        rap_trace!(
+            "[trait bound] skip malformed generic args for {}: expected {}, got {}",
+            tcx.def_path_str(fn_did),
+            expected_len,
+            args.len()
+        );
+        return false;
+    }
 
-    for pred in inst_pred.predicates.iter() {
-        let obligation = Obligation::new(
-            tcx,
-            ObligationCause::dummy(),
-            param_env,
-            pred.as_predicate(),
+    let args = tcx.mk_args(args);
+    catch_unwind(AssertUnwindSafe(|| {
+        // rap_info!(
+        //     "fn: {:?} args: {:?} identity: {:?}",
+        //     fn_did,
+        //     args,
+        //     ty::GenericArgs::identity_for_item(tcx, fn_did)
+        // );
+        let infcx = tcx.infer_ctxt().build(ty::TypingMode::PostAnalysis);
+        let pred = tcx.predicates_of(fn_did);
+        let inst_pred = pred.instantiate(tcx, args);
+        let param_env = tcx.param_env(fn_did);
+        rap_trace!(
+            "[trait bound] check {}",
+            tcx.def_path_str_with_args(fn_did, args)
         );
 
-        let res = infcx.evaluate_obligation(&obligation);
-        match res {
-            Ok(eva) => {
-                if !eva.may_apply() {
+        for pred in inst_pred.predicates.iter() {
+            let obligation = Obligation::new(
+                tcx,
+                ObligationCause::dummy(),
+                param_env,
+                pred.as_predicate(),
+            );
+
+            let res = infcx.evaluate_obligation(&obligation);
+            match res {
+                Ok(eva) => {
+                    if !eva.may_apply() {
+                        rap_trace!("[trait bound] check fail for {pred:?}");
+                        return false;
+                    }
+                }
+                Err(_) => {
                     rap_trace!("[trait bound] check fail for {pred:?}");
                     return false;
                 }
             }
-            Err(_) => {
-                rap_trace!("[trait bound] check fail for {pred:?}");
-                return false;
-            }
         }
-    }
-    rap_trace!("[trait bound] check succ");
-    true
+        rap_trace!("[trait bound] check succ");
+        true
+    }))
+    .unwrap_or_else(|_| {
+        rap_trace!(
+            "[trait bound] skip panic during bound evaluation for {}",
+            tcx.def_path_str_with_args(fn_did, args)
+        );
+        false
+    })
 }
 
 fn is_fn_solvable<'tcx>(fn_did: DefId, tcx: TyCtxt<'tcx>) -> bool {

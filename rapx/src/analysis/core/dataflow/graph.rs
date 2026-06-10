@@ -49,6 +49,14 @@ impl From<Graph> for DataFlowGraph {
 }
 
 impl Graph {
+    pub fn into_dataflow_graph_without_param_deps(self) -> DataFlowGraph {
+        DataFlowGraph {
+            nodes: self.nodes,
+            edges: self.edges,
+            param_ret_deps: IndexVec::new(),
+        }
+    }
+
     pub fn new(def_id: DefId, span: Span, argc: usize, n_locals: usize) -> Self {
         Self {
             def_id,

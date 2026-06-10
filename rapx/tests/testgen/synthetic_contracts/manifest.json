@@ -75,6 +75,22 @@
       "mutator": "new_from_buffer with high-alignment T"
     },
     {
+      "name": "slice_from_raw_parts_bounds",
+      "family": "Pointer",
+      "sp": ["InBound", "ValidNum", "ValidPtr", "Init"],
+      "unsafe_api": "core::slice::from_raw_parts",
+      "trigger": "method-controlled slice object range and total-size contract",
+      "mutator": "set_len(len)"
+    },
+    {
+      "name": "local_expression_contract",
+      "family": "Numeric",
+      "sp": ["ValidNum"],
+      "unsafe_api": "local_expression_contract::raw_len_sink",
+      "trigger": "manual local unsafe API expression annotation",
+      "mutator": "set_len(len)"
+    },
+    {
       "name": "vec_set_len_uninit",
       "family": "Initialization",
       "sp": ["Init", "ValidNum"],

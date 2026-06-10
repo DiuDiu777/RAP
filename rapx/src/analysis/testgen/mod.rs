@@ -1,3 +1,4 @@
+mod chain;
 mod context;
 mod context_builder;
 mod contract;
@@ -10,6 +11,7 @@ mod path;
 mod syn;
 mod unsound;
 mod utils;
+mod value_plan;
 
 use crate::analysis::testgen::driver::driver_main;
 use crate::{rap_error, rap_info};

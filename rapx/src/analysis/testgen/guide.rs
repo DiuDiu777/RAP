@@ -1,5 +1,7 @@
+use crate::analysis::testgen::chain::ChainStrategy;
 use crate::analysis::testgen::context::{ApiCall, InputHint};
 use crate::analysis::testgen::context_builder::ContextBuilder;
+use crate::analysis::testgen::coverage::CaseMetadata;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
@@ -20,6 +22,7 @@ pub struct ContractTarget {
     pub sink_fn: DefId,
     pub priority: f32,
     pub generic_preference: ContractGenericPreference,
+    pub strategy: ChainStrategy,
 }
 
 /// Pluggable fuzzing guidance. Analyses can stay independent and only expose
@@ -41,9 +44,19 @@ pub trait FuzzGuide<'tcx> {
 
     fn before_call(&self, _call: &ApiCall<'tcx>, _builder: &mut ContextBuilder<'tcx, '_>) {}
 
+    fn after_call(
+        &self,
+        _call: &ApiCall<'tcx>,
+        _place: crate::analysis::testgen::context::Var,
+        _builder: &mut ContextBuilder<'tcx, '_>,
+    ) {
+    }
+
     fn contract_targets(&self, _builder: &ContextBuilder<'tcx, '_>) -> Vec<ContractTarget> {
         Vec::new()
     }
+
+    fn record_case_feedback(&mut self, _metadata: &CaseMetadata) {}
 
     fn summary(&self, _tcx: TyCtxt<'tcx>) -> String {
         format!("{}: no summary", self.name())
@@ -102,11 +115,28 @@ impl<'tcx> GuideSet<'tcx> {
         }
     }
 
+    pub fn after_call(
+        &self,
+        call: &ApiCall<'tcx>,
+        place: crate::analysis::testgen::context::Var,
+        builder: &mut ContextBuilder<'tcx, '_>,
+    ) {
+        for guide in &self.guides {
+            guide.after_call(call, place, builder);
+        }
+    }
+
     pub fn contract_targets(&self, builder: &ContextBuilder<'tcx, '_>) -> Vec<ContractTarget> {
         self.guides
             .iter()
             .flat_map(|guide| guide.contract_targets(builder))
             .collect()
+    }
+
+    pub fn record_case_feedback(&mut self, metadata: &CaseMetadata) {
+        for guide in &mut self.guides {
+            guide.record_case_feedback(metadata);
+        }
     }
 
     pub fn summary(&self, tcx: TyCtxt<'tcx>) -> String {

@@ -1,299 +1,6229 @@
 {
-  "core::slice::get_unchecked": [
-    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
-  ],
-  "core::slice::get_unchecked_mut": [
-    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
-  ],
-  "core::slice::index::SliceIndex::get_unchecked": [
-    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
-  ],
-  "core::slice::index::SliceIndex::get_unchecked_mut": [
-    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
-  ],
-  "core::slice::index::get_unchecked": [
-    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
-  ],
-  "core::slice::index::get_unchecked_mut": [
-    { "kind": "lt_len", "value_arg": 0, "container_arg": 1 }
-  ],
-  "core::str::get_unchecked": [
-    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
-  ],
-  "core::str::get_unchecked_mut": [
-    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
-  ],
-  "core::str::traits::get_unchecked": [
-    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
-  ],
-  "core::str::traits::get_unchecked_mut": [
-    { "kind": "lt_len", "value_arg": 1, "container_arg": 0 }
-  ],
-  "core::alloc::layout::from_size_align_unchecked": [
-    { "kind": "arg", "sp": "Size", "arg": 0, "role": "size" },
-    { "kind": "non_zero", "arg": 1 },
-    { "kind": "power_of_two", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1, "role": "align" }
-  ],
-  "std::alloc::Layout::from_size_align_unchecked": [
-    { "kind": "arg", "sp": "Size", "arg": 0, "role": "size" },
-    { "kind": "non_zero", "arg": 1 },
-    { "kind": "power_of_two", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1, "role": "align" }
-  ],
   "alloc::alloc::Layout::from_size_align_unchecked": [
-    { "kind": "arg", "sp": "Size", "arg": 0, "role": "size" },
-    { "kind": "non_zero", "arg": 1 },
-    { "kind": "power_of_two", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1, "role": "align" }
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "non_zero",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "power_of_two",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "role": "align",
+      "usage": "precondition"
+    }
   ],
-  "core::char::from_u32_unchecked": [
-    { "kind": "unicode_scalar", "arg": 0 }
+  "alloc::alloc::alloc": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::char::convert::from_u32_unchecked": [
-    { "kind": "unicode_scalar", "arg": 0 }
+  "alloc::alloc::alloc_zeroed": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::char::methods::from_u32_unchecked": [
-    { "kind": "unicode_scalar", "arg": 0 }
+  "alloc::alloc::dealloc": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ptr::const_ptr::add": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  "alloc::alloc::deallocate": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ptr::mut_ptr::add": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  "alloc::alloc::grow": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ptr::non_null::add": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  "alloc::alloc::grow_zeroed": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ptr::const_ptr::offset": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
+  "alloc::alloc::realloc": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ptr::mut_ptr::offset": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
-  ],
-  "core::ptr::non_null::offset": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
-  ],
-  "core::ptr::offset": [
-    { "kind": "offset_in_alloc", "offset_arg": 1, "ptr_arg": 0 }
-  ],
-  "core::ptr::read": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 }
-  ],
-  "core::ptr::read_volatile": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 }
-  ],
-  "core::ptr::write": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 }
-  ],
-  "core::ptr::write_volatile": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 }
-  ],
-  "core::intrinsics::copy_nonoverlapping": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "args", "sp": "NonOverlap", "args": [0, 1, 2], "role": "src_dst_count" },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "count" }
-  ],
-  "core::ptr::copy_nonoverlapping": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "args", "sp": "NonOverlap", "args": [0, 1, 2], "role": "src_dst_count" },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "count" }
-  ],
-  "core::intrinsics::copy": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "count" }
-  ],
-  "core::ptr::copy": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "count" }
-  ],
-  "core::ptr::drop_in_place": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 }
-  ],
-  "core::ptr::replace": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 }
-  ],
-  "core::ptr::swap_nonoverlapping": [
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "args", "sp": "NonOverlap", "args": [0, 1, 2], "role": "x_y_count" },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 1 },
-    { "kind": "arg", "sp": "Aligned", "arg": 1 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "count" }
-  ],
-  "core::slice::raw::from_raw_parts": [
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
-  ],
-  "core::slice::raw::from_raw_parts_mut": [
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
-  ],
-  "core::slice::from_raw_parts": [
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
-  ],
-  "core::slice::from_raw_parts_mut": [
-    { "kind": "arg", "sp": "Aligned", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "Init", "arg": 0 },
-    { "kind": "arg", "sp": "ValidNum", "arg": 1 }
-  ],
-  "alloc::boxed::from_raw": [
-    { "kind": "arg", "sp": "Allocated", "arg": 0 },
-    { "kind": "arg", "sp": "Ownning", "arg": 0 },
-    { "kind": "arg", "sp": "Alias", "arg": 0 }
-  ],
-  "alloc::boxed::from_raw_in": [
-    { "kind": "arg", "sp": "Allocated", "arg": 0 },
-    { "kind": "arg", "sp": "Ownning", "arg": 0 },
-    { "kind": "arg", "sp": "Alias", "arg": 0 }
+  "alloc::alloc::shrink": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
   "alloc::boxed::Box::from_raw": [
-    { "kind": "arg", "sp": "Allocated", "arg": 0 },
-    { "kind": "arg", "sp": "Ownning", "arg": 0 },
-    { "kind": "arg", "sp": "Alias", "arg": 0 }
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "precondition"
+    }
   ],
   "alloc::boxed::Box::from_raw_in": [
-    { "kind": "arg", "sp": "Allocated", "arg": 0 },
-    { "kind": "arg", "sp": "Ownning", "arg": 0 },
-    { "kind": "arg", "sp": "Alias", "arg": 0 }
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "precondition"
+    }
   ],
-  "alloc::vec::Vec::set_len": [
-    { "kind": "args", "sp": "InBound", "args": [1, 0], "role": "new_len_capacity" },
-    { "kind": "arg", "sp": "Init", "arg": 0, "role": "initialized_prefix" }
+  "alloc::boxed::assume_init": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "alloc::vec::Vec::from_raw_parts": [
-    { "kind": "arg", "sp": "Allocated", "arg": 0, "role": "ptr" },
-    { "kind": "arg", "sp": "Aligned", "arg": 0, "role": "ptr" },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0, "role": "ptr" },
-    { "kind": "arg", "sp": "Init", "arg": 0, "role": "initialized_len" },
-    { "kind": "args", "sp": "InBound", "args": [1, 2], "role": "len_capacity" },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "capacity" }
+  "alloc::boxed::downcast_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "alloc::vec::Vec::from_raw_parts_in": [
-    { "kind": "arg", "sp": "Allocated", "arg": 0, "role": "ptr" },
-    { "kind": "arg", "sp": "Aligned", "arg": 0, "role": "ptr" },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0, "role": "ptr" },
-    { "kind": "arg", "sp": "Init", "arg": 0, "role": "initialized_len" },
-    { "kind": "args", "sp": "InBound", "args": [1, 2], "role": "len_capacity" },
-    { "kind": "arg", "sp": "ValidNum", "arg": 2, "role": "capacity" }
+  "alloc::boxed::from_non_null": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ffi::c_str::from_bytes_with_nul_unchecked": [
-    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  "alloc::boxed::from_non_null_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "std::ffi::c_str::from_bytes_with_nul_unchecked": [
-    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  "alloc::boxed::from_raw": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "precondition"
+    }
   ],
-  "core::ffi::c_str::from_ptr": [
-    { "kind": "arg", "sp": "!Null", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  "alloc::boxed::from_raw_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "precondition"
+    }
   ],
-  "std::ffi::c_str::from_ptr": [
-    { "kind": "arg", "sp": "!Null", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  "alloc::collections::btree::map::insert_after_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ffi::CStr::from_ptr": [
-    { "kind": "arg", "sp": "!Null", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  "alloc::collections::btree::map::insert_before_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "std::ffi::CStr::from_ptr": [
-    { "kind": "arg", "sp": "!Null", "arg": 0 },
-    { "kind": "arg", "sp": "ValidPtr", "arg": 0 },
-    { "kind": "arg", "sp": "ValidCStr", "arg": 0 }
+  "alloc::collections::btree::map::with_mutable_key": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::str::converts::from_utf8_unchecked": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::collections::btree::set::insert_after_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::str::converts::from_utf8_unchecked_mut": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::collections::btree::set::insert_before_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::str::from_utf8_unchecked": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::collections::btree::set::upper_bound_mut": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::str::from_utf8_unchecked_mut": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::collections::btree::set::with_mutable_key": [
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "std::str::from_utf8_unchecked": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::ffi::c_str::from_raw": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "std::str::from_utf8_unchecked_mut": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::ffi::c_str::from_vec_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "alloc::string::from_utf8_unchecked": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::ffi::c_str::from_vec_with_nul_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::assume_init": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::decrement_strong_count": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::decrement_strong_count_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::downcast_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::from_raw": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::from_raw_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::get_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::increment_strong_count": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::rc::increment_strong_count_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::str::from_boxed_utf8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
   "alloc::string::String::from_utf8_unchecked": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
   ],
-  "std::string::String::from_utf8_unchecked": [
-    { "kind": "arg", "sp": "ValidString", "arg": 0 }
+  "alloc::string::as_mut_vec": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
   ],
-  "core::option::unwrap_unchecked": [
-    { "kind": "arg", "sp": "Unwrap", "arg": 0 }
+  "alloc::string::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::result::unwrap_unchecked": [
-    { "kind": "arg", "sp": "Unwrap", "arg": 0 }
+  "alloc::string::from_utf8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
   ],
-  "core::result::unwrap_err_unchecked": [
-    { "kind": "arg", "sp": "Unwrap", "arg": 0 }
+  "alloc::sync::assume_init": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::ptr::non_null::new_unchecked": [
-    { "kind": "arg", "sp": "!Null", "arg": 0 }
+  "alloc::sync::decrement_strong_count": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "std::ptr::non_null::new_unchecked": [
-    { "kind": "arg", "sp": "!Null", "arg": 0 }
+  "alloc::sync::decrement_strong_count_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::num::nonzero::new_unchecked": [
-    { "kind": "non_zero", "arg": 0 }
+  "alloc::sync::downcast_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::num::NonZero::new_unchecked": [
-    { "kind": "non_zero", "arg": 0 }
+  "alloc::sync::from_raw": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::mem::maybe_uninit::assume_init": [
-    { "kind": "arg", "sp": "Init", "arg": 0 }
+  "alloc::sync::from_raw_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::mem::maybe_uninit::assume_init_read": [
-    { "kind": "arg", "sp": "Init", "arg": 0 }
+  "alloc::sync::get_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::mem::maybe_uninit::assume_init_ref": [
-    { "kind": "arg", "sp": "Init", "arg": 0 }
+  "alloc::sync::increment_strong_count": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
-  "core::mem::maybe_uninit::assume_init_mut": [
-    { "kind": "arg", "sp": "Init", "arg": 0 }
+  "alloc::sync::increment_strong_count_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::Vec::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_len",
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        2
+      ],
+      "role": "len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg2 * size_of(T) <= isize::MAX)",
+      "role": "capacity_total_size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "allocation_layout",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::Vec::from_raw_parts_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_len",
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        2
+      ],
+      "role": "len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg2 * size_of(T) <= isize::MAX)",
+      "role": "capacity_total_size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "allocation_layout",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::Vec::set_len": [
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        0
+      ],
+      "role": "new_len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_prefix",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::from_parts": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::from_parts_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_len",
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        2
+      ],
+      "role": "len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg2 * size_of(T) <= isize::MAX)",
+      "role": "capacity_total_size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "allocation_layout",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::from_raw_parts_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_len",
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        2
+      ],
+      "role": "len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg2 * size_of(T) <= isize::MAX)",
+      "role": "capacity_total_size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "allocation_layout",
+      "usage": "precondition"
+    }
+  ],
+  "alloc::vec::set_len": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::Allocator::deallocate": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::Allocator::grow": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::Allocator::grow_zeroed": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::Allocator::shrink": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::deallocate": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::global::GlobalAlloc::alloc": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::global::GlobalAlloc::alloc_zeroed": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::global::GlobalAlloc::dealloc": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::global::GlobalAlloc::realloc": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::grow": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::grow_zeroed": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::layout::for_value_raw": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidSlice",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidTraitObj",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::layout::from_size_align_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "non_zero",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "power_of_two",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "role": "align",
+      "usage": "precondition"
+    }
+  ],
+  "core::alloc::shrink": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::any::downcast_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::any::downcast_ref_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::array::ascii::as_ascii_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::array::iter::new_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ascii::ascii_char::digit_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ascii::ascii_char::from_u8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::cell::try_borrow_unguarded": [
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::char::convert::from_u32_unchecked": [
+    {
+      "kind": "unicode_scalar",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::char::from_u32_unchecked": [
+    {
+      "kind": "unicode_scalar",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::char::methods::from_u32_unchecked": [
+    {
+      "kind": "unicode_scalar",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::clone::clone_to_uninit": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::convert::num::FloatToInt::to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::convert::num::to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::f128::to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::f16::to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::f32::to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::f64::to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ffi::CStr::from_ptr": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::ffi::c_str::from_bytes_with_nul_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::ffi::c_str::from_ptr": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ffi::va_list::arg": [
+    {
+      "kind": "arg",
+      "sp": "",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ffi::va_list::with_copy": [
+    {
+      "kind": "arg",
+      "sp": "",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::future::async_drop::async_drop_in_place": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::hint::assert_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
   ],
   "core::hint::unreachable_unchecked": [
-    { "kind": "no_args", "sp": "Unreachable" }
+    {
+      "kind": "no_args",
+      "sp": "Unreachable",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::assume": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::const_allocate": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::const_deallocate": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::copy": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 2,
+      "role": "count",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::intrinsics::copy::copy": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::intrinsics::copy_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "NonOverlap",
+      "args": [
+        0,
+        1,
+        2
+      ],
+      "role": "src_dst_count",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 2,
+      "role": "count",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::intrinsics::drop_in_place": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::float_to_int_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::min_align_of_val": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidSlice",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidTraitObj",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::pref_align_of": [
+    {
+      "kind": "arg",
+      "sp": "",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::ptr_offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::size_of_val": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidSlice",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidTraitObj",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::typed_swap": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::vtable_align": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::vtable_size": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::intrinsics::write_bytes": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::io::borrowed_buf::advance_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::io::borrowed_buf::as_mut": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::io::borrowed_buf::set_init": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::iter::range::Step::backward_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::iter::range::Step::forward_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::iter::range::backward_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::iter::range::forward_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::align_of_val_raw": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidSlice",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidTraitObj",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::manually_drop::drop": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::manually_drop::take": [
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::array_assume_init": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::assume_init": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::assume_init_drop": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::assume_init_mut": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::assume_init_read": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::mem::maybe_uninit::assume_init_ref": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::slice_assume_init_mut": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::maybe_uninit::slice_assume_init_ref": [
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::size_of_val_raw": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidSlice",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidTraitObj",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::transmutability::TransmuteFrom::transmute": [
+    {
+      "kind": "arg",
+      "sp": "DoubleAligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::transmute_copy": [
+    {
+      "kind": "arg",
+      "sp": "DoubleAligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::uninitialized": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::mem::zeroed": [
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::NonZero::new_unchecked": [
+    {
+      "kind": "non_zero",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::num::nonzero::from_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::nonzero::new_unchecked": [
+    {
+      "kind": "non_zero",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::num::nonzero::unchecked_add": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::nonzero::unchecked_mul": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::unchecked_add": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::unchecked_mul": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::unchecked_neg": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::unchecked_shl": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::unchecked_shr": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::num::unchecked_sub": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::option::unwrap_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Unwrap",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::pin::get_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "Pinned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
+  ],
+  "core::pin::into_inner_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Pinned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
+  ],
+  "core::pin::map_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Pinned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
+  ],
+  "core::pin::map_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "Pinned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
+  ],
+  "core::pin::new_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Pinned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
+  ],
+  "core::ptr::alignment::new_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::add": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::as_ref": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::const_ptr::as_ref_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::const_ptr::as_uninit_ref": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::as_uninit_slice": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::byte_add": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::byte_offset": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::byte_offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::byte_sub": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::copy_to": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::const_ptr::copy_to_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::get_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::non_null::sub_ptr": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::offset": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::read": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::const_ptr::read_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::const_ptr::read_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::const_ptr::sub": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::const_ptr::sub_ptr": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::copy": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 2,
+      "role": "count",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::copy_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "NonOverlap",
+      "args": [
+        0,
+        1,
+        2
+      ],
+      "role": "src_dst_count",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 2,
+      "role": "count",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::drop_in_place": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::add": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::as_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::mut_ptr::as_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::mut_ptr::as_ref": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::mut_ptr::as_ref_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::mut_ptr::as_uninit_mut": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::as_uninit_ref": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::as_uninit_slice": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::as_uninit_slice_mut": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::byte_add": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::byte_offset": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::byte_offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::byte_sub": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::copy_from": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::copy_from_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::copy_to": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::mut_ptr::copy_to_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::drop_in_place": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::get_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::offset": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::read": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::read_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::read_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::replace": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::split_at_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::split_at_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::sub": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::sub_ptr": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::swap": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::write": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::write_bytes": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::write_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::mut_ptr::write_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::add": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::as_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::non_null::as_ref": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "usage": "hazard",
+      "role": "post_ref_alias"
+    }
+  ],
+  "core::ptr::non_null::as_uninit_mut": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::as_uninit_ref": [
+    {
+      "kind": "arg",
+      "sp": "NonNull |",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr2Ref",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::as_uninit_slice": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::as_uninit_slice_mut": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::byte_add": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::byte_offset": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::byte_offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::byte_sub": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::copy_from": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::copy_from_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::copy_to": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::non_null::copy_to_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Volatile",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::drop_in_place": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::get_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::new_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::offset": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::offset_from": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::read": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::read_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::read_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::replace": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::sub": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::sub_ptr": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::swap": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::write": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::write_bytes": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::write_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::non_null::write_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::offset": [
+    {
+      "kind": "offset_in_alloc",
+      "offset_arg": 1,
+      "ptr_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::read": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::read_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::read_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "CopyTrait",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "option"
+    }
+  ],
+  "core::ptr::replace": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::swap": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::swap_nonoverlapping": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "NonOverlap",
+      "args": [
+        0,
+        1,
+        2
+      ],
+      "role": "x_y_count",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 2,
+      "role": "count",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::write": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::write_unaligned": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::ptr::write_volatile": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::result::unwrap_err_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Unwrap",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::result::unwrap_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Unwrap",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::align_to": [
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::align_to_mut": [
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Typed",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::as_chunks_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::as_chunks_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::ascii::as_ascii_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_range",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, T)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::from_raw_parts_mut": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_range",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, T)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::get_unchecked": [
+    {
+      "kind": "lt_len",
+      "value_arg": 1,
+      "container_arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::get_unchecked_mut": [
+    {
+      "kind": "lt_len",
+      "value_arg": 1,
+      "container_arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked": [
+    {
+      "kind": "lt_len",
+      "value_arg": 0,
+      "container_arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked_mut": [
+    {
+      "kind": "lt_len",
+      "value_arg": 0,
+      "container_arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::index::get_unchecked": [
+    {
+      "kind": "lt_len",
+      "value_arg": 0,
+      "container_arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::index::get_unchecked_mut": [
+    {
+      "kind": "lt_len",
+      "value_arg": 0,
+      "container_arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::raw::from_mut_ptr_range": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::raw::from_ptr_range": [
+    {
+      "kind": "arg",
+      "sp": "NonNull",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "!Size",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::raw::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_range",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, T)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::raw::from_raw_parts_mut": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_range",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, T)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::split_at_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::split_at_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::slice::swap_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::as_bytes_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "hazard"
+    }
+  ],
+  "core::str::converts::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_bytes",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "utf8",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, u8)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::converts::from_raw_parts_mut": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_bytes",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "utf8",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, u8)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::converts::from_utf8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::str::converts::from_utf8_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::str::from_utf8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::str::from_utf8_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "core::str::get_unchecked": [
+    {
+      "kind": "lt_len",
+      "value_arg": 1,
+      "container_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::get_unchecked_mut": [
+    {
+      "kind": "lt_len",
+      "value_arg": 1,
+      "container_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::slice_mut_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::slice_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "InBounded",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::traits::get_unchecked": [
+    {
+      "kind": "lt_len",
+      "value_arg": 1,
+      "container_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::str::traits::get_unchecked_mut": [
+    {
+      "kind": "lt_len",
+      "value_arg": 1,
+      "container_arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::sync::atomic::from_ptr": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::task::wake::from_raw": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "core::task::wake::new": [
+    {
+      "kind": "arg",
+      "sp": "System_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::alloc::Layout::from_size_align_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Size",
+      "arg": 0,
+      "role": "size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "non_zero",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "power_of_two",
+      "arg": 1,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 1,
+      "role": "align",
+      "usage": "precondition"
+    }
+  ],
+  "std::alloc::deallocate": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::alloc::grow": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::alloc::grow_zeroed": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::alloc::shrink": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::collections::hash::map::get_many_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "NonOverlap",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::env::remove_var": [
+    {
+      "kind": "arg",
+      "sp": "System_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::env::set_var": [
+    {
+      "kind": "arg",
+      "sp": "System_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::ffi::CStr::from_ptr": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::ffi::c_str::from_bytes_with_nul_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::ffi::c_str::from_ptr": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidCStr",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::ffi::os_str::clone_to_uninit": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::ffi::os_str::from_encoded_bytes_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::from_raw_handle": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::fd::net::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::fd::owned::borrow_raw": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::fd::owned::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::fd::raw::FromRawFd::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::fd::raw::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::linux::process::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::unix::net::datagram::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::unix::net::listener::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::unix::net::stream::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::unix::process::CommandExt::before_exec": [
+    {
+      "kind": "arg",
+      "sp": "System_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::unix::process::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::os::unix::process::pre_exec": [
+    {
+      "kind": "arg",
+      "sp": "System_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::path::clone_to_uninit": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::ptr::non_null::new_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::raw_attribute": [
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidNum",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::slice::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_range",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, T)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "std::slice::from_raw_parts_mut": [
+    {
+      "kind": "arg",
+      "sp": "!Null",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_range",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "allocation_alive",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Alias",
+      "arg": 0,
+      "role": "aliasing",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "InBound(arg0, arg1, T)",
+      "role": "ptr_len_object",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg1 * size_of(T) <= isize::MAX)",
+      "role": "total_size_isize",
+      "usage": "precondition"
+    }
+  ],
+  "std::str::from_utf8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::str::from_utf8_unchecked_mut": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::string::String::from_utf8_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::anonymous_pipe::unix::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::os_str::bytes::clone_to_uninit": [
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::os_str::bytes::from_encoded_bytes_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "ValidString",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::pal::unix::fd::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::pal::unix::fs::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::pal::unix::linux::pidfd::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::pal::unix::net::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::pal::unix::pipe::from_raw_fd": [
+    {
+      "kind": "arg",
+      "sp": "Opened",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::sys::pal::unix::process::process_common::pre_exec": [
+    {
+      "kind": "arg",
+      "sp": "System_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::thread::from_raw": [
+    {
+      "kind": "arg",
+      "sp": "Ownning",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::thread::spawn_unchecked": [
+    {
+      "kind": "arg",
+      "sp": "Alive",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Function_sp",
+      "arg": 0,
+      "role": "std_sp_site_0",
+      "usage": "precondition"
+    }
+  ],
+  "std::vec::Vec::from_raw_parts": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_len",
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        2
+      ],
+      "role": "len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg2 * size_of(T) <= isize::MAX)",
+      "role": "capacity_total_size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "allocation_layout",
+      "usage": "precondition"
+    }
+  ],
+  "std::vec::Vec::from_raw_parts_in": [
+    {
+      "kind": "arg",
+      "sp": "Allocated",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Aligned",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "ValidPtr",
+      "arg": 0,
+      "role": "ptr",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Init",
+      "arg": 0,
+      "role": "initialized_len",
+      "usage": "precondition"
+    },
+    {
+      "kind": "args",
+      "sp": "InBound",
+      "args": [
+        1,
+        2
+      ],
+      "role": "len_capacity",
+      "usage": "precondition"
+    },
+    {
+      "kind": "predicate",
+      "predicate": "ValidNum(arg2 * size_of(T) <= isize::MAX)",
+      "role": "capacity_total_size",
+      "usage": "precondition"
+    },
+    {
+      "kind": "arg",
+      "sp": "Layout",
+      "arg": 0,
+      "role": "allocation_layout",
+      "usage": "precondition"
+    }
   ]
 }
