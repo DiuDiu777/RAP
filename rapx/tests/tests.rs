@@ -504,7 +504,7 @@ fn test_verify_named_contract_argument_binding() {
     );
     assert_contain(
         &output,
-        "function: sound_pre_scc_guard_with_scc_offsets | result: UNSOUND",
+        "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND",
     );
     assert_contain(
         &output,
