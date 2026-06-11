@@ -11,11 +11,11 @@ use rustc_data_structures::fx::FxHashMap;
 use rustc_middle::ty::TyCtxt;
 
 use super::{
-    path_refine::BackwardVisitor,
     contract::Property,
     forward_visit::ForwardVisitor,
     helpers::Callsite,
     path::{FunctionPaths, Path, PathExtractor},
+    path_refine::BackwardVisitor,
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     smt_check::SmtChecker,
     target::{FunctionTarget, VerifyTargetCollector},
@@ -162,6 +162,55 @@ pub struct CallsiteCheckView<'view, 'target, 'tcx> {
     pub properties: &'target [Property<'tcx>],
 }
 
+/// Analysis pass that runs verification and emits function-level summaries.
+pub struct VerifyRun<'tcx> {
+    tcx: TyCtxt<'tcx>,
+}
+
+impl<'tcx> VerifyRun<'tcx> {
+    /// Create the default verify pass for the current compiler type context.
+    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+        Self { tcx }
+    }
+}
+
+impl<'tcx> Analysis for VerifyRun<'tcx> {
+    fn name(&self) -> &'static str {
+        "Verify Driver"
+    }
+
+    /// Collect verify targets, run the staged driver, and emit a compact summary.
+    fn run(&mut self) {
+        let mut collector = VerifyTargetCollector::new(self.tcx);
+        self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
+
+        for target in &collector.function_targets {
+            let target_path = self.tcx.def_path_str(target.def_id);
+            let driver = VerifyDriver::new(self.tcx, target);
+            let report = driver.verify_function();
+            let total = report.results.len();
+            let unproved = report
+                .results
+                .iter()
+                .filter(|result| !matches!(result.result, super::report::CheckResult::Proved))
+                .count();
+
+            if unproved == 0 {
+                rap_info!("[rapx::verify] function: {target_path} | result: SOUND");
+            } else {
+                rap_warn!("[rapx::verify] function: {target_path} | result: UNSOUND");
+                rap_debug!(
+                    "[rapx::verify] function: {target_path} | checks not proved: {unproved}/{total}"
+                );
+            }
+
+            rap_debug!("{}", report.describe());
+        }
+    }
+
+    fn reset(&mut self) {}
+}
+
 /// Analysis pass that dumps backward and forward visitor diagnostics.
 pub struct VerifyVisitDump<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -181,23 +230,23 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
 
     /// Collect verify targets and print the current staged visitor output.
     fn run(&mut self) {
-        rap_info!("======== #[rapx::verify] visitor diagnostics ========");
+        rap_debug!("======== #[rapx::verify] visitor diagnostics ========");
         let mut collector = VerifyTargetCollector::new(self.tcx);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {
             let target_path = self.tcx.def_path_str(target.def_id);
-            rap_info!(
-                "[rapx::verify::dump-visits] target: {} (DefId: {:?})",
+            rap_debug!(
+                "[rapx::verify::diagnostics] target: {} (DefId: {:?})",
                 target_path,
                 target.def_id
             );
             let driver = VerifyDriver::new(self.tcx, target);
             let report = driver.verify_function();
-            rap_info!("{}", report.describe());
+            rap_debug!("{}", report.describe());
         }
 
-        rap_info!("=======================================");
+        rap_debug!("=======================================");
     }
 
     fn reset(&mut self) {}

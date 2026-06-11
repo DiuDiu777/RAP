@@ -19,12 +19,12 @@ use rustc_middle::{
 };
 
 use super::{
-    path_refine::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
     call_summary::{self, CallEffect, CallEffectSummary},
     contract::Property,
     def_use::PlaceKey,
     helpers::CallsiteLocation,
     path::{Path, PathStep},
+    path_refine::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
 };
 
 /// Visits relevant MIR items forward and builds an abstract state.

@@ -1,5 +1,4 @@
 pub mod attribute;
-pub mod path_refine;
 pub mod call_summary;
 mod contract;
 pub mod def_use;
@@ -7,6 +6,7 @@ pub mod driver;
 pub mod forward_visit;
 mod helpers;
 pub mod path;
+pub mod path_refine;
 pub mod report;
 pub mod smt_check;
 pub mod target;
