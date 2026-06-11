@@ -8,8 +8,8 @@
 
 use std::fmt::Write;
 
-use rustc_middle::mir::{BasicBlock, Operand, StatementKind, TerminatorKind};
 use rustc_middle::mir::Body;
+use rustc_middle::mir::{BasicBlock, Operand, StatementKind, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::Spanned;
 
@@ -19,7 +19,7 @@ use crate::graphs::dataflow::DataflowGraph;
 use super::{
     call_summary,
     def_use::{
-        bind_callsite_roots, call_args_uses_at, operand_uses, terminator_use_def, RelevantPlaces,
+        RelevantPlaces, bind_callsite_roots, call_args_uses_at, operand_uses, terminator_use_def,
     },
     helpers::{Callsite, CallsiteLocation},
     path::{Path, PathStep},
@@ -108,7 +108,14 @@ impl<'tcx> BackwardVisitor<'tcx> {
             PathStep::Block(block) => {
                 let block_data = &body.basic_blocks[*block];
                 if *block != callsite.block {
-                    self.visit_terminator(*block, block_data.terminator(), flow, body, relevant, items);
+                    self.visit_terminator(
+                        *block,
+                        block_data.terminator(),
+                        flow,
+                        body,
+                        relevant,
+                        items,
+                    );
                 }
                 for (statement_index, statement) in block_data.statements.iter().enumerate().rev() {
                     self.visit_statement(*block, statement_index, statement, flow, relevant, items);
@@ -152,9 +159,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
             for &local in &defs.locals {
                 for &edge_idx in &flow.node(local).in_edges {
                     let edge = &flow.edges[edge_idx];
-                    if edge.block == block.as_usize()
-                        && edge.statement_index == statement_index
-                    {
+                    if edge.block == block.as_usize() && edge.statement_index == statement_index {
                         uses.insert_local(edge.src);
                     }
                 }
@@ -180,9 +185,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
             for &local in &defs.locals {
                 for &edge_idx in &flow.node(local).in_edges {
                     let edge = &flow.edges[edge_idx];
-                    if edge.block == block.as_usize()
-                        && edge.statement_index == statement_index
-                    {
+                    if edge.block == block.as_usize() && edge.statement_index == statement_index {
                         uses.insert_local(edge.src);
                     }
                 }
@@ -452,7 +455,9 @@ pub enum BackwardItem<'tcx> {
     /// A path-level step retained as structural context.
     PathStep { step: PathStep, kind: KeepReason },
     /// A contract fact retained as a visit input.
-    ContractFact { property: super::contract::Property<'tcx> },
+    ContractFact {
+        property: super::contract::Property<'tcx>,
+    },
     /// A conservative loss of precision for relevant state.
     Forget { reason: ForgetReason },
 }
@@ -514,8 +519,8 @@ fn statement_can_refine(statement: &rustc_middle::mir::Statement<'_>) -> bool {
         StatementKind::Assign(box (
             _,
             rustc_middle::mir::Rvalue::BinaryOp(_, _)
-                | rustc_middle::mir::Rvalue::UnaryOp(_, _)
-                | rustc_middle::mir::Rvalue::Cast(_, _, _),
+            | rustc_middle::mir::Rvalue::UnaryOp(_, _)
+            | rustc_middle::mir::Rvalue::Cast(_, _, _),
         ))
     )
 }
@@ -626,10 +631,7 @@ fn describe_path_step(step: &PathStep) -> String {
     }
 }
 
-fn describe_backward_item(
-    item: &BackwardItem<'_>,
-    body: &rustc_middle::mir::Body<'_>,
-) -> String {
+fn describe_backward_item(item: &BackwardItem<'_>, body: &rustc_middle::mir::Body<'_>) -> String {
     match item {
         BackwardItem::Statement {
             block,

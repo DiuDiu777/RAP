@@ -91,7 +91,7 @@ impl<'tcx> VerificationReport<'tcx> {
     pub fn describe(&self) -> String {
         let mut out = String::new();
         out.push_str(&format!(
-            "[rapx::verify::dump-visits] function {:?}: {} check item(s)\n",
+            "[rapx::verify::diagnostics] function {:?}: {} check item(s)\n",
             self.function,
             self.results.len()
         ));

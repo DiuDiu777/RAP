@@ -20,5 +20,4 @@ pub struct CheckArgs {
     /// automatically detect code optimization chances
     #[arg(short = 'o', long, default_missing_value = "default")]
     pub opt: Option<OptLevel>,
-
 }

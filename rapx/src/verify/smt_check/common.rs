@@ -38,8 +38,8 @@ use z3::{
 use super::{align, in_bound, init, non_null, valid_ptr};
 
 use crate::verify::{
-    def_use::{PlaceBaseKey, PlaceKey},
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
+    def_use::{PlaceBaseKey, PlaceKey},
     forward_visit::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
     helpers::{Callsite, callee_param_index_for_local},
     report::CheckResult,

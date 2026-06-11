@@ -37,22 +37,16 @@ extern crate thin_vec;
 
 use crate::{
     analysis::{alias_analysis::mfp::MfpAliasAnalyzer, api_dependency, scan::ScanAnalysis},
-    check::{
-        opt::Opt,
-        rcanary::rCanary,
-        safedrop::SafeDrop,
-    },
+    check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop},
     cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptLevel, RapxArgs, VerifyArgs},
-    verify::{driver::VerifyVisitDump, target::PrepareTargets},
+    verify::{driver::VerifyRun, target::PrepareTargets},
 };
 use analysis::{
     Analysis,
     alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
     api_dependency::ApiDependencyAnalyzer,
     callgraph::{CallGraphAnalysis, FnCallDisplay, default::CallGraphAnalyzer},
-    dataflow::{
-        Arg2RetMapWrapper, DataflowAnalysis, default::DataflowAnalyzer,
-    },
+    dataflow::{Arg2RetMapWrapper, DataflowAnalysis, default::DataflowAnalyzer},
     ownedheap_analysis::{OHAResultMapWrapper, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
     path_analysis::{PathMapWrapper, default::PathAnalyzer},
     range_analysis::{
@@ -157,11 +151,7 @@ impl Callbacks for RapCallback {
 /// Start the analysis with the features enabled.
 pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
     match &callback.args.command {
-        Commands::Check(CheckArgs {
-            uaf,
-            mleak,
-            opt,
-        }) => {
+        Commands::Check(CheckArgs { uaf, mleak, opt }) => {
             if uaf.is_some() {
                 SafeDrop::new(tcx).start();
             }
@@ -275,15 +265,11 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
         },
 
-        Commands::Verify(VerifyArgs {
-            prepare_targets,
-            dump_visits,
-        }) => {
+        Commands::Verify(VerifyArgs { prepare_targets }) => {
             if *prepare_targets {
                 PrepareTargets::new(tcx).run();
-            }
-            if *dump_visits {
-                VerifyVisitDump::new(tcx).run();
+            } else {
+                VerifyRun::new(tcx).run();
             }
         }
     }

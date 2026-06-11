@@ -1,3 +1,4 @@
+use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
         AggregateKind, BorrowKind, Const, Local, Operand, Place, PlaceElem, Rvalue, Statement,
@@ -5,7 +6,6 @@ use rustc_middle::{
     },
     ty::{TyCtxt, TyKind},
 };
-use rustc_hir::def_id::DefId;
 use rustc_span::Span;
 
 use crate::graphs::dataflow::*;
@@ -13,8 +13,7 @@ use crate::graphs::dataflow::*;
 /// Build a `DataflowGraph` for a single function identified by `def_id`.
 pub fn build_dataflow_graph(tcx: TyCtxt<'_>, def_id: DefId) -> DataflowGraph {
     let body = tcx.optimized_mir(def_id);
-    let mut graph =
-        DataflowGraph::new(def_id, body.span, body.arg_count, body.local_decls.len());
+    let mut graph = DataflowGraph::new(def_id, body.span, body.arg_count, body.local_decls.len());
     for (block_idx, bb) in body.basic_blocks.iter().enumerate() {
         graph.block = block_idx;
         for (stmt_idx, stmt) in bb.statements.iter().enumerate() {

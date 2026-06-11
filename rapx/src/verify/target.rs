@@ -221,7 +221,7 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
 
     /// Runs the collection pass and logs targets, struct invariants, unsafe callees, and contracts.
     fn run(&mut self) {
-        rap_info!("======== #[rapx::verify] identify targets ========");
+        rap_debug!("======== #[rapx::verify] identify targets ========");
         let mut collector = VerifyTargetCollector::new(self.tcx);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
@@ -241,17 +241,17 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
                 continue;
             };
             let struct_path = self.tcx.def_path_str(struct_target.def_id);
-            rap_info!(
+            rap_debug!(
                 "[rapx::verify::identify-targets] struct target: {} (DefId: {:?})",
                 struct_path,
                 struct_target.def_id
             );
 
             if struct_target.invariants.is_empty() {
-                rap_info!("  struct invariants: <none>");
+                rap_debug!("  struct invariants: <none>");
             } else {
                 for property in &struct_target.invariants {
-                    rap_info!(
+                    rap_debug!(
                         "  struct invariant: kind={:?}, args={:?}",
                         property.kind,
                         property.args
@@ -276,13 +276,13 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
             .count();
         let total_struct_targets = collector.struct_targets.len();
 
-        rap_info!(
+        rap_debug!(
             "total: {} free function target(s) to verify, {} method target(s) to verify, {} struct target(s) to verify",
             total_free_function_targets,
             total_method_targets,
             total_struct_targets
         );
-        rap_info!("=======================================");
+        rap_debug!("=======================================");
     }
 
     fn reset(&mut self) {}
@@ -302,11 +302,11 @@ impl<'tcx> PrepareTargets<'tcx> {
         } else {
             "[rapx::verify::identify-targets] function target"
         };
-        rap_info!("{}: {} (DefId: {:?})", prefix, target_path, target.def_id);
+        rap_debug!("{}: {} (DefId: {:?})", prefix, target_path, target.def_id);
 
         if let Some(struct_def_id) = target.owner_struct_def_id {
             let struct_path = self.tcx.def_path_str(struct_def_id);
-            rap_info!(
+            rap_debug!(
                 "    owner struct: {} (DefId: {:?})",
                 struct_path,
                 struct_def_id
@@ -314,7 +314,7 @@ impl<'tcx> PrepareTargets<'tcx> {
         }
 
         if target.callee_requires.is_empty() {
-            rap_info!("    unsafe callees: <none>");
+            rap_debug!("    unsafe callees: <none>");
             return;
         }
 
@@ -323,7 +323,7 @@ impl<'tcx> PrepareTargets<'tcx> {
 
         for unsafe_callee_def_id in unsafe_callee_ids {
             let unsafe_callee_path = self.tcx.def_path_str(unsafe_callee_def_id);
-            rap_info!(
+            rap_debug!(
                 "    unsafe callee: {} (DefId: {:?})",
                 unsafe_callee_path,
                 unsafe_callee_def_id
@@ -332,7 +332,7 @@ impl<'tcx> PrepareTargets<'tcx> {
             match target.callee_requires.get(&unsafe_callee_def_id) {
                 Some(requires) if !requires.is_empty() => {
                     for property in requires {
-                        rap_info!(
+                        rap_debug!(
                             "      safety contract: kind={:?}, args={:?}",
                             property.kind,
                             property.args
@@ -340,7 +340,7 @@ impl<'tcx> PrepareTargets<'tcx> {
                     }
                 }
                 _ => {
-                    rap_info!("      safety contract: <none>");
+                    rap_debug!("      safety contract: <none>");
                 }
             }
         }
@@ -351,13 +351,13 @@ impl<'tcx> PrepareTargets<'tcx> {
     /// Logs unsafe callsites and SCC-aware path skeletons for one target.
     fn log_function_paths(&self, target: &FunctionTarget<'tcx>) {
         if target.callsites.is_empty() {
-            rap_info!("    unsafe callsites: <none>");
+            rap_debug!("    unsafe callsites: <none>");
             return;
         }
 
         let result = PathExtractor::new(self.tcx, target.def_id, target.callsites.clone()).run();
 
-        rap_info!("    detected SCC region(s): {}", result.scc_regions().len());
+        rap_debug!("    detected SCC region(s): {}", result.scc_regions().len());
         for scc_info in result.scc_regions() {
             let body: Vec<_> = scc_info
                 .blocks
@@ -369,7 +369,7 @@ impl<'tcx> PrepareTargets<'tcx> {
                 .iter()
                 .map(|exit| format!("bb{}->bb{}", exit.from.as_usize(), exit.to.as_usize()))
                 .collect();
-            rap_info!(
+            rap_debug!(
                 "      SCC bb{}: body={:?}, exits={:?}",
                 scc_info.representative.as_usize(),
                 body,
@@ -378,7 +378,7 @@ impl<'tcx> PrepareTargets<'tcx> {
         }
 
         for (display_index, callsite) in result.callsites().iter().enumerate() {
-            rap_info!(
+            rap_debug!(
                 "    unsafe callsite #{}: {} at bb{} ({} arg(s))",
                 display_index,
                 callsite.callee_name(self.tcx),
@@ -390,7 +390,7 @@ impl<'tcx> PrepareTargets<'tcx> {
             callsite_paths.sort_by_key(|path| path.describe());
 
             if callsite_paths.is_empty() {
-                rap_info!("      paths: <none>");
+                rap_debug!("      paths: <none>");
                 continue;
             }
 
@@ -398,17 +398,17 @@ impl<'tcx> PrepareTargets<'tcx> {
                 let kind = match path.start {
                     PathStart::FunctionEntry => "entry",
                     PathStart::SccRepresentative { representative } => {
-                        rap_info!(
+                        rap_debug!(
                             "      path {} kind: scc-representative(bb{})",
                             path_idx,
                             representative.as_usize()
                         );
-                        rap_info!("      path {}: {}", path_idx, path.describe());
+                        rap_debug!("      path {}: {}", path_idx, path.describe());
                         continue;
                     }
                 };
-                rap_info!("      path {} kind: {}", path_idx, kind);
-                rap_info!("      path {}: {}", path_idx, path.describe());
+                rap_debug!("      path {} kind: {}", path_idx, kind);
+                rap_debug!("      path {}: {}", path_idx, path.describe());
             }
         }
     }

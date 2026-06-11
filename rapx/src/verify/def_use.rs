@@ -7,9 +7,7 @@
 //! focused on path-level decisions (calls, SCC exits, path conditions).
 
 use rustc_data_structures::fx::FxHashSet;
-use rustc_middle::mir::{
-    Local, Operand, Place, ProjectionElem, Terminator, TerminatorKind,
-};
+use rustc_middle::mir::{Local, Operand, Place, ProjectionElem, Terminator, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::Spanned;
 

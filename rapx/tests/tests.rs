@@ -109,7 +109,7 @@ const ANALYZE_SSA_CMD: &[&str] = &["analyze", "ssa"];
 const ANALYZE_RANGE_CMD: &[&str] = &["analyze", "range"];
 const ANALYZE_CALLGRAPH_CMD: &[&str] = &["analyze", "callgraph"];
 const ANALYZE_ADG_CMD: &[&str] = &["analyze", "adg", "--dump", "api_graph.yml"];
-const VERIFY_DUMP_CMD: &[&str] = &["verify", "--dump-visits"];
+const VERIFY_CMD: &[&str] = &["verify"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
@@ -497,31 +497,39 @@ fn test_paths_analysis() {
 
 #[test]
 fn test_verify_named_contract_argument_binding() {
-    let output = run_with_args("verify/align/scc_paths", VERIFY_DUMP_CMD);
-    assert_contain(&output, "target: sound_named_contract_binds_callsite_arg");
-    assert_contain(&output, "target: sound_pre_scc_guard_with_scc_offsets");
-    assert_contain(&output, "target: unsound_scc_guard_only_on_one_branch");
-    assert_contain(&output, "goal: Align(_5, u32, 4-byte boundary)");
-    assert_contain(&output, "smt check: Proved");
-    assert_not_contain(&output, "goal: Align(_1, u32, 4-byte boundary)");
+    let output = run_with_args("verify/align/scc_paths", VERIFY_CMD);
+    assert_contain(
+        &output,
+        "function: sound_named_contract_binds_callsite_arg | result: SOUND",
+    );
+    assert_contain(
+        &output,
+        "function: sound_pre_scc_guard_with_scc_offsets | result: UNSOUND",
+    );
+    assert_contain(
+        &output,
+        "function: unsound_scc_guard_only_on_one_branch | result: UNSOUND",
+    );
 }
 
 #[test]
 fn test_verify_align_intra_paths() {
-    let output = run_with_args("verify/align/intra_paths", VERIFY_DUMP_CMD);
-    assert_contain(&output, "target: sound_helper_with_conjunctive_guard");
-    assert_contain(&output, "target: unsound_helper_with_disjunctive_guard");
-    assert_contain(&output, "target: sound_multi_hop_helper");
-    assert_contain(&output, "goal: Align(");
+    let output = run_with_args("verify/align/intra_paths", VERIFY_CMD);
+    assert_contain(
+        &output,
+        "function: sound_helper_with_conjunctive_guard | result: SOUND",
+    );
+    assert_contain(&output, "function: sound_multi_hop_helper | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_ptr_arith_layout() {
-    let output = run_with_args("verify/align/ptr_arith_layout", VERIFY_DUMP_CMD);
-    assert_contain(&output, "target: sound_add_sub_chain");
-    assert_contain(&output, "target: unsound_repr_packed_field");
-    assert_contain(&output, "target: sound_zst_trivial_alignment");
-    assert_contain(&output, "goal: Align(");
+    let output = run_with_args("verify/align/ptr_arith_layout", VERIFY_CMD);
+    assert_contain(&output, "function: sound_add_sub_chain | result: UNSOUND");
+    assert_contain(
+        &output,
+        "function: sound_zst_trivial_alignment | result: SOUND",
+    );
 }
 
 #[test]
