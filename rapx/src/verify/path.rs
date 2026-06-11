@@ -11,6 +11,7 @@ use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
+use crate::analysis::path_analysis::graph::PathGraph;
 use crate::graphs::scc::{SccRegion, find_scc_regions};
 
 use super::helpers::{CFG, Callsite, CallsiteLocation};
@@ -51,23 +52,38 @@ struct SccInternalCtx<'a> {
 
 /// Extracts SCC-aware paths for one function body.
 pub struct PathExtractor<'tcx> {
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
     cfg: CFG,
     callsites: Vec<Callsite<'tcx>>,
     scc_regions: Vec<SccRegion>,
     block_to_scc: FxHashMap<BasicBlock, BasicBlock>,
     paths: FxHashMap<CallsiteLocation, Vec<Path>>,
+    path_graph: Option<PathGraph<'tcx>>,
 }
 
 impl<'tcx> PathExtractor<'tcx> {
     /// Create a path extractor for `def_id` and the callsites found in that body.
     pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, callsites: Vec<Callsite<'tcx>>) -> Self {
         Self {
+            tcx,
+            def_id,
             cfg: CFG::new(tcx, def_id),
             callsites,
             scc_regions: Vec::new(),
             block_to_scc: FxHashMap::default(),
             paths: FxHashMap::default(),
+            path_graph: None,
         }
+    }
+
+    /// Get (or create) the PathGraph for this function's full SCC enumeration.
+    fn path_graph(&mut self) -> &mut PathGraph<'tcx> {
+        self.path_graph.get_or_insert_with(|| {
+            let mut pg = PathGraph::new(self.tcx, self.def_id);
+            pg.find_scc();
+            pg
+        })
     }
 
     /// Run SCC-region detection and path extraction, then return path metadata.
@@ -97,7 +113,7 @@ impl<'tcx> PathExtractor<'tcx> {
     }
 
     /// Extract paths for one callsite according to whether it is inside an SCC region.
-    fn find_paths_for_callsite(&self, callsite: &Callsite<'tcx>) -> Vec<Path> {
+    fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
         if let Some(representative) = self.block_to_scc.get(&callsite.block).copied() {
             self.find_scc_internal_paths(representative, target, callsite.block)
@@ -108,7 +124,7 @@ impl<'tcx> PathExtractor<'tcx> {
 
     // ── entry-path search (target outside SCC) ──────────────────────────
 
-    fn find_entry_paths(&self, target: CallsiteLocation, target_block: BasicBlock) -> Vec<Path> {
+    fn find_entry_paths(&mut self, target: CallsiteLocation, target_block: BasicBlock) -> Vec<Path> {
         let mut results = Vec::new();
         let mut stack = vec![PathStep::Block(self.cfg.entry)];
         let mut visited = FxHashSet::default();
@@ -125,30 +141,46 @@ impl<'tcx> PathExtractor<'tcx> {
         results
     }
 
-    fn dfs_entry_paths(&self, current: BasicBlock, ctx: &mut EntrySearchCtx<'_>) {
+    fn dfs_entry_paths(&mut self, current: BasicBlock, ctx: &mut EntrySearchCtx<'_>) {
         if ctx.results.len() >= ctx.limit {
             return;
         }
 
         if current == ctx.target_block {
             ctx.stack.push(PathStep::Callsite(ctx.target));
-            ctx.results.push(Path {
-                target: ctx.target,
-                start: PathStart::FunctionEntry,
-                entry_prefix: Vec::new(),
-                steps: ctx.stack.clone(),
-            });
+            let path_blocks: Vec<usize> = ctx
+                .stack
+                .iter()
+                .filter_map(|s| match s {
+                    PathStep::Block(bb) => Some(bb.as_usize()),
+                    _ => None,
+                })
+                .collect();
+            let reachable = self
+                .path_graph()
+                .is_path_reachable(&path_blocks);
+            if reachable {
+                ctx.results.push(Path {
+                    target: ctx.target,
+                    start: PathStart::FunctionEntry,
+                    entry_prefix: Vec::new(),
+                    steps: ctx.stack.clone(),
+                });
+            }
             ctx.stack.pop();
             return;
         }
 
-        for &next in self.cfg.successors(current) {
+        let successors = self.cfg.successors(current).to_vec();
+        for &next in &successors {
             if ctx.results.len() >= ctx.limit {
                 break;
             }
 
-            if let Some(representative) = self.block_to_scc.get(&next).copied() {
-                if self.block_to_scc.get(&ctx.target_block).copied() == Some(representative) {
+            let scc_rep = self.block_to_scc.get(&next).copied();
+            if let Some(representative) = scc_rep {
+                let target_rep = self.block_to_scc.get(&ctx.target_block).copied();
+                if target_rep == Some(representative) {
                     continue;
                 }
                 self.follow_scc_exits(next, representative, ctx);
@@ -168,17 +200,18 @@ impl<'tcx> PathExtractor<'tcx> {
     }
 
     fn follow_scc_exits(
-        &self,
+        &mut self,
         entry: BasicBlock,
         representative: BasicBlock,
         ctx: &mut EntrySearchCtx<'_>,
     ) {
-        let Some(scc_info) = self.scc_by_representative(representative) else {
-            return;
+        let scc_region = match self.scc_by_representative(representative) {
+            Some(r) => r.clone(),
+            None => return,
         };
-        let scc_blocks: FxHashSet<BasicBlock> = scc_info.blocks.iter().copied().collect();
+        let scc_blocks: FxHashSet<BasicBlock> = scc_region.blocks.iter().copied().collect();
 
-        for exit in &scc_info.exits {
+        for exit in scc_region.exits {
             if ctx.results.len() >= ctx.limit {
                 break;
             }
@@ -186,8 +219,25 @@ impl<'tcx> PathExtractor<'tcx> {
                 continue;
             }
 
-            let internal_paths =
-                self.find_scc_paths_to(&scc_blocks, entry, exit.from, ctx.limit);
+            let internal_paths: Vec<Vec<BasicBlock>> = if entry == representative {
+                let pg = self.path_graph();
+                let scc_info = &pg.cfg.block(representative.as_usize()).scc;
+                if scc_info.nodes.is_empty() {
+                    vec![vec![entry]]
+                } else {
+                    let paths = pg.find_scc_paths(
+                        representative.as_usize(),
+                        &scc_info.clone(),
+                        &FxHashMap::default(),
+                    );
+                    paths
+                        .into_iter()
+                        .map(|p| p.blocks.into_iter().map(|i| BasicBlock::from(i)).collect())
+                        .collect()
+                }
+            } else {
+                self.find_scc_paths_to(&scc_blocks, entry, exit.from, ctx.limit)
+            };
 
             for internal_path in &internal_paths {
                 if ctx.results.len() >= ctx.limit {

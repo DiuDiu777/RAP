@@ -668,6 +668,62 @@ impl<'tcx> PathGraph<'tcx> {
         true
     }
 
+    /// Like `is_path_reachable` but returns the reconstructed discriminant
+    /// constraints. Returns `None` if the path is unreachable.
+    pub fn is_path_reachable_with_constraints(
+        &self,
+        path: &[usize],
+    ) -> Option<FxHashMap<usize, usize>> {
+        if path.is_empty() || path[0] != 0 {
+            return None;
+        }
+        self.check_reachability(path)
+    }
+
+    /// Check a path segment (may not start at block 0) and return
+    /// reconstructed constraints. Returns `None` if unreachable.
+    pub fn check_segment_reachability(
+        &self,
+        path: &[usize],
+    ) -> Option<FxHashMap<usize, usize>> {
+        if path.len() <= 1 {
+            return Some(FxHashMap::default());
+        }
+        self.check_reachability(path)
+    }
+
+    fn check_reachability(&self, path: &[usize]) -> Option<FxHashMap<usize, usize>> {
+        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
+
+        for i in 0..path.len() - 1 {
+            let cur = path[i];
+            let next = path[i + 1];
+
+            if cur >= self.cfg.blocks.len() || next >= self.cfg.blocks.len() {
+                return None;
+            }
+
+            if let Some(assigned) = self.assigned_locals.get(cur) {
+                for local in assigned {
+                    constraints.remove(local);
+                }
+            }
+
+            let successors = &self.cfg.block(cur).next;
+            if !successors.contains(&next) {
+                if !self.is_unwind_target(cur, next) {
+                    return None;
+                }
+            }
+
+            if !self.check_switch_transition(cur, next, &mut constraints) {
+                return None;
+            }
+        }
+
+        Some(constraints)
+    }
+
     /// Check whether `cur → next` is a valid `SwitchInt` transition given
     /// current discriminant constraints. Returns `false` when the transition
     /// contradicts a known discriminant value. Also records newly learned
