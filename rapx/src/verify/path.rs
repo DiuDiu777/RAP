@@ -358,19 +358,15 @@ impl<'tcx> PathExtractor<'tcx> {
             let internal_paths: Vec<Vec<BasicBlock>> = {
                 let pg = self.path_graph();
                 let scc_info = &pg.cfg.block(representative.as_usize()).scc;
-                if scc_info.nodes.is_empty() {
-                    vec![vec![representative]]
-                } else {
-                    let paths = pg.find_scc_paths(
-                        representative.as_usize(),
-                        &scc_info.clone(),
-                        &FxHashMap::default(),
-                    );
-                    paths
-                        .into_iter()
-                        .map(|p| p.blocks.into_iter().map(|i| BasicBlock::from(i)).collect())
-                        .collect()
-                }
+                let paths = pg.find_scc_paths(
+                    representative.as_usize(),
+                    &scc_info.clone(),
+                    &FxHashMap::default(),
+                );
+                paths
+                    .into_iter()
+                    .map(|p| p.blocks.into_iter().map(|i| BasicBlock::from(i)).collect())
+                    .collect()
             };
 
             for internal_path in &internal_paths {
