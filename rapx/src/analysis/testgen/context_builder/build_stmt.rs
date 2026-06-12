@@ -18,6 +18,26 @@ fn str_ref<'tcx>(region: ty::Region<'tcx>, tcx: TyCtxt<'tcx>) -> Ty<'tcx> {
     Ty::new_ref(tcx, region, tcx.types.str_, ty::Mutability::Not)
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum PointerOffset {
+    Bytes(usize),
+}
+
+fn allocation_backed_raw_ptr_expr(
+    base: &str,
+    inner_ty: &str,
+    mutability: ty::Mutability,
+    offset: PointerOffset,
+) -> String {
+    let base_ptr = match mutability {
+        ty::Mutability::Mut => format!("(&mut *{base} as *mut {inner_ty})"),
+        ty::Mutability::Not => format!("(&*{base} as *const {inner_ty})"),
+    };
+
+    let PointerOffset::Bytes(bytes) = offset;
+    format!("({base_ptr}).cast::<u8>().wrapping_add({bytes}).cast::<{inner_ty}>()")
+}
+
 impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     pub fn add_stmt(&mut self, stmt: Stmt<'tcx>) {
         let place = stmt.place();
@@ -444,9 +464,11 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             InputHintKind::DanglingPtr => self.add_dangling_ptr_recipe(ty),
             InputHintKind::NullPtr => self.add_null_ptr_recipe(ty),
             InputHintKind::MisalignedPtr | InputHintKind::InvalidAlign => {
-                self.add_addr_cast_ptr_recipe(ty, 3)
+                self.add_allocation_backed_ptr_recipe(ty, PointerOffset::Bytes(1))
             }
-            InputHintKind::OverlappingRange => self.add_addr_cast_ptr_recipe(ty, 0x1000),
+            InputHintKind::OverlappingRange => {
+                self.add_allocation_backed_ptr_recipe(ty, PointerOffset::Bytes(0x1000))
+            }
             InputHintKind::UninitValue => self.add_uninit_value_recipe(ty),
             _ => None,
         }
@@ -463,15 +485,27 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
         Some(self.add_raw_expr_stmt(ty, expr))
     }
 
-    fn add_addr_cast_ptr_recipe(&mut self, ty: Ty<'tcx>, addr: usize) -> Option<Var> {
+    fn add_allocation_backed_ptr_recipe(
+        &mut self,
+        ty: Ty<'tcx>,
+        offset: PointerOffset,
+    ) -> Option<Var> {
         let TyKind::RawPtr(inner_ty, mutability) = ty.kind() else {
             return None;
         };
-        let ptr_kind = match mutability {
-            ty::Mutability::Mut => "*mut",
-            ty::Mutability::Not => "*const",
+
+        let inner = self.add_input_stmts(*inner_ty);
+        let boxed = self.add_box_stmt(inner);
+        if mutability.is_mut() {
+            self.cx.lift_mutability(boxed, ty::Mutability::Mut);
         };
-        Some(self.add_raw_expr_stmt(ty, format!("{addr}usize as {ptr_kind} {inner_ty}")))
+        let expr = allocation_backed_raw_ptr_expr(
+            &boxed.to_string(),
+            &inner_ty.to_string(),
+            *mutability,
+            offset,
+        );
+        Some(self.add_raw_expr_stmt(ty, expr))
     }
 
     fn add_dangling_ptr_recipe(&mut self, ty: Ty<'tcx>) -> Option<Var> {
@@ -576,5 +610,29 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
 
     pub fn move_var(&mut self, var: Var) {
         self.live_state.remove(var.index());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allocation_backed_pointer_recipe_avoids_integer_to_pointer_casts() {
+        let expr =
+            allocation_backed_raw_ptr_expr("v1", "u32", ty::Mutability::Not, PointerOffset::Bytes(3));
+
+        assert!(expr.contains("cast::<u8>()"));
+        assert!(expr.contains("wrapping_add(3)"));
+        assert!(!expr.contains("usize as"));
+    }
+
+    #[test]
+    fn allocation_backed_mut_pointer_recipe_preserves_mutability() {
+        let expr =
+            allocation_backed_raw_ptr_expr("v1", "u32", ty::Mutability::Mut, PointerOffset::Bytes(1));
+
+        assert!(expr.contains("*mut u32"));
+        assert!(expr.contains("&mut *v1"));
     }
 }

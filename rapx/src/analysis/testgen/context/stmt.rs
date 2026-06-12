@@ -44,7 +44,8 @@ impl<'tcx> ApiCall<'tcx> {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum ExploitKind {
-    Debug, // use by Debug trait
+    Debug,        // non-observing reducer aid
+    DebugObserve, // observing witness use for temporal hazards
 }
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

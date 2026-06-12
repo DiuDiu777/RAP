@@ -130,7 +130,12 @@ impl InputHint {
     fn numeric_candidates(&self) -> Vec<NumericHint> {
         match &self.kind {
             InputHintKind::Numeric(hints) => hints.clone(),
-            InputHintKind::InvalidIndex => vec![NumericHint::Max, NumericHint::Literal(1024)],
+            InputHintKind::InvalidIndex => vec![
+                NumericHint::Literal(4),
+                NumericHint::Literal(8),
+                NumericHint::Literal(16),
+                NumericHint::Literal(1024),
+            ],
             InputHintKind::InvalidAlign => vec![NumericHint::Zero, NumericHint::Three],
             InputHintKind::NullPtr => vec![NumericHint::Zero],
             InputHintKind::DanglingPtr => vec![NumericHint::One],
@@ -241,5 +246,23 @@ impl InputHint {
             .choose(rng)
             .copied()
             .map(|hint| numeric_hint_for_uint(hint, uint_ty))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn invalid_index_prefers_near_boundary_values_over_global_max() {
+        let hint = InputHint::invalid_index("bounds");
+        let candidates = hint.numeric_candidates();
+
+        assert!(candidates.contains(&NumericHint::Literal(4)));
+        assert!(candidates.contains(&NumericHint::Literal(1024)));
+        assert!(
+            !candidates.contains(&NumericHint::Max),
+            "usize::MAX often triggers allocation/capacity panic before the sink"
+        );
     }
 }

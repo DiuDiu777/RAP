@@ -277,11 +277,16 @@ fn raw_ptr_cast_expr<'tcx>(
     mutability: Mutability,
     resolver: &PathResolver<'tcx>,
 ) -> String {
-    let ptr_kind = match mutability {
-        Mutability::Mut => "*mut",
-        Mutability::Not => "*const",
-    };
-    format!("{address}usize as {ptr_kind} {}", resolver.ty_str(inner_ty))
+    if address == 0 {
+        return null_ptr_expr(inner_ty, mutability, resolver);
+    }
+
+    let inner = resolver.ty_str(inner_ty);
+    let dangling = format!("std::ptr::NonNull::<{inner}>::dangling().as_ptr()");
+    match mutability {
+        Mutability::Mut => dangling,
+        Mutability::Not => format!("{dangling} as *const {inner}"),
+    }
 }
 
 fn null_ptr_expr<'tcx>(

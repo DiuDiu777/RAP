@@ -126,6 +126,14 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
     }
 
     pub fn try_add_exploit_stmt_for(&mut self, var: Var) -> bool {
+        self.try_add_debug_stmt_for(var, ExploitKind::Debug)
+    }
+
+    pub fn try_add_observer_stmt_for(&mut self, var: Var) -> bool {
+        self.try_add_debug_stmt_for(var, ExploitKind::DebugObserve)
+    }
+
+    fn try_add_debug_stmt_for(&mut self, var: Var, kind: ExploitKind) -> bool {
         if !self.var_state(var).is_live() {
             return false;
         }
@@ -143,7 +151,7 @@ impl<'tcx, 'a> ContextBuilder<'tcx, 'a> {
             .type_implements_trait(debug_def_id, [ty], param_env)
             .must_apply_modulo_regions()
         {
-            self.add_exploit_stmt(var, ExploitKind::Debug);
+            self.add_exploit_stmt(var, kind);
             return true;
         }
         false

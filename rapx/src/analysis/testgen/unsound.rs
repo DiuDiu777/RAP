@@ -132,9 +132,14 @@ impl NumericPreconditionKind {
             Self::NonZero | Self::PowerOfTwo => InputHint::invalid_align(reason),
             Self::UnicodeScalar => InputHint::invalid_unicode_scalar(reason),
             Self::OffsetInAllocation => InputHint::negative_offset(reason),
-            Self::Expression => {
-                InputHint::numeric(reason, vec![NumericHint::Max, NumericHint::Literal(1024)])
-            }
+            Self::Expression => InputHint::numeric(
+                reason,
+                vec![
+                    NumericHint::Zero,
+                    NumericHint::Literal(4),
+                    NumericHint::Literal(1024),
+                ],
+            ),
         }
     }
 
@@ -1872,7 +1877,7 @@ impl<'tcx> ContractGuide<'tcx> {
             };
             builder.add_call_stmt_with_hints(post_call, Vec::new());
             builder.add_sink_marker_stmt(target.contract_id, self.tcx.def_path_str(target.sink_fn));
-            builder.try_add_exploit_stmt_for(witness);
+            builder.try_add_observer_stmt_for(witness);
             break;
         }
     }
@@ -2144,7 +2149,7 @@ impl<'tcx> FuzzGuide<'tcx> for ContractGuide<'tcx> {
                 continue;
             };
             builder.add_sink_marker_stmt(target.contract_id, self.tcx.def_path_str(target.sink_fn));
-            builder.try_add_exploit_stmt_for(witness);
+            builder.try_add_observer_stmt_for(witness);
         }
     }
 

@@ -6,6 +6,18 @@ use crate::analysis::testgen::path::PathResolver;
 use crate::rap_debug;
 use rustc_middle::ty::{self, TyCtxt};
 
+fn crate_header(crate_name: &str) -> String {
+    format!("#![feature(allocator_api)]\nuse ::{}::*;", crate_name)
+}
+
+fn debug_exploit_stmt(var: &str) -> String {
+    format!("// keep {var} available for reducer")
+}
+
+fn debug_observer_stmt(var: &str) -> String {
+    format!("let _ = format!(\"{{:?}}\", {var})")
+}
+
 pub struct FuzzDriverSynImpl<'a, 'tcx, I: InputGen> {
     input_gen: I,
     option: SynOption,
@@ -78,13 +90,8 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
             //     format!("{}*{}", mutability.ref_prefix_str(), self.var_str(**var))
             // }
             StmtKind::Exploit(var, kind) => match kind {
-                ExploitKind::Debug => {
-                    format!(
-                        "println!(\"{}: {{:?}}\",{})",
-                        self.var_str(*var),
-                        self.var_str(*var)
-                    )
-                }
+                ExploitKind::Debug => debug_exploit_stmt(&self.var_str(*var)),
+                ExploitKind::DebugObserve => debug_observer_stmt(&self.var_str(*var)),
             },
             StmtKind::Array(vars) => {
                 format!(
@@ -196,10 +203,7 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
     }
 
     fn header_str(&self) -> String {
-        format!(
-            "#![feature(allocator_api)]\nuse {}::*;",
-            self.option.crate_name
-        )
+        crate_header(&self.option.crate_name)
     }
 
     fn main_str(&mut self, cx: &Context<'tcx>) -> String {
@@ -219,5 +223,34 @@ impl<'a, 'tcx, I: InputGen> FuzzDriverSynImpl<'a, 'tcx, I> {
 impl<'a, 'tcx, I: InputGen> Synthesizer<'tcx> for FuzzDriverSynImpl<'a, 'tcx, I> {
     fn syn(&mut self, cx: &Context<'tcx>, tcx: TyCtxt<'tcx>) -> String {
         format!("{}\n{}", self.header_str(), self.main_str(cx))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn header_qualifies_crate_root_to_avoid_glob_ambiguity() {
+        let header = crate_header("AutoVec");
+
+        assert!(header.contains("use ::AutoVec::*;"));
+        assert!(!header.contains("use AutoVec::*;"));
+    }
+
+    #[test]
+    fn debug_exploit_is_side_effect_free_by_default() {
+        let stmt = debug_exploit_stmt("v64");
+
+        assert!(!stmt.contains("println!"));
+        assert!(stmt.contains("v64"));
+    }
+
+    #[test]
+    fn debug_observer_still_reads_the_witness() {
+        let stmt = debug_observer_stmt("v7");
+
+        assert!(stmt.contains("format!"));
+        assert!(stmt.contains("v7"));
     }
 }

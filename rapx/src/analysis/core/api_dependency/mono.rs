@@ -43,6 +43,7 @@ impl<'tcx> Mono<'tcx> {
     fn has_infer_types(&self) -> bool {
         self.value.iter().any(|arg| match arg.kind() {
             ty::GenericArgKind::Type(ty) => ty.has_infer_types(),
+            ty::GenericArgKind::Const(ct) => ct.has_infer(),
             _ => false,
         })
     }
@@ -57,45 +58,69 @@ impl<'tcx> Mono<'tcx> {
         for i in 0..self.value.len() {
             let arg = self.value[i];
             let other_arg = other.value[i];
-            let new_arg = if let Some(ty) = arg.as_type() {
-                let other_ty = other_arg.expect_ty();
-                if ty.is_ty_var() && other_ty.is_ty_var() {
-                    arg
-                } else if ty.is_ty_var() {
-                    other_arg
-                } else if other_ty.is_ty_var() {
-                    arg
-                } else if utils::is_ty_eq(ty, other_ty, tcx) {
-                    arg
-                } else {
-                    return None;
+            let new_arg = match (arg.kind(), other_arg.kind()) {
+                (ty::GenericArgKind::Type(ty), ty::GenericArgKind::Type(other_ty)) => {
+                    if ty.is_ty_var() && other_ty.is_ty_var() {
+                        arg
+                    } else if ty.is_ty_var() {
+                        other_arg
+                    } else if other_ty.is_ty_var() {
+                        arg
+                    } else if utils::is_ty_eq(ty, other_ty, tcx) {
+                        arg
+                    } else {
+                        return None;
+                    }
                 }
-            } else {
-                arg
+                (ty::GenericArgKind::Const(ct), ty::GenericArgKind::Const(other_ct)) => {
+                    if ct.has_infer() && other_ct.has_infer() {
+                        arg
+                    } else if ct.has_infer() {
+                        other_arg
+                    } else if other_ct.has_infer() || ct == other_ct {
+                        arg
+                    } else {
+                        return None;
+                    }
+                }
+                _ => arg,
             };
             res.push(new_arg);
         }
         Some(Mono { value: res })
     }
 
-    fn fill_unbound_var(&self, tcx: TyCtxt<'tcx>) -> Vec<Mono<'tcx>> {
-        let candidates = get_unbound_generic_candidates(tcx);
+    fn fill_unbound_var(&self, fn_did: DefId, tcx: TyCtxt<'tcx>) -> Vec<Mono<'tcx>> {
+        let type_candidates = get_unbound_generic_candidates(tcx);
         let mut res = vec![self.clone()];
         rap_trace!("fill unbound: {:?}", self);
 
         for (i, arg) in self.value.iter().enumerate() {
-            if let Some(ty) = arg.as_type() {
-                if ty.is_ty_var() {
+            match arg.kind() {
+                ty::GenericArgKind::Type(ty) if ty.is_ty_var() => {
                     let mut last = Vec::new();
                     std::mem::swap(&mut res, &mut last);
                     last.into_iter().for_each(|mono| {
-                        for candidate in &candidates {
+                        for candidate in &type_candidates {
                             let mut new_mono = mono.clone();
                             *new_mono.mut_arg_at(i) = (*candidate).into();
                             res.push(new_mono);
                         }
                     });
                 }
+                ty::GenericArgKind::Const(ct) if ct.has_infer() => {
+                    let const_candidates = get_unbound_const_candidates(fn_did, i, tcx);
+                    let mut last = Vec::new();
+                    std::mem::swap(&mut res, &mut last);
+                    last.into_iter().for_each(|mono| {
+                        for candidate in &const_candidates {
+                            let mut new_mono = mono.clone();
+                            *new_mono.mut_arg_at(i) = (*candidate).into();
+                            res.push(new_mono);
+                        }
+                    });
+                }
+                _ => {}
             }
         }
         res
@@ -160,10 +185,10 @@ impl<'tcx> MonoSet<'tcx> {
     // if the unbound generic type is still exist (this could happen
     // if `T` has no trait bounds at all)
     // we substitute the unbound generic type with predefined type candidates
-    fn instantiate_unbound(&self, tcx: TyCtxt<'tcx>) -> Self {
+    fn instantiate_unbound(&self, fn_did: DefId, tcx: TyCtxt<'tcx>) -> Self {
         let mut res = MonoSet::new();
         for mono in &self.monos {
-            let filled = mono.fill_unbound_var(tcx);
+            let filled = mono.fill_unbound_var(fn_did, tcx);
             res.monos.extend(filled);
         }
         res
@@ -414,7 +439,7 @@ fn get_mono_set<'tcx>(
     res.erase_region_var(tcx);
 
     // if there is still unbound generic type, we try to instantiate it with predefined candidates
-    res.instantiate_unbound(tcx)
+    res.instantiate_unbound(fn_did, tcx)
 }
 
 fn solve_unbound_type_generics<'tcx>(
@@ -638,6 +663,28 @@ pub fn get_unbound_generic_candidates<'tcx>(tcx: TyCtxt<'tcx>) -> Vec<ty::Ty<'tc
             Ty::new_slice(tcx, tcx.types.u8),
         ),
     ]
+}
+
+pub fn get_unbound_const_candidates<'tcx>(
+    fn_did: DefId,
+    arg_index: usize,
+    tcx: TyCtxt<'tcx>,
+) -> Vec<ty::Const<'tcx>> {
+    let generics = tcx.generics_of(fn_did);
+    let param = generics.param_at(arg_index, tcx);
+    if !matches!(param.kind, ty::GenericParamDefKind::Const { .. }) {
+        return Vec::new();
+    }
+
+    let const_ty = tcx.type_of(param.def_id).instantiate_identity();
+    if const_ty != tcx.types.usize {
+        return Vec::new();
+    }
+
+    [0_u64, 1, 2, 3, 4, 8, 16]
+        .into_iter()
+        .map(|value| ty::Const::from_target_usize(tcx, value))
+        .collect()
 }
 
 // calculate the complexity of monomorphic solution,

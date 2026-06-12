@@ -404,6 +404,17 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
         }
     }
 
+    pub fn reserve_boundary_const_generic_apis(&self, reserved: &mut [bool]) {
+        for node in self.graph.node_indices() {
+            let DepNode::Api(_, args) = self.graph[node] else {
+                continue;
+            };
+            if has_boundary_const_generic_args(args, self.tcx) {
+                reserved[node.index()] = true;
+            }
+        }
+    }
+
     pub fn minimal_select(
         &mut self,
         reserved: &mut [bool],
@@ -462,6 +473,7 @@ impl<'tcx> ApiDependencyGraph<'tcx> {
 
         // heuristic strategy
         self.heuristic_select(&mut reserved);
+        self.reserve_boundary_const_generic_apis(&mut reserved);
         self.reserve_high_alignment_generic_apis(&mut reserved);
 
         // traverse from start node, if a node can achieve a reserved node,
@@ -549,6 +561,18 @@ fn has_high_alignment_generic_args(args: GenericArgsRef<'_>) -> bool {
     }
 
     mentions_high_alignment_ty(&format!("{args:?}"))
+}
+
+fn has_boundary_const_generic_args<'tcx>(
+    args: GenericArgsRef<'tcx>,
+    tcx: TyCtxt<'tcx>,
+) -> bool {
+    args.iter().any(|arg| {
+        let ty::GenericArgKind::Const(ct) = arg.kind() else {
+            return false;
+        };
+        matches!(ct.try_to_target_usize(tcx), Some(1))
+    })
 }
 
 fn mentions_high_alignment_ty(text: &str) -> bool {
