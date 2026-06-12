@@ -169,6 +169,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
         rap_debug!("Paths in scc: {:?}", paths_in_scc);
 
+        let mut scc_all_nodes: FxHashSet<usize> = cur_scc.nodes.clone();
+        scc_all_nodes.insert(cur_scc.enter);
+
         let backup_values = self.alias_graph.values.clone();
         let backup_constant = self.alias_graph.constants.clone();
         let backup_alias_sets = self.alias_graph.alias_sets.clone();
@@ -187,13 +190,15 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     self.drop_check(*idx);
                 }
             }
-            // The last node is already ouside the scc.
             if let Some(&last_node) = path.last() {
                 if self.alias_graph.cfg_block(last_node).scc.nodes.is_empty() {
                     self.check_single_node(last_node, fn_map);
-                    self.handle_nexts(last_node, fn_map, None, Some(path_constants));
-                } else {
-                    // TODO
+                    self.handle_nexts(
+                        last_node,
+                        fn_map,
+                        Some(&scc_all_nodes),
+                        Some(path_constants),
+                    );
                 }
             }
             self.alias_graph.alias_sets = backup_alias_sets.clone();
@@ -354,8 +359,18 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 }
                 let all_targets = targets.all_targets();
                 let next_idx = all_targets[all_targets.len() - 1].as_usize();
-                let path_discr_val = usize::MAX; // to indicate the default path;
-                self.split_check_with_cond(next_idx, path_discr_id, path_discr_val, fn_map);
+                match exclusive_nodes {
+                    Some(exclusive) => {
+                        if !exclusive.contains(&next_idx) {
+                            let path_discr_val = usize::MAX; // to indicate the default path;
+                            self.split_check_with_cond(next_idx, path_discr_id, path_discr_val, fn_map);
+                        }
+                    }
+                    None => {
+                        let path_discr_val = usize::MAX; // to indicate the default path;
+                        self.split_check_with_cond(next_idx, path_discr_id, path_discr_val, fn_map);
+                    }
+                }
             } else {
                 for next in &cfg_block.next {
                     if self.alias_graph.visit_times() > VISIT_LIMIT {
