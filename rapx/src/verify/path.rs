@@ -719,16 +719,6 @@ pub struct FunctionPaths<'tcx> {
 }
 
 impl<'tcx> FunctionPaths<'tcx> {
-    /// Return SCC-region metadata for this function.
-    pub fn scc_info(&self) -> &SccRegions {
-        &self.scc_regions
-    }
-
-    /// Return callsite-to-path metadata for this function.
-    pub fn callsite_paths(&self) -> &CallsitePaths<'tcx> {
-        &self.callsite_paths
-    }
-
     /// Return all callsites used during path extraction.
     pub fn callsites(&self) -> &[Callsite<'tcx>] {
         self.callsite_paths.callsites()
@@ -764,16 +754,6 @@ impl SccRegions {
     /// Return all detected SCC regions.
     pub fn scc_regions(&self) -> &[SccRegion] {
         &self.scc_regions
-    }
-
-    /// Return the number of detected SCC regions.
-    pub fn len(&self) -> usize {
-        self.scc_regions.len()
-    }
-
-    /// Return true when no SCC regions were detected.
-    pub fn is_empty(&self) -> bool {
-        self.scc_regions.is_empty()
     }
 }
 
