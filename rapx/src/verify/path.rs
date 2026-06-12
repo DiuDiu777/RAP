@@ -354,9 +354,6 @@ impl<'tcx> PathExtractor<'tcx> {
             if ctx.results.len() >= ctx.limit {
                 break;
             }
-            if ctx.visited.contains(&exit.to) {
-                continue;
-            }
 
             let internal_paths: Vec<Vec<BasicBlock>> = {
                 let pg = self.path_graph();
@@ -502,9 +499,6 @@ impl<'tcx> PathExtractor<'tcx> {
         for exit in &scc_info.exits {
             if ctx.results.len() >= ctx.limit {
                 break;
-            }
-            if ctx.visited.contains(&exit.to) {
-                continue;
             }
 
             let internal_paths =
