@@ -939,19 +939,26 @@ impl<'tcx> PathGraph<'tcx> {
     /// For the current SCC node, generate the set of `SccPathAction`s that
     /// determine how the traversal proceeds.
     ///
-    /// For ordinary (non-terminator) blocks and match terminators, generates
-    /// `Traverse` actions to each successor. For `SwitchInt` terminators,
-    /// uses discriminant constraints to narrow down which target branches
-    /// are actually reachable, avoiding path explosion from impossible cases.
+    /// For ordinary (non-terminator) blocks and non-SwitchInt terminators,
+    /// generates `Traverse` actions to each successor. For `SwitchInt`
+    /// terminators, uses discriminant constraints to narrow down which target
+    /// branches are actually reachable, avoiding path explosion from
+    /// impossible cases.
     pub(crate) fn enumerate_scc_actions(
         &mut self,
-        _scc: &SccInfo,
+        scc: &SccInfo,
         state: &SccPathTraversalState,
         constraints: &FxHashMap<usize, usize>,
     ) -> Vec<SccPathAction> {
-        let mut actions = vec![SccPathAction::RecordExit {
-            constraints: constraints.clone(),
-        }];
+        let mut actions = Vec::new();
+
+        // Only generate RecordExit if this node actually has an edge leaving
+        // the SCC — otherwise record_scc_exit_path is a no‑op.
+        if scc.exits.iter().any(|e| e.exit == state.cur) {
+            actions.push(SccPathAction::RecordExit {
+                constraints: constraints.clone(),
+            });
+        }
 
         let Some(terminator) = self.cfg.terminator(state.cur) else {
             for next in self.cfg.block(state.cur).next.clone() {
