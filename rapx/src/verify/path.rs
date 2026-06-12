@@ -15,9 +15,10 @@
 //! The extractor detects SCC regions via `find_scc_regions` and handles them
 //! differently depending on where the target callsite resides:
 //!
-//! * **Outside SCC**: When the callsite lies outside any SCC, the extractor treats
-//!   each SCC as a "black box" and emits a single step through one of its exit edges.
-//!   This avoids unrolling and produces a bounded number of finite paths.
+//! * **Outside SCC**: When the callsite lies outside any SCC, the extractor
+//!   fully expands each SCC by enumerating all simple paths through it via
+//!   `PathGraph::find_scc_paths`, splicing their block sequences into the DFS
+//!   trail. This produces a bounded number of finite paths.
 //!
 //! * **Inside SCC**: When the callsite itself is inside an SCC, the extractor
 //!   computes two segments:
@@ -56,11 +57,11 @@ const PATH_LIMIT: usize = 1024;
 /// Mutable DFS state shared across recursive calls during entry-path search.
 ///
 /// Used when the target callsite is **outside** any SCC region. The search starts
-/// at the function entry and explores forward, treating SCCs as opaque by jumping
-/// through one of their exit edges.
+/// at the function entry and explores forward, fully expanding SCCs by enumerating
+/// their internal paths and splicing the block sequences into the trail.
 struct EntrySearchCtx<'a> {
     /// Blocks currently on the path stack, including SCC-internal blocks pushed
-    /// by [`follow_scc_exits`]. Used to avoid re-entering the same SCC exit.
+    /// by [`expand_scc_paths`]. Enforces simple-path semantics (no block revisited).
     visited: &'a mut FxHashSet<BasicBlock>,
     /// The current path stack being built during DFS.
     stack: &'a mut Vec<PathStep>,
@@ -77,11 +78,12 @@ struct EntrySearchCtx<'a> {
 /// Mutable DFS state shared across recursive calls during entry-prefix search.
 ///
 /// Used to find paths from the function entry to an SCC representative block,
-/// going around other intervening SCCs via their exits. The results feed into
+/// going around other intervening SCCs by expanding their internal paths.
+/// The results feed into
 /// SCC-internal path construction as `entry_prefix` segments.
 struct PrefixSearchCtx<'a> {
     /// Blocks currently on the path stack, including SCC-internal blocks pushed
-    /// by [`follow_scc_exits_for_prefix`]. Used to avoid re-entering the same SCC exit.
+    /// by [`expand_scc_prefix_paths`]. Enforces simple-path semantics.
     visited: &'a mut FxHashSet<BasicBlock>,
     /// The current path stack being built during DFS.
     stack: &'a mut Vec<PathStep>,
@@ -126,8 +128,8 @@ struct SccInternalCtx<'a> {
 /// (`def_id`) and its unsafe callsites, then:
 ///
 /// 1. Detects SCC (loop) regions in the function CFG.
-/// 2. For each callsite, enumerates finite paths either by treating SCCs as
-///    opaque blocks or by computing entry-prefix + body-path pairs.
+/// 2. For each callsite, enumerates finite paths by fully expanding SCCs
+///    (via `PathGraph::find_scc_paths`) or by computing entry-prefix + body-path pairs.
 /// 3. Validates each path against a `PathGraph` for reachability.
 ///
 /// The result is a `FunctionPaths` value that maps callsite locations to
@@ -219,8 +221,8 @@ impl<'tcx> PathExtractor<'tcx> {
     ///
     /// If the callsite block belongs to an SCC, we use
     /// [`find_scc_internal_paths`] which produces entry-prefix + body-path
-    /// pairs. Otherwise we use [`find_entry_paths`] which treats SCCs as
-    /// opaque and jumps through their exits.
+    /// pairs. Otherwise we use [`find_entry_paths`] which expands SCCs
+    /// by enumerating all internal paths through them.
     fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
         if let Some(representative) = self.block_to_scc.get(&callsite.block).copied() {
@@ -233,15 +235,16 @@ impl<'tcx> PathExtractor<'tcx> {
     // ── entry-path search (target outside SCC) ──────────────────────────
     //
     // These methods handle the case where the target callsite is not inside any
-    // SCC. SCCs are treated as opaque: the search jumps from the SCC entry to
-    // one of its exit blocks in a single logical step, without enumerating
-    // internal SCC paths.
+    // SCC. SCCs are fully expanded: the search enumerates all internal SCC
+    // paths via `PathGraph::find_scc_paths` and splices their block sequences
+    // into the DFS trail.
 
     /// Find all paths from the function entry to a callsite outside any SCC.
     ///
-    /// Initializes a DFS from the entry block, with SCC regions treated as
-    /// opaque via [`follow_scc_exits`]. The `target` and `target_block`
-    /// identify the callsite to reach.
+    /// Initializes a DFS from the entry block. SCC regions encountered along
+    /// the way are fully expanded by [`expand_scc_paths`] — each internal path
+    /// through the SCC is enumerated and its blocks are pushed to the trail.
+    /// The `target` and `target_block` identify the callsite to reach.
     fn find_entry_paths(&mut self, target: CallsiteLocation, target_block: BasicBlock) -> Vec<Path> {
         let mut results = Vec::new();
         let mut stack = vec![PathStep::Block(self.cfg.entry)];
@@ -263,7 +266,8 @@ impl<'tcx> PathExtractor<'tcx> {
     ///
     /// When `current` equals `ctx.target_block`, a complete path is recorded
     /// (after a reachability check via `PathGraph`). SCC blocks are handled
-    /// by [`follow_scc_exits`], which jumps through SCC exits as atomic steps.
+    /// by [`expand_scc_paths`], which fully enumerates internal SCC paths and
+    /// splices their block sequences into the DFS trail.
     /// Non-SCC blocks form a DAG (all cycles were captured by SCC detection),
     /// so they are explored without explicit cycle detection.
     fn dfs_entry_paths(&mut self, current: BasicBlock, ctx: &mut EntrySearchCtx<'_>) {
@@ -317,10 +321,10 @@ impl<'tcx> PathExtractor<'tcx> {
                 if target_rep == Some(representative) {
                     continue;
                 }
-                // Target is outside this SCC → treat the SCC as one black‑box step:
-                // enumerate simple paths through the SCC to its exits, then continue
-                // DFS from each exit.
-                self.follow_scc_exits(representative, ctx);
+                // Target is outside this SCC → fully expand the SCC by
+                // enumerating simple paths through it, then continue DFS from
+                // each exit.
+                self.expand_scc_paths(representative, ctx);
                 continue;
             }
             // next is a plain non‑SCC block (DAG node) → standard DFS descent.
@@ -333,14 +337,16 @@ impl<'tcx> PathExtractor<'tcx> {
         }
     }
 
-    /// Jump through an SCC by enumerating internal paths to each exit edge.
+    /// Enumerate all simple paths through an SCC and splice them into the
+    /// ongoing DFS trail.
     ///
-    /// For each exit edge `(from, to)` of the SCC, this method finds all
-    /// simple paths from the SCC representative to `exit.from` within the
-    /// SCC, then recursively continues the search from `exit.to`. The
-    /// SCC-internal blocks are pushed onto the stack and visited set, then
-    /// cleaned up after the recursive call returns (backtracking).
-    fn follow_scc_exits(
+    /// For each exit edge `(from, to)` of the SCC, this method uses the
+    /// `PathGraph` to enumerate every simple path from the SCC representative
+    /// to `exit.from`. Each internal path's blocks are pushed onto the stack
+    /// and visited set, then the DFS continues recursively from `exit.to`.
+    /// After the recursive call returns, all pushed blocks are cleaned up
+    /// (backtracking).
+    fn expand_scc_paths(
         &mut self,
         representative: BasicBlock,
         ctx: &mut EntrySearchCtx<'_>,
@@ -403,8 +409,8 @@ impl<'tcx> PathExtractor<'tcx> {
     //
     // These methods find paths from the function entry to an SCC
     // representative. The results are used as the `entry_prefix` segment of
-    // SCC-internal paths. Other SCCs along the way are jumped through via
-    // their exits, so the prefixes themselves remain finite.
+    // SCC-internal paths. Other SCCs along the way are fully expanded (via
+    // `expand_scc_prefix_paths`), so the prefixes themselves remain finite.
 
     /// Find all paths from the function entry to a given SCC representative.
     ///
@@ -440,7 +446,8 @@ impl<'tcx> PathExtractor<'tcx> {
     ///
     /// Each time `next == ctx.representative`, the current stack is pushed as
     /// a complete prefix. When encountering another SCC, delegates to
-    /// [`follow_scc_exits_for_prefix`] for opaque traversal.
+    /// [`expand_scc_prefix_paths`] which splices the SCC's internal blocks
+    /// into the prefix trail.
     /// Non-SCC blocks form a DAG so no explicit cycle detection is needed.
     fn dfs_entry_prefixes(&self, current: BasicBlock, ctx: &mut PrefixSearchCtx<'_>) {
         // Stop if we have enough prefix paths.
@@ -466,8 +473,9 @@ impl<'tcx> PathExtractor<'tcx> {
                 if scc_representative == ctx.representative {
                     continue;
                 }
-                // Different SCC along the way → jump through it via its exits.
-                self.follow_scc_exits_for_prefix(scc_representative, ctx);
+                // Different SCC along the way → expand it and splice its blocks
+                // into the prefix trail.
+                self.expand_scc_prefix_paths(scc_representative, ctx);
                 continue;
             }
 
@@ -480,13 +488,14 @@ impl<'tcx> PathExtractor<'tcx> {
         }
     }
 
-    /// Jump through an SCC during entry-prefix search.
+    /// Enumerate all simple paths through an SCC during entry-prefix search,
+    /// splicing each one into the ongoing prefix trail.
     ///
-    /// Works similarly to [`follow_scc_exits`] but targets the SCC
+    /// Works similarly to [`expand_scc_paths`] but targets the SCC
     /// representative instead of a callsite. For each exit edge, finds
     /// internal paths within the SCC from the representative to `exit.from`,
     /// then continues the prefix search from `exit.to`.
-    fn follow_scc_exits_for_prefix(
+    fn expand_scc_prefix_paths(
         &self,
         scc_representative: BasicBlock,
         ctx: &mut PrefixSearchCtx<'_>,
