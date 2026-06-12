@@ -355,6 +355,10 @@ impl<'tcx> PathExtractor<'tcx> {
                 break;
             }
 
+            // Enumerate all simple paths from the SCC representative through the
+            // SCC body. `find_scc_paths` returns `Vec<SccEnumeratedPath>` where
+            // each element has `blocks: Vec<usize>` and path constraints; we only
+            // need the block sequences, discarding constraints.
             let internal_paths: Vec<Vec<BasicBlock>> = {
                 let pg = self.path_graph();
                 let scc_info = &pg.cfg.block(representative.as_usize()).scc;
