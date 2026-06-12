@@ -51,125 +51,21 @@ impl SccPathCacheKey {
 
 pub type SccPathConstraints = FxHashMap<usize, usize>;
 
-/// Mutable state carried through recursive SCC path enumeration.
-///
-/// Tracks the current position (`cur`), accumulated block sequence (`path`),
-/// and per-iteration cycle detection (`visited_since_enter`, `segment_stack`).
-#[derive(Clone, Debug)]
-pub struct SccPathTraversalState {
-    pub start: usize,
-    pub cur: usize,
-    pub path: Vec<usize>,
-    pub segment_stack: FxHashSet<usize>,
-    pub visited_since_enter: FxHashSet<usize>,
-    pub baseline_at_dominator: FxHashSet<usize>,
-    pub skip_child_enter: Option<usize>,
-}
-
-impl SccPathTraversalState {
-    pub fn new(start: usize) -> Self {
-        let mut segment_stack = FxHashSet::default();
-        segment_stack.insert(start);
-
-        let mut visited_since_enter = FxHashSet::default();
-        visited_since_enter.insert(start);
-
-        Self {
-            start,
-            cur: start,
-            path: vec![start],
-            segment_stack,
-            baseline_at_dominator: visited_since_enter.clone(),
-            visited_since_enter,
-            skip_child_enter: None,
-        }
+fn check_forward_progress(path: &[usize], enter: usize, seen_nodes: &mut FxHashSet<usize>) -> bool {
+    let prev_pos = path[..path.len() - 1]
+        .iter()
+        .rposition(|&node| node == enter)
+        .unwrap_or(0);
+    let has_new = path[prev_pos + 1..path.len() - 1]
+        .iter()
+        .any(|&n| n != enter && !seen_nodes.contains(&n));
+    if !has_new {
+        return false;
     }
-
-    pub fn is_cur_in_scc(&self, scc: &SccInfo) -> bool {
-        node_is_in_current_scc(self.start, scc, self.cur)
+    for &n in &path[prev_pos + 1..path.len() - 1] {
+        seen_nodes.insert(n);
     }
-
-    pub fn is_node_in_scc(&self, scc: &SccInfo, node: usize) -> bool {
-        node_is_in_current_scc(self.start, scc, node)
-    }
-
-    pub fn exceeds_complexity_limits(
-        &self,
-        max_path_len: usize,
-        max_seen_paths: usize,
-        seen_paths_len: usize,
-    ) -> bool {
-        self.path.len() > max_path_len || seen_paths_len > max_seen_paths
-    }
-
-    pub fn prepare_for_current_node(&mut self) -> bool {
-        if self.cur != self.start {
-            return true;
-        }
-
-        if self.path.len() > 1 {
-            let prev_start_pos = self.path[..self.path.len() - 1]
-                .iter()
-                .rposition(|&node| node == self.start)
-                .unwrap_or(0);
-            let cycle_nodes = &self.path[prev_start_pos + 1..self.path.len() - 1];
-            let introduces_new = cycle_nodes
-                .iter()
-                .any(|node| !self.baseline_at_dominator.contains(node));
-            if !introduces_new {
-                return false;
-            }
-        }
-
-        self.baseline_at_dominator = self.visited_since_enter.clone();
-        self.segment_stack.clear();
-        self.segment_stack.insert(self.start);
-        true
-    }
-
-    pub fn can_descend_to(&self, next: usize) -> bool {
-        !self.segment_stack.contains(&next) || next == self.start
-    }
-
-    pub fn descend_to(&self, next: usize) -> Self {
-        let mut next_state = self.clone();
-        next_state.cur = next;
-        next_state.path.push(next);
-        next_state.segment_stack.insert(next);
-        next_state.visited_since_enter.insert(next);
-        next_state.skip_child_enter = None;
-        next_state
-    }
-
-    pub fn with_skip_child_enter(&self, child_enter: usize) -> Self {
-        let mut next_state = self.clone();
-        next_state.skip_child_enter = Some(child_enter);
-        next_state
-    }
-
-    pub fn with_spliced_path(
-        &self,
-        spliced_path: Vec<usize>,
-        skip_child_enter: Option<usize>,
-    ) -> Self {
-        let mut visited_since_enter = self.visited_since_enter.clone();
-        for node in &spliced_path {
-            visited_since_enter.insert(*node);
-        }
-
-        let cur = *spliced_path.last().unwrap_or(&self.cur);
-        let segment_stack = rebuild_segment_stack(&spliced_path, self.start);
-
-        Self {
-            start: self.start,
-            cur,
-            path: spliced_path,
-            segment_stack,
-            visited_since_enter,
-            baseline_at_dominator: self.baseline_at_dominator.clone(),
-            skip_child_enter,
-        }
-    }
+    true
 }
 
 #[derive(Clone, Debug)]
@@ -200,23 +96,6 @@ impl Default for SccPathTraversalConfig {
     }
 }
 
-/// Action produced at a node during SCC path enumeration.
-///
-/// - `Traverse`: move to `next` with the given constraints.
-/// - `RecordExit`: record the current path as an SCC exit path.
-///
-/// When `Traverse.next` falls outside the SCC, the traversal engine treats
-/// it as an implicit `RecordExit` and does not follow the edge further.
-#[derive(Clone, Debug)]
-pub enum SccPathAction {
-    Traverse {
-        next: usize,
-        constraints: SccPathConstraints,
-    },
-    RecordExit {
-        constraints: SccPathConstraints,
-    },
-}
 
 #[derive(Clone)]
 pub struct PathGraph<'tcx> {
@@ -227,231 +106,13 @@ pub struct PathGraph<'tcx> {
     pub discriminants: FxHashMap<usize, usize>,
 }
 
-type OnNodeEnterFn<C> = fn(&mut C, usize, &mut SccPathConstraints);
-type EnumerateChildPathsFn<C> = fn(&mut C, usize, &SccPathConstraints) -> Vec<SccEnumeratedPath>;
-type EnumerateActionsFn<C> =
-    fn(&mut C, &SccInfo, &SccPathTraversalState, &SccPathConstraints) -> Vec<SccPathAction>;
-
-/// Enumerate all simple paths through an SCC region from `start`, with an
-/// intra-session cache keyed by `(def_id, scc_enter, initial_constraints)`.
-/// Falls back to `enumerate_scc_paths_with` on cache miss and stores the
-/// result for subsequent identical queries.
-pub(crate) fn enumerate_scc_paths_cached_with<C>(
-    def_id: DefId,
-    start: usize,
-    scc: &SccInfo,
-    initial_constraints: SccPathConstraints,
-    context: &mut C,
-    on_node_enter: OnNodeEnterFn<C>,
-    enumerate_child_paths: EnumerateChildPathsFn<C>,
-    enumerate_actions: EnumerateActionsFn<C>,
-    config: SccPathTraversalConfig,
-) -> Vec<SccEnumeratedPath> {
-    let key = SccPathCacheKey::new(def_id, scc.enter, &initial_constraints);
-    if let Some(cached) = SCC_PATH_CACHE.with(|c| c.borrow().get(&key).cloned()) {
-        return cached;
-    }
-
-    let all_paths = enumerate_scc_paths_with(
-        start,
-        scc,
-        initial_constraints,
-        context,
-        on_node_enter,
-        enumerate_child_paths,
-        enumerate_actions,
-        config,
-    );
-
-    SCC_PATH_CACHE.with(|c| {
-        let mut cache = c.borrow_mut();
-        if cache.len() >= SCC_PATH_CACHE_LIMIT {
-            cache.clear();
-        }
-        cache.insert(key, all_paths.clone());
-    });
-
-    all_paths
-}
-
-/// Enumerate simple paths through `scc` starting at `start`, initialising a
-/// fresh `SccPathTraversalState` and delegating to `enumerate_scc_paths_inner`.
-fn enumerate_scc_paths_with<C>(
-    start: usize,
-    scc: &SccInfo,
-    initial_constraints: SccPathConstraints,
-    context: &mut C,
-    on_node_enter: OnNodeEnterFn<C>,
-    enumerate_child_paths: EnumerateChildPathsFn<C>,
-    enumerate_actions: EnumerateActionsFn<C>,
-    config: SccPathTraversalConfig,
-) -> Vec<SccEnumeratedPath> {
-    let mut all_paths = Vec::new();
-    let mut seen_paths: FxHashSet<PathKey> = FxHashSet::default();
-    enumerate_scc_paths_inner(
-        scc,
-        SccPathTraversalState::new(start),
-        initial_constraints,
-        &mut all_paths,
-        &mut seen_paths,
-        context,
-        on_node_enter,
-        enumerate_child_paths,
-        enumerate_actions,
-        &config,
-        0,
-    );
-    all_paths
-}
-
-/// Core recursive DFS that enumerates all simple paths through a single SCC.
-///
-/// At each node inside the SCC, the algorithm either:
-/// 1. Records the current path as an exit (if the next edge leaves the SCC).
-/// 2. Descends to a successor still inside the SCC, recursing further.
-/// 3. Splices sub-paths of a nested child SCC into the current path.
-///
-/// Path uniqueness is enforced via `seen_paths` (block-sequence + constraints).
-/// Loop avoidance within one traversal iteration uses `visited_since_enter`.
-fn enumerate_scc_paths_inner<C>(
-    scc: &SccInfo,
-    state: SccPathTraversalState,
-    mut path_constraints: SccPathConstraints,
-    paths_in_scc: &mut Vec<SccEnumeratedPath>,
-    seen_paths: &mut FxHashSet<PathKey>,
-    context: &mut C,
-    on_node_enter: OnNodeEnterFn<C>,
-    enumerate_child_paths: EnumerateChildPathsFn<C>,
-    enumerate_actions: EnumerateActionsFn<C>,
-    config: &SccPathTraversalConfig,
-    depth: usize,
-) {
-    if depth > config.max_depth {
-        return;
-    }
-
-    if scc.nodes.is_empty() {
-        record_unique_path(&state.path, &path_constraints, paths_in_scc, seen_paths);
-        return;
-    }
-
-    if state.exceeds_complexity_limits(config.max_path_len, config.max_seen_paths, seen_paths.len())
-    {
-        return;
-    }
-
-    if !state.is_cur_in_scc(scc) {
-        return;
-    }
-
-    let mut state = state;
-    if !state.prepare_for_current_node() {
-        return;
-    }
-
-    on_node_enter(context, state.cur, &mut path_constraints);
-
-    for &child_enter in &scc.child_sccs {
-        if state.cur != child_enter {
-            continue;
-        }
-
-        if state.skip_child_enter == Some(child_enter) {
-            break;
-        }
-
-        let sub_paths = enumerate_child_paths(context, child_enter, &path_constraints);
-
-        enumerate_scc_paths_inner(
-            scc,
-            state.with_skip_child_enter(child_enter),
-            path_constraints.clone(),
-            paths_in_scc,
-            seen_paths,
-            context,
-            on_node_enter,
-            enumerate_child_paths,
-            enumerate_actions,
-            config,
-            depth + 1,
-        );
-
-        for sub_path in sub_paths {
-            if sub_path.blocks.len() <= 1 {
-                continue;
-            }
-
-            let mut new_path = state.path.clone();
-            new_path.extend(&sub_path.blocks[1..]);
-            let new_cur = *new_path
-                .last()
-                .expect("spliced child path must be non-empty");
-            let next_skip_child_enter = if new_cur == child_enter {
-                Some(child_enter)
-            } else {
-                None
-            };
-
-            enumerate_scc_paths_inner(
-                scc,
-                state.with_spliced_path(new_path, next_skip_child_enter),
-                sub_path.constraints,
-                paths_in_scc,
-                seen_paths,
-                context,
-                on_node_enter,
-                enumerate_child_paths,
-                enumerate_actions,
-                config,
-                depth + 1,
-            );
-        }
-        return;
-    }
-
-    for action in enumerate_actions(context, scc, &state, &path_constraints) {
-        match action {
-            SccPathAction::RecordExit { constraints } => {
-                record_scc_exit_path(
-                    scc,
-                    state.cur,
-                    &constraints,
-                    &state.path,
-                    paths_in_scc,
-                    seen_paths,
-                );
-            }
-            SccPathAction::Traverse { next, constraints } => {
-                if !state.is_node_in_scc(scc, next) {
-                    record_scc_exit_path(
-                        scc,
-                        state.cur,
-                        &constraints,
-                        &state.path,
-                        paths_in_scc,
-                        seen_paths,
-                    );
-                    continue;
-                }
-                if !state.can_descend_to(next) {
-                    continue;
-                }
-                enumerate_scc_paths_inner(
-                    scc,
-                    state.descend_to(next),
-                    constraints,
-                    paths_in_scc,
-                    seen_paths,
-                    context,
-                    on_node_enter,
-                    enumerate_child_paths,
-                    enumerate_actions,
-                    config,
-                    depth + 1,
-                );
-            }
-        }
-    }
+/// A successor edge together with its propagated constraints.
+#[derive(Clone, Debug)]
+pub enum SccPathAction {
+    Traverse {
+        next: usize,
+        constraints: SccPathConstraints,
+    },
 }
 
 impl<'tcx> PathGraph<'tcx> {
@@ -891,29 +552,41 @@ impl<'tcx> PathGraph<'tcx> {
         self.cfg.block(scc.enter).scc.clone()
     }
 
-    /// Enumerate all simple paths through `scc` starting at `start`.
-    ///
-    /// Delegates to `enumerate_scc_paths_cached_with`, passing `self` as the
-    /// callback context for node-enter, child-path enumeration, and action
-    /// generation. Results are cached per `(def_id, scc_enter, constraints)`.
+    /// Enumerate all simple paths through `scc` starting at `start`,
+    /// using the SCC tree to guide traversal. Results are cached per
+    /// `(def_id, scc_enter, constraints)`.
     pub fn find_scc_paths(
         &mut self,
         start: usize,
         scc: &SccInfo,
         initial_constraints: &FxHashMap<usize, usize>,
     ) -> Vec<SccEnumeratedPath> {
-        let def_id = self.cfg.def_id;
-        enumerate_scc_paths_cached_with(
-            def_id,
-            start,
-            scc,
-            initial_constraints.clone(),
-            self,
-            PathGraph::on_scc_node_enter,
-            PathGraph::enumerate_child_scc_paths,
-            PathGraph::enumerate_scc_actions,
-            SccPathTraversalConfig::default(),
-        )
+        let key = SccPathCacheKey::new(self.cfg.def_id, scc.enter, initial_constraints);
+        if let Some(cached) = SCC_PATH_CACHE.with(|c| c.borrow().get(&key).cloned()) {
+            return cached;
+        }
+
+        let config = SccPathTraversalConfig::default();
+        let mut out = Vec::new();
+        let mut seen: FxHashSet<PathKey> = FxHashSet::default();
+        let mut path = vec![start];
+        let mut seen_nodes = FxHashSet::default();
+        seen_nodes.insert(start);
+
+        self.dfs_scc_tree(
+            scc, start, &mut path, &mut seen_nodes, None,
+            initial_constraints.clone(), &mut out, &mut seen, 0, &config,
+        );
+
+        SCC_PATH_CACHE.with(|c| {
+            let mut cache = c.borrow_mut();
+            if cache.len() >= SCC_PATH_CACHE_LIMIT {
+                cache.clear();
+            }
+            cache.insert(key, out.clone());
+        });
+
+        out
     }
 
     /// Called when the SCC traversal enters a node. Removes assignment
@@ -927,41 +600,116 @@ impl<'tcx> PathGraph<'tcx> {
         }
     }
 
-    fn enumerate_child_scc_paths(
+    /// Recursive DFS through one level of the SCC tree.
+    ///
+    /// At the current SCC level, after collapsing child SCCs, the remaining
+    /// nodes form a DAG plus back edges to the SCC entry.  The function:
+    ///
+    /// 1. Checks forward progress when re-entering the entry via a back edge.
+    /// 2. Handles child SCC entries by splicing their pre-enumerated paths.
+    /// 3. Follows plain successors, recursing depth-first.
+    fn dfs_scc_tree(
         &mut self,
-        child_enter: usize,
-        constraints: &FxHashMap<usize, usize>,
-    ) -> Vec<SccEnumeratedPath> {
-        let child_scc = self.cfg.block(child_enter).scc.clone();
-        self.find_scc_paths(child_enter, &child_scc, constraints)
+        scc: &SccInfo,
+        cur: usize,
+        path: &mut Vec<usize>,
+        seen_nodes: &mut FxHashSet<usize>,
+        skip_child: Option<usize>,
+        mut constraints: SccPathConstraints,
+        out: &mut Vec<SccEnumeratedPath>,
+        seen: &mut FxHashSet<PathKey>,
+        depth: usize,
+        config: &SccPathTraversalConfig,
+    ) {
+        if depth > config.max_depth { return; }
+        if out.len() >= config.max_seen_paths { return; }
+        if path.len() > config.max_path_len { return; }
+        if cur != scc.enter && !scc.nodes.contains(&cur) { return; }
+
+        // Forward progress: only relevant when re-entering the SCC header.
+        if cur == scc.enter && path.len() > 1 {
+            if !check_forward_progress(path, scc.enter, seen_nodes) {
+                path.pop();
+                return;
+            }
+        }
+
+        self.on_scc_node_enter(cur, &mut constraints);
+
+        // Record exit if this node has an edge leaving the SCC.
+        if scc.exits.iter().any(|e| e.exit == cur) {
+            record_unique_path(path, &constraints, out, seen);
+        }
+
+        // Handle child SCC at this node.
+        let is_child = scc.child_sccs.contains(&cur);
+        let skipping = skip_child == Some(cur);
+
+        if is_child && !skipping {
+            let child_scc = self.cfg.block(cur).scc.clone();
+            let child_paths = self.find_scc_paths(cur, &child_scc, &constraints);
+
+            // Follow parent-level edges from the child entry (skip child body).
+            self.dfs_scc_tree(
+                scc, cur, path, seen_nodes, Some(cur),
+                constraints.clone(), out, seen, depth + 1, config,
+            );
+
+            // Splice child paths.
+            for child_path in child_paths {
+                if child_path.blocks.len() <= 1 { continue; }
+                let orig_len = path.len();
+                path.extend(&child_path.blocks[1..]);
+                let new_cur = *path.last().unwrap();
+                let next_skip = if new_cur == cur { Some(cur) } else { None };
+
+                let mut merged = child_path.constraints;
+                for (k, v) in constraints.iter() {
+                    merged.entry(*k).or_insert(*v);
+                }
+
+                self.dfs_scc_tree(
+                    scc, new_cur, path, seen_nodes, next_skip,
+                    merged, out, seen, depth + 1, config,
+                );
+                path.truncate(orig_len);
+            }
+            return;
+        }
+
+        // Enumerate successors and recurse.
+        let successors = self.enumerate_scc_traversals(cur, &constraints);
+        for SccPathAction::Traverse { next, constraints: newc } in successors {
+            if next != scc.enter && !scc.nodes.contains(&next) {
+                record_unique_path(path, &newc, out, seen);
+                continue;
+            }
+            path.push(next);
+            self.dfs_scc_tree(
+                scc, next, path, seen_nodes, None,
+                newc, out, seen, depth + 1, config,
+            );
+            path.pop();
+        }
     }
 
-    /// For the current SCC node, generate the set of `SccPathAction`s that
-    /// determine how the traversal proceeds.
+    /// For the current SCC node, generate the set of `SccPathAction::Traverse`
+    /// items that determine how the traversal proceeds.
     ///
     /// For ordinary (non-terminator) blocks and non-SwitchInt terminators,
     /// generates `Traverse` actions to each successor. For `SwitchInt`
     /// terminators, uses discriminant constraints to narrow down which target
     /// branches are actually reachable, avoiding path explosion from
     /// impossible cases.
-    pub(crate) fn enumerate_scc_actions(
+    fn enumerate_scc_traversals(
         &mut self,
-        scc: &SccInfo,
-        state: &SccPathTraversalState,
+        cur: usize,
         constraints: &FxHashMap<usize, usize>,
     ) -> Vec<SccPathAction> {
         let mut actions = Vec::new();
 
-        // Only generate RecordExit if this node actually has an edge leaving
-        // the SCC — otherwise record_scc_exit_path is a no‑op.
-        if scc.exits.iter().any(|e| e.exit == state.cur) {
-            actions.push(SccPathAction::RecordExit {
-                constraints: constraints.clone(),
-            });
-        }
-
-        let Some(terminator) = self.cfg.terminator(state.cur) else {
-            for next in self.cfg.block(state.cur).next.clone() {
+        let Some(terminator) = self.cfg.terminator(cur) else {
+            for next in self.cfg.block(cur).next.clone() {
                 actions.push(SccPathAction::Traverse {
                     next,
                     constraints: constraints.clone(),
@@ -1039,7 +787,7 @@ impl<'tcx> PathGraph<'tcx> {
                 });
             }
             _ => {
-                for next in self.cfg.block(state.cur).next.clone() {
+                for next in self.cfg.block(cur).next.clone() {
                     actions.push(SccPathAction::Traverse {
                         next,
                         constraints: constraints.clone(),
@@ -1292,29 +1040,4 @@ fn record_unique_path(
     }
 }
 
-fn node_is_in_current_scc(start: usize, scc: &SccInfo, node: usize) -> bool {
-    node == start || scc.nodes.contains(&node)
-}
 
-fn rebuild_segment_stack(path: &[usize], start: usize) -> FxHashSet<usize> {
-    let last_start_pos = path.iter().rposition(|&node| node == start).unwrap_or(0);
-    let mut segment_stack = FxHashSet::default();
-    for node in &path[last_start_pos..] {
-        segment_stack.insert(*node);
-    }
-    segment_stack
-}
-
-fn record_scc_exit_path(
-    scc: &SccInfo,
-    node: usize,
-    constraints: &SccPathConstraints,
-    cur_path: &[usize],
-    out: &mut Vec<SccEnumeratedPath>,
-    seen_paths: &mut FxHashSet<PathKey>,
-) {
-    if !scc.exits.iter().any(|e| e.exit == node) {
-        return;
-    }
-    record_unique_path(cur_path, constraints, out, seen_paths);
-}
