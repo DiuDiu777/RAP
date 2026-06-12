@@ -51,6 +51,10 @@ impl SccPathCacheKey {
 
 pub type SccPathConstraints = FxHashMap<usize, usize>;
 
+/// Mutable state carried through recursive SCC path enumeration.
+///
+/// Tracks the current position (`cur`), accumulated block sequence (`path`),
+/// and per-iteration cycle detection (`visited_since_enter`, `segment_stack`).
 #[derive(Clone, Debug)]
 pub struct SccPathTraversalState {
     pub start: usize,
@@ -169,6 +173,11 @@ impl SccPathTraversalState {
 }
 
 #[derive(Clone, Debug)]
+/// A single enumerated path through an SCC region.
+///
+/// `blocks` is the ordered sequence of MIR block indices from the SCC entry
+/// to an exit point. `constraints` records variable-assignment constraints
+/// accumulated along the path (used to resolve SwitchInt discriminants).
 pub struct SccEnumeratedPath {
     pub blocks: Vec<usize>,
     pub constraints: SccPathConstraints,
@@ -191,6 +200,13 @@ impl Default for SccPathTraversalConfig {
     }
 }
 
+/// Action produced at a node during SCC path enumeration.
+///
+/// - `Traverse`: move to `next` with the given constraints.
+/// - `RecordExit`: record the current path as an SCC exit path.
+///
+/// When `Traverse.next` falls outside the SCC, the traversal engine treats
+/// it as an implicit `RecordExit` and does not follow the edge further.
 #[derive(Clone, Debug)]
 pub enum SccPathAction {
     Traverse {
@@ -216,6 +232,10 @@ type EnumerateChildPathsFn<C> = fn(&mut C, usize, &SccPathConstraints) -> Vec<Sc
 type EnumerateActionsFn<C> =
     fn(&mut C, &SccInfo, &SccPathTraversalState, &SccPathConstraints) -> Vec<SccPathAction>;
 
+/// Enumerate all simple paths through an SCC region from `start`, with an
+/// intra-session cache keyed by `(def_id, scc_enter, initial_constraints)`.
+/// Falls back to `enumerate_scc_paths_with` on cache miss and stores the
+/// result for subsequent identical queries.
 pub(crate) fn enumerate_scc_paths_cached_with<C>(
     def_id: DefId,
     start: usize,
@@ -254,6 +274,8 @@ pub(crate) fn enumerate_scc_paths_cached_with<C>(
     all_paths
 }
 
+/// Enumerate simple paths through `scc` starting at `start`, initialising a
+/// fresh `SccPathTraversalState` and delegating to `enumerate_scc_paths_inner`.
 fn enumerate_scc_paths_with<C>(
     start: usize,
     scc: &SccInfo,
@@ -282,6 +304,15 @@ fn enumerate_scc_paths_with<C>(
     all_paths
 }
 
+/// Core recursive DFS that enumerates all simple paths through a single SCC.
+///
+/// At each node inside the SCC, the algorithm either:
+/// 1. Records the current path as an exit (if the next edge leaves the SCC).
+/// 2. Descends to a successor still inside the SCC, recursing further.
+/// 3. Splices sub-paths of a nested child SCC into the current path.
+///
+/// Path uniqueness is enforced via `seen_paths` (block-sequence + constraints).
+/// Loop avoidance within one traversal iteration uses `visited_since_enter`.
 fn enumerate_scc_paths_inner<C>(
     scc: &SccInfo,
     state: SccPathTraversalState,
@@ -860,6 +891,11 @@ impl<'tcx> PathGraph<'tcx> {
         self.cfg.block(scc.enter).scc.clone()
     }
 
+    /// Enumerate all simple paths through `scc` starting at `start`.
+    ///
+    /// Delegates to `enumerate_scc_paths_cached_with`, passing `self` as the
+    /// callback context for node-enter, child-path enumeration, and action
+    /// generation. Results are cached per `(def_id, scc_enter, constraints)`.
     pub fn find_scc_paths(
         &mut self,
         start: usize,
@@ -880,6 +916,9 @@ impl<'tcx> PathGraph<'tcx> {
         )
     }
 
+    /// Called when the SCC traversal enters a node. Removes assignment
+    /// constraints for locals that are reassigned at this block, because
+    /// a new assignment invalidates the prior constraint.
     fn on_scc_node_enter(&mut self, node: usize, constraints: &mut FxHashMap<usize, usize>) {
         if let Some(assigned_locals) = self.assigned_locals.get(node) {
             for local in assigned_locals {
@@ -897,6 +936,13 @@ impl<'tcx> PathGraph<'tcx> {
         self.find_scc_paths(child_enter, &child_scc, constraints)
     }
 
+    /// For the current SCC node, generate the set of `SccPathAction`s that
+    /// determine how the traversal proceeds.
+    ///
+    /// For ordinary (non-terminator) blocks and match terminators, generates
+    /// `Traverse` actions to each successor. For `SwitchInt` terminators,
+    /// uses discriminant constraints to narrow down which target branches
+    /// are actually reachable, avoiding path explosion from impossible cases.
     pub(crate) fn enumerate_scc_actions(
         &mut self,
         _scc: &SccInfo,
