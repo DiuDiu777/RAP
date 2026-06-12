@@ -320,7 +320,7 @@ impl<'tcx> PathExtractor<'tcx> {
                 // Target is outside this SCC → treat the SCC as one black‑box step:
                 // enumerate simple paths through the SCC to its exits, then continue
                 // DFS from each exit.
-                self.follow_scc_exits(next, representative, ctx);
+                self.follow_scc_exits(representative, ctx);
                 continue;
             }
             // next is a plain non‑SCC block (DAG node) → standard DFS descent.
@@ -336,16 +336,12 @@ impl<'tcx> PathExtractor<'tcx> {
     /// Jump through an SCC by enumerating internal paths to each exit edge.
     ///
     /// For each exit edge `(from, to)` of the SCC, this method finds all
-    /// simple paths from `entry` to `exit.from` within the SCC, then
-    /// recursively continues the search from `exit.to`. The SCC-internal
-    /// blocks are pushed onto the stack and visited set, then cleaned up
-    /// after the recursive call returns (backtracking).
-    ///
-    /// If the SCC entry equals its representative, uses the `PathGraph`'s
-    /// pre-computed SCC paths for efficiency.
+    /// simple paths from the SCC representative to `exit.from` within the
+    /// SCC, then recursively continues the search from `exit.to`. The
+    /// SCC-internal blocks are pushed onto the stack and visited set, then
+    /// cleaned up after the recursive call returns (backtracking).
     fn follow_scc_exits(
         &mut self,
-        entry: BasicBlock,
         representative: BasicBlock,
         ctx: &mut EntrySearchCtx<'_>,
     ) {
@@ -353,7 +349,6 @@ impl<'tcx> PathExtractor<'tcx> {
             Some(r) => r.clone(),
             None => return,
         };
-        let scc_blocks: FxHashSet<BasicBlock> = scc_region.blocks.iter().copied().collect();
 
         for exit in scc_region.exits {
             if ctx.results.len() >= ctx.limit {
@@ -363,11 +358,11 @@ impl<'tcx> PathExtractor<'tcx> {
                 continue;
             }
 
-            let internal_paths: Vec<Vec<BasicBlock>> = if entry == representative {
+            let internal_paths: Vec<Vec<BasicBlock>> = {
                 let pg = self.path_graph();
                 let scc_info = &pg.cfg.block(representative.as_usize()).scc;
                 if scc_info.nodes.is_empty() {
-                    vec![vec![entry]]
+                    vec![vec![representative]]
                 } else {
                     let paths = pg.find_scc_paths(
                         representative.as_usize(),
@@ -379,8 +374,6 @@ impl<'tcx> PathExtractor<'tcx> {
                         .map(|p| p.blocks.into_iter().map(|i| BasicBlock::from(i)).collect())
                         .collect()
                 }
-            } else {
-                self.find_scc_paths_to(&scc_blocks, entry, exit.from, ctx.limit)
             };
 
             for internal_path in &internal_paths {
@@ -485,7 +478,7 @@ impl<'tcx> PathExtractor<'tcx> {
                     continue;
                 }
                 // Different SCC along the way → jump through it via its exits.
-                self.follow_scc_exits_for_prefix(next, scc_representative, ctx);
+                self.follow_scc_exits_for_prefix(scc_representative, ctx);
                 continue;
             }
 
@@ -502,11 +495,10 @@ impl<'tcx> PathExtractor<'tcx> {
     ///
     /// Works similarly to [`follow_scc_exits`] but targets the SCC
     /// representative instead of a callsite. For each exit edge, finds
-    /// internal paths within the SCC from `entry` to `exit.from`, then
-    /// continues the prefix search from `exit.to`.
+    /// internal paths within the SCC from the representative to `exit.from`,
+    /// then continues the prefix search from `exit.to`.
     fn follow_scc_exits_for_prefix(
         &self,
-        entry: BasicBlock,
         scc_representative: BasicBlock,
         ctx: &mut PrefixSearchCtx<'_>,
     ) {
@@ -524,7 +516,7 @@ impl<'tcx> PathExtractor<'tcx> {
             }
 
             let internal_paths =
-                self.find_scc_paths_to(&scc_blocks, entry, exit.from, ctx.limit);
+                self.find_scc_paths_to(&scc_blocks, scc_representative, exit.from, ctx.limit);
 
             for internal_path in &internal_paths {
                 if ctx.results.len() >= ctx.limit {
