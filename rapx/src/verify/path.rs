@@ -59,7 +59,8 @@ const PATH_LIMIT: usize = 1024;
 /// at the function entry and explores forward, treating SCCs as opaque by jumping
 /// through one of their exit edges.
 struct EntrySearchCtx<'a> {
-    /// Set of blocks already visited on the current stack prefix (for cycle detection).
+    /// Blocks currently on the path stack, including SCC-internal blocks pushed
+    /// by [`follow_scc_exits`]. Used to avoid re-entering the same SCC exit.
     visited: &'a mut FxHashSet<BasicBlock>,
     /// The current path stack being built during DFS.
     stack: &'a mut Vec<PathStep>,
@@ -79,7 +80,8 @@ struct EntrySearchCtx<'a> {
 /// going around other intervening SCCs via their exits. The results feed into
 /// SCC-internal path construction as `entry_prefix` segments.
 struct PrefixSearchCtx<'a> {
-    /// Set of blocks already visited on the current stack prefix.
+    /// Blocks currently on the path stack, including SCC-internal blocks pushed
+    /// by [`follow_scc_exits_for_prefix`]. Used to avoid re-entering the same SCC exit.
     visited: &'a mut FxHashSet<BasicBlock>,
     /// The current path stack being built during DFS.
     stack: &'a mut Vec<PathStep>,
@@ -262,7 +264,8 @@ impl<'tcx> PathExtractor<'tcx> {
     /// When `current` equals `ctx.target_block`, a complete path is recorded
     /// (after a reachability check via `PathGraph`). SCC blocks are handled
     /// by [`follow_scc_exits`], which jumps through SCC exits as atomic steps.
-    /// Non-SCC blocks are explored recursively with cycle detection.
+    /// Non-SCC blocks form a DAG (all cycles were captured by SCC detection),
+    /// so they are explored without explicit cycle detection.
     fn dfs_entry_paths(&mut self, current: BasicBlock, ctx: &mut EntrySearchCtx<'_>) {
         if ctx.results.len() >= ctx.limit {
             return;
@@ -310,10 +313,6 @@ impl<'tcx> PathExtractor<'tcx> {
                 }
                 // Treat this SCC as opaque: jump through one of its exits.
                 self.follow_scc_exits(next, representative, ctx);
-                continue;
-            }
-
-            if ctx.visited.contains(&next) {
                 continue;
             }
 
@@ -450,8 +449,8 @@ impl<'tcx> PathExtractor<'tcx> {
     ///
     /// Each time `next == ctx.representative`, the current stack is pushed as
     /// a complete prefix. When encountering another SCC, delegates to
-    /// [`follow_scc_exits_for_prefix`] for opaque traversal. Cycle detection
-    /// via `ctx.visited` prevents infinite recursion.
+    /// [`follow_scc_exits_for_prefix`] for opaque traversal.
+    /// Non-SCC blocks form a DAG so no explicit cycle detection is needed.
     fn dfs_entry_prefixes(&self, current: BasicBlock, ctx: &mut PrefixSearchCtx<'_>) {
         if ctx.results.len() >= ctx.limit {
             return;
@@ -472,10 +471,6 @@ impl<'tcx> PathExtractor<'tcx> {
                     continue;
                 }
                 self.follow_scc_exits_for_prefix(next, scc_representative, ctx);
-                continue;
-            }
-
-            if ctx.visited.contains(&next) {
                 continue;
             }
 
