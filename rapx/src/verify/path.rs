@@ -267,13 +267,15 @@ impl<'tcx> PathExtractor<'tcx> {
     /// Non-SCC blocks form a DAG (all cycles were captured by SCC detection),
     /// so they are explored without explicit cycle detection.
     fn dfs_entry_paths(&mut self, current: BasicBlock, ctx: &mut EntrySearchCtx<'_>) {
+        // Stop if we have already collected enough paths.
         if ctx.results.len() >= ctx.limit {
             return;
         }
 
+        // ── base case: reached the block containing the target callsite ──
         if current == ctx.target_block {
-            // Target reached: validate via PathGraph, then record the path.
             ctx.stack.push(PathStep::Callsite(ctx.target));
+            // Extract block-only indices from the path stack for the reachability check.
             let path_blocks: Vec<usize> = ctx
                 .stack
                 .iter()
@@ -282,6 +284,7 @@ impl<'tcx> PathExtractor<'tcx> {
                     _ => None,
                 })
                 .collect();
+            // Validate that this block sequence is actually reachable in the PathGraph.
             let reachable = self
                 .path_graph()
                 .is_path_reachable(&path_blocks);
@@ -297,24 +300,30 @@ impl<'tcx> PathExtractor<'tcx> {
             return;
         }
 
+        // ── recursive case: explore successors ──
         let successors = self.cfg.successors(current).to_vec();
         for &next in &successors {
             if ctx.results.len() >= ctx.limit {
                 break;
             }
 
+            // Does `next` belong to an SCC (loop) region?
             let scc_rep = self.block_to_scc.get(&next).copied();
             if let Some(representative) = scc_rep {
-                // Skip SCCs that contain both `next` and the target callsite —
-                // they would be explored in the SCC-internal path search instead.
+                // Check whether the target callsite is inside the SAME SCC.
+                // If it is, do NOT enter this SCC here — the callsite's SCC‑internal
+                // paths are extracted separately by find_scc_internal_paths.
                 let target_rep = self.block_to_scc.get(&ctx.target_block).copied();
                 if target_rep == Some(representative) {
                     continue;
                 }
-                // Treat this SCC as opaque: jump through one of its exits.
+                // Target is outside this SCC → treat the SCC as one black‑box step:
+                // enumerate simple paths through the SCC to its exits, then continue
+                // DFS from each exit.
                 self.follow_scc_exits(next, representative, ctx);
                 continue;
             }
+            // next is a plain non‑SCC block (DAG node) → standard DFS descent.
 
             ctx.stack.push(PathStep::Block(next));
             ctx.visited.insert(next);
@@ -452,6 +461,7 @@ impl<'tcx> PathExtractor<'tcx> {
     /// [`follow_scc_exits_for_prefix`] for opaque traversal.
     /// Non-SCC blocks form a DAG so no explicit cycle detection is needed.
     fn dfs_entry_prefixes(&self, current: BasicBlock, ctx: &mut PrefixSearchCtx<'_>) {
+        // Stop if we have enough prefix paths.
         if ctx.results.len() >= ctx.limit {
             return;
         }
@@ -461,19 +471,25 @@ impl<'tcx> PathExtractor<'tcx> {
                 break;
             }
 
+            // Reached the target SCC representative — record this prefix.
             if next == ctx.representative {
                 ctx.results.push(ctx.stack.clone());
                 continue;
             }
 
+            // Does next belong to some SCC?
             if let Some(scc_representative) = self.block_to_scc.get(&next).copied() {
+                // If next is inside the target SCC itself, skip — we are looking
+                // for prefixes that END at the representative, not internal SCC paths.
                 if scc_representative == ctx.representative {
                     continue;
                 }
+                // Different SCC along the way → jump through it via its exits.
                 self.follow_scc_exits_for_prefix(next, scc_representative, ctx);
                 continue;
             }
 
+            // Plain non‑SCC block → descend normally.
             ctx.stack.push(PathStep::Block(next));
             ctx.visited.insert(next);
             self.dfs_entry_prefixes(next, ctx);
