@@ -161,20 +161,23 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
     pub fn check_scc(&mut self, bb_idx: usize, fn_map: &MopFnAliasMap) {
         let cur_scc = self.alias_graph.cfg_block(bb_idx).scc.clone();
-        /* Handle cases if the current block is a merged scc block with sub block */
         let scc = self.alias_graph.sort_scc_tree(&cur_scc);
+        let inherited_constraints = self.alias_graph.constants.clone();
         let paths_in_scc = self
             .alias_graph
             .find_scc_paths(bb_idx, &scc, &FxHashMap::default());
 
         rap_debug!("Paths in scc: {:?}", paths_in_scc);
 
-        let backup_values = self.alias_graph.values.clone(); // duplicate the status when visiteding different paths;
+        let backup_values = self.alias_graph.values.clone();
         let backup_constant = self.alias_graph.constants.clone();
         let backup_alias_sets = self.alias_graph.alias_sets.clone();
         let backup_drop_record = self.drop_record.clone();
         for raw_path in &paths_in_scc {
             let path = &raw_path.blocks;
+            if !self.alias_graph.is_path_reachable(path, &inherited_constraints) {
+                continue;
+            }
             let path_constants = &raw_path.constraints;
 
             if !path.is_empty() {

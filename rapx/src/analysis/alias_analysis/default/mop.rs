@@ -76,6 +76,10 @@ impl Drop for DepthLimitGuard {
 }
 
 impl<'tcx> AliasGraph<'tcx> {
+    pub(crate) fn is_path_reachable(&self, path: &[usize], initial: &FxHashMap<usize, usize>) -> bool {
+        self.path_graph.is_path_reachable_with(path, initial)
+    }
+
     fn switch_target_for_value(
         &self,
         targets: &rustc_middle::mir::SwitchTargets,
@@ -450,15 +454,19 @@ impl<'tcx> AliasGraph<'tcx> {
 
         // SCC exits are recorded on the SCC entry metadata.
         for raw_path in paths_in_scc {
+            let path = &raw_path.blocks;
+            if !self.is_path_reachable(path, &inherited_constraints) {
+                rap_debug!("Skip unreachable scc path: {:?}", path);
+                continue;
+            }
             self.restore_state(&snapshot);
             *recursion_set = backup_recursion_set.clone();
 
-            let path = raw_path.blocks;
             let path_constraints = &raw_path.constraints;
             rap_debug!("checking path: {:?}", path);
 
             // Apply alias transfer for every node in the path (including the exit node).
-            for idx in &path {
+            for idx in path {
                 self.alias_bb(*idx);
                 self.alias_bbcall(*idx, fn_map, recursion_set);
             }

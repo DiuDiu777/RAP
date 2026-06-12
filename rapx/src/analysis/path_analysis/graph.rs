@@ -106,13 +106,10 @@ pub struct PathGraph<'tcx> {
     pub discriminants: FxHashMap<usize, usize>,
 }
 
-/// A successor edge together with its propagated constraints.
+/// A successor edge.
 #[derive(Clone, Debug)]
 pub enum SccPathAction {
-    Traverse {
-        next: usize,
-        constraints: SccPathConstraints,
-    },
+    Traverse { next: usize },
 }
 
 impl<'tcx> PathGraph<'tcx> {
@@ -308,22 +305,27 @@ impl<'tcx> PathGraph<'tcx> {
     /// the corresponding local is reassigned, and rejects transitions that
     /// contradict known constraints.
     ///
-    /// Returns `false` if the path is empty, does not start at block `0`,
-    /// or contains a transition that is provably unreachable.
+    /// Returns `false` if the path is empty or contains a transition that
+    /// is provably unreachable.
     pub fn is_path_reachable(&self, path: &[usize]) -> bool {
+        self.is_path_reachable_with(path, &FxHashMap::default())
+    }
+
+    /// Like `is_path_reachable` but accepts caller-provided initial
+    /// constraints (e.g. accumulated before entering an SCC).
+    pub fn is_path_reachable_with(
+        &self,
+        path: &[usize],
+        initial: &FxHashMap<usize, usize>,
+    ) -> bool {
         if path.is_empty() {
-            return false;
-        }
-        // Every function entry is block 0.
-        if path[0] != 0 {
             return false;
         }
         if path.len() == 1 {
             return true;
         }
 
-        // constraints: local → concrete discriminant value
-        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
+        let mut constraints: FxHashMap<usize, usize> = initial.clone();
 
         for i in 0..path.len() - 1 {
             let cur = path[i];
@@ -372,20 +374,29 @@ impl<'tcx> PathGraph<'tcx> {
         self.check_reachability(path)
     }
 
-    /// Check a path segment (may not start at block 0) and return
-    /// reconstructed constraints. Returns `None` if unreachable.
-    pub fn check_segment_reachability(
+    /// Check a path segment with caller-provided initial constraints.
+    /// Returns `None` if unreachable, otherwise the reconstructed constraints.
+    pub fn check_segment_reachability_with(
         &self,
         path: &[usize],
+        initial: &FxHashMap<usize, usize>,
     ) -> Option<FxHashMap<usize, usize>> {
         if path.len() <= 1 {
-            return Some(FxHashMap::default());
+            return Some(initial.clone());
         }
-        self.check_reachability(path)
+        self.check_reachability_from(path, initial)
     }
 
     fn check_reachability(&self, path: &[usize]) -> Option<FxHashMap<usize, usize>> {
-        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
+        self.check_reachability_from(path, &FxHashMap::default())
+    }
+
+    fn check_reachability_from(
+        &self,
+        path: &[usize],
+        initial: &FxHashMap<usize, usize>,
+    ) -> Option<FxHashMap<usize, usize>> {
+        let mut constraints: FxHashMap<usize, usize> = initial.clone();
 
         for i in 0..path.len() - 1 {
             let cur = path[i];
@@ -554,14 +565,14 @@ impl<'tcx> PathGraph<'tcx> {
 
     /// Enumerate all simple paths through `scc` starting at `start`,
     /// using the SCC tree to guide traversal. Results are cached per
-    /// `(def_id, scc_enter, constraints)`.
+    /// `(def_id, scc_enter)`.
     pub fn find_scc_paths(
         &mut self,
         start: usize,
         scc: &SccInfo,
         initial_constraints: &FxHashMap<usize, usize>,
     ) -> Vec<SccEnumeratedPath> {
-        let key = SccPathCacheKey::new(self.cfg.def_id, scc.enter, initial_constraints);
+        let key = SccPathCacheKey::new(self.cfg.def_id, scc.enter, &FxHashMap::default());
         if let Some(cached) = SCC_PATH_CACHE.with(|c| c.borrow().get(&key).cloned()) {
             return cached;
         }
@@ -574,7 +585,7 @@ impl<'tcx> PathGraph<'tcx> {
         seen_nodes.insert(start);
 
         self.dfs_scc_tree(
-            scc, start, &mut path, &mut seen_nodes, None,
+            scc, start, &mut path, seen_nodes, None,
             initial_constraints.clone(), &mut out, &mut seen, 0, &config,
         );
 
@@ -589,33 +600,20 @@ impl<'tcx> PathGraph<'tcx> {
         out
     }
 
-    /// Called when the SCC traversal enters a node. Removes assignment
-    /// constraints for locals that are reassigned at this block, because
-    /// a new assignment invalidates the prior constraint.
-    fn on_scc_node_enter(&mut self, node: usize, constraints: &mut FxHashMap<usize, usize>) {
-        if let Some(assigned_locals) = self.assigned_locals.get(node) {
-            for local in assigned_locals {
-                constraints.remove(local);
-            }
-        }
-    }
-
     /// Recursive DFS through one level of the SCC tree.
     ///
     /// At the current SCC level, after collapsing child SCCs, the remaining
-    /// nodes form a DAG plus back edges to the SCC entry.  The function:
-    ///
-    /// 1. Checks forward progress when re-entering the entry via a back edge.
-    /// 2. Handles child SCC entries by splicing their pre-enumerated paths.
-    /// 3. Follows plain successors, recursing depth-first.
+    /// nodes form a DAG plus back edges to the SCC entry.
+    /// Child SCC paths are enumerated once (cached) and filtered against
+    /// the current constraints at splice time to avoid path explosion.
     fn dfs_scc_tree(
         &mut self,
         scc: &SccInfo,
         cur: usize,
         path: &mut Vec<usize>,
-        seen_nodes: &mut FxHashSet<usize>,
+        mut seen_nodes: FxHashSet<usize>,
         skip_child: Option<usize>,
-        mut constraints: SccPathConstraints,
+        constraints: SccPathConstraints,
         out: &mut Vec<SccEnumeratedPath>,
         seen: &mut FxHashSet<PathKey>,
         depth: usize,
@@ -626,50 +624,53 @@ impl<'tcx> PathGraph<'tcx> {
         if path.len() > config.max_path_len { return; }
         if cur != scc.enter && !scc.nodes.contains(&cur) { return; }
 
-        // Forward progress: only relevant when re-entering the SCC header.
+        // When returning to the entry, only continue if new blocks appeared
+        // since the last traversal — otherwise stop.
         if cur == scc.enter && path.len() > 1 {
-            if !check_forward_progress(path, scc.enter, seen_nodes) {
+            if !check_forward_progress(path, scc.enter, &mut seen_nodes) {
                 path.pop();
                 return;
             }
         }
 
-        self.on_scc_node_enter(cur, &mut constraints);
-
-        // Record exit if this node has an edge leaving the SCC.
         if scc.exits.iter().any(|e| e.exit == cur) {
             record_unique_path(path, &constraints, out, seen);
         }
 
-        // Handle child SCC at this node.
         let is_child = scc.child_sccs.contains(&cur);
         let skipping = skip_child == Some(cur);
 
         if is_child && !skipping {
             let child_scc = self.cfg.block(cur).scc.clone();
-            let child_paths = self.find_scc_paths(cur, &child_scc, &constraints);
+            // Always enumerate child SCC structurally (cached).
+            let all_child = self.find_scc_paths(cur, &child_scc, &FxHashMap::default());
+
+            let child_paths: Vec<_> = all_child
+                .into_iter()
+                .filter(|cp| self.is_path_reachable_with(&cp.blocks, &constraints))
+                .collect();
 
             // Follow parent-level edges from the child entry (skip child body).
             self.dfs_scc_tree(
-                scc, cur, path, seen_nodes, Some(cur),
+                scc, cur, path, seen_nodes.clone(), Some(cur),
                 constraints.clone(), out, seen, depth + 1, config,
             );
 
-            // Splice child paths.
-            for child_path in child_paths {
+            for child_path in &child_paths {
                 if child_path.blocks.len() <= 1 { continue; }
                 let orig_len = path.len();
                 path.extend(&child_path.blocks[1..]);
                 let new_cur = *path.last().unwrap();
                 let next_skip = if new_cur == cur { Some(cur) } else { None };
 
-                let mut merged = child_path.constraints;
+                // Merge parent constraints into child constraints.
+                let mut merged = child_path.constraints.clone();
                 for (k, v) in constraints.iter() {
                     merged.entry(*k).or_insert(*v);
                 }
 
                 self.dfs_scc_tree(
-                    scc, new_cur, path, seen_nodes, next_skip,
+                    scc, new_cur, path, seen_nodes.clone(), next_skip,
                     merged, out, seen, depth + 1, config,
                 );
                 path.truncate(orig_len);
@@ -677,45 +678,36 @@ impl<'tcx> PathGraph<'tcx> {
             return;
         }
 
-        // Enumerate successors and recurse.
-        let successors = self.enumerate_scc_traversals(cur, &constraints);
-        for SccPathAction::Traverse { next, constraints: newc } in successors {
+        let successors = self.enumerate_scc_traversals(cur);
+        for SccPathAction::Traverse { next } in successors {
             if next != scc.enter && !scc.nodes.contains(&next) {
-                record_unique_path(path, &newc, out, seen);
+                record_unique_path(path, &constraints, out, seen);
                 continue;
             }
             path.push(next);
             self.dfs_scc_tree(
-                scc, next, path, seen_nodes, None,
-                newc, out, seen, depth + 1, config,
+                scc, next, path, seen_nodes.clone(), None,
+                constraints.clone(), out, seen, depth + 1, config,
             );
             path.pop();
         }
     }
 
-    /// For the current SCC node, generate the set of `SccPathAction::Traverse`
-    /// items that determine how the traversal proceeds.
-    ///
-    /// For ordinary (non-terminator) blocks and non-SwitchInt terminators,
-    /// generates `Traverse` actions to each successor. For `SwitchInt`
-    /// terminators, uses discriminant constraints to narrow down which target
-    /// branches are actually reachable, avoiding path explosion from
-    /// impossible cases.
+    /// For the current SCC node, generate `SccPathAction::Traverse` items
+    /// for each CFG successor, with constraint propagation limited to
+    /// SwitchInt discriminant narrowing (bool/enum possible values).
     fn enumerate_scc_traversals(
         &mut self,
         cur: usize,
-        constraints: &FxHashMap<usize, usize>,
     ) -> Vec<SccPathAction> {
-        let mut actions = Vec::new();
-
         let Some(terminator) = self.cfg.terminator(cur) else {
-            for next in self.cfg.block(cur).next.clone() {
-                actions.push(SccPathAction::Traverse {
-                    next,
-                    constraints: constraints.clone(),
-                });
-            }
-            return actions;
+            return self
+                .cfg
+                .block(cur)
+                .next
+                .iter()
+                .map(|&next| SccPathAction::Traverse { next })
+                .collect();
         };
 
         match &terminator.kind {
@@ -725,78 +717,38 @@ impl<'tcx> PathGraph<'tcx> {
                     .and_then(|l| self.discriminants.get(&l).copied())
                     .or(discr_local);
 
-                let otherwise_val = self.unique_otherwise_value(discr, targets);
-
-                let mut actions = Vec::new();
-
-                // Case 1: known constraint — follow only the matching target.
+                // If the discriminant's type is bool/enum, enumerate only the
+                // possible concrete values instead of all CFG successors.
+                // This keeps path counts bounded for loops containing SwitchInt.
                 if let Some(local) = constraint_local {
-                    if let Some(&constant) = constraints.get(&local) {
-                        if constant == usize::MAX {
-                            actions.push(SccPathAction::Traverse {
-                                next: targets.otherwise().as_usize(),
-                                constraints: constraints.clone(),
-                            });
-                            return actions;
-                        }
-                        let target = switch_target_for_value(targets, constant as u128);
-                        actions.push(SccPathAction::Traverse {
-                            next: target,
-                            constraints: constraints.clone(),
-                        });
-                        return actions;
+                    if let Some(values) = possible_switch_values_for_local(
+                        self.cfg.tcx, self.cfg.def_id, local,
+                    ) {
+                        return values
+                            .into_iter()
+                            .map(|val| SccPathAction::Traverse {
+                                next: resolve_switch_target(targets, val as u128),
+                            })
+                            .collect();
                     }
                 }
 
-                // Case 2: Bool / enum type — enumerate all possible values.
-                if let Some(local) = constraint_local {
-                    if let Some(values) =
-                        possible_switch_values_for_local(self.cfg.tcx, self.cfg.def_id, local)
-                    {
-                        for val in values {
-                            let mut new_constraints = constraints.clone();
-                            new_constraints.insert(local, val);
-                            actions.push(SccPathAction::Traverse {
-                                next: switch_target_for_value(targets, val as u128),
-                                constraints: new_constraints,
-                            });
-                        }
-                        return actions;
-                    }
-                }
-
-                // Case 3: fallback — enumerate all targets with constraints.
-                for (val, bb) in targets.iter() {
-                    let mut new_constraints = constraints.clone();
-                    if let Some(local) = constraint_local {
-                        new_constraints.insert(local, val as usize);
-                    }
-                    actions.push(SccPathAction::Traverse {
-                        next: bb.as_usize(),
-                        constraints: new_constraints,
-                    });
-                }
-
-                let mut otherwise_constraints = constraints.clone();
-                if let Some(local) = constraint_local {
-                    otherwise_constraints.insert(local, otherwise_val.unwrap_or(usize::MAX));
-                }
-                actions.push(SccPathAction::Traverse {
-                    next: targets.otherwise().as_usize(),
-                    constraints: otherwise_constraints,
-                });
+                // Fallback: enumerate all successors.
+                self.cfg
+                    .block(cur)
+                    .next
+                    .iter()
+                    .map(|&next| SccPathAction::Traverse { next })
+                    .collect()
             }
-            _ => {
-                for next in self.cfg.block(cur).next.clone() {
-                    actions.push(SccPathAction::Traverse {
-                        next,
-                        constraints: constraints.clone(),
-                    });
-                }
-            }
+            _ => self
+                .cfg
+                .block(cur)
+                .next
+                .iter()
+                .map(|&next| SccPathAction::Traverse { next })
+                .collect(),
         }
-
-        actions
     }
 
     fn collect_path_sensitive_paths_inner(
@@ -939,36 +891,6 @@ impl<'tcx> PathGraph<'tcx> {
             self.populate_child_sccs(child_enter);
         }
     }
-
-    /// Infer the single concrete value the otherwise branch must represent
-    /// (all other possible values are covered by explicit targets).
-    fn unique_otherwise_value(
-        &self,
-        discr: &Operand<'tcx>,
-        targets: &SwitchTargets,
-    ) -> Option<usize> {
-        let local_decls = &self.cfg.tcx.optimized_mir(self.cfg.def_id).local_decls;
-        let place = discr.place()?;
-        let place_ty = place.ty(local_decls, self.cfg.tcx).ty;
-
-        let possible_values: Vec<usize> = match place_ty.kind() {
-            TyKind::Bool => vec![0, 1],
-            TyKind::Adt(adt_def, _) if adt_def.is_enum() => (0..adt_def.variants().len()).collect(),
-            _ => return None,
-        };
-
-        let explicit: FxHashSet<usize> = targets.iter().map(|(v, _)| v as usize).collect();
-        let remaining: Vec<usize> = possible_values
-            .into_iter()
-            .filter(|v| !explicit.contains(v))
-            .collect();
-
-        if remaining.len() == 1 {
-            Some(remaining[0])
-        } else {
-            None
-        }
-    }
 }
 
 /// Resolve a concrete discriminant value to the corresponding `SwitchInt`
@@ -977,15 +899,6 @@ fn resolve_switch_target(targets: &SwitchTargets, val: u128) -> usize {
     targets
         .iter()
         .find(|(v, _)| *v == val)
-        .map(|(_, bb)| bb.as_usize())
-        .unwrap_or_else(|| targets.otherwise().as_usize())
-}
-
-/// Find the target block for a specific `SwitchInt` value.
-fn switch_target_for_value(targets: &SwitchTargets, value: u128) -> usize {
-    targets
-        .iter()
-        .find(|(v, _)| *v == value)
         .map(|(_, bb)| bb.as_usize())
         .unwrap_or_else(|| targets.otherwise().as_usize())
 }
