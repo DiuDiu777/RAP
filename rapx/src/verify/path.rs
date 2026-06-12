@@ -388,14 +388,6 @@ impl<'tcx> PathExtractor<'tcx> {
                     pushed.push(block);
                 }
 
-                if ctx.visited.contains(&exit.to) {
-                    for &block in pushed.iter().rev() {
-                        ctx.visited.remove(&block);
-                        ctx.stack.pop();
-                    }
-                    continue;
-                }
-
                 ctx.stack.push(PathStep::Block(exit.to));
                 ctx.visited.insert(exit.to);
                 self.dfs_entry_paths(exit.to, ctx);
@@ -528,14 +520,6 @@ impl<'tcx> PathExtractor<'tcx> {
                     ctx.stack.push(PathStep::Block(block));
                     ctx.visited.insert(block);
                     pushed.push(block);
-                }
-
-                if ctx.visited.contains(&exit.to) {
-                    for &block in pushed.iter().rev() {
-                        ctx.visited.remove(&block);
-                        ctx.stack.pop();
-                    }
-                    continue;
                 }
 
                 ctx.stack.push(PathStep::Block(exit.to));
