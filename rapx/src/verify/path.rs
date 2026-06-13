@@ -43,7 +43,7 @@
 //! (currently 1024) per search. Searches stop producing new paths once the limit
 //! is reached.
 
-use rustc_data_structures::fx::FxHashMap;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
@@ -143,6 +143,7 @@ impl<'tcx> PathExtractor<'tcx> {
         );
 
         let mut results = Vec::new();
+        let mut seen_prefixes = FxHashSet::default();
         for (idx, path) in all_paths.iter().enumerate() {
             if results.len() >= PATH_LIMIT {
                 break;
@@ -158,6 +159,10 @@ impl<'tcx> PathExtractor<'tcx> {
                 idx, prefix, reachable
             );
             if !reachable {
+                continue;
+            }
+            if !seen_prefixes.insert(prefix.clone()) {
+                rap_info!("  verify path {}: duplicate prefix, skipped", idx);
                 continue;
             }
             results.push(Path {
