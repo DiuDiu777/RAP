@@ -4,13 +4,12 @@ use crate::{
     def_id::*,
     utils::source::{get_filename, get_name},
 };
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::{
     mir::{
-        Operand::{self, Constant, Copy, Move},
+        Operand::{self},
         Place, TerminatorKind,
     },
-    ty::{self, TypingEnv},
+    ty::{self},
 };
 use rustc_span::{Span, Symbol};
 
