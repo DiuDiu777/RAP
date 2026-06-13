@@ -35,7 +35,7 @@ fn check_postfix_segment(path: &[usize], enter: usize, segment_counts: &mut FxHa
     let segment = extract_segment(path, enter);
     let count = segment_counts.entry(segment).or_insert(0);
     *count += 1;
-    *count <= max_repeats + 1
+    *count <= max_repeats
 }
 
 fn extract_segment(path: &[usize], enter: usize) -> Vec<usize> {
