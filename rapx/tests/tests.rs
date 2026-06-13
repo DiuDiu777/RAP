@@ -507,21 +507,19 @@ fn test_verify_named_contract_argument_binding() {
     assert_contain(&output, "function: sound_unrelated_scc_does_not_pollute_align | result: SOUND");
     assert_contain(&output, "function: sound_unrelated_nested_scc_with_bad_scratch | result: SOUND");
     assert_contain(&output, "function: sound_scc_internal_noise_ignored | result: SOUND");
-    // UNSOUND cases — correctly detected
-    assert_contain(&output, "function: unsound_enum_paths_inside_scc | result: UNSOUND");
-    // FIXME: verify test times out with new SCC tree enumeration.
-    // assert_contain(&output, "function: unsound_scc_selects_mixed_source | result: UNSOUND");
-    assert_contain(&output, "function: unsound_scc_computes_misaligned_offset | result: UNSOUND");
-    assert_contain(&output, "function: unsound_iteration_count_can_leave_unaligned | result: UNSOUND");
-    // FIXME: verify test times out with new SCC tree enumeration.
-    // assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc | result: UNSOUND");
-    assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch | result: UNSOUND");
-    // FIXME: false positives — SOUND functions reported as UNSOUND due to
-    // forward-visit not invalidating old facts in SCC-unrolled paths.
-    // assert_contain(&output, "function: sound_scc_computes_aligned_offset | result: SOUND");
-    // assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND");
-    // FIXME: false negative — unsound_nested_scc_controller not yet detected.
-    // assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
+        // UNSOUND cases — correctly detected
+        assert_contain(&output, "function: unsound_enum_paths_inside_scc | result: UNSOUND");
+        assert_contain(&output, "function: unsound_scc_computes_misaligned_offset | result: UNSOUND");
+        assert_contain(&output, "function: unsound_iteration_count_can_leave_unaligned | result: UNSOUND");
+        assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch | result: UNSOUND");
+        // SOUND cases — verified
+        assert_contain(&output, "function: sound_scc_computes_aligned_offset | result: SOUND");
+        assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND");
+        // FIXME: false negatives — paths include unaligned combinations but
+        // the forward analysis doesn't track pointer sources across SCC iterations.
+        // assert_contain(&output, "function: unsound_scc_selects_mixed_source | result: UNSOUND");
+        // assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc | result: UNSOUND");
+        // assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
 }
 
 #[test]

@@ -51,21 +51,18 @@ impl SccPathCacheKey {
 
 pub type SccPathConstraints = FxHashMap<usize, usize>;
 
-fn check_forward_progress(path: &[usize], enter: usize, seen_nodes: &mut FxHashSet<usize>) -> bool {
+/// Check whether the current entry→entry sub-path introduces a new block
+/// *sequence* (not just new blocks).  Different branch choices inside the SCC
+/// produce different sequences even when all block IDs have already been seen,
+/// e.g. `if i % 2 == 0 { A } else { B }` alternates between two paths through
+/// the same set of blocks on successive loop iterations.
+fn check_forward_progress(path: &[usize], enter: usize, seen_segments: &mut FxHashSet<Vec<usize>>) -> bool {
     let prev_pos = path[..path.len() - 1]
         .iter()
         .rposition(|&node| node == enter)
         .unwrap_or(0);
-    let has_new = path[prev_pos + 1..path.len() - 1]
-        .iter()
-        .any(|&n| n != enter && !seen_nodes.contains(&n));
-    if !has_new {
-        return false;
-    }
-    for &n in &path[prev_pos + 1..path.len() - 1] {
-        seen_nodes.insert(n);
-    }
-    true
+    let segment: Vec<usize> = path[prev_pos + 1..path.len() - 1].to_vec();
+    seen_segments.insert(segment)
 }
 
 #[derive(Clone, Debug)]
@@ -574,7 +571,6 @@ impl<'tcx> PathGraph<'tcx> {
         let mut seen: FxHashSet<PathKey> = FxHashSet::default();
         let mut path = vec![start];
         let mut seen_nodes = FxHashSet::default();
-        seen_nodes.insert(start);
 
         self.dfs_scc_tree(
             scc, start, &mut path, &mut seen_nodes,
@@ -603,7 +599,7 @@ impl<'tcx> PathGraph<'tcx> {
         scc: &SccInfo,
         cur: usize,
         path: &mut Vec<usize>,
-        seen_nodes: &mut FxHashSet<usize>,
+        seen_nodes: &mut FxHashSet<Vec<usize>>,
         constraints: SccPathConstraints,
         out: &mut Vec<SccEnumeratedPath>,
         seen: &mut FxHashSet<PathKey>,
@@ -615,8 +611,6 @@ impl<'tcx> PathGraph<'tcx> {
         if path.len() > config.max_path_len { return; }
         if cur != scc.enter && !scc.nodes.contains(&cur) { return; }
 
-        // When returning to the entry, only continue if new blocks appeared
-        // since the last traversal — otherwise stop.
         if cur == scc.enter && path.len() > 1 {
             if !check_forward_progress(path, scc.enter, seen_nodes) {
                 return;
