@@ -364,6 +364,7 @@ impl<'tcx> AliasGraph<'tcx> {
             let scc = self.sort_scc_tree(&scc_info);
             let inherited_constraints = self.constants.clone();
             let paths = self.find_scc_paths(bb_idx, &scc, &FxHashMap::default());
+            rap_info!("[MoP] scc at bb{}: {} paths", bb_idx, paths.len());
 
             let snapshot = self.snapshot_state();
             let backup_recursion_set = recursion_set.clone();
@@ -372,6 +373,7 @@ impl<'tcx> AliasGraph<'tcx> {
                 if !self.is_path_reachable(&path.blocks, &inherited_constraints) {
                     continue;
                 }
+                rap_debug!("[MoP] path blocks: {:?}, exits: {:?}", path.blocks, path.exit_successors);
                 self.restore_state(&snapshot);
                 *recursion_set = backup_recursion_set.clone();
 

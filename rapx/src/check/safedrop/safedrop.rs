@@ -150,6 +150,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             let scc = self.alias_graph.sort_scc_tree(&cur_scc);
             let inherited_constraints = self.alias_graph.constants.clone();
             let paths = self.alias_graph.find_scc_paths(bb_idx, &scc, &FxHashMap::default());
+            rap_info!("[SafeDrop] scc at bb{}: {} paths", bb_idx, paths.len());
 
             let backup_values = self.alias_graph.values.clone();
             let backup_constant = self.alias_graph.constants.clone();
@@ -160,6 +161,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 if !self.alias_graph.is_path_reachable(&path.blocks, &inherited_constraints) {
                     continue;
                 }
+                rap_debug!("[SafeDrop] path blocks: {:?}, exits: {:?}", path.blocks, path.exit_successors);
                 if !path.blocks.is_empty() {
                     for idx in &path.blocks[..path.blocks.len() - 1] {
                         self.alias_bb(*idx);

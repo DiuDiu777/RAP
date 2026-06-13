@@ -567,7 +567,7 @@ fn test_ssa_transform() {
     let output = run_with_args("ssa/ssa_transform", ANALYZE_SSA_CMD);
     assert_contain(&output, "ssa lvalue check true");
 }
-// FIXME: times out after SCC-tree refactor.
+// FIXME: times out — SCC path enumeration on nested loops.
 // #[test]
 // fn test_range_analysis() {
 //     let output = run_with_args("range/range_1", ANALYZE_RANGE_CMD);
@@ -591,6 +591,7 @@ fn test_ssa_transform() {
 //         );
 //     }
 // }
+
 #[test]
 
 fn test_interprocedual_range_analysis() {

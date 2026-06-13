@@ -373,6 +373,7 @@ impl<'tcx> PathExtractor<'tcx> {
                     &scc_info.clone(),
                     &FxHashMap::default(),
                 );
+                rap_info!("[Verify] scc at bb{}: {} paths", representative.as_usize(), paths.len());
                 paths
                     .into_iter()
                     .map(|p| p.blocks.into_iter().map(|i| BasicBlock::from(i)).collect())
@@ -383,6 +384,7 @@ impl<'tcx> PathExtractor<'tcx> {
                 if ctx.results.len() >= ctx.limit {
                     break;
                 }
+                rap_debug!("[Verify] path blocks: {:?}", internal_path);
 
                 let mut pushed: Vec<BasicBlock> = Vec::new();
                 for &block in internal_path {

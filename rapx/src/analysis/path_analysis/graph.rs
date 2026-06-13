@@ -631,7 +631,6 @@ impl<'tcx> PathGraph<'tcx> {
         // since the last traversal — otherwise stop.
         if cur == scc.enter && path.len() > 1 {
             if !check_forward_progress(path, scc.enter, &mut seen_nodes) {
-                path.pop();
                 return;
             }
         }
@@ -803,7 +802,12 @@ impl<'tcx> PathGraph<'tcx> {
                     .next
                     .iter()
                     .copied()
-                    .filter(|&next| self.cfg.block(next).scc.enter != cur_scc_enter)
+                    .filter(|&next| {
+                        self.cfg.block(next).scc.enter() != cur_scc_enter
+                            && !scc
+                                .child_sccs
+                                .contains(&self.cfg.block(next).scc.enter())
+                    })
                     .collect();
                 nexts.sort_unstable();
                 nexts.dedup();
