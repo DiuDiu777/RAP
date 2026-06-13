@@ -43,84 +43,17 @@
 //! (currently 1024) per search. Searches stop producing new paths once the limit
 //! is reached.
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
 use crate::analysis::path_analysis::graph::PathGraph;
-use crate::graphs::scc::{SccRegion, find_scc_regions};
+use crate::graphs::scc::SccRegion;
 
-use super::helpers::{CFG, Callsite, CallsiteLocation};
+use super::helpers::{Callsite, CallsiteLocation};
 
 const PATH_LIMIT: usize = 1024;
 
-/// Mutable DFS state shared across recursive calls during entry-path search.
-///
-/// Used when the target callsite is **outside** any SCC region. The search starts
-/// at the function entry and explores forward, fully expanding SCCs by enumerating
-/// their internal paths and splicing the block sequences into the trail.
-struct EntrySearchCtx<'a> {
-    /// Blocks currently on the path stack, including SCC-internal blocks pushed
-    /// by [`expand_scc_paths`]. Enforces simple-path semantics (no block revisited).
-    visited: &'a mut FxHashSet<BasicBlock>,
-    /// The current path stack being built during DFS.
-    stack: &'a mut Vec<PathStep>,
-    /// Accumulated complete paths that reach the target.
-    results: &'a mut Vec<Path>,
-    /// Maximum number of paths to produce before stopping the search.
-    limit: usize,
-    /// The location of the target callsite being searched for.
-    target: CallsiteLocation,
-    /// The MIR basic block that contains the target callsite.
-    target_block: BasicBlock,
-}
-
-/// Mutable DFS state shared across recursive calls during entry-prefix search.
-///
-/// Used to find paths from the function entry to an SCC representative block,
-/// going around other intervening SCCs by expanding their internal paths.
-/// The results feed into
-/// SCC-internal path construction as `entry_prefix` segments.
-struct PrefixSearchCtx<'a> {
-    /// Blocks currently on the path stack, including SCC-internal blocks pushed
-    /// by [`expand_scc_prefix_paths`]. Enforces simple-path semantics.
-    visited: &'a mut FxHashSet<BasicBlock>,
-    /// The current path stack being built during DFS.
-    stack: &'a mut Vec<PathStep>,
-    /// Accumulated prefix paths reaching the SCC representative.
-    results: &'a mut Vec<Vec<PathStep>>,
-    /// Maximum number of prefixes to produce.
-    limit: usize,
-    /// The SCC representative block to reach.
-    representative: BasicBlock,
-}
-
-/// Mutable DFS state shared across recursive calls during SCC-internal path search.
-///
-/// Used when the target callsite is **inside** an SCC region. The search starts
-/// at the SCC representative and explores only blocks within that SCC, enumerating
-/// simple paths to the callsite. Each complete path is paired with every entry prefix
-/// to produce full verification paths.
-struct SccInternalCtx<'a> {
-    /// Set of blocks already visited on the current stack prefix within the SCC.
-    visited: &'a mut FxHashSet<BasicBlock>,
-    /// The current path stack being built during DFS.
-    stack: &'a mut Vec<PathStep>,
-    /// Accumulated complete paths (body from representative to callsite).
-    results: &'a mut Vec<Path>,
-    /// Maximum number of paths to produce.
-    limit: usize,
-    /// The location of the target callsite.
-    target: CallsiteLocation,
-    /// The MIR basic block containing the target callsite.
-    target_block: BasicBlock,
-    /// The SCC representative (entry) block.
-    representative: BasicBlock,
-    /// The set of blocks belonging to this SCC.
-    scc_blocks: &'a FxHashSet<BasicBlock>,
-    /// Pre-computed entry prefixes from function entry to the representative.
-    entry_prefixes: &'a [Vec<PathStep>],
-}
 
 /// Extracts SCC-aware, finite verification paths for one function body.
 ///
@@ -135,21 +68,11 @@ struct SccInternalCtx<'a> {
 /// The result is a `FunctionPaths` value that maps callsite locations to
 /// their finite verification paths and exposes SCC region metadata.
 pub struct PathExtractor<'tcx> {
-    /// Compiler type context for MIR body access.
     tcx: TyCtxt<'tcx>,
-    /// The function being analyzed.
     def_id: DefId,
-    /// The function's control-flow graph (successor map).
-    cfg: CFG,
-    /// Unsafe callsites collected from the function body.
     callsites: Vec<Callsite<'tcx>>,
-    /// SCC (strongly-connected component) regions detected in this function.
     scc_regions: Vec<SccRegion>,
-    /// Maps each block to its SCC representative. Blocks not in any SCC are absent.
-    block_to_scc: FxHashMap<BasicBlock, BasicBlock>,
-    /// Extracted paths, keyed by callsite location.
     paths: FxHashMap<CallsiteLocation, Vec<Path>>,
-    /// Lazily-initialized PathGraph for SCC path reachability checks.
     path_graph: Option<PathGraph<'tcx>>,
 }
 
@@ -162,10 +85,8 @@ impl<'tcx> PathExtractor<'tcx> {
         Self {
             tcx,
             def_id,
-            cfg: CFG::new(tcx, def_id),
             callsites,
             scc_regions: Vec::new(),
-            block_to_scc: FxHashMap::default(),
             paths: FxHashMap::default(),
             path_graph: None,
         }
@@ -193,16 +114,8 @@ impl<'tcx> PathExtractor<'tcx> {
         }
     }
 
-    /// Detect SCC regions in the function CFG and store their block-to-SCC map.
-    ///
-    /// Uses [`find_scc_regions`] from the graph module to identify
-    /// strongly-connected components. Each SCC is assigned a representative
-    /// (entry) block, and a reverse map from block to representative is built
-    /// for fast lookups during path search.
     fn find_scc_regions(&mut self) {
-        let (scc_regions, block_to_scc) = find_scc_regions(&self.cfg.successors);
-        self.scc_regions = scc_regions;
-        self.block_to_scc = block_to_scc;
+        self.scc_regions = self.path_graph().collect_scc_regions();
     }
 
     /// Extract paths for every callsite owned by this extractor.
@@ -217,550 +130,84 @@ impl<'tcx> PathExtractor<'tcx> {
         }
     }
 
-    /// Extract paths for one callsite based on SCC membership.
+    /// Extract paths for one callsite by filtering pre-enumerated whole-function paths.
     ///
-    /// If the callsite block belongs to an SCC, we use
-    /// [`find_scc_internal_paths`] which produces entry-prefix + body-path
-    /// pairs. Otherwise we use [`find_entry_paths`] which expands SCCs
-    /// by enumerating all internal paths through them.
+    /// Uses `PathGraph::enumerate_paths()` to get all CFG paths, then filters
+    /// to those containing the target callsite block and passing reachability.
+    /// Paths are truncated at the target block (inclusive).
     fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
-        if let Some(representative) = self.block_to_scc.get(&callsite.block).copied() {
-            self.find_scc_internal_paths(representative, target, callsite.block)
-        } else {
-            self.find_entry_paths(target, callsite.block)
-        }
-    }
+        let target_block = callsite.block.as_usize();
+        let pg = self.path_graph();
+        let all_paths = pg.enumerate_paths();
 
-    // ── entry-path search (target outside SCC) ──────────────────────────
-    //
-    // These methods handle the case where the target callsite is not inside any
-    // SCC. SCCs are fully expanded: the search enumerates all internal SCC
-    // paths via `PathGraph::find_scc_paths` and splices their block sequences
-    // into the DFS trail.
-
-    /// Find all paths from the function entry to a callsite outside any SCC.
-    ///
-    /// Initializes a DFS from the entry block. SCC regions encountered along
-    /// the way are fully expanded by [`expand_scc_paths`] — each internal path
-    /// through the SCC is enumerated and its blocks are pushed to the trail.
-    /// The `target` and `target_block` identify the callsite to reach.
-    fn find_entry_paths(&mut self, target: CallsiteLocation, target_block: BasicBlock) -> Vec<Path> {
         let mut results = Vec::new();
-        let mut stack = vec![PathStep::Block(self.cfg.entry)];
-        let mut visited = FxHashSet::default();
-        visited.insert(self.cfg.entry);
-        let mut ctx = EntrySearchCtx {
-            visited: &mut visited,
-            stack: &mut stack,
-            results: &mut results,
-            limit: PATH_LIMIT,
-            target,
-            target_block,
-        };
-        self.dfs_entry_paths(self.cfg.entry, &mut ctx);
-        results
-    }
-
-    /// Depth-first search for paths from the entry to a callsite outside SCCs.
-    ///
-    /// When `current` equals `ctx.target_block`, a complete path is recorded
-    /// (after a reachability check via `PathGraph`). SCC blocks are handled
-    /// by [`expand_scc_paths`], which fully enumerates internal SCC paths and
-    /// splices their block sequences into the DFS trail.
-    /// Non-SCC blocks form a DAG (all cycles were captured by SCC detection),
-    /// so they are explored without explicit cycle detection.
-    fn dfs_entry_paths(&mut self, current: BasicBlock, ctx: &mut EntrySearchCtx<'_>) {
-        // Stop if we have already collected enough paths.
-        if ctx.results.len() >= ctx.limit {
-            return;
-        }
-
-        // ── base case: reached the block containing the target callsite ──
-        if current == ctx.target_block {
-            ctx.stack.push(PathStep::Callsite(ctx.target));
-            // Extract block-only indices from the path stack for the reachability check.
-            let path_blocks: Vec<usize> = ctx
-                .stack
-                .iter()
-                .filter_map(|s| match s {
-                    PathStep::Block(bb) => Some(bb.as_usize()),
-                    _ => None,
-                })
-                .collect();
-            // Validate that this block sequence is actually reachable in the PathGraph.
-            let reachable = self
-                .path_graph()
-                .is_path_reachable(&path_blocks);
-            if reachable {
-                ctx.results.push(Path {
-                    target: ctx.target,
-                    start: PathStart::FunctionEntry,
-                    entry_prefix: Vec::new(),
-                    steps: ctx.stack.clone(),
-                });
-            }
-            ctx.stack.pop();
-            return;
-        }
-
-        // ── recursive case: explore successors ──
-        let successors = self.cfg.successors(current).to_vec();
-        for &next in &successors {
-            if ctx.results.len() >= ctx.limit {
+        for path in all_paths {
+            if results.len() >= PATH_LIMIT {
                 break;
             }
-
-            // Does `next` belong to an SCC (loop) region?
-            let scc_rep = self.block_to_scc.get(&next).copied();
-            if let Some(representative) = scc_rep {
-                // Check whether the target callsite is inside the SAME SCC.
-                // If it is, do NOT enter this SCC here — the callsite's SCC‑internal
-                // paths are extracted separately by find_scc_internal_paths.
-                let target_rep = self.block_to_scc.get(&ctx.target_block).copied();
-                if target_rep == Some(representative) {
-                    continue;
-                }
-                // Target is outside this SCC → fully expand the SCC by
-                // enumerating simple paths through it, then continue DFS from
-                // each exit.
-                self.expand_scc_paths(representative, ctx);
+            let Some(pos) = path.iter().position(|&b| b == target_block) else {
                 continue;
-            }
-            // next is a plain non‑SCC block (DAG node) → standard DFS descent.
-
-            ctx.stack.push(PathStep::Block(next));
-            ctx.visited.insert(next);
-            self.dfs_entry_paths(next, ctx);
-            ctx.visited.remove(&next);
-            ctx.stack.pop();
-        }
-    }
-
-    /// Enumerate all simple paths through an SCC and splice them into the
-    /// ongoing DFS trail.
-    ///
-    /// For each exit edge `(from, to)` of the SCC, this method uses the
-    /// `PathGraph` to enumerate every simple path from the SCC representative
-    /// to `exit.from`. Each internal path's blocks are pushed onto the stack
-    /// and visited set, then the DFS continues recursively from `exit.to`.
-    /// After the recursive call returns, all pushed blocks are cleaned up
-    /// (backtracking).
-    fn expand_scc_paths(
-        &mut self,
-        representative: BasicBlock,
-        ctx: &mut EntrySearchCtx<'_>,
-    ) {
-        let scc_region = match self.scc_by_representative(representative) {
-            Some(r) => r.clone(),
-            None => return,
-        };
-
-        for exit in scc_region.exits {
-            if ctx.results.len() >= ctx.limit {
-                break;
-            }
-
-            // Enumerate all simple paths from the SCC representative through the
-            // SCC body. `find_scc_paths` returns `Vec<SccEnumeratedPath>` where
-            // each element has `blocks: Vec<usize>` and path constraints; we only
-            // need the block sequences, discarding constraints.
-            let internal_paths: Vec<Vec<BasicBlock>> = {
-                let pg = self.path_graph();
-                let scc_info = &pg.cfg.block(representative.as_usize()).scc;
-                let paths = pg.find_scc_paths(
-                    representative.as_usize(),
-                    &scc_info.clone(),
-                    &FxHashMap::default(),
-                );
-                rap_info!("[Verify] scc at bb{}: {} paths", representative.as_usize(), paths.len());
-                paths
-                    .into_iter()
-                    .map(|p| p.blocks.into_iter().map(|i| BasicBlock::from(i)).collect())
-                    .collect()
             };
-
-            for internal_path in &internal_paths {
-                if ctx.results.len() >= ctx.limit {
-                    break;
-                }
-                rap_debug!("[Verify] path blocks: {:?}", internal_path);
-
-                let mut pushed: Vec<BasicBlock> = Vec::new();
-                for &block in internal_path {
-                    ctx.stack.push(PathStep::Block(block));
-                    ctx.visited.insert(block);
-                    pushed.push(block);
-                }
-
-                ctx.stack.push(PathStep::Block(exit.to));
-                ctx.visited.insert(exit.to);
-                self.dfs_entry_paths(exit.to, ctx);
-                ctx.visited.remove(&exit.to);
-                ctx.stack.pop();
-
-                for &block in pushed.iter().rev() {
-                    ctx.visited.remove(&block);
-                    ctx.stack.pop();
-                }
-            }
-        }
-    }
-
-    // ── entry-prefix search (to SCC representative) ─────────────────────
-    //
-    // These methods find paths from the function entry to an SCC
-    // representative. The results are used as the `entry_prefix` segment of
-    // SCC-internal paths. Other SCCs along the way are fully expanded (via
-    // `expand_scc_prefix_paths`), so the prefixes themselves remain finite.
-
-    /// Find all paths from the function entry to a given SCC representative.
-    ///
-    /// Returns a list of prefix paths (sequences of `PathStep`s). If the
-    /// entry block itself is the representative, returns a single empty prefix.
-    /// If no paths are found, returns a single empty prefix as a fallback.
-    fn find_entry_prefixes(&self, representative: BasicBlock, limit: usize) -> Vec<Vec<PathStep>> {
-        if self.cfg.entry == representative {
-            return vec![Vec::new()];
-        }
-
-        let mut results = Vec::new();
-        let mut stack = vec![PathStep::Block(self.cfg.entry)];
-        let mut visited = FxHashSet::default();
-        visited.insert(self.cfg.entry);
-        let mut ctx = PrefixSearchCtx {
-            visited: &mut visited,
-            stack: &mut stack,
-            results: &mut results,
-            limit,
-            representative,
-        };
-        self.dfs_entry_prefixes(self.cfg.entry, &mut ctx);
-
-        if results.is_empty() {
-            vec![Vec::new()]
-        } else {
-            results
-        }
-    }
-
-    /// DFS helper for finding entry prefixes to an SCC representative.
-    ///
-    /// Each time `next == ctx.representative`, the current stack is pushed as
-    /// a complete prefix. When encountering another SCC, delegates to
-    /// [`expand_scc_prefix_paths`] which splices the SCC's internal blocks
-    /// into the prefix trail.
-    /// Non-SCC blocks form a DAG so no explicit cycle detection is needed.
-    fn dfs_entry_prefixes(&self, current: BasicBlock, ctx: &mut PrefixSearchCtx<'_>) {
-        // Stop if we have enough prefix paths.
-        if ctx.results.len() >= ctx.limit {
-            return;
-        }
-
-        for &next in self.cfg.successors(current) {
-            if ctx.results.len() >= ctx.limit {
-                break;
-            }
-
-            // Reached the target SCC representative — record this prefix.
-            if next == ctx.representative {
-                ctx.results.push(ctx.stack.clone());
+            let prefix: Vec<usize> = path[..=pos].to_vec();
+            if !pg.is_path_reachable(&prefix) {
                 continue;
             }
-
-            // Does next belong to some SCC?
-            if let Some(scc_representative) = self.block_to_scc.get(&next).copied() {
-                // If next is inside the target SCC itself, skip — we are looking
-                // for prefixes that END at the representative, not internal SCC paths.
-                if scc_representative == ctx.representative {
-                    continue;
-                }
-                // Different SCC along the way → expand it and splice its blocks
-                // into the prefix trail.
-                self.expand_scc_prefix_paths(scc_representative, ctx);
-                continue;
-            }
-
-            // Plain non‑SCC block → descend normally.
-            ctx.stack.push(PathStep::Block(next));
-            ctx.visited.insert(next);
-            self.dfs_entry_prefixes(next, ctx);
-            ctx.visited.remove(&next);
-            ctx.stack.pop();
+            results.push(Path {
+                target,
+                start: PathStart::FunctionEntry,
+                entry_prefix: Vec::new(),
+                steps: prefix
+                    .into_iter()
+                    .map(|b| PathStep::Block(BasicBlock::from(b)))
+                    .chain(std::iter::once(PathStep::Callsite(target)))
+                    .collect(),
+            });
         }
-    }
-
-    /// Enumerate all simple paths through an SCC during entry-prefix search,
-    /// splicing each one into the ongoing prefix trail.
-    ///
-    /// Works similarly to [`expand_scc_paths`] but targets the SCC
-    /// representative instead of a callsite. For each exit edge, finds
-    /// internal paths within the SCC from the representative to `exit.from`,
-    /// then continues the prefix search from `exit.to`.
-    fn expand_scc_prefix_paths(
-        &self,
-        scc_representative: BasicBlock,
-        ctx: &mut PrefixSearchCtx<'_>,
-    ) {
-        let Some(scc_info) = self.scc_by_representative(scc_representative) else {
-            return;
-        };
-        let scc_blocks: FxHashSet<BasicBlock> = scc_info.blocks.iter().copied().collect();
-
-        for exit in &scc_info.exits {
-            if ctx.results.len() >= ctx.limit {
-                break;
-            }
-
-            let internal_paths =
-                self.find_scc_paths_to(&scc_blocks, scc_representative, exit.from, ctx.limit);
-
-            for internal_path in &internal_paths {
-                if ctx.results.len() >= ctx.limit {
-                    break;
-                }
-
-                let mut pushed: Vec<BasicBlock> = Vec::new();
-                for &block in internal_path {
-                    ctx.stack.push(PathStep::Block(block));
-                    ctx.visited.insert(block);
-                    pushed.push(block);
-                }
-
-                ctx.stack.push(PathStep::Block(exit.to));
-                ctx.visited.insert(exit.to);
-                self.dfs_entry_prefixes(exit.to, ctx);
-                ctx.visited.remove(&exit.to);
-                ctx.stack.pop();
-
-                for &block in pushed.iter().rev() {
-                    ctx.visited.remove(&block);
-                    ctx.stack.pop();
-                }
-            }
-        }
-    }
-
-    // ── SCC-internal path search ────────────────────────────────────────
-    //
-    // These methods handle the case where the target callsite is inside an
-    // SCC. Two segments are produced:
-    // 1. entry_prefix — from function entry to the SCC representative.
-    // 2. body path — from the SCC representative to the callsite, staying
-    //    within the SCC and using only simple (non-cyclic) paths.
-    //
-    // The full Path for verification is the concatenation:
-    //   entry_prefix + body_path + callsite_step
-
-    /// Build paths for a callsite that resides inside an SCC region.
-    ///
-    /// Computes entry prefixes via [`find_entry_prefixes`], then runs a DFS
-    /// within the SCC from the representative to the callsite block. Each
-    /// body path is paired with every entry prefix to produce all full
-    /// verification paths.
-    fn find_scc_internal_paths(
-        &self,
-        representative: BasicBlock,
-        target: CallsiteLocation,
-        target_block: BasicBlock,
-    ) -> Vec<Path> {
-        let Some(scc_info) = self.scc_by_representative(representative) else {
-            return Vec::new();
-        };
-        let scc_blocks: FxHashSet<BasicBlock> = scc_info.blocks.iter().copied().collect();
-        let entry_prefixes = self.find_entry_prefixes(representative, PATH_LIMIT);
-        let mut results = Vec::new();
-        let mut stack = vec![PathStep::Block(scc_info.representative)];
-        let mut visited = FxHashSet::default();
-        visited.insert(scc_info.representative);
-        let mut ctx = SccInternalCtx {
-            visited: &mut visited,
-            stack: &mut stack,
-            results: &mut results,
-            limit: PATH_LIMIT,
-            target,
-            target_block,
-            representative,
-            scc_blocks: &scc_blocks,
-            entry_prefixes: &entry_prefixes,
-        };
-        self.dfs_scc_internal_paths(scc_info.representative, &mut ctx);
         results
-    }
-
-    /// DFS within an SCC from the representative to the target callsite.
-    ///
-    /// Only blocks in `ctx.scc_blocks` are explored. When the target block
-    /// is reached, a complete `Path` is recorded for each entry prefix.
-    /// Standard DFS cycle detection prevents re-visiting SCC blocks on the
-    /// current stack.
-    fn dfs_scc_internal_paths(&self, current: BasicBlock, ctx: &mut SccInternalCtx<'_>) {
-        if ctx.results.len() >= ctx.limit {
-            return;
-        }
-
-        if current == ctx.target_block {
-            ctx.stack.push(PathStep::Callsite(ctx.target));
-            for entry_prefix in ctx.entry_prefixes {
-                ctx.results.push(Path {
-                    target: ctx.target,
-                    start: PathStart::SccRepresentative {
-                        representative: ctx.representative,
-                    },
-                    entry_prefix: entry_prefix.clone(),
-                    steps: ctx.stack.clone(),
-                });
-                if ctx.results.len() >= ctx.limit {
-                    break;
-                }
-            }
-            ctx.stack.pop();
-            return;
-        }
-
-        for &next in self.cfg.successors(current) {
-            if !ctx.scc_blocks.contains(&next) || ctx.visited.contains(&next) {
-                continue;
-            }
-            ctx.stack.push(PathStep::Block(next));
-            ctx.visited.insert(next);
-            self.dfs_scc_internal_paths(next, ctx);
-            ctx.visited.remove(&next);
-            ctx.stack.pop();
-        }
-    }
-
-    /// Return the detected SCC region whose representative is `representative`.
-    fn scc_by_representative(&self, representative: BasicBlock) -> Option<&SccRegion> {
-        self.scc_regions
-            .iter()
-            .find(|scc_info| scc_info.representative == representative)
-    }
-
-    /// Find all simple paths from `from` to `to` within `scc_blocks` (endpoints included).
-    fn find_scc_paths_to(
-        &self,
-        scc_blocks: &FxHashSet<BasicBlock>,
-        from: BasicBlock,
-        to: BasicBlock,
-        limit: usize,
-    ) -> Vec<Vec<BasicBlock>> {
-        if from == to {
-            return vec![vec![from]];
-        }
-        let mut results = Vec::new();
-        let mut visited = FxHashSet::default();
-        let mut stack = vec![from];
-        visited.insert(from);
-        self.dfs_scc_paths_to(scc_blocks, from, to, limit, &mut visited, &mut stack, &mut results);
-        results
-    }
-
-    /// DFS helper for finding simple paths between two blocks within an SCC.
-    ///
-    /// Starting from `current`, explores successors within `scc_blocks`. When
-    /// `next == target`, a complete path (stack + target) is pushed to results.
-    /// Cycle detection prevents re-visiting blocks already on the stack.
-    fn dfs_scc_paths_to(
-        &self,
-        scc_blocks: &FxHashSet<BasicBlock>,
-        current: BasicBlock,
-        target: BasicBlock,
-        limit: usize,
-        visited: &mut FxHashSet<BasicBlock>,
-        stack: &mut Vec<BasicBlock>,
-        results: &mut Vec<Vec<BasicBlock>>,
-    ) {
-        if results.len() >= limit {
-            return;
-        }
-
-        for &next in self.cfg.successors(current) {
-            if results.len() >= limit {
-                break;
-            }
-
-            if next == target {
-                let mut path = stack.clone();
-                path.push(next);
-                results.push(path);
-                continue;
-            }
-
-            if !scc_blocks.contains(&next) || visited.contains(&next) {
-                continue;
-            }
-
-            stack.push(next);
-            visited.insert(next);
-            self.dfs_scc_paths_to(scc_blocks, next, target, limit, visited, stack, results);
-            visited.remove(&next);
-            stack.pop();
-        }
     }
 }
 
-/// Path metadata produced by a completed extraction run.
-///
-/// This is the path-level view of a function CFG: SCC-region information describes
-/// cyclic regions, while callsite path information maps unsafe callsites to the
-/// finite paths that reach them.
+/// Result of path extraction for one function.
 pub struct FunctionPaths<'tcx> {
     scc_regions: SccRegions,
     callsite_paths: CallsitePaths<'tcx>,
 }
 
 impl<'tcx> FunctionPaths<'tcx> {
-    /// Return all callsites used during path extraction.
-    pub fn callsites(&self) -> &[Callsite<'tcx>] {
-        self.callsite_paths.callsites()
-    }
-
-    /// Return all SCC regions detected in the function CFG.
     pub fn scc_regions(&self) -> &[SccRegion] {
         self.scc_regions.scc_regions()
     }
 
-    /// Return the paths extracted for one callsite location.
     pub fn paths_for(&self, location: CallsiteLocation) -> &[Path] {
         self.callsite_paths.paths_for(location)
     }
+
+    pub fn callsites(&self) -> &[Callsite<'tcx>] {
+        self.callsite_paths.callsites()
+    }
 }
 
-/// Metadata for SCC regions discovered in a function CFG.
-///
-/// Each SCC region represents a strongly-connected component (a loop or
-/// mutually-recursive cycle) in the function's control-flow graph. The
-/// regions are used by the verifier to reason about cyclic control flow
-/// without unrolling it.
 pub struct SccRegions {
     scc_regions: Vec<SccRegion>,
 }
 
 impl SccRegions {
-    /// Create SCC-region metadata from detected SCC regions.
     fn new(scc_regions: Vec<SccRegion>) -> Self {
         Self { scc_regions }
     }
 
-    /// Return all detected SCC regions.
     pub fn scc_regions(&self) -> &[SccRegion] {
         &self.scc_regions
     }
 }
 
-/// Metadata that maps unsafe callsites to finite verification paths.
-///
-/// Each callsite found during extraction is mapped to zero or more `Path`
-/// instances. When no paths exist for a callsite, it means the callsite is
-/// unreachable from the function entry (dead code).
 pub struct CallsitePaths<'tcx> {
     callsites: Vec<Callsite<'tcx>>,
     paths_by_callsite: FxHashMap<CallsiteLocation, Vec<Path>>,
 }
 
 impl<'tcx> CallsitePaths<'tcx> {
-    /// Create callsite path metadata from callsites and extracted paths.
     fn new(
         callsites: Vec<Callsite<'tcx>>,
         paths_by_callsite: FxHashMap<CallsiteLocation, Vec<Path>>,
@@ -771,12 +218,10 @@ impl<'tcx> CallsitePaths<'tcx> {
         }
     }
 
-    /// Return all callsites used during path extraction.
     pub fn callsites(&self) -> &[Callsite<'tcx>] {
         &self.callsites
     }
 
-    /// Return the paths extracted for one callsite location.
     pub fn paths_for(&self, location: CallsiteLocation) -> &[Path] {
         self.paths_by_callsite
             .get(&location)
