@@ -588,7 +588,7 @@ impl<'tcx> PathGraph<'tcx> {
         seen_nodes.insert(start);
 
         self.dfs_scc_tree(
-            scc, start, &mut path, seen_nodes, None,
+            scc, start, &mut path, &mut seen_nodes, None,
             initial_constraints.clone(), &mut out, &mut seen, 0, &config,
         );
 
@@ -614,7 +614,7 @@ impl<'tcx> PathGraph<'tcx> {
         scc: &SccInfo,
         cur: usize,
         path: &mut Vec<usize>,
-        mut seen_nodes: FxHashSet<usize>,
+        seen_nodes: &mut FxHashSet<usize>,
         skip_child: Option<usize>,
         constraints: SccPathConstraints,
         out: &mut Vec<SccEnumeratedPath>,
@@ -630,7 +630,7 @@ impl<'tcx> PathGraph<'tcx> {
         // When returning to the entry, only continue if new blocks appeared
         // since the last traversal — otherwise stop.
         if cur == scc.enter && path.len() > 1 {
-            if !check_forward_progress(path, scc.enter, &mut seen_nodes) {
+            if !check_forward_progress(path, scc.enter, seen_nodes) {
                 return;
             }
         }
@@ -654,7 +654,7 @@ impl<'tcx> PathGraph<'tcx> {
 
             // Follow parent-level edges from the child entry (skip child body).
             self.dfs_scc_tree(
-                scc, cur, path, seen_nodes.clone(), Some(cur),
+                scc, cur, path, seen_nodes, Some(cur),
                 constraints.clone(), out, seen, depth + 1, config,
             );
 
@@ -672,7 +672,7 @@ impl<'tcx> PathGraph<'tcx> {
                 }
 
                 self.dfs_scc_tree(
-                    scc, new_cur, path, seen_nodes.clone(), next_skip,
+                    scc, new_cur, path, seen_nodes, next_skip,
                     merged, out, seen, depth + 1, config,
                 );
                 path.truncate(orig_len);
@@ -688,7 +688,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
             path.push(next);
             self.dfs_scc_tree(
-                scc, next, path, seen_nodes.clone(), None,
+                scc, next, path, seen_nodes, None,
                 constraints.clone(), out, seen, depth + 1, config,
             );
             path.pop();
@@ -792,34 +792,16 @@ impl<'tcx> PathGraph<'tcx> {
                     scc_path.extend_from_slice(&scc_segment.blocks[1..]);
                 }
 
-                let Some(&last) = scc_path.last() else {
-                    continue;
-                };
-
-                let mut nexts: Vec<usize> = self
-                    .cfg
-                    .block(last)
-                    .next
-                    .iter()
-                    .copied()
-                    .filter(|&next| {
-                        self.cfg.block(next).scc.enter() != cur_scc_enter
-                            && !scc
-                                .child_sccs
-                                .contains(&self.cfg.block(next).scc.enter())
-                    })
-                    .collect();
-                nexts.sort_unstable();
-                nexts.dedup();
-
-                if nexts.is_empty() {
+                // Use pre-computed exit_successors instead of computing nexts manually.
+                let exit_successors = &scc_segment.exit_successors;
+                if exit_successors.is_empty() {
                     if seen_paths.insert(scc_path.clone()) {
                         all_paths.push(scc_path);
                     }
                     continue;
                 }
 
-                for next in nexts {
+                for &next in exit_successors {
                     if active_blocks.contains(&next) {
                         if seen_paths.insert(scc_path.clone()) {
                             all_paths.push(scc_path.clone());
