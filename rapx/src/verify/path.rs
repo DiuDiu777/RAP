@@ -396,14 +396,18 @@ impl Path {
 
     /// Render this path as a compact array of block indices.
     pub fn describe_indices(&self) -> String {
-        let indices: Vec<usize> = self
-            .steps
-            .iter()
-            .map(|step| match step {
-                PathStep::Block(b) => b.as_usize(),
-                PathStep::Callsite(l) => l.block.as_usize(),
-            })
-            .collect();
+        let mut indices: Vec<usize> = Vec::new();
+        for step in &self.steps {
+            match step {
+                PathStep::Block(b) => indices.push(b.as_usize()),
+                PathStep::Callsite(l) => {
+                    let bb = l.block.as_usize();
+                    if indices.last() != Some(&bb) {
+                        indices.push(bb);
+                    }
+                }
+            }
+        }
         format!("{:?}", indices)
     }
 }
