@@ -149,7 +149,6 @@ impl<'tcx> PathExtractor<'tcx> {
                 break;
             }
             let Some(pos) = path.iter().position(|&b| b == target_block) else {
-                rap_info!("  whole-cfg path {}: {:?} | reachable: false (no target)", idx, path);
                 continue;
             };
             let prefix: Vec<usize> = path[..=pos].to_vec();
@@ -158,8 +157,9 @@ impl<'tcx> PathExtractor<'tcx> {
             }
             let reachable = pg.is_path_reachable(&prefix);
             rap_info!(
-                "  verify path {}: {:?} | reachable: {}",
-                idx, prefix, reachable
+                "  verify path {}: {:?} | {}",
+                idx, prefix,
+                if reachable { "reachable" } else { "unreachable" }
             );
             if !reachable {
                 continue;
