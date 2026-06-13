@@ -311,6 +311,12 @@ fn test_alias_sub_scc2() {
 }
 
 #[test]
+fn test_alias_switch() {
+    let output = run_with_args("alias/alias_switch", ANALYZE_ALIAS_CMD);
+    assert_contain(&output, "foo\": (0,1)");
+}
+
+#[test]
 fn test_alias_copy_on_deref() {
     let output = run_with_args("alias/alias_copy_for_deref", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
