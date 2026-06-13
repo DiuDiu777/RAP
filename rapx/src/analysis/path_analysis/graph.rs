@@ -532,7 +532,11 @@ impl<'tcx> PathGraph<'tcx> {
     /// Enumerate all structurally possible simple paths through `scc`
     /// starting at `start`.
     ///
-    /// This is purely structural — no constraint-based filtering.
+    /// The SCC is traversed depth-first. `seen_segments` is shared globally
+    /// across branches — a segment discovered in a deep branch prevents
+    /// shallow branches from re-exploring it, but the shallow path is still
+    /// recorded via "record-but-don't-recurse" in `dfs_scc_tree`.
+    ///
     /// Results are cached per `(def_id, scc_enter)`.
     pub fn find_scc_paths(
         &mut self,
@@ -548,10 +552,10 @@ impl<'tcx> PathGraph<'tcx> {
         let mut out = Vec::new();
         let mut seen: FxHashSet<Vec<usize>> = FxHashSet::default();
         let mut path = vec![start];
-        let seen_segments = FxHashSet::default();
+        let mut seen_segments = FxHashSet::default();
 
         self.dfs_scc_tree(
-            scc, start, &mut path, seen_segments,
+            scc, start, &mut path, &mut seen_segments,
             &mut out, &mut seen, 0, &config,
         );
 
@@ -572,15 +576,14 @@ impl<'tcx> PathGraph<'tcx> {
     /// No constraint tracking — `check_forward_progress` prunes repeated
     /// loop-body segments purely by block-id sequence.
     ///
-    /// `seen_segments` is cloned at each branch point so that an already-seen
-    /// segment discovered in a deep branch does not prevent a shallow branch
-    /// from exploring the same segment in a different context.
+    /// Child SCC paths are pre-enumerated via `find_scc_paths` and treated as
+    /// atomic building blocks (no recursive descent into child SCC internals).
     fn dfs_scc_tree(
         &mut self,
         scc: &SccInfo,
         cur: usize,
         path: &mut Vec<usize>,
-        mut seen_segments: FxHashSet<Vec<usize>>,
+        seen_segments: &mut FxHashSet<Vec<usize>>,
         out: &mut Vec<SccEnumeratedPath>,
         seen_paths: &mut FxHashSet<Vec<usize>>,
         depth: usize,
@@ -592,7 +595,10 @@ impl<'tcx> PathGraph<'tcx> {
         if cur != scc.enter && !scc.nodes.contains(&cur) { return; }
 
         if cur == scc.enter && path.len() > 1 {
-            if !check_forward_progress(path, scc.enter, &mut seen_segments) {
+            if !check_forward_progress(path, scc.enter, seen_segments) {
+                if scc.exits.iter().any(|e| e.exit == cur) {
+                    record_unique_path(path, scc, out, seen_paths, self);
+                }
                 return;
             }
         }
@@ -615,7 +621,7 @@ impl<'tcx> PathGraph<'tcx> {
                 for &next in &child_path.exit_successors {
                     path.push(next);
                     self.dfs_scc_tree(
-                        scc, next, path, seen_segments.clone(),
+                        scc, next, path, seen_segments,
                         out, seen_paths, depth + 1, config,
                     );
                     path.pop();
@@ -633,7 +639,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
             path.push(next);
             self.dfs_scc_tree(
-                scc, next, path, seen_segments.clone(),
+                scc, next, path, seen_segments,
                 out, seen_paths, depth + 1, config,
             );
             path.pop();
