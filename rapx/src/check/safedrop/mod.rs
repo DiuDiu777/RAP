@@ -71,7 +71,7 @@ pub fn query_safedrop(tcx: TyCtxt, fn_map: &MopFnAliasMap, def_id: DefId, adt_ow
         rap_debug!("safedrop grah (raw): {}", safedrop_graph);
         safedrop_graph.alias_graph.find_scc();
         rap_debug!("safedrop graph (scc): {}", safedrop_graph);
-        safedrop_graph.check(0, fn_map);
+        safedrop_graph.process_function_paths(fn_map);
         let visit_times = safedrop_graph.alias_graph.visit_times();
         if visit_times <= VISIT_LIMIT {
             safedrop_graph.report_bugs();

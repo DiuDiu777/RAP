@@ -264,7 +264,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
             alias_graph.find_scc();
             rap_trace!("After searching scc: {}", alias_graph);
             let mut recursion_set = HashSet::default();
-            alias_graph.check(0, &mut self.fn_map, &mut recursion_set);
+            alias_graph.process_function_paths(&mut self.fn_map, &mut recursion_set);
             if alias_graph.visit_times() > VISIT_LIMIT {
                 rap_trace!("Over visited: {:?}", def_id);
             }

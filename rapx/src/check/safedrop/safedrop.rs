@@ -97,266 +97,39 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    pub fn split_check(&mut self, bb_idx: usize, fn_map: &MopFnAliasMap) {
-        /* duplicate the status before visiteding a path; */
-        let backup_values = self.alias_graph.values.clone(); // duplicate the status when visiteding different paths;
+    /// Process pre-enumerated whole-function paths for SafeDrop.
+    pub fn process_function_paths(&mut self, fn_map: &MopFnAliasMap) {
+        let paths = self.alias_graph.path_graph.enumerate_paths();
+
+        let backup_values = self.alias_graph.values.clone();
         let backup_constant = self.alias_graph.constants.clone();
         let backup_alias_sets = self.alias_graph.alias_sets.clone();
         let backup_drop_record = self.drop_record.clone();
-        self.check(bb_idx, fn_map);
-        /* restore after visited */
-        self.alias_graph.values = backup_values;
-        self.alias_graph.constants = backup_constant;
-        self.alias_graph.alias_sets = backup_alias_sets;
-        self.drop_record = backup_drop_record;
-    }
 
-    pub fn split_check_with_cond(
-        &mut self,
-        bb_idx: usize,
-        path_discr_id: usize,
-        path_discr_val: usize,
-        fn_map: &MopFnAliasMap,
-    ) {
-        /* duplicate the status before visiteding a path; */
-        let backup_values = self.alias_graph.values.clone(); // duplicate the status when visiteding different paths;
-        let backup_constant = self.alias_graph.constants.clone();
-        let backup_alias_sets = self.alias_graph.alias_sets.clone();
-        let backup_drop_record = self.drop_record.clone();
-        /* add control-sensitive indicator to the path status */
-        self.alias_graph
-            .constants
-            .insert(path_discr_id, path_discr_val);
-        self.check(bb_idx, fn_map);
-        /* restore after visited */
-        self.alias_graph.values = backup_values;
-        self.alias_graph.constants = backup_constant;
-        self.alias_graph.alias_sets = backup_alias_sets;
-        self.drop_record = backup_drop_record;
-    }
-
-    // the core function of the safedrop.
-    pub fn check(&mut self, bb_idx: usize, fn_map: &MopFnAliasMap) {
-        self.alias_graph.increment_visit_times();
-        if self.alias_graph.visit_times() > VISIT_LIMIT {
-            return;
-        }
-
-        let cur_scc = self.alias_graph.cfg_block(bb_idx).scc.clone();
-        let scc_idx = cur_scc.enter;
-        let is_scc = bb_idx == scc_idx && !cur_scc.nodes.is_empty();
-
-        if is_scc {
-            let scc = self.alias_graph.sort_scc_tree(&cur_scc);
-            let inherited_constraints = self.alias_graph.constants.clone();
-            let paths = self.alias_graph.find_scc_paths(bb_idx, &scc, &FxHashMap::default());
-            rap_info!("[SafeDrop] scc at bb{}: {} paths", bb_idx, paths.len());
-
-            let backup_values = self.alias_graph.values.clone();
-            let backup_constant = self.alias_graph.constants.clone();
-            let backup_alias_sets = self.alias_graph.alias_sets.clone();
-            let backup_drop_record = self.drop_record.clone();
-
-            for path in &paths {
-                if !self.alias_graph.is_path_reachable(&path.blocks, &inherited_constraints) {
-                    continue;
-                }
-                rap_debug!("[SafeDrop] path blocks: {:?}, exits: {:?}", path.blocks, path.exit_successors);
-                if !path.blocks.is_empty() {
-                    for idx in &path.blocks[..path.blocks.len() - 1] {
-                        self.alias_bb(*idx);
-                        self.alias_bbcall(*idx, fn_map);
-                        self.drop_check(*idx);
-                    }
-                }
-                if let Some(&last_node) = path.blocks.last() {
-                    if self.alias_graph.cfg_block(last_node).scc.nodes.is_empty() {
-                        self.alias_bb(last_node);
-                        self.alias_bbcall(last_node, fn_map);
-                        self.drop_check(last_node);
-                        for &next in &path.exit_successors {
-                            self.split_check(next, fn_map);
-                        }
-                    }
-                }
-                self.alias_graph.alias_sets = backup_alias_sets.clone();
-                self.alias_graph.values = backup_values.clone();
-                self.alias_graph.constants = backup_constant.clone();
-                self.drop_record = backup_drop_record.clone();
+        for path in &paths {
+            if !self.alias_graph.path_graph.is_path_reachable(path) {
+                continue;
             }
-        } else {
-            self.alias_bb(bb_idx);
-            self.alias_bbcall(bb_idx, fn_map);
-            self.drop_check(bb_idx);
-
-            let cfg_block = self.alias_graph.cfg_block(bb_idx).clone();
-            if cfg_block.next.is_empty() {
-                if should_check(self.alias_graph.def_id()) {
-                    self.dp_check(cfg_block.is_cleanup);
-                }
+            self.alias_graph.increment_visit_times();
+            if self.alias_graph.visit_times() > VISIT_LIMIT {
                 return;
             }
 
-            self.handle_nexts(bb_idx, fn_map, None);
-        }
-    }
+            self.alias_graph.values = backup_values.clone();
+            self.alias_graph.constants = backup_constant.clone();
+            self.alias_graph.alias_sets = backup_alias_sets.clone();
+            self.drop_record = backup_drop_record.clone();
 
-    pub fn handle_nexts(
-        &mut self,
-        bb_idx: usize,
-        fn_map: &MopFnAliasMap,
-        exclusive_nodes: Option<&FxHashSet<usize>>,
-    ) {
-        let cfg_block = self.alias_graph.cfg_block(bb_idx).clone();
-        let bb_terminator = self.alias_graph.terminator(bb_idx).cloned();
-        let tcx = self.alias_graph.tcx();
-
-        /* Begin: handle the SwitchInt statement. */
-        let mut single_target = false;
-        let mut sw_val = 0;
-        let mut sw_target = 0; // Single target
-        let mut path_discr_id = 0; // To avoid analyzing paths that cannot be reached with one enum type.
-        let mut sw_targets = None; // Multiple targets of SwitchInt
-        if let Some(terminator) = &bb_terminator {
-            rap_debug!("Handle switchInt in bb {:?}", cfg_block);
-            if let TerminatorKind::SwitchInt {
-                ref discr,
-                ref targets,
-            } = terminator.kind
-            {
-                rap_debug!("{:?}", terminator);
-                rap_debug!("{:?}", self.alias_graph.constants);
-                match discr {
-                    Copy(p) | Move(p) => {
-                        let value_idx = self.projection(*p);
-                        let local_decls = &tcx.optimized_mir(self.alias_graph.def_id()).local_decls;
-                        let place_ty = (*p).ty(local_decls, tcx);
-                        rap_debug!("value_idx: {:?}", value_idx);
-                        match place_ty.ty.kind() {
-                            ty::TyKind::Bool => {
-                                rap_debug!("SwitchInt via Bool");
-                                if let Some(constant) = self.alias_graph.constants.get(&value_idx) {
-                                    if *constant != usize::MAX {
-                                        single_target = true;
-                                        sw_val = *constant;
-                                    }
-                                }
-                                path_discr_id = value_idx;
-                                sw_targets = Some(targets.clone());
-                            }
-                            _ => {
-                                if let Some(father) = self
-                                    .alias_graph
-                                    .path_graph
-                                    .discriminants
-                                    .get(&self.alias_graph.values[value_idx].local)
-                                {
-                                    if let Some(constant) = self.alias_graph.constants.get(father) {
-                                        if *constant != usize::MAX {
-                                            single_target = true;
-                                            sw_val = *constant;
-                                        }
-                                    }
-                                    if self.alias_graph.values[value_idx].local == value_idx {
-                                        path_discr_id = *father;
-                                        sw_targets = Some(targets.clone());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    Constant(c) => {
-                        single_target = true;
-                        let ty_env = TypingEnv::post_analysis(tcx, self.alias_graph.def_id());
-                        if let Some(val) = c.const_.try_eval_target_usize(tcx, ty_env) {
-                            sw_val = val as usize;
-                        }
-                    }
-                }
-                if single_target {
-                    /* Find the target based on the value;
-                     * Since sw_val is a const, only one target is reachable.
-                     * Filed 0 is the value; field 1 is the real target.
-                     */
-                    for iter in targets.iter() {
-                        if iter.0 as usize == sw_val {
-                            sw_target = iter.1.as_usize();
-                            break;
-                        }
-                    }
-                    /* No target found, choose the default target.
-                     * The default targets is not included within the iterator.
-                     * We can only obtain the default target based on the last item of all_targets().
-                     */
-                    if sw_target == 0 {
-                        let all_target = targets.all_targets();
-                        sw_target = all_target[all_target.len() - 1].as_usize();
-                    }
-                }
+            for &block in path {
+                self.alias_bb(block);
+                self.alias_bbcall(block, fn_map);
+                self.drop_check(block);
             }
-        }
-        /* End: finish handling SwitchInt */
-        // fixed path since a constant switchInt value
-        if single_target {
-            match exclusive_nodes {
-                Some(exclusive) => {
-                    if !exclusive.contains(&sw_target) {
-                        self.check(sw_target, fn_map);
-                    }
-                }
-                None => {
-                    self.check(sw_target, fn_map);
-                }
-            }
-        } else {
-            // Other cases in switchInt terminators
-            if let Some(targets) = sw_targets {
-                for iter in targets.iter() {
-                    if self.alias_graph.visit_times() > VISIT_LIMIT {
-                        continue;
-                    }
-                    let next = iter.1.as_usize();
 
-                    match exclusive_nodes {
-                        Some(exclusive) => {
-                            if exclusive.contains(&next) {
-                                continue;
-                            }
-                        }
-                        None => {}
-                    }
-                    let path_discr_val = iter.0 as usize;
-                    self.split_check_with_cond(next, path_discr_id, path_discr_val, fn_map);
-                }
-                let all_targets = targets.all_targets();
-                let next_idx = all_targets[all_targets.len() - 1].as_usize();
-                match exclusive_nodes {
-                    Some(exclusive) => {
-                        if !exclusive.contains(&next_idx) {
-                            let path_discr_val = usize::MAX; // to indicate the default path;
-                            self.split_check_with_cond(next_idx, path_discr_id, path_discr_val, fn_map);
-                        }
-                    }
-                    None => {
-                        let path_discr_val = usize::MAX; // to indicate the default path;
-                        self.split_check_with_cond(next_idx, path_discr_id, path_discr_val, fn_map);
-                    }
-                }
-            } else {
-                for next in &cfg_block.next {
-                    if self.alias_graph.visit_times() > VISIT_LIMIT {
-                        continue;
-                    }
-
-                    match exclusive_nodes {
-                        Some(exclusive) => {
-                            if exclusive.contains(&next) {
-                                continue;
-                            }
-                        }
-                        None => {}
-                    }
-                    self.split_check(*next, fn_map);
+            if should_check(self.alias_graph.def_id()) {
+                if let Some(&last) = path.last() {
+                    let cfg_block = self.alias_graph.cfg_block(last).clone();
+                    self.dp_check(cfg_block.is_cleanup);
                 }
             }
         }
