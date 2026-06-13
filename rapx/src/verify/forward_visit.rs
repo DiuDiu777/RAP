@@ -267,7 +267,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 });
                 // If multiplying by a known constant multiple of an alignment
                 // (e.g. i * 4), the result inherits that alignment property.
-                if *op == BinOp::Mul {
+                if *op == BinOp::Mul || *op == BinOp::MulWithOverflow {
                     if let Some(divisor) = const_int_value(&rhs_val) {
                         if divisor > 0 && is_power_of_two(divisor) {
                             result.facts.push(StateFact::KnownAligned {

@@ -1180,7 +1180,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         Some(match op {
             BinOp::Add => Int::add(self.ctx, &[lhs.clone(), rhs.clone()]),
             BinOp::Sub => Int::sub(self.ctx, &[lhs.clone(), rhs.clone()]),
-            BinOp::Mul => Int::mul(self.ctx, &[lhs.clone(), rhs.clone()]),
+            BinOp::Mul | BinOp::MulWithOverflow => Int::mul(self.ctx, &[lhs.clone(), rhs.clone()]),
             BinOp::Div => lhs.div(rhs),
             BinOp::Rem => lhs.modulo(rhs),
             BinOp::Eq => lhs._eq(rhs).ite(&one, &zero),

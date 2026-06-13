@@ -90,7 +90,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
         &self,
         step: &PathStep,
         callsite: &Callsite<'tcx>,
-        body: &rustc_middle::mir::Body<'tcx>,
+        body: &'tcx rustc_middle::mir::Body<'tcx>,
         flow: &DataflowGraph,
         relevant: &mut RelevantPlaces,
         items: &mut Vec<BackwardItem<'tcx>>,
@@ -129,7 +129,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
         &self,
         block: BasicBlock,
         statement_index: usize,
-        statement: &rustc_middle::mir::Statement<'tcx>,
+        statement: &'tcx rustc_middle::mir::Statement<'tcx>,
         flow: &DataflowGraph,
         relevant: &mut RelevantPlaces,
         items: &mut Vec<BackwardItem<'tcx>>,
@@ -153,6 +153,14 @@ impl<'tcx> BackwardVisitor<'tcx> {
                     if edge.block == block.as_usize() && edge.statement_index == statement_index {
                         uses.insert_local(edge.src);
                     }
+                }
+            }
+            // Also collect uses directly from operands — the dataflow graph
+            // creates synthetic nodes for field projections (e.g. _13.0),
+            // so we need the direct operand uses to reach through.
+            if let StatementKind::Assign(box (_, rvalue)) = &statement.kind {
+                for operand in rvalue_operands(rvalue) {
+                    uses.extend(operand_uses(operand));
                 }
             }
             items.push(BackwardItem::Statement {
@@ -641,4 +649,30 @@ fn describe_forget_reason(reason: &ForgetReason) -> &'static str {
             "UnsupportedEffect: a relevant MIR effect is not modeled precisely yet"
         }
     }
+}
+
+/// Collect all MIR operands referenced by an rvalue.
+fn rvalue_operands<'tcx>(rvalue: &'tcx rustc_middle::mir::Rvalue<'tcx>) -> Vec<&'tcx rustc_middle::mir::Operand<'tcx>> {
+    let mut operands = Vec::new();
+    match rvalue {
+        rustc_middle::mir::Rvalue::Use(op)
+        | rustc_middle::mir::Rvalue::Repeat(op, _)
+        | rustc_middle::mir::Rvalue::Cast(_, op, _)
+        | rustc_middle::mir::Rvalue::UnaryOp(_, op) => {
+            operands.push(op);
+        }
+        rustc_middle::mir::Rvalue::BinaryOp(_, box (lhs, rhs)) => {
+            operands.push(lhs);
+            operands.push(rhs);
+        }
+        rustc_middle::mir::Rvalue::Ref(_, _, _) | rustc_middle::mir::Rvalue::RawPtr(_, _) => {}
+        rustc_middle::mir::Rvalue::Discriminant(_)
+        | rustc_middle::mir::Rvalue::ShallowInitBox(_, _)
+        | rustc_middle::mir::Rvalue::CopyForDeref(_)
+        | rustc_middle::mir::Rvalue::NullaryOp(_)
+        | rustc_middle::mir::Rvalue::ThreadLocalRef(_)
+        | rustc_middle::mir::Rvalue::Aggregate(_, _)
+        | _ => {}
+    }
+    operands
 }
