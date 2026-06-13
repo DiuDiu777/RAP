@@ -110,6 +110,7 @@ const ANALYZE_RANGE_CMD: &[&str] = &["analyze", "range"];
 const ANALYZE_CALLGRAPH_CMD: &[&str] = &["analyze", "callgraph"];
 const ANALYZE_ADG_CMD: &[&str] = &["analyze", "adg", "--dump", "api_graph.yml"];
 const VERIFY_CMD: &[&str] = &["verify"];
+const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "1"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
@@ -545,7 +546,7 @@ fn sound_align_05() {
 
 #[test]
 fn unsound_align_04() {
-    let output = run_with_args("verify/unsound_align_04", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_04", VERIFY_ALLOW_REPEAT_CMD);
     assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
 }
 

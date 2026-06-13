@@ -72,6 +72,7 @@ pub struct PathExtractor<'tcx> {
     callsites: Vec<Callsite<'tcx>>,
     paths: FxHashMap<CallsiteLocation, Vec<Path>>,
     path_graph: Option<PathGraph<'tcx>>,
+    allow_repeat: usize,
 }
 
 impl<'tcx> PathExtractor<'tcx> {
@@ -79,13 +80,22 @@ impl<'tcx> PathExtractor<'tcx> {
     ///
     /// This initializes the CFG and stores callsites. SCC detection and path
     /// extraction are deferred until [`run`] is called.
-    pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, callsites: Vec<Callsite<'tcx>>) -> Self {
+    ///
+    /// `allow_repeat` controls how many times a repeated SCC postfix segment
+    /// is allowed beyond the first occurrence. Default is 0 (no extra repeats).
+    pub fn new(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        callsites: Vec<Callsite<'tcx>>,
+        allow_repeat: usize,
+    ) -> Self {
         Self {
             tcx,
             def_id,
             callsites,
             paths: FxHashMap::default(),
             path_graph: None,
+            allow_repeat,
         }
     }
 
@@ -135,6 +145,7 @@ impl<'tcx> PathExtractor<'tcx> {
         let target = callsite.location();
         let target_block = callsite.block.as_usize();
         let callee_name = callsite.callee_name(self.tcx);
+        let allow_repeat = self.allow_repeat;
         let pg = self.path_graph();
 
         let scc_info = pg.cfg.block(target_block).scc.clone();
@@ -146,7 +157,7 @@ impl<'tcx> PathExtractor<'tcx> {
             );
         }
 
-        let all_paths = pg.enumerate_paths();
+        let all_paths = pg.enumerate_paths_repeat(allow_repeat);
 
         rap_info!(
             "Callsite at bb{} -> {}: {} whole-cfg paths",

@@ -355,7 +355,7 @@ impl<'tcx> PrepareTargets<'tcx> {
             return;
         }
 
-        let result = PathExtractor::new(self.tcx, target.def_id, target.callsites.clone()).run();
+        let result = PathExtractor::new(self.tcx, target.def_id, target.callsites.clone(), 0).run();
         for (display_index, callsite) in result.callsites().iter().enumerate() {
             rap_info!(
                 "    unsafe callsite #{}: {} at bb{} ({} arg(s))",

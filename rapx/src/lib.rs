@@ -265,11 +265,11 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
         },
 
-        Commands::Verify(VerifyArgs { prepare_targets }) => {
+        Commands::Verify(VerifyArgs { prepare_targets, allow_pathseg_repeat }) => {
             if *prepare_targets {
                 PrepareTargets::new(tcx).run();
             } else {
-                VerifyRun::new(tcx).run();
+                VerifyRun::new(tcx, *allow_pathseg_repeat).run();
             }
         }
     }

@@ -32,7 +32,17 @@ pub struct VerifyDriver<'target, 'tcx> {
 impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     /// Build a driver for one collected function target.
     pub fn new(tcx: TyCtxt<'tcx>, target: &'target FunctionTarget<'tcx>) -> Self {
-        let path_info = PathExtractor::new(tcx, target.def_id, target.callsites.clone()).run();
+        Self::new_with_repeat(tcx, target, 0)
+    }
+
+    /// Build a driver with control over SCC postfix repeat count.
+    pub fn new_with_repeat(
+        tcx: TyCtxt<'tcx>,
+        target: &'target FunctionTarget<'tcx>,
+        allow_repeat: usize,
+    ) -> Self {
+        let path_info =
+            PathExtractor::new(tcx, target.def_id, target.callsites.clone(), allow_repeat).run();
         let properties_to_verify = Self::build_properties_to_verify(target);
         Self {
             tcx,
@@ -167,12 +177,16 @@ pub struct CallsiteCheckView<'view, 'target, 'tcx> {
 /// Analysis pass that runs verification and emits function-level summaries.
 pub struct VerifyRun<'tcx> {
     tcx: TyCtxt<'tcx>,
+    allow_pathseg_repeat: usize,
 }
 
 impl<'tcx> VerifyRun<'tcx> {
     /// Create the default verify pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Self { tcx }
+    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize) -> Self {
+        Self {
+            tcx,
+            allow_pathseg_repeat,
+        }
     }
 }
 
@@ -182,17 +196,49 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
     }
 
     /// Collect verify targets, run the staged driver, and emit a compact summary.
+    ///
+    /// For each target, extracts paths with increasing `allow-pathseg-repeat`
+    /// levels from 0 to the configured maximum, running verification at each
+    /// level. Earlier rounds use fewer loop unrollings; later rounds incrementally
+    /// add deeper paths.
     fn run(&mut self) {
         let mut collector = VerifyTargetCollector::new(self.tcx);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {
             let target_path = self.tcx.def_path_str(target.def_id);
-            let driver = VerifyDriver::new(self.tcx, target);
-            let report = driver.verify_function();
-            let total = report.results.len();
-            let unproved = report
-                .results
+            let mut combined_results: Vec<PropertyCheckResult<'_>> = Vec::new();
+
+            for repeat in 0..=self.allow_pathseg_repeat {
+                if self.allow_pathseg_repeat > 0 {
+                    rap_info!(
+                        "[rapx::verify] round {}/{}: allow-pathseg-repeat={}",
+                        repeat,
+                        self.allow_pathseg_repeat,
+                        repeat
+                    );
+                }
+
+                let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
+                let report = driver.verify_function();
+                let unproved = report
+                    .results
+                    .iter()
+                    .filter(|result| !matches!(result.result, super::report::CheckResult::Proved))
+                    .count();
+
+                if unproved > 0 {
+                    rap_warn!(
+                        "[rapx::verify] round {}/{}: found {unproved} unproved check(s)",
+                        repeat,
+                        self.allow_pathseg_repeat
+                    );
+                }
+                combined_results.extend(report.results);
+            }
+
+            let total = combined_results.len();
+            let unproved = combined_results
                 .iter()
                 .filter(|result| !matches!(result.result, super::report::CheckResult::Proved))
                 .count();
@@ -204,7 +250,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 rap_debug!(
                     "[rapx::verify] function: {target_path} | checks not proved: {unproved}/{total}"
                 );
-                for result in &report.results {
+                for result in &combined_results {
                     if !matches!(result.result, super::report::CheckResult::Proved) {
                         rap_info!(
                             "  [rapx::verify] callsite bb{} -> {}, path: {} | property {:?} | {:?}",
@@ -218,7 +264,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 }
             }
 
-            rap_debug!("{}", report.describe());
+            rap_debug!("Combined results: {} checks", combined_results.len());
         }
     }
 
@@ -228,12 +274,16 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 /// Analysis pass that dumps backward and forward visitor diagnostics.
 pub struct VerifyVisitDump<'tcx> {
     tcx: TyCtxt<'tcx>,
+    allow_pathseg_repeat: usize,
 }
 
 impl<'tcx> VerifyVisitDump<'tcx> {
     /// Create a diagnostic dump pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        Self { tcx }
+    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize) -> Self {
+        Self {
+            tcx,
+            allow_pathseg_repeat,
+        }
     }
 }
 
@@ -255,9 +305,20 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
                 target_path,
                 target.def_id
             );
-            let driver = VerifyDriver::new(self.tcx, target);
-            let report = driver.verify_function();
-            rap_debug!("{}", report.describe());
+
+            for repeat in 0..=self.allow_pathseg_repeat {
+                if self.allow_pathseg_repeat > 0 {
+                    rap_debug!(
+                        "[rapx::verify::diagnostics] round {}/{}: allow-pathseg-repeat={}",
+                        repeat,
+                        self.allow_pathseg_repeat,
+                        repeat
+                    );
+                }
+                let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
+                let report = driver.verify_function();
+                rap_debug!("{}", report.describe());
+            }
         }
 
         rap_debug!("=======================================");
