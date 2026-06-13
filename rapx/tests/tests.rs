@@ -515,8 +515,8 @@ fn test_verify_named_contract_argument_binding() {
         // SOUND cases — verified
         assert_contain(&output, "function: sound_scc_computes_aligned_offset | result: SOUND");
         assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND");
-        // FIXME: false negatives — paths include unaligned combinations but
-        // the forward analysis doesn't track pointer sources across SCC iterations.
+        // FIXME: false negatives — standalone Second-branch path now exists
+        // but verify analysis engine doesn't detect misalignment.
         // assert_contain(&output, "function: unsound_scc_selects_mixed_source | result: UNSOUND");
         // assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc | result: UNSOUND");
         // assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
