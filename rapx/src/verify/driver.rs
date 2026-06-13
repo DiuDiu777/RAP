@@ -89,6 +89,8 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                             backward.describe(self.tcx, view.callsite, path_index),
                             check_diagnostics,
                         )),
+                        path_description: path.describe(),
+                        callee_name: view.callsite.callee_name(self.tcx),
                     });
                 }
             }
@@ -202,6 +204,18 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 rap_debug!(
                     "[rapx::verify] function: {target_path} | checks not proved: {unproved}/{total}"
                 );
+                for result in &report.results {
+                    if !matches!(result.result, super::report::CheckResult::Proved) {
+                        rap_info!(
+                            "  [rapx::verify] callsite bb{} -> {}, path: {} | property {:?} | {:?}",
+                            result.callsite.block.as_usize(),
+                            result.callee_name,
+                            result.path_description,
+                            result.property.kind,
+                            result.result,
+                        );
+                    }
+                }
             }
 
             rap_debug!("{}", report.describe());
