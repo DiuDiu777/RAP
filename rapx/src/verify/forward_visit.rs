@@ -310,7 +310,14 @@ impl<'tcx> ForwardVisitor<'tcx> {
                         });
                     }
                 }
-                CallEffect::ReturnPointerAdd { .. } => {}
+                CallEffect::ReturnPointerAdd { base_arg, .. } => {
+                    if let Some(source) = args.get(*base_arg).and_then(|arg| operand_place(&arg.node)) {
+                        result.facts.push(StateFact::PointsTo {
+                            pointer: destination_place.clone(),
+                            source,
+                        });
+                    }
+                }
                 CallEffect::ReturnNonZero => result.facts.push(StateFact::KnownNonZero {
                     place: destination_place.clone(),
                     reason: format!("returned by {}", summary.name),
