@@ -160,14 +160,21 @@ impl<'tcx> SmtChecker<'tcx> {
                         "alignment proved; no counterexample satisfies the path facts",
                     )
                     .with_query(query),
-                    SatResult::Sat => SmtCheckResult::unknown(
-                        "current path facts do not prove the required alignment",
-                    )
-                    .with_query(query)
-                    .with_note(
-                        "hint: add an offset-alignment guard or provide a pointer-add/layout summary",
-                    ),
+                    SatResult::Sat => {
+                        rap_info!(
+                            "  [SMT Align] {} sat: counterexample found",
+                            target_label
+                        );
+                        SmtCheckResult::unknown(
+                            "current path facts do not prove the required alignment",
+                        )
+                        .with_query(query)
+                        .with_note(
+                            "hint: add an offset-alignment guard or provide a pointer-add/layout summary",
+                        )
+                    }
                     SatResult::Unknown => {
+                        rap_info!("  [SMT Align] {} unknown result", target_label);
                         SmtCheckResult::unknown("solver returned unknown").with_query(query)
                     }
                 }
