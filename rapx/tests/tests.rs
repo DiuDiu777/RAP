@@ -113,7 +113,7 @@ const VERIFY_CMD: &[&str] = &["verify"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
-fn test_dangling_min() {
+fn dangling_min() {
     let output = run_with_args("uaf/dangling_min", CHECK_UAF_CMD);
     assert_contain(
         &output,
@@ -122,63 +122,63 @@ fn test_dangling_min() {
 }
 
 #[test]
-fn test_df_min() {
+fn df_min() {
     let output = run_with_args("uaf/df_min", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"main\"");
 }
 
 #[test]
-fn test_df_unwinding() {
+fn df_unwinding() {
     let output = run_with_args("uaf/df_unwinding", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected");
 }
 
 /*
 #[test]
-fn test_dp_lengthy() {
+fn dp_lengthy() {
     let output = run_with_args("uaf/dp_lengthy", CHECK_UAF_CMD);
     assert_contain(&output, "Dangling pointer detected in function \"call\"");
 }
 */
 
 #[test]
-fn test_uaf_drop() {
+fn uaf_drop() {
     let output = run_with_args("uaf/uaf_drop", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn test_uaf_drop2() {
+fn uaf_drop2() {
     let output = run_with_args("uaf/uaf_drop2", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn test_uaf_drop_in_place() {
+fn uaf_drop_in_place() {
     let output = run_with_args("uaf/uaf_drop_in_place", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"main\"");
 }
 
 #[test]
-fn test_uaf_lifetime() {
+fn uaf_lifetime() {
     let output = run_with_args("uaf/uaf_lifetime", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn test_uaf_small() {
+fn uaf_small() {
     let output = run_with_args("uaf/uaf_small", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn test_uaf_swithint() {
+fn uaf_swithint() {
     let output = run_with_args("uaf/uaf_swithint", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"evil_test\"");
 }
 
 #[test]
-fn test_false_wrapper() {
+fn false_wrapper() {
     let output = run_with_args("uaf/false_wrapper", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
@@ -188,13 +188,13 @@ fn test_false_wrapper() {
 }
 
 #[test]
-fn test_false_scc1() {
+fn false_scc1() {
     let output = run_with_args("uaf/false_scc1", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn test_false_tuple_transitive() {
+fn false_tuple_transitive() {
     let output = run_with_args("uaf/false_tuple_transitive", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
@@ -204,20 +204,20 @@ fn test_false_tuple_transitive() {
 }
 
 #[test]
-fn test_false_arc() {
+fn false_arc() {
     let output = run_with_args("uaf/false_arc", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn test_false_clone1() {
+fn false_clone1() {
     #[allow(unused)]
     let output = run_with_args("uaf/false_clone1", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn test_false_field_clone() {
+fn false_field_clone() {
     #[allow(unused)]
     let output = run_with_args("uaf/false_field_clone", CHECK_UAF_CMD);
     assert!(
@@ -228,28 +228,28 @@ fn test_false_field_clone() {
 }
 
 #[test]
-fn test_false_mutate() {
+fn false_mutate() {
     #[allow(unused)]
     let output = run_with_args("uaf/false_mutate", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn test_false_loop_drop() {
+fn false_loop_drop() {
     #[allow(unused)]
     let output = run_with_args("uaf/false_loop_drop", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn test_false_memtake() {
+fn false_memtake() {
     #[allow(unused)]
     let output = run_with_args("uaf/false_memtake", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn test_reference() {
+fn false_reference() {
     #[allow(unused)]
     let output = run_with_args("uaf/false_reference", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
@@ -257,25 +257,25 @@ fn test_reference() {
 
 // ===============Alias(MOP) Analysis Test==============
 #[test]
-fn test_alias_from_raw_parts_in() {
+fn alias_from_raw_parts_in() {
     let output = run_with_args("alias/alias_from_raw_parts_in", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0.0,1)");
 }
 
 #[test]
-fn test_alias_from_raw_parts() {
+fn alias_from_raw_parts() {
     let output = run_with_args("alias/alias_from_raw_parts", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_not_alias_iter() {
+fn not_alias_iter() {
     let output = run_with_args("alias/not_alias_iter", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": null");
 }
 
 #[test]
-fn test_alias_field() {
+fn alias_field() {
     let output = run_with_args("alias/alias_field", ANALYZE_ALIAS_CMD);
     let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
         || output.contains("\"foo\": (0,1.0), (0,1.1)");
@@ -287,69 +287,69 @@ fn test_alias_field() {
 }
 
 #[test]
-fn test_alias_lib_no_caller() {
+fn alias_lib_no_caller() {
     let output = run_with_args("alias/alias_lib_no_caller", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn test_alias_scc() {
+fn alias_scc() {
     let output = run_with_args("alias/alias_scc", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_sub_scc1() {
+fn alias_sub_scc1() {
     let output = run_with_args("alias/alias_sub_scc1", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_sub_scc2() {
+fn alias_sub_scc2() {
     let output = run_with_args("alias/alias_sub_scc2", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1), (0,2)");
 }
 
 #[test]
-fn test_alias_switch() {
+fn alias_switch() {
     let output = run_with_args("alias/alias_switch", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_copy_on_deref() {
+fn alias_copy_for_deref() {
     let output = run_with_args("alias/alias_copy_for_deref", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn test_alias_indirect() {
+fn alias_indirect() {
     let output = run_with_args("alias/alias_indirect", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "iter_prop\": (0.0,1.0)");
 }
 
 // ===============Alias(MFP) Analysis Test==============
 #[test]
-fn test_alias_mfp_from_raw_parts_in() {
+fn alias_from_raw_parts_in_mfp() {
     let output = run_with_args("alias/alias_from_raw_parts_in", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0.0,1)");
 }
 
 #[test]
-fn test_alias_mfp_from_raw_parts() {
+fn alias_from_raw_parts_mfp() {
     let output = run_with_args("alias/alias_from_raw_parts", ANALYZE_ALIAS_MFP_CMD);
     // MOP expects "foo": (0,1) but MFP reports a slightly different format.
     assert_contain(&output, "foo\": (0.0,1)"); // This is slightly different from MOP
 }
 
 #[test]
-fn test_alias_mfp_not_alias_iter() {
+fn not_alias_iter_mfp() {
     let output = run_with_args("alias/not_alias_iter", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": null");
 }
 
 #[test]
-fn test_alias_mfp_field() {
+fn alias_field_mfp() {
     let output = run_with_args("alias/alias_field", ANALYZE_ALIAS_MFP_CMD);
     let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
         || output.contains("\"foo\": (0,1.0), (0,1.1)");
@@ -361,61 +361,61 @@ fn test_alias_mfp_field() {
 }
 
 #[test]
-fn test_alias_mfp_lib_no_caller() {
+fn alias_lib_no_caller_mfp() {
     let output = run_with_args("alias/alias_lib_no_caller", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn test_alias_mfp_scc() {
+fn alias_scc_mfp() {
     let output = run_with_args("alias/alias_scc", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_mfp_sub_scc1() {
+fn alias_sub_scc1_mfp() {
     let output = run_with_args("alias/alias_sub_scc1", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_mfp_sub_scc2() {
+fn alias_sub_scc2_mfp() {
     let output = run_with_args("alias/alias_sub_scc2", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1), (0,2)");
 }
 
 #[test]
-fn test_alias_mfp_switch() {
+fn alias_switch_mfp() {
     let output = run_with_args("alias/alias_switch", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn test_alias_mfp_copy_on_deref() {
+fn alias_copy_for_deref_mfp() {
     let output = run_with_args("alias/alias_copy_for_deref", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn test_alias_mfp_indirect() {
+fn alias_indirect_mfp() {
     let output = run_with_args("alias/alias_indirect", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "iter_prop\": (0.0,1.0)");
 }
 
 #[test]
-fn test_leak_ctor() {
+fn leak_ctor() {
     let output = run_with_args("leak/leak_ctor", CHECK_MLEAK_CMD);
     assert_not_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn test_leak_orphan() {
+fn leak_orphan() {
     let output = run_with_args("leak/leak_orphan", CHECK_MLEAK_CMD);
     assert_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn test_leak_orphan_timeout() {
+fn leak_orphan_timeout() {
     let mut args = Vec::from(["--timeout", "0"]);
     args.extend(CHECK_MLEAK_CMD);
     let output = run_with_args("leak/leak_orphan", &args);
@@ -423,13 +423,13 @@ fn test_leak_orphan_timeout() {
 }
 
 #[test]
-fn test_leak_proxy() {
+fn leak_proxy() {
     let output = run_with_args("leak/leak_proxy", CHECK_MLEAK_CMD);
     assert_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn test_heap_cell() {
+fn heap_cell() {
     let output = run_with_args("ownedheap/heap_cell", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "Cell\": False, <1>",
@@ -444,7 +444,7 @@ fn test_heap_cell() {
 }
 
 #[test]
-fn test_heap_collections() {
+fn heap_collections() {
     let output = run_with_args("ownedheap/heap_collections", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "Unique\": True, <0>",
@@ -462,7 +462,7 @@ fn test_heap_collections() {
 }
 
 #[test]
-fn test_heap_nested() {
+fn heap_nested() {
     let output: String = run_with_args("ownedheap/heap_nested", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "X\": False, <1>",
@@ -474,7 +474,7 @@ fn test_heap_nested() {
 }
 
 #[test]
-fn test_heap_proxy() {
+fn heap_proxy() {
     let output = run_with_args("ownedheap/heap_proxy", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "Proxy1\": False, <0>",
@@ -488,7 +488,7 @@ fn test_heap_proxy() {
 }
 
 #[test]
-fn test_paths_analysis() {
+fn if_else() {
     let output = run_with_args("verify/path/if-else", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read1\":");
     assert_contain(&output, "Function: \"read2\":");
@@ -496,109 +496,109 @@ fn test_paths_analysis() {
 }
 
 #[test]
-fn test_verify_align_scc_01() {
+fn sound_align_01() {
     let output = run_with_args("verify/sound_align_01", VERIFY_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_02() {
+fn sound_align_02() {
     let output = run_with_args("verify/sound_align_02", VERIFY_CMD);
     assert_contain(&output, "function: sound_enum_paths_inside_scc | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_03() {
+fn unsound_align_01() {
     let output = run_with_args("verify/unsound_align_01", VERIFY_CMD);
     assert_contain(&output, "function: unsound_enum_paths_inside_scc | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_scc_04() {
+fn sound_align_03() {
     let output = run_with_args("verify/sound_align_03", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_selects_aligned_source | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_05() {
+fn unsound_align_02() {
     let output = run_with_args("verify/unsound_align_02", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_selects_mixed_source | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_scc_06() {
+fn sound_align_04() {
     let output = run_with_args("verify/sound_align_04", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_computes_aligned_offset | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_07() {
+fn unsound_align_03() {
     let output = run_with_args("verify/unsound_align_03", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_computes_misaligned_offset | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_scc_08() {
+fn sound_align_05() {
     let output = run_with_args("verify/sound_align_05", VERIFY_CMD);
     assert_contain(&output, "function: sound_nested_scc_controller | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_09() {
+fn unsound_align_04() {
     let output = run_with_args("verify/unsound_align_04", VERIFY_CMD);
     assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_scc_10() {
+fn sound_align_06() {
     let output = run_with_args("verify/sound_align_06", VERIFY_CMD);
     assert_contain(&output, "function: sound_iteration_count_switches_aligned_offsets | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_11() {
+fn unsound_align_05() {
     let output = run_with_args("verify/unsound_align_05", VERIFY_CMD);
     assert_contain(&output, "function: unsound_iteration_count_can_leave_unaligned | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_scc_12() {
+fn sound_align_07() {
     let output = run_with_args("verify/sound_align_07", VERIFY_CMD);
     assert_contain(&output, "function: sound_unrelated_scc_does_not_pollute_align | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_13() {
+fn sound_align_08() {
     let output = run_with_args("verify/sound_align_08", VERIFY_CMD);
     assert_contain(&output, "function: sound_unrelated_nested_scc_with_bad_scratch | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_14() {
+fn sound_align_09() {
     let output = run_with_args("verify/sound_align_09", VERIFY_CMD);
     assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_15() {
+fn unsound_align_06() {
     let output = run_with_args("verify/unsound_align_06", VERIFY_CMD);
     assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_scc_16() {
+fn sound_align_10() {
     let output = run_with_args("verify/sound_align_10", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_internal_noise_ignored | result: SOUND");
 }
 
 #[test]
-fn test_verify_align_scc_17() {
+fn unsound_align_07() {
     let output = run_with_args("verify/unsound_align_07", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch | result: UNSOUND");
 }
 
 #[test]
-fn test_verify_align_intra_paths() {
+fn verify_align_intra_paths() {
     let output = run_with_args("verify/align/intra_paths", VERIFY_CMD);
     assert_contain(
         &output,
@@ -608,7 +608,7 @@ fn test_verify_align_intra_paths() {
 }
 
 #[test]
-fn test_verify_align_ptr_arith_layout() {
+fn verify_align_ptr_arith_layout() {
     let output = run_with_args("verify/align/ptr_arith_layout", VERIFY_CMD);
     assert_contain(&output, "function: sound_add_sub_chain | result: UNSOUND");
     assert_contain(
@@ -618,30 +618,30 @@ fn test_verify_align_ptr_arith_layout() {
 }
 
 #[test]
-fn test_upg_safe_caller() {
+fn upg_safe_caller() {
     let output = run_with_args("upg/safe_caller", ANALYZE_UPG_CMD);
     assert_contain(&output, "from_raw_parts");
 }
 
 #[test]
-fn test_upg_raw_ptr() {
+fn upg_raw_ptr() {
     let output = run_with_args("upg/raw_ptr", ANALYZE_UPG_CMD);
     assert_contain(&output, "raw_ptr_deref_dummy");
 }
 
 #[test]
-fn test_upg_static_mut() {
+fn upg_static_mut() {
     let output = run_with_args("upg/static_mut", ANALYZE_UPG_CMD);
     assert_contain(&output, "::COUNTER");
 }
 
 #[test]
-fn test_ssa_transform() {
+fn ssa_transform() {
     let output = run_with_args("ssa/ssa_transform", ANALYZE_SSA_CMD);
     assert_contain(&output, "ssa lvalue check true");
 }
 #[test]
-fn test_range_analysis() {
+fn range_analysis() {
     let output = run_with_args("range/range_1", ANALYZE_RANGE_CMD);
 
     let expected_ranges = vec![
@@ -666,7 +666,7 @@ fn test_range_analysis() {
 
 #[test]
 
-fn test_interprocedual_range_analysis() {
+fn interprocedual_range_analysis() {
     let output = run_with_args("range/range_2", ANALYZE_RANGE_CMD);
 
     let expected_ranges = vec![
@@ -687,7 +687,7 @@ fn test_interprocedual_range_analysis() {
 }
 
 #[test]
-fn test_callgraph_dynamic_dispatch() {
+fn callgraph_dynamic_dispatch() {
     let output = run_with_args("callgraph/dynamic", ANALYZE_CALLGRAPH_CMD);
 
     let expected_calls = vec!["-> <Dog as Animal>::speak", "-> <Cat as Animal>::speak"];
@@ -703,7 +703,7 @@ fn test_callgraph_dynamic_dispatch() {
 }
 
 #[test]
-fn test_symbolic_interval() {
+fn symbolic_interval() {
     let output = run_with_args("range/range_symbolic", ANALYZE_RANGE_CMD);
 
     let expected_ranges = vec![
@@ -723,13 +723,13 @@ fn test_symbolic_interval() {
 }
 
 #[test]
-fn test_adg_bug() {
+fn adg_bug() {
     // This test pass if don't panic (e.g., stack overflow) during ADG construction and resolution.
     let _ = run_with_args("adg/bug-regression", ANALYZE_ADG_CMD);
 }
 
 #[test]
-fn test_adg_simple_graph() {
+fn adg_simple_graph() {
     let _ = run_with_args("adg/simple-graph", ANALYZE_ADG_CMD);
     let graph_str = std::fs::read_to_string(project_path("adg/simple-graph").join("api_graph.yml"))
         .expect("read api_graph.yml fail");
