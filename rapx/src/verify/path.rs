@@ -162,7 +162,6 @@ impl<'tcx> PathExtractor<'tcx> {
                 continue;
             }
             if !seen_prefixes.insert(prefix.clone()) {
-                rap_info!("  verify path {}: duplicate prefix, skipped", idx);
                 continue;
             }
             results.push(Path {
