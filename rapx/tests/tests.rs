@@ -567,35 +567,29 @@ fn test_ssa_transform() {
     let output = run_with_args("ssa/ssa_transform", ANALYZE_SSA_CMD);
     assert_contain(&output, "ssa lvalue check true");
 }
-// FIXME: times out — `dfs_scc_tree` explodes on nested-loops when enumerated
-// via `collect_whole_cfg_paths` (SCC child-splicing triggers repeated
-// `check_forward_progress` passes that the shared `seen_nodes` does not yet
-// fully suppress).  Root cause is the interaction between child-SCC path
-// splicing and the parent SCC's entry re-visit logic, not the consumer
-// (MoP / SafeDrop / Verify) path.
-// #[test]
-// fn test_range_analysis() {
-//     let output = run_with_args("range/range_1", ANALYZE_RANGE_CMD);
-//
-//     let expected_ranges = vec![
-//         "_1 => Regular [0, 0]",
-//         "_2 => Regular [Min, Max]",
-//         "_4 => Regular [0, 100]",
-//         "_6 => Regular [0, 99]",
-//         "_11 => Regular [1, 99]",
-//         "_12 => Regular [0, 98]",
-//         "_34 => Regular [1, 100]",
-//     ];
-//
-//     for expected in expected_ranges {
-//         assert!(
-//             output.contains(expected),
-//             "Missing expected range: '{}'\nFull output:\n{}",
-//             expected,
-//             output
-//         );
-//     }
-// }
+#[test]
+fn test_range_analysis() {
+    let output = run_with_args("range/range_1", ANALYZE_RANGE_CMD);
+
+    let expected_ranges = vec![
+        "_1 => Regular [0, 0]",
+        "_2 => Regular [Min, Max]",
+        "_4 => Regular [0, 100]",
+        "_6 => Regular [0, 99]",
+        "_11 => Regular [1, 99]",
+        "_12 => Regular [0, 98]",
+        "_34 => Regular [1, 100]",
+    ];
+
+    for expected in expected_ranges {
+        assert!(
+            output.contains(expected),
+            "Missing expected range: '{}'\nFull output:\n{}",
+            expected,
+            output
+        );
+    }
+}
 
 #[test]
 

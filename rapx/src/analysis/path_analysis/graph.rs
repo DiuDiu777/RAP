@@ -576,8 +576,10 @@ impl<'tcx> PathGraph<'tcx> {
         let mut seen_nodes = FxHashSet::default();
         seen_nodes.insert(start);
 
+        let visited_children: &mut FxHashSet<usize> = &mut FxHashSet::default();
+
         self.dfs_scc_tree(
-            scc, start, &mut path, &mut seen_nodes, None,
+            scc, start, &mut path, &mut seen_nodes, visited_children,
             initial_constraints.clone(), &mut out, &mut seen, 0, &config,
         );
 
@@ -604,7 +606,7 @@ impl<'tcx> PathGraph<'tcx> {
         cur: usize,
         path: &mut Vec<usize>,
         seen_nodes: &mut FxHashSet<usize>,
-        skip_child: Option<usize>,
+        visited_children: &mut FxHashSet<usize>,
         constraints: SccPathConstraints,
         out: &mut Vec<SccEnumeratedPath>,
         seen: &mut FxHashSet<PathKey>,
@@ -629,42 +631,53 @@ impl<'tcx> PathGraph<'tcx> {
         }
 
         let is_child = scc.child_sccs.contains(&cur);
-        let skipping = skip_child == Some(cur);
 
-        if is_child && !skipping {
-            let child_scc = self.cfg.block(cur).scc.clone();
-            // Always enumerate child SCC structurally (cached).
-            let all_child = self.find_scc_paths(cur, &child_scc, &FxHashMap::default());
+        if is_child {
+            if visited_children.insert(cur) {
+                // First visit: enumerate child SCC, splice paths, continue.
+                let child_scc = self.cfg.block(cur).scc.clone();
+                let all_child = self.find_scc_paths(cur, &child_scc, &FxHashMap::default());
 
-            let child_paths: Vec<_> = all_child
-                .into_iter()
-                .filter(|cp| self.is_path_reachable_with(&cp.blocks, &constraints))
-                .collect();
+                let child_paths: Vec<_> = all_child
+                    .into_iter()
+                    .filter(|cp| self.is_path_reachable_with(&cp.blocks, &constraints))
+                    .collect();
 
-            // Follow parent-level edges from the child entry (skip child body).
-            self.dfs_scc_tree(
-                scc, cur, path, seen_nodes, Some(cur),
-                constraints.clone(), out, seen, depth + 1, config,
-            );
+                for child_path in &child_paths {
+                    if child_path.blocks.len() <= 1 { continue; }
+                    let orig_len = path.len();
+                    path.extend(&child_path.blocks[1..]);
 
-            for child_path in &child_paths {
-                if child_path.blocks.len() <= 1 { continue; }
-                let orig_len = path.len();
-                path.extend(&child_path.blocks[1..]);
-                let new_cur = *path.last().unwrap();
-                let next_skip = if new_cur == cur { Some(cur) } else { None };
+                    let mut merged = child_path.constraints.clone();
+                    for (k, v) in constraints.iter() {
+                        merged.entry(*k).or_insert(*v);
+                    }
 
-                // Merge parent constraints into child constraints.
-                let mut merged = child_path.constraints.clone();
-                for (k, v) in constraints.iter() {
-                    merged.entry(*k).or_insert(*v);
+                    for &next in &child_path.exit_successors {
+                        path.push(next);
+                        self.dfs_scc_tree(
+                            scc, next, path, seen_nodes, visited_children,
+                            merged.clone(), out, seen, depth + 1, config,
+                        );
+                        path.pop();
+                    }
+                    path.truncate(orig_len);
                 }
-
+            }
+            // Whether first or subsequent visit: follow parent-level successors
+            // from this child entry, treating it as a regular SCC node.
+            for action in self.enumerate_scc_traversals(cur) {
+                let SccPathAction::Traverse { next } = action;
+                if next != scc.enter && !scc.nodes.contains(&next) {
+                    record_unique_path(path, &constraints, scc, out, seen, self);
+                    continue;
+                }
+                path.push(next);
                 self.dfs_scc_tree(
-                    scc, new_cur, path, seen_nodes, next_skip,
-                    merged, out, seen, depth + 1, config,
+                    scc, next, path, seen_nodes, visited_children,
+                    constraints.clone(), out, seen, depth + 1, config,
                 );
-                path.truncate(orig_len);
+                path.pop();
             }
             return;
         }
@@ -677,7 +690,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
             path.push(next);
             self.dfs_scc_tree(
-                scc, next, path, seen_nodes, None,
+                scc, next, path, seen_nodes, visited_children,
                 constraints.clone(), out, seen, depth + 1, config,
             );
             path.pop();
