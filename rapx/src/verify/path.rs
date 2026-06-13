@@ -131,14 +131,14 @@ impl<'tcx> PathExtractor<'tcx> {
     fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
         let target_block = callsite.block.as_usize();
-        let fn_name = self.tcx.def_path_str(self.def_id);
+        let callee_name = callsite.callee_name(self.tcx);
         let pg = self.path_graph();
         let all_paths = pg.enumerate_paths();
 
         rap_info!(
-            "Callsite at bb{} in {}: {} whole-cfg paths",
+            "Callsite at bb{} -> {}: {} whole-cfg paths",
             target_block,
-            fn_name,
+            callee_name,
             all_paths.len()
         );
 
@@ -153,15 +153,15 @@ impl<'tcx> PathExtractor<'tcx> {
                 continue;
             };
             let prefix: Vec<usize> = path[..=pos].to_vec();
+            if !seen_prefixes.insert(prefix.clone()) {
+                continue;
+            }
             let reachable = pg.is_path_reachable(&prefix);
             rap_info!(
                 "  verify path {}: {:?} | reachable: {}",
                 idx, prefix, reachable
             );
             if !reachable {
-                continue;
-            }
-            if !seen_prefixes.insert(prefix.clone()) {
                 continue;
             }
             results.push(Path {
