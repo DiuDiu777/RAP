@@ -595,15 +595,11 @@ impl<'tcx> PathGraph<'tcx> {
         if cur != scc.enter && !scc.nodes.contains(&cur) { return; }
 
         if cur == scc.enter && path.len() > 1 {
-            if !check_forward_progress(path, scc.enter, seen_segments) {
-                if scc.exits.iter().any(|e| e.exit == cur) {
-                    record_unique_path(path, scc, out, seen_paths, self);
-                }
+            let enter_count = path.iter().filter(|&&n| n == scc.enter).count();
+            if enter_count > 2 {
                 return;
             }
-            // Limit to at most 2 full loop iterations (2 returns to the SCC entry).
-            let enter_count = path.iter().filter(|&&n| n == scc.enter).count();
-            if enter_count >= 3 {
+            if !check_forward_progress(path, scc.enter, seen_segments) {
                 if scc.exits.iter().any(|e| e.exit == cur) {
                     record_unique_path(path, scc, out, seen_paths, self);
                 }
