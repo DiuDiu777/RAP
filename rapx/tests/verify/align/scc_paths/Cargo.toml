@@ -1,6 +1,0 @@
-[package]
-name = "align_scc_paths"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]

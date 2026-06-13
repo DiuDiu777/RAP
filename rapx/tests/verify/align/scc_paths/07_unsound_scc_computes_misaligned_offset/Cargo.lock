@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "align_scc_paths"
+name = "scc_07_unsound_scc_computes_misaligned_offset"
 version = "0.1.0"
