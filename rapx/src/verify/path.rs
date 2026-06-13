@@ -134,16 +134,27 @@ impl<'tcx> PathExtractor<'tcx> {
         let pg = self.path_graph();
         let all_paths = pg.enumerate_paths();
 
+        rap_info!(
+            "Callsite at bb{}: {} whole-cfg paths",
+            target_block, all_paths.len()
+        );
+
         let mut results = Vec::new();
-        for path in all_paths {
+        for (idx, path) in all_paths.iter().enumerate() {
             if results.len() >= PATH_LIMIT {
                 break;
             }
             let Some(pos) = path.iter().position(|&b| b == target_block) else {
+                rap_info!("  whole-cfg path {}: {:?} | reachable: false (no target)", idx, path);
                 continue;
             };
             let prefix: Vec<usize> = path[..=pos].to_vec();
-            if !pg.is_path_reachable(&prefix) {
+            let reachable = pg.is_path_reachable(&prefix);
+            rap_info!(
+                "  verify path {}: {:?} | reachable: {}",
+                idx, prefix, reachable
+            );
+            if !reachable {
                 continue;
             }
             results.push(Path {

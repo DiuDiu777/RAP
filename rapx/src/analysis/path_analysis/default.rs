@@ -30,12 +30,14 @@ impl<'tcx> PathAnalyzer<'tcx> {
         let mut graph = PathGraph::new(self.tcx, def_id);
         graph.find_scc();
         let paths = graph.enumerate_paths();
+        let fn_name = self.tcx.def_path_str(def_id);
 
-        if self.debug {
-            rap_debug!(
-                "Extracted paths for function {}: {:?}",
-                self.tcx.def_path_str(def_id),
-                paths
+        rap_info!("Function: {}", fn_name);
+        for (idx, path) in paths.iter().enumerate() {
+            let reachable = graph.is_path_reachable(path);
+            rap_info!(
+                "  path {}: {:?} | reachable: {}",
+                idx, path, reachable
             );
         }
 
