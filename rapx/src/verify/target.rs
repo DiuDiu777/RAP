@@ -356,27 +356,6 @@ impl<'tcx> PrepareTargets<'tcx> {
         }
 
         let result = PathExtractor::new(self.tcx, target.def_id, target.callsites.clone()).run();
-
-        rap_info!("    detected SCC region(s): {}", result.scc_regions().len());
-        for scc_info in result.scc_regions() {
-            let body: Vec<_> = scc_info
-                .blocks
-                .iter()
-                .map(|bb| format!("bb{}", bb.as_usize()))
-                .collect();
-            let exits: Vec<_> = scc_info
-                .exits
-                .iter()
-                .map(|exit| format!("bb{}->bb{}", exit.from.as_usize(), exit.to.as_usize()))
-                .collect();
-            rap_info!(
-                "      SCC bb{}: body={:?}, exits={:?}",
-                scc_info.representative.as_usize(),
-                body,
-                exits
-            );
-        }
-
         for (display_index, callsite) in result.callsites().iter().enumerate() {
             rap_info!(
                 "    unsafe callsite #{}: {} at bb{} ({} arg(s))",

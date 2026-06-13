@@ -48,7 +48,6 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
 use crate::analysis::path_analysis::graph::PathGraph;
-use crate::graphs::scc::SccRegion;
 
 use super::helpers::{Callsite, CallsiteLocation};
 
@@ -71,7 +70,6 @@ pub struct PathExtractor<'tcx> {
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     callsites: Vec<Callsite<'tcx>>,
-    scc_regions: Vec<SccRegion>,
     paths: FxHashMap<CallsiteLocation, Vec<Path>>,
     path_graph: Option<PathGraph<'tcx>>,
 }
@@ -86,7 +84,6 @@ impl<'tcx> PathExtractor<'tcx> {
             tcx,
             def_id,
             callsites,
-            scc_regions: Vec::new(),
             paths: FxHashMap::default(),
             path_graph: None,
         }
@@ -106,16 +103,12 @@ impl<'tcx> PathExtractor<'tcx> {
     /// Returns a `FunctionPaths` value that bundles SCC metadata with the
     /// per-callsite path vectors. This is the main driver method.
     pub fn run(mut self) -> FunctionPaths<'tcx> {
-        self.find_scc_regions();
+        // Ensure PathGraph is initialized (also builds SCC info internally).
+        self.path_graph();
         self.find_paths();
         FunctionPaths {
-            scc_regions: SccRegions::new(self.scc_regions),
             callsite_paths: CallsitePaths::new(self.callsites, self.paths),
         }
-    }
-
-    fn find_scc_regions(&mut self) {
-        self.scc_regions = self.path_graph().collect_scc_regions();
     }
 
     /// Extract paths for every callsite owned by this extractor.
@@ -170,35 +163,16 @@ impl<'tcx> PathExtractor<'tcx> {
 
 /// Result of path extraction for one function.
 pub struct FunctionPaths<'tcx> {
-    scc_regions: SccRegions,
     callsite_paths: CallsitePaths<'tcx>,
 }
 
 impl<'tcx> FunctionPaths<'tcx> {
-    pub fn scc_regions(&self) -> &[SccRegion] {
-        self.scc_regions.scc_regions()
-    }
-
     pub fn paths_for(&self, location: CallsiteLocation) -> &[Path] {
         self.callsite_paths.paths_for(location)
     }
 
     pub fn callsites(&self) -> &[Callsite<'tcx>] {
         self.callsite_paths.callsites()
-    }
-}
-
-pub struct SccRegions {
-    scc_regions: Vec<SccRegion>,
-}
-
-impl SccRegions {
-    fn new(scc_regions: Vec<SccRegion>) -> Self {
-        Self { scc_regions }
-    }
-
-    pub fn scc_regions(&self) -> &[SccRegion] {
-        &self.scc_regions
     }
 }
 

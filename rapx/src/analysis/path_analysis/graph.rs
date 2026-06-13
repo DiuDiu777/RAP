@@ -1,6 +1,6 @@
 use crate::graphs::{
     cfg::{CfgBlock, ControlFlowGraph},
-    scc::{Scc, SccInfo, SccRegion, SccRegionExit},
+    scc::{Scc, SccInfo},
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::{
@@ -248,39 +248,6 @@ impl<'tcx> PathGraph<'tcx> {
 
     pub fn find_scc(&mut self) {
         self.cfg.find_scc();
-    }
-
-    pub fn collect_scc_regions(&self) -> Vec<SccRegion> {
-        let mut regions = Vec::new();
-        let mut seen = FxHashSet::default();
-        for block in &self.cfg.blocks {
-            let enter = block.scc.enter;
-            if seen.insert(enter) && !block.scc.nodes.is_empty() {
-                let blocks: Vec<usize> = std::iter::once(enter)
-                    .chain(block.scc.nodes.iter().copied())
-                    .collect();
-
-                let mut exits = Vec::new();
-                for exit in &block.scc.exits {
-                    exits.push(SccRegionExit {
-                        from: BasicBlock::from(exit.from),
-                        to: BasicBlock::from(exit.to),
-                    });
-                }
-
-                let backedges: Vec<_> = block.scc.backedges.iter().map(|&(f, t)| {
-                    (BasicBlock::from(f), BasicBlock::from(t))
-                }).collect();
-
-                regions.push(SccRegion {
-                    representative: BasicBlock::from(enter),
-                    blocks: blocks.into_iter().map(BasicBlock::from).collect(),
-                    exits,
-                    backedges,
-                });
-            }
-        }
-        regions
     }
 
     pub fn def_id(&self) -> DefId {
