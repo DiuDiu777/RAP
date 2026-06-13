@@ -256,12 +256,29 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 });
             }
             Rvalue::BinaryOp(op, box (lhs, rhs)) => {
+                let lhs_val = value_from_operand(lhs);
+                let rhs_val = value_from_operand(rhs);
+                let target_key = target.clone();
                 result.facts.push(StateFact::Binary {
-                    target,
+                    target: target_key.clone(),
                     op: *op,
-                    lhs: value_from_operand(lhs),
-                    rhs: value_from_operand(rhs),
+                    lhs: lhs_val.clone(),
+                    rhs: rhs_val.clone(),
                 });
+                // If multiplying by a known constant multiple of an alignment
+                // (e.g. i * 4), the result inherits that alignment property.
+                if *op == BinOp::Mul {
+                    if let Some(divisor) = const_int_value(&rhs_val) {
+                        if divisor > 0 && is_power_of_two(divisor) {
+                            result.facts.push(StateFact::KnownAligned {
+                                place: target_key,
+                                align: divisor as u64,
+                                ty_name: format!("result of mul by {divisor}"),
+                                reason: format!("multiply by {divisor} (power of two)"),
+                            });
+                        }
+                    }
+                }
             }
             _ => {}
         }
@@ -751,4 +768,15 @@ fn aggregate_name<'tcx>(kind: &AggregateKind<'tcx>) -> String {
         AggregateKind::CoroutineClosure(def_id, _) => format!("coroutine_closure({def_id:?})"),
         AggregateKind::RawPtr(_, _) => "raw_ptr".to_string(),
     }
+}
+
+fn const_int_value(val: &AbstractValue<'_>) -> Option<u128> {
+    match val {
+        AbstractValue::ConstInt(v) => Some(*v),
+        _ => None,
+    }
+}
+
+fn is_power_of_two(n: u128) -> bool {
+    n > 0 && (n & (n - 1)) == 0
 }
