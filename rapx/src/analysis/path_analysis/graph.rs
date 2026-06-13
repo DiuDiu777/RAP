@@ -280,24 +280,7 @@ impl<'tcx> PathGraph<'tcx> {
             return all_paths;
         }
 
-        rap_info!(
-            "  [CFG] fn={} blocks: {}..{}, adjacency:",
-            self.cfg.tcx.def_path_str(self.cfg.def_id),
-            0,
-            self.cfg.blocks.len() - 1
-        );
-        for (i, block) in self.cfg.blocks.iter().enumerate() {
-            if !block.next.is_empty() {
-                rap_info!("    bb{} -> {:?}", i, block.next);
-            }
-        }
-
         self.collect_whole_cfg_paths(0, &mut vec![0], &mut all_paths, &mut seen_paths, 0);
-
-        rap_info!("  [CFG] generated {} whole-cfg paths:", all_paths.len());
-        for (idx, path) in all_paths.iter().enumerate() {
-            rap_info!("    path {}: {:?}", idx, path);
-        }
 
         all_paths.sort_unstable();
         all_paths
@@ -578,12 +561,6 @@ impl<'tcx> PathGraph<'tcx> {
         scc: &SccInfo,
         initial_constraints: &FxHashMap<usize, usize>,
     ) -> Vec<SccEnumeratedPath> {
-        rap_info!(
-            "    [SCC] enter=bb{}, nodes={:?}, exits={:?}",
-            scc.enter,
-            scc.nodes.iter().collect::<Vec<_>>(),
-            scc.exits.iter().map(|e| (e.exit, e.to)).collect::<Vec<_>>()
-        );
         let key = SccPathCacheKey::new(self.cfg.def_id, scc.enter, &FxHashMap::default());
         if let Some(cached) = SCC_PATH_CACHE.with(|c| c.borrow().get(&key).cloned()) {
             return cached;
@@ -720,12 +697,17 @@ impl<'tcx> PathGraph<'tcx> {
                 // If the discriminant's type is bool/enum, enumerate only the
                 // possible concrete values instead of all CFG successors.
                 // This keeps path counts bounded for loops containing SwitchInt.
+                // Values are reversed so that higher-valued branches (usually
+                // the less-complex ones) get explored first, preventing the
+                // first branch from exhausting the SCC path quota before others
+                // are reached.
                 if let Some(local) = constraint_local {
                     if let Some(values) = possible_switch_values_for_local(
                         self.cfg.tcx, self.cfg.def_id, local,
                     ) {
                         return values
                             .into_iter()
+                            .rev()
                             .map(|val| SccPathAction::Traverse {
                                 next: resolve_switch_target(targets, val as u128),
                             })
