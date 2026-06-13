@@ -1,6 +1,0 @@
-[package]
-name = "scc_15_unsound_pre_scc_guard_overwritten_by_scc"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]

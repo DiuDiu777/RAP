@@ -1,6 +1,0 @@
-[package]
-name = "scc_16_sound_scc_internal_noise_ignored"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]

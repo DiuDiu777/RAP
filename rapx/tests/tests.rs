@@ -497,103 +497,103 @@ fn test_paths_analysis() {
 
 #[test]
 fn test_verify_align_scc_01() {
-    let output = run_with_args("verify/align/scc_paths/01_sound_named_contract_binds_callsite_arg", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_01", VERIFY_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_02() {
-    let output = run_with_args("verify/align/scc_paths/02_sound_enum_paths_inside_scc", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_02", VERIFY_CMD);
     assert_contain(&output, "function: sound_enum_paths_inside_scc | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_03() {
-    let output = run_with_args("verify/align/scc_paths/03_unsound_enum_paths_inside_scc", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_01", VERIFY_CMD);
     assert_contain(&output, "function: unsound_enum_paths_inside_scc | result: UNSOUND");
 }
 
 #[test]
 fn test_verify_align_scc_04() {
-    let output = run_with_args("verify/align/scc_paths/04_sound_scc_selects_aligned_source", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_03", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_selects_aligned_source | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_05() {
-    let output = run_with_args("verify/align/scc_paths/05_unsound_scc_selects_mixed_source", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_02", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_selects_mixed_source | result: UNSOUND");
 }
 
 #[test]
 fn test_verify_align_scc_06() {
-    let output = run_with_args("verify/align/scc_paths/06_sound_scc_computes_aligned_offset", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_04", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_computes_aligned_offset | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_07() {
-    let output = run_with_args("verify/align/scc_paths/07_unsound_scc_computes_misaligned_offset", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_03", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_computes_misaligned_offset | result: UNSOUND");
 }
 
 #[test]
 fn test_verify_align_scc_08() {
-    let output = run_with_args("verify/align/scc_paths/08_sound_nested_scc_controller", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_05", VERIFY_CMD);
     assert_contain(&output, "function: sound_nested_scc_controller | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_09() {
-    let output = run_with_args("verify/align/scc_paths/09_unsound_nested_scc_controller", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_04", VERIFY_CMD);
     assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
 }
 
 #[test]
 fn test_verify_align_scc_10() {
-    let output = run_with_args("verify/align/scc_paths/10_sound_iteration_count_switches_aligned_offsets", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_06", VERIFY_CMD);
     assert_contain(&output, "function: sound_iteration_count_switches_aligned_offsets | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_11() {
-    let output = run_with_args("verify/align/scc_paths/11_unsound_iteration_count_can_leave_unaligned", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_05", VERIFY_CMD);
     assert_contain(&output, "function: unsound_iteration_count_can_leave_unaligned | result: UNSOUND");
 }
 
 #[test]
 fn test_verify_align_scc_12() {
-    let output = run_with_args("verify/align/scc_paths/12_sound_unrelated_scc_does_not_pollute_align", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_07", VERIFY_CMD);
     assert_contain(&output, "function: sound_unrelated_scc_does_not_pollute_align | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_13() {
-    let output = run_with_args("verify/align/scc_paths/13_sound_unrelated_nested_scc_with_bad_scratch", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_08", VERIFY_CMD);
     assert_contain(&output, "function: sound_unrelated_nested_scc_with_bad_scratch | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_14() {
-    let output = run_with_args("verify/align/scc_paths/14_sound_pre_scc_guard_with_scc_offsets", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_09", VERIFY_CMD);
     assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_15() {
-    let output = run_with_args("verify/align/scc_paths/15_unsound_pre_scc_guard_overwritten_by_scc", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_06", VERIFY_CMD);
     assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc | result: UNSOUND");
 }
 
 #[test]
 fn test_verify_align_scc_16() {
-    let output = run_with_args("verify/align/scc_paths/16_sound_scc_internal_noise_ignored", VERIFY_CMD);
+    let output = run_with_args("verify/sound_align_10", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_internal_noise_ignored | result: SOUND");
 }
 
 #[test]
 fn test_verify_align_scc_17() {
-    let output = run_with_args("verify/align/scc_paths/17_unsound_scc_guard_only_on_one_branch", VERIFY_CMD);
+    let output = run_with_args("verify/unsound_align_07", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch | result: UNSOUND");
 }
 

@@ -1,6 +1,0 @@
-[package]
-name = "scc_01_sound_named_contract_binds_callsite_arg"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]

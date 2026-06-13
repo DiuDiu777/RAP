@@ -1,6 +1,0 @@
-[package]
-name = "scc_08_sound_nested_scc_controller"
-version = "0.1.0"
-edition = "2024"
-
-[dependencies]
