@@ -393,6 +393,19 @@ impl Path {
             .collect::<Vec<_>>()
             .join(" -> ")
     }
+
+    /// Render this path as a compact array of block indices.
+    pub fn describe_indices(&self) -> String {
+        let indices: Vec<usize> = self
+            .steps
+            .iter()
+            .map(|step| match step {
+                PathStep::Block(b) => b.as_usize(),
+                PathStep::Callsite(l) => l.block.as_usize(),
+            })
+            .collect();
+        format!("{:?}", indices)
+    }
 }
 
 /// Render one path step as a human-readable string for diagnostics.

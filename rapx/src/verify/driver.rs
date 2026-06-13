@@ -89,7 +89,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                             backward.describe(self.tcx, view.callsite, path_index),
                             check_diagnostics,
                         )),
-                        path_description: path.describe(),
+                        path_description: path.describe_indices(),
                         callee_name: view.callsite.callee_name(self.tcx),
                     });
                 }
