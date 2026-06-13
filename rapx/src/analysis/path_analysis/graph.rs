@@ -283,18 +283,7 @@ impl<'tcx> PathGraph<'tcx> {
             return all_paths;
         }
 
-        let mut current_path = vec![0];
-        let mut active_blocks = FxHashSet::default();
-        active_blocks.insert(0);
-
-        self.collect_path_sensitive_paths_inner(
-            0,
-            &mut current_path,
-            &mut active_blocks,
-            &mut all_paths,
-            &mut seen_paths,
-            0,
-        );
+        self.collect_whole_cfg_paths(0, &mut vec![0], &mut all_paths, &mut seen_paths, 0);
 
         all_paths.sort_unstable();
         all_paths
@@ -753,11 +742,14 @@ impl<'tcx> PathGraph<'tcx> {
         }
     }
 
-    fn collect_path_sensitive_paths_inner(
+    /// Depth-first enumeration of all CFG paths from `current` to a terminator.
+    ///
+    /// SCC nodes are flattened via `find_scc_paths`; non-SCC blocks are followed
+    /// one by one.  No cycle detection is needed because the post-SCC CFG is a DAG.
+    fn collect_whole_cfg_paths(
         &mut self,
         current: usize,
-        current_path: &mut Vec<usize>,
-        active_blocks: &mut FxHashSet<usize>,
+        path: &mut Vec<usize>,
         all_paths: &mut Vec<Vec<usize>>,
         seen_paths: &mut FxHashSet<Vec<usize>>,
         depth: usize,
@@ -769,94 +761,61 @@ impl<'tcx> PathGraph<'tcx> {
             return;
         }
 
-        let cur_scc_enter = self.cfg.block(current).scc.enter;
-        if current == cur_scc_enter && !self.cfg.block(current).scc.nodes.is_empty() {
-            let cur_scc = self.cfg.block(current).scc.clone();
-            let scc = self.sort_scc_tree(&cur_scc);
-            let paths_in_scc = self.find_scc_paths(current, &scc, &FxHashMap::default());
+        let scc_info = self.cfg.block(current).scc.clone();
+        let is_scc = current == scc_info.enter && !scc_info.nodes.is_empty();
+        if is_scc {
+            let scc = self.sort_scc_tree(&scc_info);
+            let segments = self.find_scc_paths(current, &scc, &FxHashMap::default());
 
-            if paths_in_scc.is_empty() {
-                if seen_paths.insert(current_path.clone()) {
-                    all_paths.push(current_path.clone());
+            if segments.is_empty() {
+                if seen_paths.insert(path.clone()) {
+                    all_paths.push(path.clone());
                 }
                 return;
             }
 
-            for scc_segment in paths_in_scc {
+            for seg in segments {
                 if all_paths.len() >= WHOLE_CFG_PATH_LIMIT {
                     break;
                 }
 
-                let mut scc_path = current_path.clone();
-                if scc_segment.blocks.len() > 1 {
-                    scc_path.extend_from_slice(&scc_segment.blocks[1..]);
+                let orig_len = path.len();
+                if seg.blocks.len() > 1 {
+                    path.extend_from_slice(&seg.blocks[1..]);
                 }
 
-                // Use pre-computed exit_successors instead of computing nexts manually.
-                let exit_successors = &scc_segment.exit_successors;
-                if exit_successors.is_empty() {
-                    if seen_paths.insert(scc_path.clone()) {
-                        all_paths.push(scc_path);
+                if seg.exit_successors.is_empty() {
+                    if seen_paths.insert(path.clone()) {
+                        all_paths.push(path.clone());
                     }
-                    continue;
-                }
-
-                for &next in exit_successors {
-                    if active_blocks.contains(&next) {
-                        if seen_paths.insert(scc_path.clone()) {
-                            all_paths.push(scc_path.clone());
-                        }
-                        continue;
+                } else {
+                    for &next in &seg.exit_successors {
+                        path.push(next);
+                        self.collect_whole_cfg_paths(
+                            next, path, all_paths, seen_paths, depth + 1,
+                        );
+                        path.pop();
                     }
-
-                    let mut continued_path = scc_path.clone();
-                    continued_path.push(next);
-                    active_blocks.insert(next);
-                    self.collect_path_sensitive_paths_inner(
-                        next,
-                        &mut continued_path,
-                        active_blocks,
-                        all_paths,
-                        seen_paths,
-                        depth + 1,
-                    );
-                    active_blocks.remove(&next);
                 }
+
+                path.truncate(orig_len);
             }
             return;
         }
 
-        let mut nexts: Vec<usize> = self.cfg.block(current).next.iter().copied().collect();
-        nexts.sort_unstable();
-        nexts.dedup();
-
-        if nexts.is_empty() {
-            if seen_paths.insert(current_path.clone()) {
-                all_paths.push(current_path.clone());
+        // Non-SCC block: follow CFG successors.
+        let successors: Vec<usize> = self.cfg.block(current).next.iter().copied().collect();
+        if successors.is_empty() {
+            if seen_paths.insert(path.clone()) {
+                all_paths.push(path.clone());
             }
             return;
         }
 
-        for next in nexts {
-            if active_blocks.contains(&next) {
-                if seen_paths.insert(current_path.clone()) {
-                    all_paths.push(current_path.clone());
-                }
-                continue;
-            }
-
-            active_blocks.insert(next);
-            current_path.push(next);
-            self.collect_path_sensitive_paths_inner(
-                next,
-                current_path,
-                active_blocks,
-                all_paths,
-                seen_paths,
-                depth + 1,
-            );
-            current_path.pop();
-            active_blocks.remove(&next);
+        for next in successors {
+            path.push(next);
+            self.collect_whole_cfg_paths(next, path, all_paths, seen_paths, depth + 1);
+            path.pop();
         }
     }
 
