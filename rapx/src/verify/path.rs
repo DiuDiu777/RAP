@@ -125,14 +125,27 @@ impl<'tcx> PathExtractor<'tcx> {
 
     /// Extract paths for one callsite by filtering pre-enumerated whole-function paths.
     ///
-    /// Uses `PathGraph::enumerate_paths()` to get all CFG paths, then filters
-    /// to those containing the target callsite block and passing reachability.
-    /// Paths are truncated at the target block (inclusive).
+    /// For callsites outside any SCC, uses `PathGraph::enumerate_paths()` to get
+    /// all CFG paths, then filters to those containing the target callsite block
+    /// and passing reachability. Paths are truncated at the target block.
+    ///
+    /// For callsites inside an SCC, extracts minimal body paths from the SCC
+    /// entry to the callsite, avoiding redundant loop-iteration prefixes.
     fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
         let target_block = callsite.block.as_usize();
         let callee_name = callsite.callee_name(self.tcx);
         let pg = self.path_graph();
+
+        let scc_info = pg.cfg.block(target_block).scc.clone();
+        let is_inside_scc = !scc_info.is_trivial() && scc_info.nodes.contains(&target_block);
+
+        if is_inside_scc {
+            return find_paths_for_scc_internal(
+                target, target_block, &scc_info, callee_name, pg,
+            );
+        }
+
         let all_paths = pg.enumerate_paths();
 
         rap_info!(
@@ -176,6 +189,109 @@ impl<'tcx> PathExtractor<'tcx> {
             });
         }
         results
+    }
+}
+
+/// Extract minimal paths from the SCC entry to a callsite inside the SCC.
+fn find_paths_for_scc_internal(
+    target: CallsiteLocation,
+    target_block: usize,
+    scc_info: &crate::graphs::scc::SccInfo,
+    callee_name: String,
+    pg: &mut PathGraph<'_>,
+) -> Vec<Path> {
+    let scc_enter = scc_info.enter;
+    let entry_prefix = build_entry_prefix(scc_enter, pg);
+    let body_paths = collect_scc_body_paths(scc_enter, target_block, scc_info, pg);
+
+    rap_info!(
+        "Callsite at bb{} -> {} (inside SCC): {} body paths",
+        target_block, callee_name, body_paths.len()
+    );
+
+    let mut results = Vec::new();
+    for body_path in &body_paths {
+        let full_path: Vec<usize> = entry_prefix
+            .iter()
+            .map(|step| match step {
+                PathStep::Block(b) => b.as_usize(),
+                _ => unreachable!(),
+            })
+            .chain(body_path.iter().copied())
+            .collect();
+
+        if !pg.is_path_reachable(&full_path) {
+            rap_info!("  body path {:?} | unreachable", body_path);
+            continue;
+        }
+        rap_info!("  body path {:?} | reachable", body_path);
+
+        results.push(Path {
+            target,
+            start: PathStart::SccRepresentative {
+                representative: BasicBlock::from_usize(scc_enter),
+            },
+            entry_prefix: entry_prefix.clone(),
+            steps: body_path
+                .iter()
+                .map(|&b| PathStep::Block(BasicBlock::from(b)))
+                .chain(std::iter::once(PathStep::Callsite(target)))
+                .collect(),
+        });
+    }
+    results
+}
+
+fn build_entry_prefix(scc_enter: usize, pg: &PathGraph<'_>) -> Vec<PathStep> {
+    let mut steps = Vec::new();
+    let mut visited = FxHashSet::default();
+    let mut current = 0usize;
+    while current != scc_enter && visited.insert(current) {
+        steps.push(PathStep::Block(BasicBlock::from(current)));
+        let next = pg.cfg.block(current).next.iter().next().copied();
+        match next {
+            Some(n) => current = n,
+            None => break,
+        }
+    }
+    steps
+}
+
+fn collect_scc_body_paths(
+    scc_enter: usize,
+    target_block: usize,
+    scc_info: &crate::graphs::scc::SccInfo,
+    pg: &PathGraph<'_>,
+) -> Vec<Vec<usize>> {
+    let mut results = Vec::new();
+    let mut path = vec![scc_enter];
+    let mut seen = FxHashSet::default();
+    seen.insert(scc_enter);
+    dfs_scc_body(scc_enter, target_block, scc_info, &mut path, &mut seen, &mut results, pg);
+    results
+}
+
+fn dfs_scc_body(
+    cur: usize,
+    target_block: usize,
+    scc_info: &crate::graphs::scc::SccInfo,
+    path: &mut Vec<usize>,
+    seen: &mut FxHashSet<usize>,
+    results: &mut Vec<Vec<usize>>,
+    pg: &PathGraph<'_>,
+) {
+    if cur == target_block {
+        results.push(path.clone());
+        return;
+    }
+    let successors = &pg.cfg.block(cur).next;
+    for &next in successors {
+        if next != scc_info.enter && scc_info.nodes.contains(&next) && seen.insert(next) {
+            path.push(next);
+            dfs_scc_body(next, target_block, scc_info, path, seen, results, pg);
+            path.pop();
+            seen.remove(&next);
+        }
     }
 }
 
