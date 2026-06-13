@@ -1,0 +1,6 @@
+[package]
+name = "scc_10_sound_iteration_count_switches_aligned_offsets"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

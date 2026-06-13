@@ -1,0 +1,6 @@
+[package]
+name = "scc_13_sound_unrelated_nested_scc_with_bad_scratch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

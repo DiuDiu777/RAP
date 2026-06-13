@@ -1,0 +1,6 @@
+[package]
+name = "scc_07_unsound_scc_computes_misaligned_offset"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

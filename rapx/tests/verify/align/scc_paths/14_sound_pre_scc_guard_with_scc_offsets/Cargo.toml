@@ -1,0 +1,6 @@
+[package]
+name = "scc_14_sound_pre_scc_guard_with_scc_offsets"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

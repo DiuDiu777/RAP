@@ -1,0 +1,6 @@
+[package]
+name = "scc_05_unsound_scc_selects_mixed_source"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]

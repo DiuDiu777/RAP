@@ -1,0 +1,6 @@
+[package]
+name = "scc_03_unsound_enum_paths_inside_scc"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
