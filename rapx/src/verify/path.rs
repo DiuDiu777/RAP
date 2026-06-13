@@ -131,12 +131,15 @@ impl<'tcx> PathExtractor<'tcx> {
     fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
         let target_block = callsite.block.as_usize();
+        let fn_name = self.tcx.def_path_str(self.def_id);
         let pg = self.path_graph();
         let all_paths = pg.enumerate_paths();
 
         rap_info!(
-            "Callsite at bb{}: {} whole-cfg paths",
-            target_block, all_paths.len()
+            "Callsite at bb{} in {}: {} whole-cfg paths",
+            target_block,
+            fn_name,
+            all_paths.len()
         );
 
         let mut results = Vec::new();
