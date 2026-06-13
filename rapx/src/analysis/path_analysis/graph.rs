@@ -32,14 +32,18 @@ thread_local! {
 /// e.g. `if i % 2 == 0 { A } else { B }` alternates between two paths through
 /// the same set of blocks on successive loop iterations.
 fn check_postfix_segment(path: &[usize], enter: usize, segment_counts: &mut FxHashMap<Vec<usize>, usize>, max_repeats: usize) -> bool {
+    let segment = extract_segment(path, enter);
+    let count = segment_counts.entry(segment).or_insert(0);
+    *count += 1;
+    *count <= max_repeats + 1
+}
+
+fn extract_segment(path: &[usize], enter: usize) -> Vec<usize> {
     let prev_pos = path[..path.len() - 1]
         .iter()
         .rposition(|&node| node == enter)
         .unwrap_or(0);
-    let segment: Vec<usize> = path[prev_pos + 1..path.len() - 1].to_vec();
-    let count = segment_counts.entry(segment).or_insert(0);
-    *count += 1;
-    *count <= max_repeats + 1
+    path[prev_pos + 1..path.len() - 1].to_vec()
 }
 
 #[derive(Clone, Debug)]
@@ -661,11 +665,13 @@ impl<'tcx> PathGraph<'tcx> {
         }
 
         let successors = self.enumerate_scc_traversals(cur);
+        let saved_counts = segment_counts.clone();
         for SccPathAction::Traverse { next } in successors {
             if next != scc.enter && !scc.nodes.contains(&next) {
                 record_unique_path(path, scc, out, seen_paths, self);
                 continue;
             }
+            *segment_counts = saved_counts.clone();
             path.push(next);
             self.dfs_scc_tree(
                 scc, next, path, segment_counts,
