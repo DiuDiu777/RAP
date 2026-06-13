@@ -869,6 +869,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         SmtTerm::Place(target.clone()),
                         SmtTerm::Value(value_label(source)),
                     ));
+                    // Propagate type-based alignment from an explicit source place.
+                    if let AbstractValue::Place(source_place) = source {
+                        self.assert_place_alignment(solver, source_place);
+                    }
                 }
                 StateFact::Binary {
                     target,
