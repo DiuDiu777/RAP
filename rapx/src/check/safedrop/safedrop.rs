@@ -141,86 +141,61 @@ impl<'tcx> SafeDropGraph<'tcx> {
         if self.alias_graph.visit_times() > VISIT_LIMIT {
             return;
         }
-        let scc_idx = self.alias_graph.cfg_block(bb_idx).scc.enter;
-        let cur_scc = self.alias_graph.cfg_block(bb_idx).scc.clone();
-        rap_debug!(
-            "Checking bb: {}, scc_idx: {}, scc: {:?}",
-            bb_idx,
-            scc_idx,
-            cur_scc.clone(),
-        );
 
-        if bb_idx == scc_idx && !cur_scc.nodes.is_empty() {
-            rap_debug!("check {:?} as a scc", bb_idx);
-            self.check_scc(bb_idx, fn_map);
+        let cur_scc = self.alias_graph.cfg_block(bb_idx).scc.clone();
+        let scc_idx = cur_scc.enter;
+        let is_scc = bb_idx == scc_idx && !cur_scc.nodes.is_empty();
+
+        if is_scc {
+            let scc = self.alias_graph.sort_scc_tree(&cur_scc);
+            let inherited_constraints = self.alias_graph.constants.clone();
+            let paths = self.alias_graph.find_scc_paths(bb_idx, &scc, &FxHashMap::default());
+
+            let backup_values = self.alias_graph.values.clone();
+            let backup_constant = self.alias_graph.constants.clone();
+            let backup_alias_sets = self.alias_graph.alias_sets.clone();
+            let backup_drop_record = self.drop_record.clone();
+
+            for path in &paths {
+                if !self.alias_graph.is_path_reachable(&path.blocks, &inherited_constraints) {
+                    continue;
+                }
+                if !path.blocks.is_empty() {
+                    for idx in &path.blocks[..path.blocks.len() - 1] {
+                        self.alias_bb(*idx);
+                        self.alias_bbcall(*idx, fn_map);
+                        self.drop_check(*idx);
+                    }
+                }
+                if let Some(&last_node) = path.blocks.last() {
+                    if self.alias_graph.cfg_block(last_node).scc.nodes.is_empty() {
+                        self.alias_bb(last_node);
+                        self.alias_bbcall(last_node, fn_map);
+                        self.drop_check(last_node);
+                        for &next in &path.exit_successors {
+                            self.split_check(next, fn_map);
+                        }
+                    }
+                }
+                self.alias_graph.alias_sets = backup_alias_sets.clone();
+                self.alias_graph.values = backup_values.clone();
+                self.alias_graph.constants = backup_constant.clone();
+                self.drop_record = backup_drop_record.clone();
+            }
         } else {
-            self.check_single_node(bb_idx, fn_map);
-            self.handle_nexts(bb_idx, fn_map, None, None);
-        }
-    }
+            self.alias_bb(bb_idx);
+            self.alias_bbcall(bb_idx, fn_map);
+            self.drop_check(bb_idx);
 
-    pub fn check_scc(&mut self, bb_idx: usize, fn_map: &MopFnAliasMap) {
-        let cur_scc = self.alias_graph.cfg_block(bb_idx).scc.clone();
-        let scc = self.alias_graph.sort_scc_tree(&cur_scc);
-        let inherited_constraints = self.alias_graph.constants.clone();
-        let paths_in_scc = self
-            .alias_graph
-            .find_scc_paths(bb_idx, &scc, &FxHashMap::default());
-
-        rap_debug!("Paths in scc: {:?}", paths_in_scc);
-
-        let mut scc_all_nodes: FxHashSet<usize> = cur_scc.nodes.clone();
-        scc_all_nodes.insert(cur_scc.enter);
-
-        let backup_values = self.alias_graph.values.clone();
-        let backup_constant = self.alias_graph.constants.clone();
-        let backup_alias_sets = self.alias_graph.alias_sets.clone();
-        let backup_drop_record = self.drop_record.clone();
-        for raw_path in &paths_in_scc {
-            let path = &raw_path.blocks;
-            if !self.alias_graph.is_path_reachable(path, &inherited_constraints) {
-                continue;
-            }
-            let path_constants = &raw_path.constraints;
-
-            if !path.is_empty() {
-                for idx in &path[..path.len() - 1] {
-                    self.alias_bb(*idx);
-                    self.alias_bbcall(*idx, fn_map);
-                    self.drop_check(*idx);
+            let cfg_block = self.alias_graph.cfg_block(bb_idx).clone();
+            if cfg_block.next.is_empty() {
+                if should_check(self.alias_graph.def_id()) {
+                    self.dp_check(cfg_block.is_cleanup);
                 }
+                return;
             }
-            if let Some(&last_node) = path.last() {
-                if self.alias_graph.cfg_block(last_node).scc.nodes.is_empty() {
-                    self.check_single_node(last_node, fn_map);
-                    self.handle_nexts(
-                        last_node,
-                        fn_map,
-                        Some(&scc_all_nodes),
-                        Some(path_constants),
-                    );
-                }
-            }
-            self.alias_graph.alias_sets = backup_alias_sets.clone();
-            self.alias_graph.values = backup_values.clone();
-            self.alias_graph.constants = backup_constant.clone();
-            self.drop_record = backup_drop_record.clone();
-        }
-    }
 
-    pub fn check_single_node(&mut self, bb_idx: usize, fn_map: &MopFnAliasMap) {
-        let cfg_block = self.alias_graph.cfg_block(bb_idx).clone();
-        rap_debug!("check {:?} as a node", bb_idx);
-        self.alias_bb(bb_idx);
-        self.alias_bbcall(bb_idx, fn_map);
-        self.drop_check(bb_idx);
-
-        // For dangling pointer check;
-        // Since a node within an SCC cannot be an exit, we only check for non-scc nodes;
-        if cfg_block.next.is_empty() {
-            if should_check(self.alias_graph.def_id()) {
-                self.dp_check(cfg_block.is_cleanup);
-            }
+            self.handle_nexts(bb_idx, fn_map, None);
         }
     }
 
@@ -229,16 +204,10 @@ impl<'tcx> SafeDropGraph<'tcx> {
         bb_idx: usize,
         fn_map: &MopFnAliasMap,
         exclusive_nodes: Option<&FxHashSet<usize>>,
-        path_constraints: Option<&FxHashMap<usize, usize>>,
     ) {
         let cfg_block = self.alias_graph.cfg_block(bb_idx).clone();
         let bb_terminator = self.alias_graph.terminator(bb_idx).cloned();
         let tcx = self.alias_graph.tcx();
-
-        // Extra path contraints are introduced during scc handling.
-        if let Some(path_constants) = path_constraints {
-            self.alias_graph.constants.extend(path_constants);
-        }
 
         /* Begin: handle the SwitchInt statement. */
         let mut single_target = false;

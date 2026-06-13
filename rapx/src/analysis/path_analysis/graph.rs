@@ -73,10 +73,13 @@ fn check_forward_progress(path: &[usize], enter: usize, seen_nodes: &mut FxHashS
 ///
 /// `blocks` is the ordered sequence of MIR block indices from the SCC entry
 /// to an exit point. `constraints` records variable-assignment constraints
-/// accumulated along the path (used to resolve SwitchInt discriminants).
+/// accumulated along the path. `exit_successors` lists CFG successors of the
+/// last block that are outside this SCC, pre-filtered for anti‑reentry and
+/// narrowed by SwitchInt constraints when a known discriminant value exists.
 pub struct SccEnumeratedPath {
     pub blocks: Vec<usize>,
     pub constraints: SccPathConstraints,
+    pub exit_successors: Vec<usize>,
 }
 
 #[derive(Clone, Debug)]
@@ -634,7 +637,7 @@ impl<'tcx> PathGraph<'tcx> {
         }
 
         if scc.exits.iter().any(|e| e.exit == cur) {
-            record_unique_path(path, &constraints, out, seen);
+            record_unique_path(path, &constraints, scc, out, seen, self);
         }
 
         let is_child = scc.child_sccs.contains(&cur);
@@ -681,7 +684,7 @@ impl<'tcx> PathGraph<'tcx> {
         let successors = self.enumerate_scc_traversals(cur);
         for SccPathAction::Traverse { next } in successors {
             if next != scc.enter && !scc.nodes.contains(&next) {
-                record_unique_path(path, &constraints, out, seen);
+                record_unique_path(path, &constraints, scc, out, seen, self);
                 continue;
             }
             path.push(next);
@@ -941,16 +944,59 @@ fn make_path_key(path: &[usize], constraints: &FxHashMap<usize, usize>) -> PathK
 fn record_unique_path(
     path: &[usize],
     constraints: &FxHashMap<usize, usize>,
+    scc: &SccInfo,
     out: &mut Vec<SccEnumeratedPath>,
     seen_paths: &mut FxHashSet<PathKey>,
+    graph: &PathGraph<'_>,
 ) {
     let key = make_path_key(path, constraints);
-    if seen_paths.insert(key) {
-        out.push(SccEnumeratedPath {
-            blocks: path.to_vec(),
-            constraints: constraints.clone(),
-        });
+    if !seen_paths.insert(key) {
+        return;
     }
+    let exit_successors = compute_exit_successors(path, scc, constraints, graph);
+    out.push(SccEnumeratedPath {
+        blocks: path.to_vec(),
+        constraints: constraints.clone(),
+        exit_successors,
+    });
+}
+
+fn compute_exit_successors(
+    path: &[usize],
+    scc: &SccInfo,
+    constraints: &FxHashMap<usize, usize>,
+    graph: &PathGraph<'_>,
+) -> Vec<usize> {
+    let Some(&last) = path.last() else { return vec![]; };
+    let outside: Vec<usize> = scc
+        .exits
+        .iter()
+        .filter(|e| e.exit == last)
+        .map(|e| e.to)
+        .filter(|&n| {
+            !scc.child_sccs.contains(&graph.cfg.block(n).scc.enter())
+        })
+        .collect();
+    if outside.is_empty() {
+        return vec![];
+    }
+    let Some(terminator) = graph.cfg.terminator(last) else {
+        return outside;
+    };
+    let TerminatorKind::SwitchInt { ref discr, ref targets } = terminator.kind else {
+        return outside;
+    };
+    let discr_local = discr.place().map(|p| p.local.as_usize());
+    let constraint_local = discr_local
+        .and_then(|l| graph.discriminants.get(&l).copied())
+        .or(discr_local);
+    if let Some(local) = constraint_local {
+        if let Some(&val) = constraints.get(&local) {
+            let expected = resolve_switch_target(targets, val as u128);
+            return outside.into_iter().filter(|&n| n == expected).collect();
+        }
+    }
+    outside
 }
 
 

@@ -161,12 +161,6 @@ impl<'tcx> AliasGraph<'tcx> {
         self.alias_sets = snapshot.alias_sets.clone();
     }
 
-    fn apply_path_constraints(&mut self, constraints: Option<&FxHashMap<usize, usize>>) {
-        if let Some(constraints) = constraints {
-            self.constants.extend(constraints);
-        }
-    }
-
     fn known_switch_value(&mut self, discr: &rustc_middle::mir::Operand<'tcx>) -> Option<usize> {
         match discr {
             Copy(p) | Move(p) => {
@@ -323,63 +317,6 @@ impl<'tcx> AliasGraph<'tcx> {
         }
     }
 
-    fn allowed_switch_targets_for_exit(&mut self, exit_node: usize) -> Option<FxHashSet<usize>> {
-        let Some(terminator) = self.terminator(exit_node).cloned() else {
-            return None;
-        };
-        let TerminatorKind::SwitchInt { discr, targets } = terminator.kind else {
-            return None;
-        };
-
-        let place = match discr {
-            Copy(p) | Move(p) => Some(self.projection(p)),
-            _ => None,
-        }?;
-
-        let discr_local = self
-            .path_graph
-            .discriminants
-            .get(&self.values[place].local)
-            .cloned()
-            .unwrap_or(place);
-
-        let mut allowed = FxHashSet::default();
-        if let Some(&constant) = self.constants.get(&discr_local) {
-            allowed.insert(self.switch_target_for_value(&targets, constant));
-        } else {
-            // No path constraint: all explicit targets and default remain reachable.
-            for (_, bb) in targets.iter() {
-                allowed.insert(bb.as_usize());
-            }
-            allowed.insert(targets.otherwise().as_usize());
-        }
-        Some(allowed)
-    }
-
-    fn follow_recorded_scc_exits(
-        &mut self,
-        scc: &SccInfo,
-        exit_node: usize,
-        allowed_targets: Option<&FxHashSet<usize>>,
-        fn_map: &mut MopFnAliasMap,
-        recursion_set: &mut HashSet<DefId>,
-    ) -> bool {
-        let mut followed = false;
-        for edge in &scc.exits {
-            if edge.exit != exit_node {
-                continue;
-            }
-            if let Some(allowed_targets) = allowed_targets {
-                if !allowed_targets.contains(&edge.to) {
-                    continue;
-                }
-            }
-            followed = true;
-            self.split_check(edge.to, fn_map, recursion_set);
-        }
-        followed
-    }
-
     pub fn split_check(
         &mut self,
         bb_idx: usize,
@@ -413,123 +350,67 @@ impl<'tcx> AliasGraph<'tcx> {
         recursion_set: &mut HashSet<DefId>,
     ) {
         let Some(_guard) = enter_depth_limit(&CHECK_DEPTH, CHECK_STACK_LIMIT) else {
-            // Prevent rustc stack overflow on extremely deep CFG / SCC exploration.
             return;
         };
         self.increment_visit_times();
         if self.visit_times() > VISIT_LIMIT {
             return;
         }
-        let scc_idx = self.cfg_block(bb_idx).scc.enter;
-        rap_debug!("check {:?}", bb_idx);
-        if bb_idx == scc_idx && !self.cfg_block(bb_idx).scc.nodes.is_empty() {
-            rap_debug!("check {:?} as a scc", bb_idx);
-            self.check_scc(bb_idx, fn_map, recursion_set);
-        } else {
-            self.check_single_node(bb_idx, fn_map, recursion_set);
-            self.handle_nexts(bb_idx, fn_map, None, recursion_set);
-        }
-    }
 
-    pub fn check_scc(
-        &mut self,
-        bb_idx: usize,
-        fn_map: &mut MopFnAliasMap,
-        recursion_set: &mut HashSet<DefId>,
-    ) {
-        let cur_scc = self.cfg_block(bb_idx).scc.clone();
+        let scc_info = self.cfg_block(bb_idx).scc.clone();
+        let is_scc = bb_idx == scc_info.enter && !scc_info.nodes.is_empty();
 
-        /* Handle cases if the current block is a merged scc block with sub block */
-        rap_debug!("Searchng paths in scc: {:?}, {:?}", bb_idx, cur_scc);
-        let scc = self.sort_scc_tree(&cur_scc);
-        rap_debug!("scc: {:?}", scc);
-        // Propagate constraints collected so far (top-down)
-        let inherited_constraints = self.constants.clone();
-        let paths_in_scc = self.find_scc_paths(bb_idx, &scc, &inherited_constraints);
-        rap_debug!("Paths found in scc: {:?}", paths_in_scc);
+        if is_scc {
+            let scc = self.sort_scc_tree(&scc_info);
+            let inherited_constraints = self.constants.clone();
+            let paths = self.find_scc_paths(bb_idx, &scc, &FxHashMap::default());
 
-        // Every SCC path is evaluated from the same pre-SCC state.
-        let snapshot = self.snapshot_state();
-        let backup_recursion_set = recursion_set.clone();
+            let snapshot = self.snapshot_state();
+            let backup_recursion_set = recursion_set.clone();
 
-        // SCC exits are recorded on the SCC entry metadata.
-        for raw_path in paths_in_scc {
-            let path = &raw_path.blocks;
-            if !self.is_path_reachable(path, &inherited_constraints) {
-                rap_debug!("Skip unreachable scc path: {:?}", path);
-                continue;
-            }
-            self.restore_state(&snapshot);
-            *recursion_set = backup_recursion_set.clone();
+            for path in &paths {
+                if !self.is_path_reachable(&path.blocks, &inherited_constraints) {
+                    continue;
+                }
+                self.restore_state(&snapshot);
+                *recursion_set = backup_recursion_set.clone();
 
-            let path_constraints = &raw_path.constraints;
-            rap_debug!("checking path: {:?}", path);
+                for idx in &path.blocks {
+                    self.alias_bb(*idx);
+                    self.alias_bbcall(*idx, fn_map, recursion_set);
+                }
 
-            // Apply alias transfer for every node in the path (including the exit node).
-            for idx in path {
-                self.alias_bb(*idx);
-                self.alias_bbcall(*idx, fn_map, recursion_set);
-            }
-
-            // The path ends at an SCC-exit node (inside the SCC). We now leave the SCC only via
-            // recorded SCC exit edges from that node, carrying the collected path constraints.
-            if let Some(&exit_node) = path.last() {
-                self.apply_path_constraints(Some(path_constraints));
-                let allowed_targets = self.allowed_switch_targets_for_exit(exit_node);
-                let followed = self.follow_recorded_scc_exits(
-                    &cur_scc,
-                    exit_node,
-                    allowed_targets.as_ref(),
-                    fn_map,
-                    recursion_set,
-                );
-
-                // If this SCC path ends at a node that is not recorded as an exit (should be rare),
-                // fall back to exploring its successors normally.
-                if !followed {
-                    self.handle_nexts(exit_node, fn_map, Some(path_constraints), recursion_set);
+                for &next in &path.exit_successors {
+                    for (k, v) in path.constraints.iter() {
+                        self.constants.entry(*k).or_insert(*v);
+                    }
+                    self.split_check(next, fn_map, recursion_set);
                 }
             }
+        } else {
+            self.alias_bb(bb_idx);
+            self.alias_bbcall(bb_idx, fn_map, recursion_set);
+
+            let cur_next = self.cfg_block(bb_idx).next.clone();
+            if cur_next.is_empty() {
+                self.merge_results();
+                return;
+            }
+
+            self.follow_cfg_successors(bb_idx, fn_map, recursion_set);
         }
     }
 
-    pub fn check_single_node(
+    fn follow_cfg_successors(
         &mut self,
         bb_idx: usize,
         fn_map: &mut MopFnAliasMap,
-        recursion_set: &mut HashSet<DefId>,
-    ) {
-        rap_debug!("check {:?} as a node", bb_idx);
-        let cur_next = self.cfg_block(bb_idx).next.clone();
-        self.alias_bb(self.cfg_block(bb_idx).scc.enter);
-        self.alias_bbcall(self.cfg_block(bb_idx).scc.enter, fn_map, recursion_set);
-        if cur_next.is_empty() {
-            self.merge_results();
-            return;
-        }
-    }
-
-    pub fn handle_nexts(
-        &mut self,
-        bb_idx: usize,
-        fn_map: &mut MopFnAliasMap,
-        path_constraints: Option<&FxHashMap<usize, usize>>,
         recursion_set: &mut HashSet<DefId>,
     ) {
         let successors = self.cfg_block(bb_idx).next.clone();
 
-        rap_debug!(
-            "handle nexts {:?} of node {:?}",
-            self.cfg_block(bb_idx).next,
-            bb_idx
-        );
-        // Extra constraints are introduced during SCC path expansion and reused here when
-        // dispatching CFG successors after exiting an SCC path.
-        self.apply_path_constraints(path_constraints);
-
         match self.analyze_switch_successors(bb_idx) {
             SwitchSuccessorPlan::SingleTarget { target } => {
-                rap_debug!("visit a single switch target: {:?}", target);
                 self.check(target, fn_map, recursion_set);
             }
             SwitchSuccessorPlan::SplitTargets {
