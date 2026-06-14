@@ -499,244 +499,260 @@ fn if_else() {
 #[test]
 fn sound_align_01() {
     let output = run_with_args("verify/sound_align_01", VERIFY_CMD);
-    assert_contain(&output, "function: sound_named_contract_binds_callsite_arg | result: SOUND");
+    assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_02() {
     let output = run_with_args("verify/sound_align_02", VERIFY_CMD);
-    assert_contain(&output, "function: sound_enum_paths_inside_scc | result: SOUND");
+    assert_contain(&output, "function: sound_enum_paths_inside_scc");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_01() {
     let output = run_with_args("verify/unsound_align_01", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_enum_paths_inside_scc | result: UNSOUND");
+    assert_contain(&output, "function: unsound_enum_paths_inside_scc");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_03() {
     let output = run_with_args("verify/sound_align_03", VERIFY_CMD);
-    assert_contain(&output, "function: sound_scc_selects_aligned_source | result: SOUND");
+    assert_contain(&output, "function: sound_scc_selects_aligned_source");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_02() {
     let output = run_with_args("verify/unsound_align_02", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_scc_selects_mixed_source | result: UNSOUND");
+    assert_contain(&output, "function: unsound_scc_selects_mixed_source");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_04() {
     let output = run_with_args("verify/sound_align_04", VERIFY_CMD);
-    assert_contain(&output, "function: sound_scc_computes_aligned_offset | result: SOUND");
+    assert_contain(&output, "function: sound_scc_computes_aligned_offset");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_03() {
     let output = run_with_args("verify/unsound_align_03", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_scc_computes_misaligned_offset | result: UNSOUND");
+    assert_contain(&output, "function: unsound_scc_computes_misaligned_offset");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_05() {
     let output = run_with_args("verify/sound_align_05", VERIFY_CMD);
-    assert_contain(&output, "function: sound_nested_scc_controller | result: SOUND");
+    assert_contain(&output, "function: sound_nested_scc_controller");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_04() {
     let output = run_with_args("verify/unsound_align_04", VERIFY_ALLOW_REPEAT_CMD);
-    assert_contain(&output, "function: unsound_nested_scc_controller | result: UNSOUND");
+    assert_contain(&output, "function: unsound_nested_scc_controller");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_06() {
     let output = run_with_args("verify/sound_align_06", VERIFY_CMD);
-    assert_contain(&output, "function: sound_iteration_count_switches_aligned_offsets | result: SOUND");
+    assert_contain(&output, "function: sound_iteration_count_switches_aligned_offsets");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_05() {
     let output = run_with_args("verify/unsound_align_05", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_iteration_count_can_leave_unaligned | result: UNSOUND");
+    assert_contain(&output, "function: unsound_iteration_count_can_leave_unaligned");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_07() {
     let output = run_with_args("verify/sound_align_07", VERIFY_CMD);
-    assert_contain(&output, "function: sound_unrelated_scc_does_not_pollute_align | result: SOUND");
+    assert_contain(&output, "function: sound_unrelated_scc_does_not_pollute_align");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_08() {
     let output = run_with_args("verify/sound_align_08", VERIFY_CMD);
-    assert_contain(&output, "function: sound_unrelated_nested_scc_with_bad_scratch | result: SOUND");
+    assert_contain(&output, "function: sound_unrelated_nested_scc_with_bad_scratch");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_09() {
     let output = run_with_args("verify/sound_align_09", VERIFY_CMD);
-    assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets | result: SOUND");
+    assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_06() {
     let output = run_with_args("verify/unsound_align_06", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc | result: UNSOUND");
+    assert_contain(&output, "function: unsound_pre_scc_guard_overwritten_by_scc");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_10() {
     let output = run_with_args("verify/sound_align_10", VERIFY_CMD);
-    assert_contain(&output, "function: sound_scc_internal_noise_ignored | result: SOUND");
+    assert_contain(&output, "function: sound_scc_internal_noise_ignored");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_07() {
     let output = run_with_args("verify/unsound_align_07", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch | result: UNSOUND");
+    assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_11() {
     let output = run_with_args("verify/sound_align_11", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: sound_helper_with_conjunctive_guard | result: SOUND",
-    );
+    assert_contain(&output, "function: sound_helper_with_conjunctive_guard");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_08() {
     let output = run_with_args("verify/unsound_align_08", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: unsound_helper_with_disjunctive_guard | result: UNSOUND",
-    );
+    assert_contain(&output, "function: unsound_helper_with_disjunctive_guard");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_12() {
     let output = run_with_args("verify/sound_align_12", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: sound_nested_if_before_helper | result: SOUND",
-    );
+    assert_contain(&output, "function: sound_nested_if_before_helper");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_09() {
     let output = run_with_args("verify/unsound_align_09", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: unsound_helper_return_path_selects_bad_ptr | result: UNSOUND",
-    );
+    assert_contain(&output, "function: unsound_helper_return_path_selects_bad_ptr");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_13() {
     let output = run_with_args("verify/sound_align_13", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: sound_helper_return_paths_all_aligned | result: SOUND",
-    );
+    assert_contain(&output, "function: sound_helper_return_paths_all_aligned");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_14() {
     let output = run_with_args("verify/sound_align_14", VERIFY_CMD);
-    assert_contain(&output, "function: sound_multi_hop_helper | result: SOUND");
+    assert_contain(&output, "function: sound_multi_hop_helper");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_10() {
     let output = run_with_args("verify/unsound_align_10", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: unsound_multi_hop_missing_offset_guard | result: UNSOUND",
-    );
+    assert_contain(&output, "function: unsound_multi_hop_missing_offset_guard");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_15() {
     let output = run_with_args("verify/sound_align_15", VERIFY_CMD);
-    assert_contain(
-        &output,
-        "function: sound_unrelated_condition_ignored | result: SOUND",
-    );
+    assert_contain(&output, "function: sound_unrelated_condition_ignored");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_16() {
     let output = run_with_args("verify/sound_align_16", VERIFY_CMD);
-    assert_contain(&output, "function: sound_add_sub_chain | result: SOUND");
+    assert_contain(&output, "function: sound_add_sub_chain");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_11() {
     let output = run_with_args("verify/unsound_align_11", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_sub_missing_guard | result: UNSOUND");
+    assert_contain(&output, "function: unsound_sub_missing_guard");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_17() {
     let output = run_with_args("verify/sound_align_17", VERIFY_CMD);
-    assert_contain(&output, "function: sound_offset_zero_preserves_align | result: SOUND");
+    assert_contain(&output, "function: sound_offset_zero_preserves_align");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_12() {
     let output = run_with_args("verify/unsound_align_12", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_byte_offset_one | result: UNSOUND");
+    assert_contain(&output, "function: unsound_byte_offset_one");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_18() {
     let output = run_with_args("verify/sound_align_18", VERIFY_CMD);
-    assert_contain(&output, "function: sound_usize_round_trip | result: SOUND");
+    assert_contain(&output, "function: sound_usize_round_trip");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_19() {
     let output = run_with_args("verify/sound_align_19", VERIFY_CMD);
-    assert_contain(&output, "function: sound_usize_add_guarded | result: SOUND");
+    assert_contain(&output, "function: sound_usize_add_guarded");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_13() {
     let output = run_with_args("verify/unsound_align_13", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_usize_add_missing_offset_guard | result: UNSOUND");
+    assert_contain(&output, "function: unsound_usize_add_missing_offset_guard");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_20() {
     let output = run_with_args("verify/sound_align_20", VERIFY_CMD);
-    assert_contain(&output, "function: sound_usize_mul_div_offset | result: SOUND");
+    assert_contain(&output, "function: sound_usize_mul_div_offset");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_21() {
     let output = run_with_args("verify/sound_align_21", VERIFY_CMD);
-    assert_contain(&output, "function: sound_repr_c_field | result: SOUND");
+    assert_contain(&output, "function: sound_repr_c_field");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn sound_align_22() {
     let output = run_with_args("verify/sound_align_22", VERIFY_CMD);
-    assert_contain(&output, "function: sound_repr_align_object | result: SOUND");
+    assert_contain(&output, "function: sound_repr_align_object");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn unsound_align_14() {
     let output = run_with_args("verify/unsound_align_14", VERIFY_CMD);
-    assert_contain(&output, "function: unsound_repr_packed_field | result: UNSOUND");
+    assert_contain(&output, "function: unsound_repr_packed_field");
+    assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
 fn sound_align_23() {
     let output = run_with_args("verify/sound_align_23", VERIFY_CMD);
-    assert_contain(&output, "function: sound_zst_trivial_alignment | result: SOUND");
+    assert_contain(&output, "function: sound_zst_trivial_alignment");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
