@@ -1,18 +1,10 @@
-use rustc_hir::{self, Node::*, def::DefKind};
+use rustc_hir::{Node::*, def::DefKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::{
     FileName,
-    def_id::{CrateNum, DefId},
+    def_id::DefId,
     symbol::Symbol,
 };
-
-pub fn get_crate_num<'tcx>(tcx: TyCtxt<'tcx>, name: &str) -> Option<CrateNum> {
-    let sym = Symbol::intern(name);
-    tcx.crates(())
-        .iter()
-        .cloned()
-        .find(|&cnum| tcx.crate_name(cnum) == sym)
-}
 
 pub fn get_fn_name(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
     let name = tcx.def_path(def_id).to_string_no_crate_verbose();
@@ -76,17 +68,6 @@ pub fn get_filename(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
     }
     None
 }
-
-/*
-fn convert_filename(filename: FileName) -> String {
-    match filename {
-        FileName::Real(path) => path
-            .to_string_lossy(FileNameDisplayPreference::Local)
-            .into_owned(),
-        _ => "<unknown>".to_string(),
-    }
-}
-*/
 
 fn convert_filename(filename: FileName) -> String {
     if let FileName::Real(realname) = filename {

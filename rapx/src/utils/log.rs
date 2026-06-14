@@ -121,16 +121,6 @@ pub fn span_to_trimmed_span(span: Span) -> Span {
     .unwrap()
 }
 
-#[inline]
-/*
-pub fn span_to_filename(span: Span) -> String {
-    get_source_map()
-        .unwrap()
-        .span_to_filename(span)
-        .display(FileNameDisplayPreference::Local)
-        .to_string()
-}
-*/
 pub fn span_to_filename(span: Span) -> String {
     let filename = get_source_map().unwrap().span_to_filename(span);
     if let FileName::Real(realname) = filename {

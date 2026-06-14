@@ -9,7 +9,6 @@ use super::utils;
 use crate::analysis::utils::def_path::path_str_def_id;
 use crate::rap_debug;
 use crate::rap_trace;
-use crate::utils::fs::rap_create_file;
 use petgraph::Direction;
 use petgraph::visit::EdgeRef;
 use rustc_middle::ty::{self, Ty, TyCtxt};
