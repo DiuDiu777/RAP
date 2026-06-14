@@ -16,7 +16,7 @@ use super::{
     attribute::assets_parser::*,
     attribute::attr_parser::parse_rapx_attr,
     contract::Property,
-    helpers::{Callsite, collect_unsafe_callsites},
+    helpers::{Callsite, collect_return_block_indices, collect_unsafe_callsites},
     path::{PathExtractor, PathStart},
 };
 
@@ -37,6 +37,8 @@ pub struct FunctionTarget<'tcx> {
     pub callsites: Vec<Callsite<'tcx>>,
     /// Parsed `requires` contracts for each unsafe callee reachable from this target.
     pub callee_requires: HashMap<DefId, FnContracts<'tcx>>,
+    /// Parsed struct invariants that methods of the owning struct must maintain.
+    pub struct_invariants: Vec<Property<'tcx>>,
 }
 
 /// Collected verification data for a struct that owns methods marked with `#[rapx::verify]`.
@@ -140,11 +142,17 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             .map(|callee_def_id| (*callee_def_id, self.get_fn_contracts(*callee_def_id)))
             .collect();
 
+        let owner_struct_def_id = self.get_owner_struct_def_id(def_id);
+        let struct_invariants = owner_struct_def_id
+            .map(|struct_def_id| get_struct_invariants_from_annotation(self.tcx, struct_def_id, def_id))
+            .unwrap_or_default();
+
         FunctionTarget {
             def_id,
-            owner_struct_def_id: self.get_owner_struct_def_id(def_id),
+            owner_struct_def_id,
             callsites,
             callee_requires,
+            struct_invariants,
         }
     }
 
@@ -311,6 +319,19 @@ impl<'tcx> PrepareTargets<'tcx> {
                 struct_path,
                 struct_def_id
             );
+        }
+
+        if !target.struct_invariants.is_empty() {
+            rap_info!("    struct invariants to verify:");
+            for property in &target.struct_invariants {
+                rap_info!(
+                    "      invariant: kind={:?}, args={:?}",
+                    property.kind,
+                    property.args
+                );
+            }
+            let return_blocks = collect_return_block_indices(self.tcx, target.def_id);
+            rap_info!("    return checkpoints: {} block(s) {:?}", return_blocks.len(), return_blocks);
         }
 
         if target.callee_requires.is_empty() {

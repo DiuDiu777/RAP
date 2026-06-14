@@ -73,6 +73,27 @@ impl<'tcx> SmtChecker<'tcx> {
         }
     }
 
+    /// Try to prove one property at a return checkpoint (struct invariant).
+    ///
+    /// Unlike [`check`], this does not use callee-to-caller argument mapping
+    /// because struct invariant properties are already resolved in the caller's
+    /// local namespace.
+    pub fn check_for_checkpoint(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        property: &Property<'tcx>,
+        forward: &ForwardVisitResult<'tcx>,
+    ) -> SmtCheckResult {
+        match property.kind {
+            PropertyKind::Align => align::check_for_checkpoint(self, caller, property, forward),
+            PropertyKind::NonNull => SmtCheckResult::unknown("NonNull struct invariant not implemented yet"),
+            PropertyKind::InBound => SmtCheckResult::unknown("InBound struct invariant not implemented yet"),
+            PropertyKind::Init => SmtCheckResult::unknown("Init struct invariant not implemented yet"),
+            PropertyKind::ValidPtr => SmtCheckResult::unknown("ValidPtr struct invariant not implemented yet"),
+            _ => SmtCheckResult::unknown("no struct invariant SMT lowering for this property yet"),
+        }
+    }
+
     /// Prove one already-lowered common SMT obligation.
     pub(crate) fn prove_obligation(
         &self,
@@ -376,6 +397,26 @@ impl<'tcx> SmtChecker<'tcx> {
         }
     }
 
+    /// Prove one lowered obligation at a return checkpoint (struct invariant).
+    ///
+    /// Wraps `prove_obligation` with a minimal dummy callsite that only carries
+    /// the caller DefId. No callee-to-caller argument mapping is needed.
+    pub(crate) fn prove_obligation_for_checkpoint(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        forward: &ForwardVisitResult<'tcx>,
+        obligation: SmtObligation,
+    ) -> SmtCheckResult {
+        let dummy_callsite = Callsite {
+            caller,
+            callee: caller,
+            block: rustc_middle::mir::BasicBlock::from_usize(0),
+            span: rustc_span::Span::default(),
+            args: Vec::new(),
+        };
+        self.prove_obligation(&dummy_callsite, forward, obligation)
+    }
+
     /// Resolve the target place of a property at a concrete callsite.
     pub(crate) fn property_target(
         &self,
@@ -396,6 +437,22 @@ impl<'tcx> SmtChecker<'tcx> {
         }
     }
 
+    /// Resolve the target place of a property directly from a contract place
+    /// without going through callee argument mapping.
+    pub(crate) fn property_target_direct(
+        &self,
+        property: &Property<'tcx>,
+    ) -> Option<PlaceKey> {
+        let arg = property.args.first()?;
+        match arg {
+            PropertyArg::Place(place) => Some(PlaceKey::from_contract_place(place)),
+            PropertyArg::Expr(ContractExpr::Place(place)) => {
+                Some(PlaceKey::from_contract_place(place))
+            }
+            _ => None,
+        }
+    }
+
     /// Resolve the type argument used by an alignment property.
     pub(crate) fn property_required_ty(
         &self,
@@ -407,6 +464,19 @@ impl<'tcx> SmtChecker<'tcx> {
                 return None;
             };
             Some(self.instantiate_callsite_ty(callsite, *ty))
+        })
+    }
+
+    /// Resolve the type argument of a property directly without callee generic instantiation.
+    pub(crate) fn property_required_ty_direct(
+        &self,
+        property: &Property<'tcx>,
+    ) -> Option<Ty<'tcx>> {
+        property.args.iter().find_map(|arg| {
+            let PropertyArg::Ty(ty) = arg else {
+                return None;
+            };
+            Some(*ty)
         })
     }
 

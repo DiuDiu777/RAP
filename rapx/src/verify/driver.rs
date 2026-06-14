@@ -13,7 +13,7 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     contract::Property,
     forward_visit::ForwardVisitor,
-    helpers::Callsite,
+    helpers::{Callsite, CallsiteLocation, collect_return_block_indices},
     path::{FunctionPaths, Path, PathExtractor},
     path_refine::BackwardVisitor,
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
@@ -143,6 +143,98 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             )
     }
 
+    /// Run struct invariant verification for the managed function target.
+    ///
+    /// For each return block in the function body, extracts paths from entry
+    /// to that point and checks that each struct invariant holds.
+    pub fn verify_struct_invariants(&self) -> VerificationReport<'tcx> {
+        let mut report = VerificationReport::new(self.target.def_id);
+        let invariants = &self.target.struct_invariants;
+        if invariants.is_empty() {
+            return report;
+        }
+
+        let return_blocks = collect_return_block_indices(self.tcx, self.target.def_id);
+        rap_info!(
+            "[rapx::verify] struct invariant: {} return block(s) to check for {}",
+            return_blocks.len(),
+            self.tcx.def_path_str(self.target.def_id),
+        );
+
+        let backward_visitor = BackwardVisitor::new(self.tcx);
+        let forward_visitor = ForwardVisitor::new(self.tcx);
+        let smt_checker = SmtChecker::new(self.tcx);
+
+        for &return_block in &return_blocks {
+            let checkpoint = CallsiteLocation {
+                caller: self.target.def_id,
+                block: return_block,
+            };
+
+            let mut path_extractor = PathExtractor::new(
+                self.tcx,
+                self.target.def_id,
+                Vec::new(),
+                0, // struct invariants only use 0 repeats for now
+            );
+            let paths = path_extractor.find_paths_for_block(
+                self.target.def_id,
+                return_block,
+            );
+
+            rap_info!(
+                "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
+                return_block.as_usize(),
+                paths.len()
+            );
+
+            for (path_index, path) in paths.iter().enumerate() {
+                for (property_index, property) in invariants.iter().enumerate() {
+                    rap_debug!(
+                        "[rapx::verify] struct invariant path {} check: kind={:?}",
+                        path_index,
+                        property.kind
+                    );
+
+                    let backward = backward_visitor.visit_for_checkpoint(
+                        self.target.def_id,
+                        checkpoint,
+                        path,
+                        property,
+                    );
+                    let forward = forward_visitor.visit(&backward);
+                    let smt_check = smt_checker.check_for_checkpoint(
+                        self.target.def_id,
+                        property,
+                        &forward,
+                    );
+                    let check_diagnostics =
+                        format!("{}\n{}", forward.describe(), smt_check.describe());
+
+                    report.push(PropertyCheckResult {
+                        callsite: checkpoint,
+                        callsite_index: return_block.as_usize(),
+                        path_index,
+                        property_index,
+                        property: property.clone(),
+                        result: smt_check.result,
+                        diagnostics: Some(VisitDiagnostics::new(
+                            backward.describe_for_checkpoint(self.tcx, checkpoint, path_index),
+                            check_diagnostics,
+                        )),
+                        path_description: path.describe_indices(),
+                        callee_name: format!(
+                            "struct-invariant(bb{})",
+                            return_block.as_usize()
+                        ),
+                    });
+                }
+            }
+        }
+
+        report
+    }
+
     /// Build the per-callsite property view from the target's callee requirements.
     fn build_properties_to_verify(
         target: &'target FunctionTarget<'tcx>,
@@ -209,6 +301,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             let target_path = self.tcx.def_path_str(target.def_id);
             let mut combined_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
+            // Phase 1: unsafe callsite verification
             for repeat in 0..=self.allow_pathseg_repeat {
                 if self.allow_pathseg_repeat > 0 {
                     rap_info!(
@@ -235,6 +328,13 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                     );
                 }
                 combined_results.extend(report.results);
+            }
+
+            // Phase 2: struct invariant verification
+            if !target.struct_invariants.is_empty() {
+                let driver = VerifyDriver::new(self.tcx, target);
+                let struct_report = driver.verify_struct_invariants();
+                combined_results.extend(struct_report.results);
             }
 
             let total = combined_results.len();

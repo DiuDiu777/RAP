@@ -740,6 +740,15 @@ fn sound_align_23() {
 }
 
 #[test]
+fn struct_invariant_1() {
+    let output = run_with_args("verify/struct_invariant_1", VERIFY_CMD);
+    // Verify the pipeline runs and produces diagnostic output
+    assert_contain(&output, "struct invariant");
+    // At minimum, confirm the verify analysis ran for each method
+    assert_contain(&output, "result:");
+}
+
+#[test]
 fn upg_safe_caller() {
     let output = run_with_args("upg/safe_caller", ANALYZE_UPG_CMD);
     assert_contain(&output, "from_raw_parts");

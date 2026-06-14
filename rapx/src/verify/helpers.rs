@@ -93,6 +93,21 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
     callsites
 }
 
+/// Collect all return basic block indices for a function body.
+pub fn collect_return_block_indices(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<BasicBlock> {
+    let mut blocks = Vec::new();
+    if !tcx.is_mir_available(def_id) {
+        return blocks;
+    }
+    let body = tcx.optimized_mir(def_id);
+    for (bb, data) in body.basic_blocks.iter_enumerated() {
+        if matches!(data.terminator().kind, TerminatorKind::Return) {
+            blocks.push(bb);
+        }
+    }
+    blocks
+}
+
 pub fn get_cleaned_def_path_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     let def_id_str = format!("{:?}", def_id);
     let mut parts: Vec<&str> = def_id_str.split("::").collect();

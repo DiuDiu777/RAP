@@ -12,6 +12,7 @@ use rustc_middle::mir::Body;
 use rustc_middle::mir::{BasicBlock, Operand, StatementKind, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::Spanned;
+use rustc_hir::def_id::DefId;
 
 use crate::analysis::dataflow::graph::build_dataflow_graph;
 use crate::graphs::dataflow::DataflowGraph;
@@ -66,26 +67,51 @@ impl<'tcx> BackwardVisitor<'tcx> {
     ) -> RelevantMirItems<'tcx> {
         let mut visit = self.start_visit(callsite.location(), path, property);
         bind_callsite_roots(self.tcx, &mut visit.roots, callsite);
+        self.visit_path(callsite.caller, &callsite.location(), path, &mut visit);
+        visit
+    }
 
+    /// Visit one `(checkpoint, path, property)` item backward for struct invariant checks.
+    ///
+    /// Unlike [`visit`], this does not bind callee parameter roots because the property
+    /// places are already resolved in the caller's local namespace (e.g., struct field
+    /// accesses on `self`).
+    pub fn visit_for_checkpoint(
+        &self,
+        caller: DefId,
+        checkpoint: CallsiteLocation,
+        path: &Path,
+        property: &super::contract::Property<'tcx>,
+    ) -> RelevantMirItems<'tcx> {
+        let mut visit = self.start_visit(checkpoint, path, property);
+        self.visit_path(caller, &checkpoint, path, &mut visit);
+        visit
+    }
+
+    fn visit_path(
+        &self,
+        caller: DefId,
+        callsite_loc: &CallsiteLocation,
+        path: &Path,
+        visit: &mut RelevantMirItems<'tcx>,
+    ) {
         let mut relevant = visit.roots.clone();
         let mut items = Vec::new();
-        let body = self.tcx.optimized_mir(callsite.caller);
-        let flow = build_dataflow_graph(self.tcx, callsite.caller);
+        let body = self.tcx.optimized_mir(caller);
+        let flow = build_dataflow_graph(self.tcx, caller);
 
         for step in path.steps.iter().rev() {
-            self.visit_path_step(step, callsite, &body, &flow, &mut relevant, &mut items);
+            self.visit_path_step_inner(step, callsite_loc, &body, &flow, &mut relevant, &mut items);
         }
 
         items.reverse();
         visit.items = items;
-        visit
     }
 
-    /// Visit one path step against the current relevance frontier.
-    fn visit_path_step(
+    fn visit_path_step_inner(
         &self,
         step: &PathStep,
-        callsite: &Callsite<'tcx>,
+        callsite_loc: &CallsiteLocation,
         body: &'tcx rustc_middle::mir::Body<'tcx>,
         flow: &DataflowGraph,
         relevant: &mut RelevantPlaces,
@@ -93,7 +119,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
     ) {
         match step {
             PathStep::Callsite(location) => {
-                if *location != callsite.location() {
+                if *location != *callsite_loc {
                     return;
                 }
                 items.push(BackwardItem::Terminator {
@@ -103,7 +129,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
             }
             PathStep::Block(block) => {
                 let block_data = &body.basic_blocks[*block];
-                if *block != callsite.block {
+                if *block != callsite_loc.block {
                     self.visit_terminator(
                         *block,
                         block_data.terminator(),
@@ -366,6 +392,79 @@ impl<'tcx> RelevantMirItems<'tcx> {
             "      callsite: {} at bb{}",
             callsite.callee_name(tcx),
             callsite.block.as_usize()
+        );
+        let _ = writeln!(
+            out,
+            "      property: kind={:?}, args={:?}",
+            self.property.kind, self.property.args
+        );
+        let _ = writeln!(out, "      path {path_index}:");
+        let _ = writeln!(
+            out,
+            "        |_ kind: {}",
+            describe_path_start(&self.path.start)
+        );
+        let _ = writeln!(out, "        |_ steps: {}", self.path.describe_body());
+        let _ = writeln!(
+            out,
+            "        |_ roots: {} place(s), {} local(s)",
+            self.roots.place_count(),
+            self.roots.local_count()
+        );
+        let _ = writeln!(out, "      relevant MIR items:");
+
+        let mut has_relevant_item = false;
+        for step in self.path.steps.iter() {
+            let step_items: Vec<_> = self
+                .items
+                .iter()
+                .filter(|item| item_belongs_to_step(item, step))
+                .collect();
+            if step_items.is_empty() {
+                continue;
+            }
+            has_relevant_item = true;
+
+            let _ = writeln!(out, "        |_ {}", describe_path_step(step));
+            for item in step_items {
+                let _ = writeln!(out, "        |  |_ {}", describe_backward_item(item, body));
+            }
+        }
+        if !has_relevant_item {
+            let _ = writeln!(out, "        |_ <none>");
+        }
+
+        let forgets: Vec<_> = self
+            .items
+            .iter()
+            .filter_map(|item| match item {
+                BackwardItem::Forget { reason } => Some(reason),
+                _ => None,
+            })
+            .collect();
+        if !forgets.is_empty() {
+            let _ = writeln!(out, "      precision loss:");
+            for reason in forgets {
+                let _ = writeln!(out, "        |_ {}", describe_forget_reason(reason));
+            }
+        }
+
+        out
+    }
+
+    /// Render diagnostics for a struct invariant checkpoint (no callee name available).
+    pub fn describe_for_checkpoint(
+        &self,
+        tcx: TyCtxt<'tcx>,
+        checkpoint: CallsiteLocation,
+        path_index: usize,
+    ) -> String {
+        let mut out = String::new();
+        let body = tcx.optimized_mir(checkpoint.caller);
+        let _ = writeln!(
+            out,
+            "      checkpoint: bb{}",
+            checkpoint.block.as_usize()
         );
         let _ = writeln!(
             out,
