@@ -884,7 +884,6 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         SmtTerm::Place(target.clone()),
                         SmtTerm::Value(value_label(source)),
                     ));
-                    // Propagate type-based alignment from an explicit source place.
                     if let AbstractValue::Place(source_place) = source {
                         if self
                             .place_ty(source_place)
@@ -892,6 +891,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         {
                             self.assert_place_alignment(solver, source_place);
                         }
+                    }
+                    if let Some(term) =
+                        self.term_for_value(source, &mut HashSet::new())
+                    {
+                        self.place_terms.insert(target.clone(), term);
                     }
                 }
                 StateFact::Binary {
@@ -1014,8 +1018,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             return;
         }
         if let Some(term) = self.term_for_place(place) {
-            let zero = Int::from_u64(self.ctx, 0);
             let align_term = Int::from_u64(self.ctx, align);
+            let k = Int::new_const(
+                self.ctx,
+                format!("{}_ka_k", place_label(place)),
+            );
+            solver.assert(&term._eq(&Int::mul(self.ctx, &[k, align_term.clone()])));
+            let zero = Int::from_u64(self.ctx, 0);
             solver.assert(&term.modulo(&align_term)._eq(&zero));
             self.assumptions.push(SmtPredicate::Custom(format!(
                 "{} aligned for {ty_name} ({align} bytes, {reason})",
@@ -1595,3 +1604,4 @@ fn const_int_from_debug(text: &str) -> Option<u128> {
         u128::from_str_radix(&digits, 16).ok()
     }
 }
+

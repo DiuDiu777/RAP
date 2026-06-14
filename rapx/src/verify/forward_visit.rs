@@ -21,7 +21,7 @@ use rustc_middle::{
 use super::{
     call_summary::{self, CallEffect, CallEffectSummary},
     contract::Property,
-    def_use::PlaceKey,
+    def_use::{PlaceBaseKey, PlaceKey},
     helpers::CallsiteLocation,
     path::{Path, PathStep},
     path_refine::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
@@ -161,10 +161,23 @@ impl<'tcx> ForwardVisitor<'tcx> {
             }
             TerminatorKind::SwitchInt { discr, .. } => {
                 if let Some(equals) = chosen_switch_value(&result.path, block, terminator) {
+                    let value = value_from_operand(discr);
                     result.facts.push(StateFact::BranchEq {
-                        value: value_from_operand(discr),
+                        value: value.clone(),
                         equals,
                     });
+                    if let Some((place, align)) =
+                        align_guard_value(&value, equals, result)
+                    {
+                        result.facts.push(StateFact::KnownAligned {
+                            place,
+                            align,
+                            ty_name: format!("{align}-aligned"),
+                            reason: format!(
+                                "{align}-byte alignment guard on path"
+                            ),
+                        });
+                    }
                 } else {
                     result
                         .facts
@@ -249,11 +262,20 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 });
             }
             Rvalue::Cast(_, operand, ty) => {
+                let source_val = value_from_operand(operand);
                 result.facts.push(StateFact::Cast {
-                    target,
-                    source: value_from_operand(operand),
+                    target: target.clone(),
+                    source: source_val.clone(),
                     ty: *ty,
                 });
+                if let Some(align) = known_alignment_of(&source_val, result) {
+                    result.facts.push(StateFact::KnownAligned {
+                        place: target,
+                        align,
+                        ty_name: format!("cast-{align}"),
+                        reason: format!("cast preserves {align}-byte alignment"),
+                    });
+                }
             }
             Rvalue::BinaryOp(op, box (lhs, rhs)) => {
                 let lhs_val = value_from_operand(lhs);
@@ -271,12 +293,24 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     if let Some(divisor) = const_int_value(&rhs_val) {
                         if divisor > 0 && is_power_of_two(divisor) {
                             result.facts.push(StateFact::KnownAligned {
-                                place: target_key,
+                                place: target_key.clone(),
                                 align: divisor as u64,
                                 ty_name: format!("result of mul by {divisor}"),
                                 reason: format!("multiply by {divisor} (power of two)"),
                             });
                         }
+                    }
+                }
+                if *op == BinOp::Add || *op == BinOp::AddWithOverflow {
+                    if let Some(a) = known_alignment_of(&lhs_val, result)
+                        .and_then(|a| known_alignment_of(&rhs_val, result)
+                            .filter(|&b| b == a).map(|_| a))                     {
+                        result.facts.push(StateFact::KnownAligned {
+                            place: target_key,
+                            align: a,
+                            ty_name: format!("sum of {a}-aligned"),
+                            reason: "sum of two aligned values".into(),
+                        });
                     }
                 }
             }
@@ -787,4 +821,124 @@ fn const_int_value(val: &AbstractValue<'_>) -> Option<u128> {
 
 fn is_power_of_two(n: u128) -> bool {
     n > 0 && (n & (n - 1)) == 0
+}
+
+fn is_const_zero(val: &AbstractValue<'_>) -> bool {
+    matches!(val, AbstractValue::ConstInt(0))
+}
+
+fn align_guard_value<'tcx>(
+    value: &AbstractValue<'tcx>,
+    equals: u128,
+    result: &ForwardVisitResult<'tcx>,
+) -> Option<(PlaceKey, u64)> {
+    let resolved = resolve_value_chain(value, result);
+    if equals == 0 {
+        // MIR encodes `value % n == 0` as switchInt(value) -> [0: ...].
+        match &resolved {
+            AbstractValue::Binary(BinOp::Rem, rem_l, rem_r) => {
+                let d = const_int_value(rem_r)?;
+                if d > 0 && is_power_of_two(d) {
+                    let place = match resolve_value_chain(rem_l, result) {
+                        AbstractValue::Place(p) => p,
+                        AbstractValue::Cast(inner, _) => match inner.as_ref() {
+                            AbstractValue::Place(p) => p.clone(),
+                            _ => return None,
+                        },
+                        _ => return None,
+                    };
+                    return Some((place, d as u64));
+                }
+            }
+            _ => {}
+        }
+    }
+    if equals == 1 {
+        // Guards expressed as `(value % n) == 0` produce Eq(Rem(place, n), 0).
+        let AbstractValue::Binary(BinOp::Eq, eq_l, eq_r) = &resolved else {
+            return None;
+        };
+        if !is_const_zero(eq_r) { return None; }
+        let eq_resolved = resolve_value_chain(eq_l, result);
+        let AbstractValue::Binary(BinOp::Rem, rem_l, rem_r) = &eq_resolved else {
+            return None;
+        };
+        let d = const_int_value(rem_r)?;
+        if d == 0 || !is_power_of_two(d) { return None; }
+        let place = match resolve_value_chain(rem_l, result) {
+            AbstractValue::Place(p) => p,
+            AbstractValue::Cast(inner, _) => match inner.as_ref() {
+                AbstractValue::Place(p) => p.clone(),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        return Some((place, d as u64));
+    }
+    None
+}
+
+fn resolve_value_chain<'tcx>(
+    value: &AbstractValue<'tcx>,
+    result: &ForwardVisitResult<'tcx>,
+) -> AbstractValue<'tcx> {
+    let mut cur = value.clone();
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(format!("{cur:?}")) {
+            return cur;
+        }
+        cur = match &cur {
+            AbstractValue::Place(p) => {
+                if let PlaceBaseKey::Local(ix) = &p.base {
+                    match result.values.get(&Local::from_usize(*ix)) {
+                        Some(v) => v.clone(),
+                        None => return cur,
+                    }
+                } else { return cur; }
+            }
+            _ => return cur,
+        };
+    }
+}
+
+fn known_alignment_of<'tcx>(
+    value: &AbstractValue<'tcx>,
+    result: &ForwardVisitResult<'tcx>,
+) -> Option<u64> {
+    let mut best: Option<u64> = None;
+    let mut cur = value.clone();
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(format!("{cur:?}")) { break; }
+        if let AbstractValue::Place(ref p) = cur {
+            for f in &result.facts {
+                if let StateFact::KnownAligned { place, align, .. } = f {
+                    if place == p {
+                        best = best.map_or(Some(*align), |b| Some(b.max(*align)));
+                    }
+                    // Match known-aligned place without fields to current
+                    // place with fields (e.g., _19 matches _19.0).
+                    if place.fields.is_empty() != p.fields.is_empty()
+                        && place.base == p.base
+                    {
+                        best = best.map_or(Some(*align), |b| Some(b.max(*align)));
+                    }
+                }
+            }
+        }
+        cur = match &cur {
+            AbstractValue::Place(p) => {
+                if let PlaceBaseKey::Local(ix) = &p.base {
+                    match result.values.get(&Local::from_usize(*ix)) {
+                        Some(v) => v.clone(),
+                        None => break,
+                    }
+                } else { break }
+            }
+            AbstractValue::Cast(inner, _) => (**inner).clone(),
+            _ => break,
+        };
+    }
+    best
 }
