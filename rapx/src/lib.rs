@@ -54,7 +54,7 @@ use analysis::{
     },
     ssa_transform::SSATrans,
     upg::{TargetCrate, UPGAnalysis},
-    utils::show_mir::ShowMir,
+    helpers::show_mir::ShowMir,
 };
 use rustc_ast::ast;
 use rustc_driver::{Callbacks, Compilation};

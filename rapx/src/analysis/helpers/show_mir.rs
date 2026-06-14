@@ -1,4 +1,4 @@
-use crate::analysis::utils::fn_info::*;
+use crate::analysis::helpers::fn_info::*;
 use colorful::{Color, Colorful};
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{

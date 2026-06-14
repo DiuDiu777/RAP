@@ -251,7 +251,7 @@ fn get_known_std_names<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<Str
 }
 
 fn get_std_api_signature_json() -> Value {
-    serde_json::from_str(include_str!("../analysis/utils/data/std_sig.json"))
+    serde_json::from_str(include_str!("../analysis/helpers/data/std_sig.json"))
         .expect("Unable to parse JSON")
 }
 
