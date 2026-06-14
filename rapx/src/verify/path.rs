@@ -111,7 +111,7 @@ impl<'tcx> PathExtractor<'tcx> {
 
         let all_paths = pg.enumerate_paths_repeat(allow_repeat);
 
-        rap_info!(
+        rap_debug!(
             "Callsite at bb{} -> {}: {} whole-cfg paths",
             target_block,
             callee_name,
@@ -132,7 +132,7 @@ impl<'tcx> PathExtractor<'tcx> {
                 continue;
             }
             let reachable = pg.is_path_reachable(&prefix);
-            rap_info!(
+            rap_debug!(
                 "  verify path {}: {:?} | {}",
                 idx, prefix,
                 if reachable { "reachable" } else { "unreachable" }
