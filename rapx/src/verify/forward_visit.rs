@@ -804,7 +804,7 @@ fn chosen_switch_value(
 /// Return the next MIR block after `block` in a finite verification path.
 fn chosen_successor(path: &Path, block: BasicBlock) -> Option<BasicBlock> {
     let mut previous = None;
-    for step in path.entry_prefix.iter().chain(path.steps.iter()) {
+    for step in path.steps.iter() {
         match step {
             PathStep::Block(current) => {
                 if previous == Some(block) {

@@ -76,10 +76,6 @@ impl<'tcx> BackwardVisitor<'tcx> {
             self.visit_path_step(step, callsite, &body, &flow, &mut relevant, &mut items);
         }
 
-        for step in path.entry_prefix.iter().rev() {
-            self.visit_path_step(step, callsite, &body, &flow, &mut relevant, &mut items);
-        }
-
         items.reverse();
         visit.items = items;
         visit
@@ -382,16 +378,7 @@ impl<'tcx> RelevantMirItems<'tcx> {
             "        |_ kind: {}",
             describe_path_start(&self.path.start)
         );
-        if self.path.entry_prefix.is_empty() {
-            let _ = writeln!(out, "        |_ steps: {}", self.path.describe_body());
-        } else {
-            let _ = writeln!(
-                out,
-                "        |_ entry prefix: {}",
-                self.path.describe_entry_prefix()
-            );
-            let _ = writeln!(out, "        |_ loop body: {}", self.path.describe_body());
-        }
+        let _ = writeln!(out, "        |_ steps: {}", self.path.describe_body());
         let _ = writeln!(
             out,
             "        |_ roots: {} place(s), {} local(s)",
@@ -401,7 +388,7 @@ impl<'tcx> RelevantMirItems<'tcx> {
         let _ = writeln!(out, "      relevant MIR items:");
 
         let mut has_relevant_item = false;
-        for step in self.path.entry_prefix.iter().chain(self.path.steps.iter()) {
+        for step in self.path.steps.iter() {
             let step_items: Vec<_> = self
                 .items
                 .iter()
@@ -595,9 +582,6 @@ fn same_path_step(lhs: &PathStep, rhs: &PathStep) -> bool {
 fn describe_path_start(start: &super::path::PathStart) -> String {
     match start {
         super::path::PathStart::FunctionEntry => "entry".to_string(),
-        super::path::PathStart::SccRepresentative { representative } => {
-            format!("scc-representative(bb{})", representative.as_usize())
-        }
     }
 }
 

@@ -376,15 +376,6 @@ impl<'tcx> PrepareTargets<'tcx> {
             for (path_idx, path) in callsite_paths.iter().enumerate() {
                 let kind = match path.start {
                     PathStart::FunctionEntry => "entry",
-                    PathStart::SccRepresentative { representative } => {
-                        rap_info!(
-                            "      path {} kind: scc-representative(bb{})",
-                            path_idx,
-                            representative.as_usize()
-                        );
-                        rap_info!("      path {}: {}", path_idx, path.describe());
-                        continue;
-                    }
                 };
                 rap_info!("      path {} kind: {}", path_idx, kind);
                 rap_info!("      path {}: {}", path_idx, path.describe());
