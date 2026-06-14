@@ -1,7 +1,7 @@
 use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
 use crate::{
     analysis::path_analysis::graph::PathGraph,
-    graphs::{cfg::CfgBlock, scc::SccInfo},
+    graphs::cfg::CfgBlock,
     utils::source::*,
 };
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -416,14 +416,6 @@ impl<'tcx> AliasGraph<'tcx> {
 
     pub fn find_scc(&mut self) {
         self.path_graph.find_scc();
-    }
-
-    pub fn enumerate_paths(&mut self) -> Vec<Vec<usize>> {
-        self.path_graph.enumerate_paths()
-    }
-
-    pub fn sort_scc_tree(&mut self, scc: &SccInfo) -> SccInfo {
-        self.path_graph.sort_scc_tree(scc)
     }
 
     pub fn visit_times(&self) -> usize {
