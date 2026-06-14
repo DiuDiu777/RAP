@@ -441,8 +441,13 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 );
                 for result in &combined_results {
                     if !matches!(result.result, super::report::CheckResult::Proved) {
+                        let kind = if result.callee_name.starts_with("struct-invariant") {
+                            "struct-invariant"
+                        } else {
+                            "unsafe callsite"
+                        };
                         rap_info!(
-                            "  [rapx::verify] callsite bb{} -> {}, path: {} | property {:?} | {:?}",
+                            "  [rapx::verify] {kind} bb{} -> {}, path: {} | property {:?} | {:?}",
                             result.callsite.block.as_usize(),
                             result.callee_name,
                             result.path_description,
