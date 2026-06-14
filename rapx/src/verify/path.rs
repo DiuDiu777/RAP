@@ -24,7 +24,7 @@ use crate::analysis::path_analysis::graph::PathGraph;
 
 use super::helpers::{Callsite, CallsiteLocation};
 
-const PATH_LIMIT: usize = 1024;
+pub(crate) const PATH_LIMIT: usize = 1024;
 
 
 /// Extracts finite verification paths for one function body.
@@ -95,63 +95,6 @@ impl<'tcx> PathExtractor<'tcx> {
             let paths = self.find_paths_for_callsite(&callsite);
             self.paths.insert(callsite.location(), paths);
         }
-    }
-
-    /// Extract paths that reach a specific basic block (for struct invariant verification).
-    ///
-    /// This is the same path extraction logic as `find_paths_for_callsite` but
-    /// targets an arbitrary block instead of a callsite. The target block acts
-    /// as the verification checkpoint.
-    pub fn find_paths_for_block(&mut self, caller: DefId, target_block: BasicBlock) -> Vec<Path> {
-        let target = CallsiteLocation {
-            caller,
-            block: target_block,
-        };
-        let target_block_idx = target_block.as_usize();
-        let allow_repeat = self.allow_repeat;
-        let pg = self.path_graph();
-
-        let all_paths = pg.enumerate_paths_repeat(allow_repeat);
-
-        rap_info!(
-            "Checkpoint at bb{}: {} whole-cfg paths",
-            target_block_idx,
-            all_paths.len()
-        );
-
-        let mut results = Vec::new();
-        let mut seen_prefixes = FxHashSet::default();
-        for (idx, path) in all_paths.iter().enumerate() {
-            if results.len() >= PATH_LIMIT {
-                break;
-            }
-            let Some(pos) = path.iter().position(|&b| b == target_block_idx) else {
-                continue;
-            };
-            let prefix: Vec<usize> = path[..=pos].to_vec();
-            if !seen_prefixes.insert(prefix.clone()) {
-                continue;
-            }
-            let reachable = pg.is_path_reachable(&prefix);
-            rap_info!(
-                "  verify path {}: {:?} | {}",
-                idx, prefix,
-                if reachable { "reachable" } else { "unreachable" }
-            );
-            if !reachable {
-                continue;
-            }
-            results.push(Path {
-                target,
-                start: PathStart::FunctionEntry,
-                steps: prefix
-                    .into_iter()
-                    .map(|b| PathStep::Block(BasicBlock::from(b)))
-                    .chain(std::iter::once(PathStep::Callsite(target)))
-                    .collect(),
-            });
-        }
-        results
     }
 
     /// Extract paths for one callsite by filtering pre-enumerated whole-function paths.

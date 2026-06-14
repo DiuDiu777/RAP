@@ -6,15 +6,17 @@
 //! callsite-level views for later backward visits, forward visits, and SMT stages.
 
 use crate::analysis::Analysis;
+use crate::analysis::path_analysis::graph::PathGraph;
 
-use rustc_data_structures::fx::FxHashMap;
-use rustc_middle::ty::TyCtxt;
+use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_middle::mir::BasicBlock;
+use rustc_middle::ty::{TyCtxt, TyKind};
 
 use super::{
     contract::Property,
     forward_visit::ForwardVisitor,
     helpers::{Callsite, CallsiteLocation, collect_return_block_indices},
-    path::{FunctionPaths, Path, PathExtractor},
+    path::{FunctionPaths, Path, PathExtractor, PathStart, PathStep, PATH_LIMIT},
     path_refine::BackwardVisitor,
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     smt_check::SmtChecker,
@@ -145,8 +147,10 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
 
     /// Run struct invariant verification for the managed function target.
     ///
-    /// For each return block in the function body, extracts paths from entry
-    /// to that point and checks that each struct invariant holds.
+    /// For constructors (functions returning `Self`), paths are filtered to
+    /// return blocks to avoid unwinding paths where the struct may not be
+    /// fully initialised. For methods, all whole-CFG paths from
+    /// `PathGraph::enumerate_paths_repeat` are used directly.
     pub fn verify_struct_invariants(&self) -> VerificationReport<'tcx> {
         let mut report = VerificationReport::new(self.target.def_id);
         let invariants = &self.target.struct_invariants;
@@ -154,10 +158,20 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             return report;
         }
 
-        let return_blocks = collect_return_block_indices(self.tcx, self.target.def_id);
+        let is_constructor = self
+            .target
+            .owner_struct_def_id
+            .map(|sid| returns_self(self.tcx, self.target.def_id, sid))
+            .unwrap_or(false);
+
+        let mut pg = PathGraph::new(self.tcx, self.target.def_id);
+        pg.find_scc();
+        let all_paths = pg.enumerate_paths_repeat(0);
+
+        let kind_label = if is_constructor { "constructor" } else { "method" };
         rap_info!(
-            "[rapx::verify] struct invariant: {} return block(s) to check for {}",
-            return_blocks.len(),
+            "[rapx::verify] struct invariant ({kind_label}): {} whole-cfg path(s) for {}",
+            all_paths.len(),
             self.tcx.def_path_str(self.target.def_id),
         );
 
@@ -165,26 +179,80 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         let forward_visitor = ForwardVisitor::new(self.tcx);
         let smt_checker = SmtChecker::new(self.tcx);
 
-        for &return_block in &return_blocks {
-            let checkpoint = CallsiteLocation {
-                caller: self.target.def_id,
-                block: return_block,
-            };
+        let mut paths_by_checkpoint: FxHashMap<CallsiteLocation, Vec<Path>> =
+            FxHashMap::default();
+        let mut seen_paths = FxHashSet::default();
 
-            let mut path_extractor = PathExtractor::new(
-                self.tcx,
-                self.target.def_id,
-                Vec::new(),
-                0, // struct invariants only use 0 repeats for now
-            );
-            let paths = path_extractor.find_paths_for_block(
-                self.target.def_id,
-                return_block,
-            );
+        if is_constructor {
+            let return_blocks = collect_return_block_indices(self.tcx, self.target.def_id);
+            for &return_block in &return_blocks {
+                let checkpoint = CallsiteLocation {
+                    caller: self.target.def_id,
+                    block: return_block,
+                };
+                let mut paths = Vec::new();
+                let mut seen_prefixes = FxHashSet::default();
+                for (_idx, path) in all_paths.iter().enumerate() {
+                    if paths.len() >= PATH_LIMIT {
+                        break;
+                    }
+                    let Some(pos) = path.iter().position(|&b| b == return_block.as_usize()) else {
+                        continue;
+                    };
+                    let prefix: Vec<usize> = path[..=pos].to_vec();
+                    if !seen_prefixes.insert(prefix.clone()) {
+                        continue;
+                    }
+                    if !pg.is_path_reachable(&prefix) {
+                        continue;
+                    }
+                    paths.push(Path {
+                        target: checkpoint,
+                        start: PathStart::FunctionEntry,
+                        steps: prefix
+                            .into_iter()
+                            .map(|b| PathStep::Block(BasicBlock::from(b)))
+                            .chain(std::iter::once(PathStep::Callsite(checkpoint)))
+                            .collect(),
+                    });
+                }
+                if !paths.is_empty() {
+                    paths_by_checkpoint.insert(checkpoint, paths);
+                }
+            }
+        } else {
+            for path in all_paths.iter() {
+                if path.is_empty() || !pg.is_path_reachable(path) {
+                    continue;
+                }
+                if !seen_paths.insert(path.clone()) {
+                    continue;
+                }
+                let last_block =
+                    BasicBlock::from(*path.last().unwrap());
+                let checkpoint = CallsiteLocation {
+                    caller: self.target.def_id,
+                    block: last_block,
+                };
+                paths_by_checkpoint
+                    .entry(checkpoint)
+                    .or_default()
+                    .push(Path {
+                        target: checkpoint,
+                        start: PathStart::FunctionEntry,
+                        steps: path
+                            .iter()
+                            .map(|&b| PathStep::Block(BasicBlock::from(b)))
+                            .chain(std::iter::once(PathStep::Callsite(checkpoint)))
+                            .collect(),
+                    });
+            }
+        }
 
+        for (checkpoint, paths) in &paths_by_checkpoint {
             rap_info!(
                 "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
-                return_block.as_usize(),
+                checkpoint.block.as_usize(),
                 paths.len()
             );
 
@@ -198,7 +266,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
 
                     let backward = backward_visitor.visit_for_checkpoint(
                         self.target.def_id,
-                        checkpoint,
+                        *checkpoint,
                         path,
                         property,
                     );
@@ -212,20 +280,20 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         format!("{}\n{}", forward.describe(), smt_check.describe());
 
                     report.push(PropertyCheckResult {
-                        callsite: checkpoint,
-                        callsite_index: return_block.as_usize(),
+                        callsite: *checkpoint,
+                        callsite_index: checkpoint.block.as_usize(),
                         path_index,
                         property_index,
                         property: property.clone(),
                         result: smt_check.result,
                         diagnostics: Some(VisitDiagnostics::new(
-                            backward.describe_for_checkpoint(self.tcx, checkpoint, path_index),
+                            backward.describe_for_checkpoint(self.tcx, *checkpoint, path_index),
                             check_diagnostics,
                         )),
                         path_description: path.describe_indices(),
                         callee_name: format!(
                             "struct-invariant(bb{})",
-                            return_block.as_usize()
+                            checkpoint.block.as_usize()
                         ),
                     });
                 }
@@ -251,6 +319,15 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                 (callsite.location(), properties)
             })
             .collect()
+    }
+}
+
+/// Returns whether a function returns the owning struct type (i.e. is a constructor).
+fn returns_self(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId, struct_def_id: rustc_hir::def_id::DefId) -> bool {
+    let output = tcx.fn_sig(def_id).skip_binder().output().skip_binder();
+    match output.kind() {
+        TyKind::Adt(adt_def, _) => adt_def.did() == struct_def_id,
+        _ => false,
     }
 }
 

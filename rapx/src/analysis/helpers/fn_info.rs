@@ -128,7 +128,6 @@ pub fn check_safety(tcx: TyCtxt<'_>, def_id: DefId) -> Safety {
 }
 
 pub fn get_type(tcx: TyCtxt<'_>, def_id: DefId) -> FnKind {
-    let mut node_type = 2;
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         match assoc_item.kind {
             AssocKind::Fn { has_self, .. } => {
@@ -213,8 +212,8 @@ pub fn get_adt_via_method(tcx: TyCtxt<'_>, method_def_id: DefId) -> Option<AdtIn
     Some(AdtInfo::new(adt_def_id, pub_count == total_count))
 }
 
-fn place_has_raw_deref<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, place: &Place<'tcx>) -> bool {
-    let mut local = place.local;
+fn place_has_raw_deref<'tcx>(_tcx: TyCtxt<'tcx>, body: &Body<'tcx>, place: &Place<'tcx>) -> bool {
+    let local = place.local;
     for proj in place.projection.iter() {
         if let ProjectionElem::Deref = proj.kind() {
             let ty = body.local_decls[local].ty;
@@ -781,7 +780,7 @@ fn dfs_find_unsafe_chains(
         results.push(current_chain.clone());
     } else {
         // 对每个unsafe callee继续DFS
-        for (callee_def_id, callee_name) in unsafe_callees {
+        for (callee_def_id, _callee_name) in unsafe_callees {
             dfs_find_unsafe_chains(tcx, callee_def_id, current_chain, results, visited);
         }
     }
