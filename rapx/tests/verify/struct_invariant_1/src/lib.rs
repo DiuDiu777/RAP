@@ -12,17 +12,17 @@ struct Wrapper<T> {
 
 impl<T> Wrapper<T> {
     #[rapx::verify]
-    fn new(ptr: *const T, len: usize) -> Self {
+    fn unsound_new(ptr: *const T, len: usize) -> Self {
         Self { ptr, len }
     }
 
     #[rapx::verify]
-    fn set_len(&mut self, len: usize) {
+    fn unsound_set_len(&mut self, len: usize) {
         self.len = len;
     }
 
     #[rapx::verify]
-    fn safe_read(&self) -> Option<u32> {
+    fn sound_read(&self) -> Option<u32> {
         let ptr = self.ptr;
 
         if self.len == 0 {
@@ -40,7 +40,7 @@ impl<T> Wrapper<T> {
     }
 
     #[rapx::verify]
-    fn unsafe_read(&self) -> u32 {
+    fn unsound_read(&self) -> u32 {
         let ptr = self.ptr;
 
         unsafe {

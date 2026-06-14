@@ -17,7 +17,7 @@ use super::{
     forward_visit::ForwardVisitor,
     helpers::{Callsite, CallsiteLocation, collect_return_block_indices},
     path::{FunctionPaths, Path, PathExtractor, PathStart, PathStep, PATH_LIMIT},
-    path_refine::BackwardVisitor,
+    path_refine::{BackwardItem, BackwardVisitor},
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     smt_check::SmtChecker,
     target::{FunctionTarget, VerifyTargetCollector},
@@ -264,12 +264,24 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         property.kind
                     );
 
-                    let backward = backward_visitor.visit_for_checkpoint(
+                    let mut backward = backward_visitor.visit_for_checkpoint(
                         self.target.def_id,
                         *checkpoint,
                         path,
                         property,
                     );
+
+                    if !is_constructor {
+                        let mut items = Vec::new();
+                        for inv in invariants.iter() {
+                            items.push(BackwardItem::ContractFact {
+                                property: inv.clone(),
+                            });
+                        }
+                        items.extend(backward.items.clone());
+                        backward.items = items;
+                    }
+
                     let forward = forward_visitor.visit(&backward);
                     let smt_check = smt_checker.check_for_checkpoint(
                         self.target.def_id,

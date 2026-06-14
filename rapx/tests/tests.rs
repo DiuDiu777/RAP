@@ -742,10 +742,10 @@ fn sound_align_23() {
 #[test]
 fn struct_invariant_1() {
     let output = run_with_args("verify/struct_invariant_1", VERIFY_CMD);
-    // Verify the pipeline runs and produces diagnostic output
-    assert_contain(&output, "struct invariant");
-    // At minimum, confirm the verify analysis ran for each method
-    assert_contain(&output, "result:");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_new | result: UNSOUND");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_set_len | result: UNSOUND");
+    assert_contain(&output, "function: Wrapper::<T>::sound_read | result: UNSOUND");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_read | result: UNSOUND");
 }
 
 #[test]
