@@ -22,7 +22,6 @@ pub enum BugType {
 pub struct TyBug {
     pub drop_spot: LocalSpot,
     pub trigger_info: LocalSpot,
-    pub prop_chain: Vec<usize>,
     pub span: Span,
     pub confidence: usize,
     pub bug_type: BugType,

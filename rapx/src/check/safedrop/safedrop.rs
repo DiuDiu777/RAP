@@ -1,7 +1,7 @@
 use super::{bug_records::*, corner_case::*, drop::*, graph::*};
 use crate::{
     analysis::alias_analysis::default::{MopFnAliasMap, types::ValueKind},
-    def_id::*,
+    def_id::is_drop_fn,
     utils::source::{get_filename, get_name},
 };
 use rustc_middle::{
@@ -34,8 +34,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         return;
                     }
                     let value_idx = self.projection(place.clone());
-                    let info = terminator.source_info.clone();
-                    self.add_to_drop_record(value_idx, bb_idx, &info, is_cleanup);
+                    self.add_to_drop_record(value_idx, bb_idx, is_cleanup);
                 }
                 TerminatorKind::Call {
                     ref func, ref args, ..
@@ -62,8 +61,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
                             return;
                         }
                         let local = self.projection(place.clone());
-                        let info = terminator.source_info.clone();
-                        self.add_to_drop_record(local, bb_idx, &info, is_cleanup);
+                        self.add_to_drop_record(local, bb_idx, is_cleanup);
                     }
                 }
                 _ => {}
@@ -165,13 +163,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
             .uaf_bugs_output(body, fn_name, self.alias_graph.span());
         self.bug_records
             .dp_bug_output(body, fn_name, self.alias_graph.span());
-        /*
-        let _ = generate_mir_cfg_dot(
-            self.alias_graph.tcx(),
-            self.alias_graph.def_id(),
-            &self.alias_graph.alias_sets,
-        );
-        */
     }
 
     fn make_bug(
@@ -185,7 +176,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
         TyBug {
             drop_spot: self.drop_record[idx].drop_spot,
             trigger_info,
-            prop_chain: self.drop_record[idx].prop_chain.clone(),
             span,
             confidence,
             bug_type,

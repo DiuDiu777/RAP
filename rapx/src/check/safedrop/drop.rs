@@ -1,6 +1,4 @@
 use super::graph::*;
-use rustc_middle::mir::SourceInfo;
-use std::usize;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct LocalSpot {
@@ -83,7 +81,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
         &mut self,
         value_idx: usize, // the value to be dropped
         bb_idx: usize,    // the block via_idx is dropped
-        _info: &SourceInfo,
         flag_cleanup: bool,
     ) {
         rap_debug!(
@@ -109,21 +106,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
     pub fn push_drop_info(&mut self, value_idx: usize, drop_spot: LocalSpot) {
         self.push_drop_bottom_up(value_idx, drop_spot);
         self.push_drop_top_down(value_idx, drop_spot);
-        //self.push_drop_alias(value_idx, drop_spot);
-    }
-
-    pub fn push_drop_alias(&mut self, value_idx: usize, drop_spot: LocalSpot) {
-        rap_debug!("push_drop_alias: value_idx = {}", value_idx,);
-        if let Some(aliases) = self.alias_graph.get_alias_set(value_idx) {
-            for i in aliases {
-                if i != value_idx {
-                    self.drop_record[i] = DropRecord::new(i, true, drop_spot);
-                    self.drop_record[i].prop_chain = self.drop_record[value_idx].prop_chain.clone();
-                    self.drop_record[i].prop_chain.push(i);
-                    rap_debug!("{:?}", self.drop_record[i]);
-                }
-            }
-        }
     }
 
     ///drop the fields of the root node.

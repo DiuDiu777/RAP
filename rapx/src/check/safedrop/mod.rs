@@ -61,8 +61,6 @@ pub fn query_safedrop(tcx: TyCtxt, fn_map: &MopFnAliasMap, def_id: DefId, adt_ow
     }
     rap_trace!("query_safedrop: {:?}", fn_name);
     /* filter const mir */
-
-    /* filter const mir */
     if let Some(_other) = tcx.hir_body_const_context(def_id.expect_local()) {
         return;
     }
