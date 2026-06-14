@@ -182,7 +182,7 @@ impl<'tcx> SmtChecker<'tcx> {
                     )
                     .with_query(query),
                     SatResult::Sat => {
-                        rap_info!(
+                        rap_debug!(
                             "  [SMT Align] {} sat: counterexample found",
                             target_label
                         );

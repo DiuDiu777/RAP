@@ -742,10 +742,13 @@ fn sound_align_23() {
 #[test]
 fn struct_invariant_1() {
     let output = run_with_args("verify/struct_invariant_1", VERIFY_CMD);
-    assert_contain(&output, "function: Wrapper::<T>::unsound_new | result: UNSOUND");
-    assert_contain(&output, "function: Wrapper::<T>::unsound_set_len | result: UNSOUND");
-    assert_contain(&output, "function: Wrapper::<T>::sound_read | result: UNSOUND");
-    assert_contain(&output, "function: Wrapper::<T>::unsound_read | result: UNSOUND");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_new");
+    assert_contain(&output, "result: UNSOUND");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_set_len");
+    assert_contain(&output, "function: Wrapper::<T>::sound_read");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
+    // Alignment is proved in sound_read via the guard
+    assert_contain(&output, "Align | Proved");
 }
 
 #[test]

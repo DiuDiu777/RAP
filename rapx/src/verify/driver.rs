@@ -8,6 +8,7 @@
 use crate::analysis::Analysis;
 use crate::analysis::path_analysis::graph::PathGraph;
 
+use indexmap::IndexMap;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::{TyCtxt, TyKind};
@@ -169,7 +170,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         let all_paths = pg.enumerate_paths_repeat(0);
 
         let kind_label = if is_constructor { "constructor" } else { "method" };
-        rap_info!(
+        rap_debug!(
             "[rapx::verify] struct invariant ({kind_label}): {} whole-cfg path(s) for {}",
             all_paths.len(),
             self.tcx.def_path_str(self.target.def_id),
@@ -250,7 +251,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         }
 
         for (checkpoint, paths) in &paths_by_checkpoint {
-            rap_info!(
+            rap_debug!(
                 "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
                 checkpoint.block.as_usize(),
                 paths.len()
@@ -386,79 +387,111 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
         let mut collector = VerifyTargetCollector::new(self.tcx);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
+        let mut saw_any = false;
         for target in &collector.function_targets {
+            saw_any = true;
             let target_path = self.tcx.def_path_str(target.def_id);
-            let mut combined_results: Vec<PropertyCheckResult<'_>> = Vec::new();
+            let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
             // Phase 1: unsafe callsite verification
             for repeat in 0..=self.allow_pathseg_repeat {
-                if self.allow_pathseg_repeat > 0 {
-                    rap_info!(
-                        "[rapx::verify] round {}/{}: allow-pathseg-repeat={}",
-                        repeat,
-                        self.allow_pathseg_repeat,
-                        repeat
-                    );
-                }
-
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
                 let report = driver.verify_function();
-                let unproved = report
-                    .results
-                    .iter()
-                    .filter(|result| !matches!(result.result, super::report::CheckResult::Proved))
-                    .count();
-
-                if unproved > 0 {
-                    rap_warn!(
-                        "[rapx::verify] round {}/{}: found {unproved} unproved check(s)",
-                        repeat,
-                        self.allow_pathseg_repeat
-                    );
-                }
-                combined_results.extend(report.results);
+                all_results.extend(report.results);
             }
 
             // Phase 2: struct invariant verification
             if !target.struct_invariants.is_empty() {
                 let driver = VerifyDriver::new(self.tcx, target);
                 let struct_report = driver.verify_struct_invariants();
-                combined_results.extend(struct_report.results);
+                all_results.extend(struct_report.results);
             }
 
-            let total = combined_results.len();
-            let unproved = combined_results
+            if all_results.is_empty() {
+                continue;
+            }
+
+            let unproved = all_results
                 .iter()
-                .filter(|result| !matches!(result.result, super::report::CheckResult::Proved))
+                .filter(|r| !matches!(r.result, super::report::CheckResult::Proved))
                 .count();
 
-            if unproved == 0 {
-                rap_info!("[rapx::verify] function: {target_path} | result: SOUND");
-            } else {
-                rap_warn!("[rapx::verify] function: {target_path} | result: UNSOUND");
-                rap_debug!(
-                    "[rapx::verify] function: {target_path} | checks not proved: {unproved}/{total}"
-                );
-                for result in &combined_results {
-                    if !matches!(result.result, super::report::CheckResult::Proved) {
-                        let kind = if result.callee_name.starts_with("struct-invariant") {
-                            "struct-invariant"
-                        } else {
-                            "unsafe callsite"
-                        };
-                        rap_info!(
-                            "  [rapx::verify] {kind} bb{} -> {}, path: {} | property {:?} | {:?}",
-                            result.callsite.block.as_usize(),
-                            result.callee_name,
-                            result.path_description,
-                            result.property.kind,
-                            result.result,
-                        );
+            rap_info!("============================================================");
+            rap_info!("[rapx::verify] function: {target_path}");
+            rap_info!("============================================================");
+
+            // Group results by (callsite, callee_name)
+            let mut groups: indexmap::IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> = indexmap::IndexMap::new();
+            for r in &all_results {
+                groups.entry((r.callsite, r.callee_name.clone())).or_default().push(r);
+            }
+
+            // Separate into callsite groups and struct-invariant groups
+            let callsite_groups: Vec<_> = groups.iter()
+                .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
+                .collect();
+            let invariant_groups: Vec<_> = groups.iter()
+                .filter(|((_, name), _)| name.starts_with("struct-invariant"))
+                .collect();
+
+            // Print unsafe callsite results
+            if !callsite_groups.is_empty() {
+                rap_info!("  --- unsafe callsites ---");
+                for ((callsite, callee_name), results) in &callsite_groups {
+                    rap_info!(
+                        "      unsafe callsite: bb{} -> {callee_name}",
+                        callsite.block.as_usize(),
+                    );
+                    let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
+                    for r in results.iter() {
+                        path_groups.entry(r.path_description.as_str()).or_default().push(r);
+                    }
+                    for (path_desc, props) in &path_groups {
+                        rap_info!("        path {path_desc}:");
+                        for r in props.iter() {
+                            rap_info!(
+                                "          {:?} | {:?}",
+                                r.property.kind,
+                                r.result,
+                            );
+                        }
                     }
                 }
             }
 
-            rap_debug!("Combined results: {} checks", combined_results.len());
+            // Print struct invariant results
+            if !invariant_groups.is_empty() {
+                rap_info!("  --- struct invariants ---");
+                for ((checkpoint, _), results) in &invariant_groups {
+                    rap_info!(
+                        "      checkpoint bb{}:",
+                        checkpoint.block.as_usize(),
+                    );
+                    // Group by path_description
+                    let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
+                    for r in results.iter() {
+                        path_groups.entry(r.path_description.as_str()).or_default().push(r);
+                    }
+                    for (path_desc, props) in &path_groups {
+                        rap_info!("        path {path_desc}:");
+                        for r in props.iter() {
+                            rap_info!(
+                                "          {:?} | {:?}",
+                                r.property.kind,
+                                r.result,
+                            );
+                        }
+                    }
+                }
+            }
+
+            if unproved == 0 {
+                rap_info!("  result: SOUND");
+            } else {
+                rap_warn!("  result: UNSOUND ({unproved} unproved)");
+            }
+
+            rap_info!("");
         }
     }
 
