@@ -2,8 +2,9 @@
 //!
 //! The target collector owns selected functions and their callee requirements.
 //! The path extractor upgrades a function CFG into SCC-aware path metadata.
-//! This module keeps those pieces together for one function target and exposes
-//! callsite-level views for later backward visits, forward visits, and SMT stages.
+//! `VerifyDriver` prepares paths for two kinds of checks (unsafe callsites and
+//! struct invariants) and delegates the actual backward/forward/SMT work to
+//! the shared `VerifyEngine`.
 
 use crate::analysis::Analysis;
 use crate::analysis::path_analysis::graph::PathGraph;
@@ -15,13 +16,11 @@ use rustc_middle::ty::{TyCtxt, TyKind};
 
 use super::{
     contract::Property,
-    forward_visit::ForwardVisitor,
     helpers::{Callsite, CallsiteLocation, collect_return_block_indices},
     path::{FunctionPaths, Path, PathExtractor, PathStart, PathStep, PATH_LIMIT},
-    path_refine::{BackwardItem, BackwardVisitor},
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
-    smt_check::SmtChecker,
     target::{FunctionTarget, VerifyTargetCollector},
+    engine::VerifyEngine,
 };
 
 /// Orchestrates verification inputs for one function target.
@@ -30,6 +29,7 @@ pub struct VerifyDriver<'target, 'tcx> {
     target: &'target FunctionTarget<'tcx>,
     path_info: FunctionPaths<'tcx>,
     properties_to_verify: FxHashMap<super::helpers::CallsiteLocation, &'target [Property<'tcx>]>,
+    engine: VerifyEngine<'tcx>,
 }
 
 impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
@@ -47,11 +47,13 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         let path_info =
             PathExtractor::new(tcx, target.def_id, target.callsites.clone(), allow_repeat).run();
         let properties_to_verify = Self::build_properties_to_verify(target);
+        let engine = VerifyEngine::new(tcx);
         Self {
             tcx,
             target,
             path_info,
             properties_to_verify,
+            engine,
         }
     }
 
@@ -70,25 +72,15 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         &self.path_info
     }
 
-    /// Run the current staged verifier pipeline for the managed function target.
-    ///
-    /// This method is the main driver entry for later verification stages.  It
-    /// currently walks `(callsite, path, property)` items and records an
-    /// `Unknown` result for each one. Backward visiting, forward visiting, and
-    /// SMT checking can replace the placeholder result inside this loop without
-    /// changing the surrounding control flow.
+    /// Run unsafe-callsite verification for the managed function target.
     pub fn verify_function(&self) -> VerificationReport<'tcx> {
         let mut report = VerificationReport::new(self.target.def_id);
-        let backward_visitor = BackwardVisitor::new(self.tcx);
-        let forward_visitor = ForwardVisitor::new(self.tcx);
-        let smt_checker = SmtChecker::new(self.tcx);
 
         for view in self.iter_callsite_checks() {
             for (path_index, path) in view.paths.iter().enumerate() {
                 for (property_index, property) in view.properties.iter().enumerate() {
-                    let backward = backward_visitor.visit(view.callsite, path, property);
-                    let forward = forward_visitor.visit(&backward);
-                    let smt_check = smt_checker.check(view.callsite, property, &forward);
+                    let (forward, smt_check) =
+                        self.engine.check_callsite(view.callsite, path, property);
                     let check_diagnostics =
                         format!("{}\n{}", forward.describe(), smt_check.describe());
                     report.push(PropertyCheckResult {
@@ -99,7 +91,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         property: property.clone(),
                         result: smt_check.result,
                         diagnostics: Some(VisitDiagnostics::new(
-                            backward.describe(self.tcx, view.callsite, path_index),
+                            String::new(),
                             check_diagnostics,
                         )),
                         path_description: path.describe_indices(),
@@ -165,6 +157,63 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             .map(|sid| returns_self(self.tcx, self.target.def_id, sid))
             .unwrap_or(false);
 
+        for (checkpoint, paths) in
+            self.build_invariant_paths(is_constructor)
+        {
+            rap_debug!(
+                "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
+                checkpoint.block.as_usize(),
+                paths.len()
+            );
+
+            for (path_index, path) in paths.iter().enumerate() {
+                for (property_index, property) in invariants.iter().enumerate() {
+                    rap_debug!(
+                        "[rapx::verify] struct invariant path {} check: kind={:?}",
+                        path_index,
+                        property.kind
+                    );
+
+                    let (backward, forward, smt_check) = self.engine.check_invariant(
+                        self.target.def_id,
+                        checkpoint,
+                        path,
+                        property,
+                        invariants,
+                        is_constructor,
+                    );
+                    let check_diagnostics =
+                        format!("{}\n{}", forward.describe(), smt_check.describe());
+
+                    report.push(PropertyCheckResult {
+                        callsite: checkpoint,
+                        callsite_index: checkpoint.block.as_usize(),
+                        path_index,
+                        property_index,
+                        property: property.clone(),
+                        result: smt_check.result,
+                        diagnostics: Some(VisitDiagnostics::new(
+                            backward
+                                .describe_for_checkpoint(self.tcx, checkpoint, path_index),
+                            check_diagnostics,
+                        )),
+                        path_description: path.describe_indices(),
+                        callee_name: format!(
+                            "struct-invariant(bb{})",
+                            checkpoint.block.as_usize()
+                        ),
+                    });
+                }
+            }
+        }
+
+        report
+    }
+
+    fn build_invariant_paths(
+        &self,
+        is_constructor: bool,
+    ) -> FxHashMap<CallsiteLocation, Vec<Path>> {
         let mut pg = PathGraph::new(self.tcx, self.target.def_id);
         pg.find_scc();
         let all_paths = pg.enumerate_paths_repeat(0);
@@ -175,10 +224,6 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             all_paths.len(),
             self.tcx.def_path_str(self.target.def_id),
         );
-
-        let backward_visitor = BackwardVisitor::new(self.tcx);
-        let forward_visitor = ForwardVisitor::new(self.tcx);
-        let smt_checker = SmtChecker::new(self.tcx);
 
         let mut paths_by_checkpoint: FxHashMap<CallsiteLocation, Vec<Path>> =
             FxHashMap::default();
@@ -229,8 +274,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                 if !seen_paths.insert(path.clone()) {
                     continue;
                 }
-                let last_block =
-                    BasicBlock::from(*path.last().unwrap());
+                let last_block = BasicBlock::from(*path.last().unwrap());
                 let checkpoint = CallsiteLocation {
                     caller: self.target.def_id,
                     block: last_block,
@@ -250,70 +294,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             }
         }
 
-        for (checkpoint, paths) in &paths_by_checkpoint {
-            rap_debug!(
-                "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
-                checkpoint.block.as_usize(),
-                paths.len()
-            );
-
-            for (path_index, path) in paths.iter().enumerate() {
-                for (property_index, property) in invariants.iter().enumerate() {
-                    rap_debug!(
-                        "[rapx::verify] struct invariant path {} check: kind={:?}",
-                        path_index,
-                        property.kind
-                    );
-
-                    let mut backward = backward_visitor.visit_for_checkpoint(
-                        self.target.def_id,
-                        *checkpoint,
-                        path,
-                        property,
-                    );
-
-                    if !is_constructor {
-                        let mut items = Vec::new();
-                        for inv in invariants.iter() {
-                            items.push(BackwardItem::ContractFact {
-                                property: inv.clone(),
-                            });
-                        }
-                        items.extend(backward.items.clone());
-                        backward.items = items;
-                    }
-
-                    let forward = forward_visitor.visit(&backward);
-                    let smt_check = smt_checker.check_for_checkpoint(
-                        self.target.def_id,
-                        property,
-                        &forward,
-                    );
-                    let check_diagnostics =
-                        format!("{}\n{}", forward.describe(), smt_check.describe());
-
-                    report.push(PropertyCheckResult {
-                        callsite: *checkpoint,
-                        callsite_index: checkpoint.block.as_usize(),
-                        path_index,
-                        property_index,
-                        property: property.clone(),
-                        result: smt_check.result,
-                        diagnostics: Some(VisitDiagnostics::new(
-                            backward.describe_for_checkpoint(self.tcx, *checkpoint, path_index),
-                            check_diagnostics,
-                        )),
-                        path_description: path.describe_indices(),
-                        callee_name: format!(
-                            "struct-invariant(bb{})",
-                            checkpoint.block.as_usize()
-                        ),
-                    });
-                }
-            }
-        }
-
-        report
+        paths_by_checkpoint
     }
 
     /// Build the per-callsite property view from the target's callee requirements.
@@ -409,91 +390,90 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 continue;
             }
 
-            let unproved = all_results
-                .iter()
-                .filter(|r| !matches!(r.result, super::report::CheckResult::Proved))
-                .count();
-
-            rap_info!("============================================================");
-            rap_info!("[rapx::verify] function: {target_path}");
-            rap_info!("============================================================");
-
-            // Group results by (callsite, callee_name)
-            let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> = IndexMap::new();
-            for r in &all_results {
-                groups.entry((r.callsite, r.callee_name.clone())).or_default().push(r);
-            }
-
-            // Separate into callsite groups and struct-invariant groups
-            let callsite_groups: Vec<_> = groups.iter()
-                .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
-                .collect();
-            let invariant_groups: Vec<_> = groups.iter()
-                .filter(|((_, name), _)| name.starts_with("struct-invariant"))
-                .collect();
-
-            // Print unsafe callsite results
-            if !callsite_groups.is_empty() {
-                rap_info!("  --- unsafe callsites ---");
-                for ((callsite, callee_name), results) in &callsite_groups {
-                    rap_info!(
-                        "      unsafe callsite: bb{} -> {callee_name}",
-                        callsite.block.as_usize(),
-                    );
-                    let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
-                    for r in results.iter() {
-                        path_groups.entry(r.path_description.as_str()).or_default().push(r);
-                    }
-                    for (path_desc, props) in &path_groups {
-                        rap_info!("        path {path_desc}:");
-                        for r in props.iter() {
-                            rap_info!(
-                                "          {:?} | {:?}",
-                                r.property.kind,
-                                r.result,
-                            );
-                        }
-                    }
-                }
-            }
-
-            // Print struct invariant results
-            if !invariant_groups.is_empty() {
-                rap_info!("  --- struct invariants ---");
-                for ((checkpoint, _), results) in &invariant_groups {
-                    rap_info!(
-                        "      checkpoint bb{}:",
-                        checkpoint.block.as_usize(),
-                    );
-                    // Group by path_description
-                    let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
-                    for r in results.iter() {
-                        path_groups.entry(r.path_description.as_str()).or_default().push(r);
-                    }
-                    for (path_desc, props) in &path_groups {
-                        rap_info!("        path {path_desc}:");
-                        for r in props.iter() {
-                            rap_info!(
-                                "          {:?} | {:?}",
-                                r.property.kind,
-                                r.result,
-                            );
-                        }
-                    }
-                }
-            }
-
-            if unproved == 0 {
-                rap_info!("  result: SOUND");
-            } else {
-                rap_warn!("  result: UNSOUND ({unproved} unproved)");
-            }
-
-            rap_info!("");
+            emit_verify_summary(&target_path, &all_results);
         }
     }
 
     fn reset(&mut self) {}
+}
+
+fn emit_verify_summary(target_path: &str, all_results: &[PropertyCheckResult<'_>]) {
+    let unproved = all_results
+        .iter()
+        .filter(|r| !matches!(r.result, super::report::CheckResult::Proved))
+        .count();
+
+    rap_info!("============================================================");
+    rap_info!("[rapx::verify] function: {target_path}");
+    rap_info!("============================================================");
+
+    // Group results by (callsite, callee_name)
+    let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> =
+        IndexMap::new();
+    for r in all_results {
+        groups
+            .entry((r.callsite, r.callee_name.clone()))
+            .or_default()
+            .push(r);
+    }
+
+    // Separate into callsite groups and struct-invariant groups
+    let callsite_groups: Vec<_> = groups
+        .iter()
+        .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
+        .collect();
+    let invariant_groups: Vec<_> = groups
+        .iter()
+        .filter(|((_, name), _)| name.starts_with("struct-invariant"))
+        .collect();
+
+    // Print unsafe callsite results
+    if !callsite_groups.is_empty() {
+        rap_info!("  --- unsafe callsites ---");
+        for ((callsite, callee_name), results) in &callsite_groups {
+            rap_info!(
+                "      unsafe callsite: bb{} -> {callee_name}",
+                callsite.block.as_usize(),
+            );
+            emit_property_rows(results);
+        }
+    }
+
+    // Print struct invariant results
+    if !invariant_groups.is_empty() {
+        rap_info!("  --- struct invariants ---");
+        for ((checkpoint, _), results) in &invariant_groups {
+            rap_info!(
+                "      checkpoint bb{}:",
+                checkpoint.block.as_usize(),
+            );
+            emit_property_rows(results);
+        }
+    }
+
+    if unproved == 0 {
+        rap_info!("  result: SOUND");
+    } else {
+        rap_warn!("  result: UNSOUND ({unproved} unproved)");
+    }
+
+    rap_info!("");
+}
+
+fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
+    let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
+    for r in results.iter() {
+        path_groups
+            .entry(r.path_description.as_str())
+            .or_default()
+            .push(r);
+    }
+    for (path_desc, props) in &path_groups {
+        rap_info!("        path {path_desc}:");
+        for r in props.iter() {
+            rap_info!("          {:?} | {:?}", r.property.kind, r.result);
+        }
+    }
 }
 
 /// Analysis pass that dumps backward and forward visitor diagnostics.
