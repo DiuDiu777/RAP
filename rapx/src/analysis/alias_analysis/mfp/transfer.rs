@@ -105,42 +105,6 @@ pub fn transfer_ref<'tcx>(
     sync_fields(state, &lv_id, &rv_id, place_info);
 }
 
-/// Transfer function for field assignment: lv = rv.field
-pub fn transfer_field_assign<'tcx>(
-    state: &mut AliasDomain,
-    lv: Place<'tcx>,
-    rv_base: Place<'tcx>,
-    field_idx: usize,
-    place_info: &PlaceInfo<'tcx>,
-) {
-    let lv_id = mir_place_to_place_id(lv);
-    let rv_base_id = mir_place_to_place_id(rv_base);
-    let rv_field_id = rv_base_id.project_field(field_idx);
-
-    let lv_idx = match place_info.get_index(&lv_id) {
-        Some(idx) => idx,
-        None => return,
-    };
-
-    let rv_field_idx = match place_info.get_index(&rv_field_id) {
-        Some(idx) => idx,
-        None => return,
-    };
-
-    if !place_info.may_drop(lv_idx) || !place_info.may_drop(rv_field_idx) {
-        return;
-    }
-
-    // Kill: remove old aliases for lv and all its fields
-    state.remove_aliases_with_prefix(&lv_id, place_info);
-
-    // Gen: add alias lv ≈ rv.field
-    state.union(lv_idx, rv_field_idx);
-
-    // Sync fields
-    sync_fields(state, &lv_id, &rv_field_id, place_info);
-}
-
 /// Transfer function for aggregate: lv = (operands...)
 pub fn transfer_aggregate<'tcx>(
     state: &mut AliasDomain,

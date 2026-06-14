@@ -289,7 +289,7 @@ impl<'tcx> AliasGraph<'tcx> {
             "merge aliases returned by function calls, args: {:?}",
             arg_vec
         );
-        rap_debug!("fn alias: {}", fn_alias);
+        rap_debug!("fn alias: {:?}", fn_alias);
         if fn_alias.left_local() >= arg_vec.len() || fn_alias.right_local() >= arg_vec.len() {
             return;
         }

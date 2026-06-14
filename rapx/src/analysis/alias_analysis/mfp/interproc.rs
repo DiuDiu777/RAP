@@ -295,23 +295,6 @@ pub fn extract_summary<'tcx>(
     summary
 }
 
-/// Join two function summaries
-pub fn join_fn_summaries(summary1: &FnAliasPairs, summary2: &FnAliasPairs) -> FnAliasPairs {
-    // TODO: Implement summary join operation
-    let mut result = FnAliasPairs::new(summary1.arg_size());
-
-    // Add all aliases from both summaries
-    for alias in summary1.aliases() {
-        result.add_alias(alias.clone());
-    }
-
-    for alias in summary2.aliases() {
-        result.add_alias(alias.clone());
-    }
-
-    result
-}
-
 /// Filter redundant aliases from a candidate set
 ///
 /// This function removes several types of redundant aliases to produce a minimal,

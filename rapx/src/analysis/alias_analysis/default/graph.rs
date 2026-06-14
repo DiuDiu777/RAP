@@ -10,7 +10,7 @@ use rustc_middle::{
     ty::{self, TyCtxt, TypingEnv},
 };
 use rustc_span::{Span, def_id::DefId};
-use std::{fmt, vec::Vec};
+use std::fmt;
 
 #[derive(Clone)]
 pub struct AliasGraph<'tcx> {
@@ -32,8 +32,6 @@ pub struct AliasGraph<'tcx> {
     pub span: Span,
 }
 
-pub type MopGraph<'tcx> = AliasGraph<'tcx>;
-
 impl<'tcx> AliasGraph<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId) -> AliasGraph<'tcx> {
         let fn_name = get_fn_name(tcx, def_id);
@@ -41,7 +39,6 @@ impl<'tcx> AliasGraph<'tcx> {
         let path_graph = PathGraph::new(tcx, def_id);
         // handle variables
         let body = tcx.optimized_mir(def_id);
-        //display_mir(def_id, body);
         let locals = &body.local_decls;
         let arg_size = body.arg_count;
         let mut values = Vec::<Value>::new();
@@ -405,10 +402,6 @@ impl<'tcx> AliasGraph<'tcx> {
         self.path_graph.cfg_block(index)
     }
 
-    pub fn cfg_block_mut(&mut self, index: usize) -> &mut CfgBlock {
-        self.path_graph.cfg_block_mut(index)
-    }
-
     /// Retrieve the MIR terminator for the block at `index` on demand.
     pub fn terminator(&self, index: usize) -> Option<&Terminator<'tcx>> {
         self.path_graph.terminator(index)
@@ -425,10 +418,6 @@ impl<'tcx> AliasGraph<'tcx> {
     pub fn increment_visit_times(&mut self) -> usize {
         self.visit_times += 1;
         self.visit_times
-    }
-
-    pub fn assigned_locals(&self, index: usize) -> Option<&FxHashSet<usize>> {
-        self.path_graph.assigned_locals(index)
     }
 }
 

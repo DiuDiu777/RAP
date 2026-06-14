@@ -19,7 +19,7 @@ pub enum ValueKind {
 /// Analyzes a `Ty` (Rustc type) and returns its `TyKind` for alias analysis.
 ///
 /// This function inspects the Rustc type and categorizes it into one of the `TyKind` variants.
-/// Special types such as `RefCell`, `RefMut`, and `Rc` are further mapped to `CornerCase`.
+/// Special types such as `RefCell`, `RefMut`, and `Rc` are further mapped to `SpecialPtr`.
 ///
 /// # Arguments
 /// * `ty` - The type to be classified.

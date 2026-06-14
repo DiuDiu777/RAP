@@ -57,19 +57,9 @@ impl Value {
         }
     }
 
-    /// Returns whether this value is a tuple type.
-    pub fn is_tuple(&self) -> bool {
-        self.kind == ValueKind::Tuple
-    }
-
     /// Returns whether this value is a pointer (raw pointer or reference).
     pub fn is_ptr(&self) -> bool {
         self.kind == ValueKind::RawPtr || self.kind == ValueKind::Ref
-    }
-
-    /// Returns whether this value is a reference type.
-    pub fn is_ref(&self) -> bool {
-        self.kind == ValueKind::Ref
     }
 
     /// Returns whether this value is of a corner case type as defined in `ValueKind`.

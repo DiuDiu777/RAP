@@ -169,14 +169,13 @@ pub struct PlaceInfo<'tcx> {
     place_to_index: FxHashMap<PlaceId, usize>,
     /// Mapping from index to PlaceId
     index_to_place: Vec<PlaceId>,
-    /// Mapping from PlaceId to MIR Place (when available)
-    place_to_mir: FxHashMap<PlaceId, Place<'tcx>>,
     /// Whether each place may need drop
     may_drop: Vec<bool>,
     /// Whether each place needs drop
     need_drop: Vec<bool>,
     /// Total number of places
     num_places: usize,
+    _phantom: std::marker::PhantomData<&'tcx ()>,
 }
 
 impl<'tcx> PlaceInfo<'tcx> {
@@ -185,10 +184,10 @@ impl<'tcx> PlaceInfo<'tcx> {
         PlaceInfo {
             place_to_index: FxHashMap::default(),
             index_to_place: Vec::new(),
-            place_to_mir: FxHashMap::default(),
             may_drop: Vec::new(),
             need_drop: Vec::new(),
             num_places: 0,
+            _phantom: std::marker::PhantomData,
         }
     }
 
@@ -365,11 +364,6 @@ impl<'tcx> PlaceInfo<'tcx> {
     /// Get total number of places
     pub fn num_places(&self) -> usize {
         self.num_places
-    }
-
-    /// Associate a MIR place with a PlaceId
-    pub fn associate_mir_place(&mut self, place_id: PlaceId, mir_place: Place<'tcx>) {
-        self.place_to_mir.insert(place_id, mir_place);
     }
 }
 
