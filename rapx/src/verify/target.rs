@@ -446,14 +446,13 @@ fn get_contract_from_entry<'tcx>(
     results
 }
 
-/// Returns whether an attribute is exactly `#[rapx::requires(...)]`.
-fn is_rapx_requires_attr(attr: &Attribute) -> bool {
+fn is_rapx_named_attr(attr: &Attribute, name: &str) -> bool {
     matches!(
         attr,
         Attribute::Unparsed(tool_attr)
             if tool_attr.path.segments.len() == 2
                 && tool_attr.path.segments[0].as_str() == "rapx"
-                && tool_attr.path.segments[1].as_str() == "requires"
+                && tool_attr.path.segments[1].as_str() == name
     )
 }
 
@@ -464,15 +463,35 @@ fn collect_properties_from_requires_attrs<'tcx>(
     property_def_id: DefId,
     parse_error_label: &str,
 ) -> Vec<Property<'tcx>> {
+    collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "requires")
+}
+
+/// Collects properties from `#[rapx::invariant(...)]` attributes.
+fn collect_properties_from_invariant_attrs<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    attrs: impl IntoIterator<Item = &'tcx Attribute>,
+    property_def_id: DefId,
+    parse_error_label: &str,
+) -> Vec<Property<'tcx>> {
+    collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "invariant")
+}
+
+fn collect_properties_from_named_attrs<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    attrs: impl IntoIterator<Item = &'tcx Attribute>,
+    property_def_id: DefId,
+    parse_error_label: &str,
+    attr_name: &str,
+) -> Vec<Property<'tcx>> {
     let mut results = Vec::new();
 
     for attr in attrs {
-        if !is_rapx_requires_attr(attr) {
+        if !is_rapx_named_attr(attr, attr_name) {
             continue;
         }
 
         let attr_str = rustc_hir_pretty::attribute_to_string(&tcx, attr);
-        let parsed = match parse_rapx_attr(attr_str.as_str(), "requires") {
+        let parsed = match parse_rapx_attr(attr_str.as_str(), attr_name) {
             Ok(parsed) => parsed,
             Err(err) => {
                 rap_error!(
@@ -513,10 +532,17 @@ fn get_struct_invariants_from_annotation<'tcx>(
         return Vec::new();
     }
 
-    collect_properties_from_requires_attrs(
+    let mut invariants = collect_properties_from_requires_attrs(
         tcx,
         tcx.get_all_attrs(struct_def_id),
         context_def_id,
         "invariant",
-    )
+    );
+    invariants.extend(collect_properties_from_invariant_attrs(
+        tcx,
+        tcx.get_all_attrs(struct_def_id),
+        context_def_id,
+        "invariant",
+    ));
+    invariants
 }

@@ -101,6 +101,17 @@ impl PlaceKey {
             PlaceBaseKey::Arg(_) => None,
         }
     }
+
+    /// Return true when this place shares a base-and-projection prefix with
+    /// `other`.  Two places overlap when one of them is a shorter projection
+    /// of the other (e.g. `[]` overlaps `[0]`, but `[0]` does not overlap
+    /// `[1]`).
+    pub fn overlaps(&self, other: &PlaceKey) -> bool {
+        self.base == other.base && {
+            let min_len = self.fields.len().min(other.fields.len());
+            self.fields[..min_len] == other.fields[..min_len]
+        }
+    }
 }
 
 /// Set of places that make MIR items relevant to a property.
@@ -187,8 +198,9 @@ impl RelevantPlaces {
 
     /// Return true if this set shares any known root with `other`.
     pub fn intersects(&self, other: &RelevantPlaces) -> bool {
-        self.locals.iter().any(|local| other.locals.contains(local))
-            || self.places.iter().any(|place| other.places.contains(place))
+        self.places.iter().any(|sp| {
+            other.places.iter().any(|op| sp.overlaps(op))
+        })
     }
 
     /// Remove all roots contained in `other` from this set.

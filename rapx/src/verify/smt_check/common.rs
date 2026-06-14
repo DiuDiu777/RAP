@@ -131,9 +131,9 @@ impl<'tcx> SmtChecker<'tcx> {
             SmtObligation::Aligned {
                 place,
                 align,
-                ty_name: _,
+                ty_name,
             } => {
-                if *align <= 1 {
+                if *align > 0 && *align <= 1 {
                     return SmtCheckResult {
                         result: CheckResult::Proved,
                         query: Some(SmtQuery::new(
@@ -163,15 +163,21 @@ impl<'tcx> SmtChecker<'tcx> {
                     ));
                 };
 
+                let is_symbolic = *align == 0;
+                let align_term = if is_symbolic {
+                    model.symbolic_align_term(&ty_name)
+                } else {
+                    Int::from_u64(&ctx, *align)
+                };
+                let align_u64 = if is_symbolic { 0 } else { *align };
                 let zero = Int::from_u64(&ctx, 0);
-                let align_term = Int::from_u64(&ctx, *align);
                 let goal = target_term.modulo(&align_term)._eq(&zero);
                 let query = SmtQuery::new(
                     obligation.clone(),
                     model.assumptions().to_vec(),
                     SmtPredicate::Not(Box::new(SmtPredicate::Divisible {
                         term: SmtTerm::Place(place.clone()),
-                        modulus: *align,
+                        modulus: align_u64,
                     })),
                 );
 
@@ -445,12 +451,21 @@ impl<'tcx> SmtChecker<'tcx> {
     ) -> Option<PlaceKey> {
         let arg = property.args.first()?;
         match arg {
-            PropertyArg::Place(place) => Some(PlaceKey::from_contract_place(place)),
+            PropertyArg::Place(place) => Some(self.resolve_contract_place(place)),
             PropertyArg::Expr(ContractExpr::Place(place)) => {
-                Some(PlaceKey::from_contract_place(place))
+                Some(self.resolve_contract_place(place))
             }
             _ => None,
         }
+    }
+
+    /// Convert a contract place to a PlaceKey, resolving Arg(n) to Local(n+1).
+    fn resolve_contract_place(&self, place: &ContractPlace<'tcx>) -> PlaceKey {
+        let mut key = PlaceKey::from_contract_place(place);
+        if let PlaceBaseKey::Arg(index) = key.base {
+            key.base = PlaceBaseKey::Local(index + 1);
+        }
+        key
     }
 
     /// Resolve the type argument used by an alignment property.
@@ -581,8 +596,11 @@ impl<'tcx> SmtChecker<'tcx> {
             typing_env,
             value: ty,
         };
-        let layout = self.tcx.layout_of(input).ok()?;
-        Some((layout.align.abi.bytes(), layout.size.bytes()))
+        match self.tcx.layout_of(input) {
+            Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
+            Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
+            Err(_) => None,
+        }
     }
 }
 
@@ -857,6 +875,7 @@ pub(crate) struct SmtModel<'a, 'ctx, 'tcx> {
     forward: &'a ForwardVisitResult<'tcx>,
     ctx: &'ctx Context,
     place_terms: HashMap<PlaceKey, Int<'ctx>>,
+    symbolic_align_terms: HashMap<String, Int<'ctx>>,
     assumptions: Vec<SmtPredicate>,
 }
 
@@ -874,8 +893,19 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             forward,
             ctx,
             place_terms: HashMap::new(),
+            symbolic_align_terms: HashMap::new(),
             assumptions: Vec::new(),
         }
+    }
+
+    /// Create or return a cached symbolic alignment constant for a type name.
+    pub(crate) fn symbolic_align_term(&mut self, ty_name: &str) -> Int<'ctx> {
+        if let Some(term) = self.symbolic_align_terms.get(ty_name) {
+            return term.clone();
+        }
+        let term = Int::new_const(self.ctx, format!("align_{ty_name}"));
+        self.symbolic_align_terms.insert(ty_name.to_string(), term.clone());
+        term
     }
 
     /// Assert facts collected by the forward visitor.
@@ -984,8 +1014,47 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         )),
                     ));
                 }
-                StateFact::Contract(_)
-                | StateFact::PathCondition(_)
+                StateFact::Contract(property) => {
+                    match property.kind {
+                        PropertyKind::Align => {
+                            let Some(target) = (|| {
+                                let arg = property.args.first()?;
+                                let PropertyArg::Place(place) = arg else { return None };
+                                let mut key = PlaceKey::from_contract_place(place);
+                                if let PlaceBaseKey::Arg(index) = key.base {
+                                    key.base = PlaceBaseKey::Local(index + 1);
+                                }
+                                Some(key)
+                            })() else { continue; };
+                            let Some(required_ty) = property.args.iter().find_map(|arg| {
+                                if let PropertyArg::Ty(ty) = arg { Some(*ty) } else { None }
+                            }) else { continue; };
+                            let Some((align, _)) = self.type_layout(required_ty) else { continue; };
+                            if align == 0 {
+                                let ty_name = format!("{required_ty:?}");
+                                if let Some(term) = self.term_for_place(&target) {
+                                    let align_term = self.symbolic_align_term(&ty_name);
+                                    let zero = Int::from_u64(self.ctx, 0);
+                                    solver.assert(&term.modulo(&align_term)._eq(&zero));
+                                    self.assumptions.push(SmtPredicate::Custom(format!(
+                                        "{} aligned for {ty_name} (symbolic, struct-invariant)",
+                                        place_label(&target)
+                                    )));
+                                }
+                            } else {
+                                self.assert_known_alignment(
+                                    solver,
+                                    &target,
+                                    align,
+                                    &format!("{required_ty:?}"),
+                                    "struct-invariant",
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                StateFact::PathCondition(_)
                 | StateFact::Drop(_)
                 | StateFact::LocalDead(_)
                 | StateFact::CallEffect(_) => {}
@@ -1347,8 +1416,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             typing_env,
             value: ty,
         };
-        let layout = self.tcx.layout_of(input).ok()?;
-        Some((layout.align.abi.bytes(), layout.size.bytes()))
+        match self.tcx.layout_of(input) {
+            Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
+            Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
+            Err(_) => None,
+        }
     }
 
     /// Return the pointer-add call that produced a place after copies/casts.

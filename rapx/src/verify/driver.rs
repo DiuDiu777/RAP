@@ -387,9 +387,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
         let mut collector = VerifyTargetCollector::new(self.tcx);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
-        let mut saw_any = false;
         for target in &collector.function_targets {
-            saw_any = true;
             let target_path = self.tcx.def_path_str(target.def_id);
             let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
@@ -421,7 +419,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             rap_info!("============================================================");
 
             // Group results by (callsite, callee_name)
-            let mut groups: indexmap::IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> = indexmap::IndexMap::new();
+            let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> = IndexMap::new();
             for r in &all_results {
                 groups.entry((r.callsite, r.callee_name.clone())).or_default().push(r);
             }
