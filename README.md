@@ -141,12 +141,12 @@ Safety properties include: `Align`, `NonNull`, `Allocated`, `InBound`, `Init`, `
 
 | var             | default when absent | possible values     | description                  |
 |-----------------|---------------------|---------------------|------------------------------|
-| `RAP_LOG`       | info                | trace, debug, info, warn | verbosity of logging   |
-| `RAP_CLEAN`     | true                | true, false         | run cargo clean before check |
-| `RAP_RECURSIVE` | none                | none, shallow, deep | scope of packages to check   |
-| `RAPFLAGS`      | (unset)             | CLI arguments       | arguments passed to `rapx` binary directly |
+| `RAPX_LOG`       | info                | trace, debug, info, warn | verbosity of logging   |
+| `RAPX_CLEAN`     | true                | true, false         | run cargo clean before check |
+| `RAPX_RECURSIVE` | none                | none, shallow, deep | scope of packages to check   |
+| `RAPXFLAGS`      | (unset)             | CLI arguments       | arguments passed to `rapx` binary directly |
 
-For `RAP_RECURSIVE`:
+For `RAPX_RECURSIVE`:
 * `none`: check for current folder
 * `shallow`: check for current workspace members
 * `deep`: check for all workspaces from current folder
