@@ -886,7 +886,12 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     ));
                     // Propagate type-based alignment from an explicit source place.
                     if let AbstractValue::Place(source_place) = source {
-                        self.assert_place_alignment(solver, source_place);
+                        if self
+                            .place_ty(source_place)
+                            .is_some_and(|ty| pointee_ty(ty).is_some())
+                        {
+                            self.assert_place_alignment(solver, source_place);
+                        }
                     }
                 }
                 StateFact::Binary {
