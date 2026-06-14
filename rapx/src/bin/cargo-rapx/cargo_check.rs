@@ -7,7 +7,7 @@ use wait_timeout::ChildExt;
 mod workspace;
 
 pub fn run() {
-    match env::var("RAP_RECURSIVE")
+    match env::var("RAPX_RECURSIVE")
         .ok()
         .map(|s| s.trim().to_ascii_lowercase())
         .as_deref()
@@ -22,7 +22,7 @@ pub fn run() {
 }
 
 fn cargo_check(dir: &Utf8Path) {
-    // always clean before check due to outdated except `RAP_CLEAN` is false
+    // always clean before check due to outdated except `RAPX_CLEAN` is false
     cargo_clean(dir, args::rap_clean());
 
     rap_trace!("cargo check in package folder {dir}");
@@ -40,7 +40,7 @@ fn cargo_check(dir: &Utf8Path) {
     cmd.args(cargo_args);
 
     // arguments are stored in env variable and read by rapx
-    cmd.env("RAPFLAGS", rap_args.join(" "));
+    cmd.env("RAPXFLAGS", rap_args.join(" "));
 
     // Invoke actual cargo for the job, but with different flags.
     let cargo_rap_path = args::current_exe_path();

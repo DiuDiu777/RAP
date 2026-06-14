@@ -6,15 +6,15 @@ extern crate rustc_session;
 use clap::Parser;
 use rapx::cli;
 use rapx::help;
-use rapx::{RAP_DEFAULT_ARGS, RapCallback, rap_debug, rap_info, rap_trace, utils::log::init_log};
+use rapx::{RAPX_DEFAULT_ARGS, RapCallback, rap_debug, rap_info, rap_trace, utils::log::init_log};
 use rustc_session::EarlyDiagCtxt;
 use rustc_session::config::ErrorOutputType;
 use std::env;
 
 fn run_complier(callback: &mut RapCallback) {
     let mut args = env::args().collect::<Vec<_>>();
-    args.extend(RAP_DEFAULT_ARGS.iter().map(ToString::to_string));
-    // Finally, add the default flags of RAP
+    args.extend(RAPX_DEFAULT_ARGS.iter().map(ToString::to_string));
+    // Finally, add the default flags of RAPx
     rap_trace!("Final arguments to rustc: {:?}", args);
 
     let handler = EarlyDiagCtxt::new(ErrorOutputType::default());
@@ -36,12 +36,12 @@ struct RapCli {
 fn main() {
     _ = init_log().inspect_err(|err| eprintln!("Failed to init log: {err}"));
 
-    // read RAPFLAGS
+    // read RAPXFLAGS
     let mut cli_args =
-        shlex::split(env::var("RAPFLAGS").unwrap_or_default().as_str()).unwrap_or_default();
-    rap_debug!("RAPFLAGS = {:?}", cli_args);
+        shlex::split(env::var("RAPXFLAGS").unwrap_or_default().as_str()).unwrap_or_default();
+    rap_debug!("RAPXFLAGS = {:?}", cli_args);
 
-    // parse arguments from RAPFLAGS
+    // parse arguments from RAPXFLAGS
     cli_args.insert(0, "rapx".to_owned());
     let cli = RapCli::parse_from(cli_args);
     let rapx_args = cli.args;

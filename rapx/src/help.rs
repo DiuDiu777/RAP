@@ -19,15 +19,15 @@ will perform two kinds of detection in a row.
 
 <underline>Environment Variables (Values are case insensitive):</underline>
 
-    RAP_LOG          verbosity of logging: trace, debug, info, warn
-                     trace: print all the detailed RAP execution traces.
+    RAPX_LOG          verbosity of logging: trace, debug, info, warn
+                     trace: print all the detailed RAPx execution traces.
                      debug: display intermediate analysis results.
                      warn: show bugs detected only.
 
-    RAP_CLEAN        run cargo clean before check: true, false
-                     * true is the default value except that false is set
+    RAPX_CLEAN        run cargo clean before check: true, false
+                      * true is the default value except that false is set
 
-    RAP_RECURSIVE    scope of packages to check: none, shallow, deep
+    RAPX_RECURSIVE    scope of packages to check: none, shallow, deep
                      * none or the variable not set: check for current folder
                      * shallow: check for current workpace members
                      * deep: check for all workspaces from current folder
@@ -71,7 +71,7 @@ pub fn styled_rapx_usage() -> String {
     let style = RAPX_STYLING.get_literal();
     format!(
         "{} {} {}",
-        styled_str("RAPFLAGS=\"[OPTIONS] <COMMAND>\"", &style, false),
+        styled_str("RAPXFLAGS=\"[OPTIONS] <COMMAND>\"", &style, false),
         styled_str("rapx", &style, true),
         styled_str("[RUSTFLAGS]", &style, false)
     )

@@ -1,6 +1,6 @@
 //! Shared strongly-connected-component utilities.
 //!
-//! This module provides the small Tarjan SCC abstraction used by RAP analyses
+//! This module provides the small Tarjan SCC abstraction used by RAPx analyses
 //! and by the verification path extractor. The trait is intentionally graph
 //! agnostic: clients provide successor queries and receive each discovered SCC
 //! through `on_scc_found`.

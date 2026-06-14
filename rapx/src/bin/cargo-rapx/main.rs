@@ -1,5 +1,5 @@
 /*
-    This is a cargo program to start RAP.
+    This is a cargo program to start RAPx.
     The file references the cargo file for Miri: https://github.com/rust-lang/miri/blob/master/cargo-miri/src/main.rs
 */
 #![feature(rustc_private)]

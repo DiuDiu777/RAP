@@ -24,7 +24,7 @@ pub fn deep_run() {
 }
 
 fn check_members(ws_metadata: &Metadata) {
-    // Force clean even if `RAP_CLEAN` is false, because rapx is in control of
+    // Force clean even if `RAPX_CLEAN` is false, because rapx is in control of
     // caches for all packages and there should be no cache.
     let ws_root = &ws_metadata.workspace_root;
     rap_trace!("cargo clean in workspace root {ws_root}");

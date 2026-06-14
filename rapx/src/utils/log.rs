@@ -10,16 +10,16 @@ use rustc_span::{
 use std::ops::Range;
 
 fn log_level() -> LevelFilter {
-    if let Ok(s) = std::env::var("RAP_LOG") {
+    if let Ok(s) = std::env::var("RAPX_LOG") {
         match s.parse() {
             Ok(level) => return level,
-            Err(err) => eprintln!("RAP_LOG is invalid: {err}"),
+            Err(err) => eprintln!("RAPX_LOG is invalid: {err}"),
         }
     }
     LevelFilter::Info
 }
 
-/// Detect `RAP_LOG` environment variable first; if it's not set,
+/// Detect `RAPX_LOG` environment variable first; if it's not set,
 /// default to INFO level.
 pub fn init_log() -> Result<(), fern::InitError> {
     let dispatch = Dispatch::new().level(log_level());
@@ -36,7 +36,7 @@ pub fn init_log() -> Result<(), fern::InitError> {
         .format(move |callback, args, record| {
             let now = Local::now();
             callback.finish(format_args!(
-                "{}{}|RAP|{}{}|: {}\x1B[0m",
+                "{}{}|RAPx|{}{}|: {}\x1B[0m",
                 format_args!(
                     "\x1B[{}m",
                     color_line.get_color(&record.level()).to_fg_str()
@@ -60,35 +60,35 @@ pub fn init_log() -> Result<(), fern::InitError> {
 #[macro_export]
 macro_rules! rap_trace {
     ($($arg:tt)+) => (
-        ::log::trace!(target: "RAP", $($arg)+)
+        ::log::trace!(target: "RAPx", $($arg)+)
     );
 }
 
 #[macro_export]
 macro_rules! rap_debug {
     ($($arg:tt)+) => (
-        ::log::debug!(target: "RAP", $($arg)+)
+        ::log::debug!(target: "RAPx", $($arg)+)
     );
 }
 
 #[macro_export]
 macro_rules! rap_info {
     ($($arg:tt)+) => (
-        ::log::info!(target: "RAP", $($arg)+)
+        ::log::info!(target: "RAPx", $($arg)+)
     );
 }
 
 #[macro_export]
 macro_rules! rap_warn {
     ($($arg:tt)+) => (
-        ::log::warn!(target: "RAP", $($arg)+)
+        ::log::warn!(target: "RAPx", $($arg)+)
     );
 }
 
 #[macro_export]
 macro_rules! rap_error {
     ($($arg:tt)+) => (
-        ::log::error!(target: "RAP", $($arg)+)
+        ::log::error!(target: "RAPx", $($arg)+)
     );
 }
 

@@ -21,7 +21,7 @@ struct Arguments {
 impl Arguments {
     fn new() -> Self {
         fn rap_clean() -> bool {
-            match env::var("RAP_CLEAN")
+            match env::var("RAPX_CLEAN")
                 .ok()
                 .map(|s| s.trim().to_ascii_lowercase())
                 .as_deref()

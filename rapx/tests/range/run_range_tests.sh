@@ -1,8 +1,8 @@
 #!/bin/bash
 
-# RAP root directory
-RAP_ROOT="/home/lcc/rust/RAP"
-TESTS_DIR="$RAP_ROOT/rapx/tests/range"
+# RAPx root directory
+RAPX_ROOT="/home/lcc/rust/RAP"
+TESTS_DIR="$RAPX_ROOT/rapx/tests/range"
 
 if [ ! -d "$TESTS_DIR" ]; then
     echo "Error: Directory $TESTS_DIR does not exist."
@@ -17,8 +17,8 @@ if [ ${#subdirs[@]} -eq 0 ]; then
     exit 1
 fi
 
-# Ask for RAP_LOG level once
-echo "Select RAP_LOG level:"
+# Ask for RAPX_LOG level once
+echo "Select RAPX_LOG level:"
 echo "1. INFO (default)"
 echo "2. DEBUG"
 echo "3. TRACE"
@@ -26,13 +26,13 @@ echo "4. WARN"
 read -p "Enter choice [1-4]: " log_choice
 
 case $log_choice in
-    2) export RAP_LOG=DEBUG ;;
-    3) export RAP_LOG=TRACE ;;
-    4) export RAP_LOG=WARN ;;
-    *) export RAP_LOG=INFO ;;
+    2) export RAPX_LOG=DEBUG ;;
+    3) export RAPX_LOG=TRACE ;;
+    4) export RAPX_LOG=WARN ;;
+    *) export RAPX_LOG=INFO ;;
 esac
 
-echo "RAP_LOG set to $RAP_LOG"
+echo "RAPX_LOG set to $RAPX_LOG"
 
 while true; do
     echo -e "\nAvailable range tests:"
@@ -64,7 +64,7 @@ while true; do
     echo "========================================"
     echo "Running install.sh..."
     (
-        cd "$RAP_ROOT" || exit
+        cd "$RAPX_ROOT" || exit
         ./install.sh
     )
     

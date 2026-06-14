@@ -51,18 +51,18 @@ function test() { #第一个参数：目录名 第二个参数：rapx的参数
       continue
     else
       cmd="cargo rapx $args"
-      $cmd 2>&1 | tee $cur/rapx.txt | ansi2txt | grep 'RAP|WARN|' && echo -e "\033[32m$project_dir pass\033[0m"
+      $cmd 2>&1 | tee $cur/rapx.txt | ansi2txt | grep 'RAPx|WARN|' && echo -e "\033[32m$project_dir pass\033[0m"
     fi
 
     if [ $? -ne 0 ]; then
-      echo -e "\033[31mError: '$cmd' doesn't emit WARN diagnostics in $project_dir \033[0m\nRAP output:"
+      echo -e "\033[31mError: '$cmd' doesn't emit WARN diagnostics in $project_dir \033[0m\nRAPx output:"
       cat $cur/rapx.txt
       exit 1
     fi
 
-    cat $cur/rapx.txt | ansi2txt | grep 'RAP|ERROR|'
+    cat $cur/rapx.txt | ansi2txt | grep 'RAPx|ERROR|'
     if [ $? -eq 0 ]; then
-      echo -e "Error: '$cmd' contains error message in $project_dir \nRAP output:"
+      echo -e "Error: '$cmd' contains error message in $project_dir \nRAPx output:"
       cat $cur/rapx.txt
       exit 1
     fi

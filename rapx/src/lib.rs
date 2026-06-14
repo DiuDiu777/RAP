@@ -64,7 +64,7 @@ use rustc_session::search_paths::PathKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-pub static RAP_DEFAULT_ARGS: &[&str] = &[
+pub static RAPX_DEFAULT_ARGS: &[&str] = &[
     "-Zalways-encode-mir",
     "-Zmir-opt-level=0",
     "-Zinline-mir-threshold=0",
