@@ -218,7 +218,10 @@ impl Path {
     pub fn describe_body(&self) -> String {
         self.steps
             .iter()
-            .map(describe_step)
+            .filter_map(|step| match step {
+                PathStep::Block(bb) => Some(format!("{}", bb.as_usize())),
+                PathStep::Callsite(_) => None,
+            })
             .collect::<Vec<_>>()
             .join(" -> ")
     }
@@ -241,18 +244,6 @@ impl Path {
     }
 }
 
-/// Render one path step as a human-readable string for diagnostics.
-///
-/// - `PathStep::Block(bb)`   -> `"bb<N>"`
-/// - `PathStep::Callsite(l)` -> `"callsite(bb<N>)"`
-fn describe_step(step: &PathStep) -> String {
-    match step {
-        PathStep::Block(bb) => format!("bb{}", bb.as_usize()),
-        PathStep::Callsite(location) => {
-            format!("callsite(bb{})", location.block.as_usize())
-        }
-    }
-}
 
 /// Start point for a finite verification path.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
