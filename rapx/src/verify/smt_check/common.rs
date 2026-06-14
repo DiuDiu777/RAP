@@ -1058,6 +1058,27 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         SmtTerm::Value(format!("{base} + {offset} * {stride}")),
                     ));
                 }
+                crate::verify::call_summary::CallEffect::ReturnPointerSub {
+                    base_arg,
+                    offset_arg,
+                    stride,
+                } => {
+                    let base = call
+                        .args
+                        .get(*base_arg)
+                        .map(value_label)
+                        .unwrap_or_else(|| format!("arg{base_arg}"));
+                    let offset = call
+                        .args
+                        .get(*offset_arg)
+                        .map(value_label)
+                        .unwrap_or_else(|| format!("arg{offset_arg}"));
+                    let stride = stride.unwrap_or(1);
+                    self.assumptions.push(SmtPredicate::Eq(
+                        SmtTerm::Place(destination.clone()),
+                        SmtTerm::Value(format!("{base} - {offset} * {stride}")),
+                    ));
+                }
                 crate::verify::call_summary::CallEffect::ReturnLengthOfArg { arg } => {
                     let source = call
                         .args
@@ -1151,6 +1172,18 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 let stride = self.call_destination_stride(call).unwrap_or(1);
                 let stride = Int::from_u64(self.ctx, stride);
                 Some(Int::add(
+                    self.ctx,
+                    &[base, Int::mul(self.ctx, &[index, stride])],
+                ))
+            }
+            AbstractValue::CallResult(call) if is_pointer_sub_call(&call.func) => {
+                let base = call.args.first()?;
+                let index = call.args.get(1)?;
+                let base = self.term_for_value(base, seen)?;
+                let index = self.term_for_value(index, seen)?;
+                let stride = self.call_destination_stride(call).unwrap_or(1);
+                let stride = Int::from_u64(self.ctx, stride);
+                Some(Int::sub(
                     self.ctx,
                     &[base, Int::mul(self.ctx, &[index, stride])],
                 ))
@@ -1371,6 +1404,11 @@ fn pointee_ty<'tcx>(ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
 /// Return true when a call summary is a typed pointer addition.
 fn is_pointer_add_call(func: &str) -> bool {
     func.contains("::add") || func.contains("::wrapping_add")
+}
+
+/// Return true when a call summary is a typed pointer subtraction.
+fn is_pointer_sub_call(func: &str) -> bool {
+    func.contains("::sub") || func.contains("::wrapping_sub")
 }
 
 /// Return true when a call summary extracts a pointer from a slice-like object.

@@ -90,6 +90,12 @@ pub enum CallEffect {
         offset_arg: usize,
         stride: Option<u64>,
     },
+    /// The return value is `base - offset * stride`.
+    ReturnPointerSub {
+        base_arg: usize,
+        offset_arg: usize,
+        stride: Option<u64>,
+    },
     /// The return value is known to be non-zero.
     ReturnNonZero,
     /// The return value is known to satisfy a concrete alignment.
@@ -125,7 +131,7 @@ pub fn dependency_summary<'tcx>(
         };
     }
 
-    if is_pointer_add_call(&name) || is_pointer_offset_call(&name) {
+    if is_pointer_add_call(&name) || is_pointer_sub_call(&name) || is_pointer_offset_call(&name) {
         return CallDependencySummary {
             callee,
             name,
@@ -245,6 +251,20 @@ pub fn effect_summary<'tcx>(
         };
     }
 
+    if is_pointer_sub_call(&name) {
+        return CallEffectSummary {
+            callee,
+            name,
+            destination,
+            effects: vec![CallEffect::ReturnPointerSub {
+                base_arg: 0,
+                offset_arg: 1,
+                stride: destination_stride(tcx, caller, destination),
+            }],
+            unsupported: false,
+        };
+    }
+
     if is_pointer_read_call(&name) {
         return CallEffectSummary {
             callee,
@@ -347,6 +367,11 @@ pub fn is_as_mut_ptr_call(name: &str) -> bool {
 /// Return true for typed pointer addition calls.
 pub fn is_pointer_add_call(name: &str) -> bool {
     name.contains("::add") || name.contains("::wrapping_add")
+}
+
+/// Return true for typed pointer subtraction calls.
+pub fn is_pointer_sub_call(name: &str) -> bool {
+    name.contains("::sub") || name.contains("::wrapping_sub")
 }
 
 /// Return true for typed pointer offset calls.

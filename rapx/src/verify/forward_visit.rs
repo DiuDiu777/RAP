@@ -310,7 +310,8 @@ impl<'tcx> ForwardVisitor<'tcx> {
                         });
                     }
                 }
-                CallEffect::ReturnPointerAdd { base_arg, .. } => {
+                CallEffect::ReturnPointerAdd { base_arg, .. }
+                | CallEffect::ReturnPointerSub { base_arg, .. } => {
                     if let Some(source) = args.get(*base_arg).and_then(|arg| operand_place(&arg.node)) {
                         result.facts.push(StateFact::PointsTo {
                             pointer: destination_place.clone(),
