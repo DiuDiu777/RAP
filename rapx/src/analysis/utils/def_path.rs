@@ -13,7 +13,7 @@ pub fn path_str_def_id<'tcx>(tcx: TyCtxt<'tcx>, path_str: &str) -> DefId {
     def_path_last_def_id(&tcx, &path)
 }
 
-pub fn def_path_last_def_id<'tcx>(tcx: &TyCtxt<'tcx>, path: &[&str]) -> DefId {
+fn def_path_last_def_id<'tcx>(tcx: &TyCtxt<'tcx>, path: &[&str]) -> DefId {
     def_path_def_ids(tcx, path)
         .last()
         .expect(&format!("can not resolve {:?}", path))
@@ -45,13 +45,13 @@ impl DefPath {
  * */
 
 /// Resolves a def path like `std::vec::Vec` to its [`DefId`]s, see [`def_path_res`].
-pub fn def_path_def_ids(tcx: &TyCtxt<'_>, path: &[&str]) -> impl Iterator<Item = DefId> {
+fn def_path_def_ids(tcx: &TyCtxt<'_>, path: &[&str]) -> impl Iterator<Item = DefId> {
     def_path_res(tcx, path)
         .into_iter()
         .filter_map(|res| res.opt_def_id())
 }
 
-pub fn def_path_res(tcx: &TyCtxt<'_>, path: &[&str]) -> Vec<Res> {
+fn def_path_res(tcx: &TyCtxt<'_>, path: &[&str]) -> Vec<Res> {
     let (base, path) = match path {
         [primitive] => {
             return vec![
@@ -79,7 +79,7 @@ pub fn def_path_res(tcx: &TyCtxt<'_>, path: &[&str]) -> Vec<Res> {
     def_path_res_with_base(tcx, crates, path)
 }
 
-pub fn def_path_res_with_base(tcx: &TyCtxt<'_>, mut base: Vec<Res>, mut path: &[&str]) -> Vec<Res> {
+fn def_path_res_with_base(tcx: &TyCtxt<'_>, mut base: Vec<Res>, mut path: &[&str]) -> Vec<Res> {
     while let [segment, rest @ ..] = path {
         path = rest;
         let segment = Symbol::intern(segment);
@@ -213,7 +213,7 @@ fn item_children_by_name(tcx: &TyCtxt<'_>, def_id: DefId, name: Symbol) -> Vec<R
     }
 }
 
-pub fn find_crates(tcx: &TyCtxt<'_>, name: Symbol) -> Vec<Res> {
+fn find_crates(tcx: &TyCtxt<'_>, name: Symbol) -> Vec<Res> {
     tcx.crates(())
         .iter()
         .copied()

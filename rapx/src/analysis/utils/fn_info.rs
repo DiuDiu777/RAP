@@ -1,24 +1,20 @@
 use super::draw_dot::render_dot_string;
-use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::def_id::*;
-use crate::{rap_debug, rap_warn};
-use rustc_ast::ItemKind;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::{
     Safety,
     def::DefKind,
-    def_id::{CrateNum, DefId, DefIndex},
+    def_id::{DefId},
 };
 use rustc_middle::{
-    hir::place::PlaceBase,
     mir::{
-        BasicBlock, BinOp, Body, Local, Operand, Place, PlaceElem, PlaceRef, ProjectionElem,
+        Body, Local, Operand, Place, ProjectionElem,
         Rvalue, StatementKind, Terminator, TerminatorKind,
     },
     ty,
-    ty::{AssocKind, ConstKind, Mutability, Ty, TyCtxt, TyKind},
+    ty::{AssocKind, Mutability, Ty, TyCtxt, TyKind},
 };
-use rustc_span::{def_id::LocalDefId, kw, sym};
+use rustc_span::{kw, sym};
 use std::{
     collections::{HashMap, HashSet},
     fmt::Debug,
@@ -71,66 +67,6 @@ pub fn check_visibility(tcx: TyCtxt, func_defid: DefId) -> bool {
         return false;
     }
     true
-}
-
-pub fn is_re_exported(tcx: TyCtxt, target_defid: DefId, module_defid: LocalDefId) -> bool {
-    for child in tcx.module_children_local(module_defid) {
-        if child.vis.is_public() {
-            if let Some(def_id) = child.res.opt_def_id() {
-                if def_id == target_defid {
-                    return true;
-                }
-            }
-        }
-    }
-    false
-}
-
-pub fn print_hashset<T: std::fmt::Debug>(set: &HashSet<T>) {
-    for item in set {
-        println!("{:?}", item);
-    }
-    println!("---------------");
-}
-
-pub fn get_cleaned_def_path_name_ori(tcx: TyCtxt, def_id: DefId) -> String {
-    let def_id_str = format!("{:?}", def_id);
-    let mut parts: Vec<&str> = def_id_str.split("::").collect();
-
-    let mut remove_first = false;
-    if let Some(first_part) = parts.get_mut(0) {
-        if first_part.contains("core") {
-            *first_part = "core";
-        } else if first_part.contains("std") {
-            *first_part = "std";
-        } else if first_part.contains("alloc") {
-            *first_part = "alloc";
-        } else {
-            remove_first = true;
-        }
-    }
-    if remove_first && !parts.is_empty() {
-        parts.remove(0);
-    }
-
-    let new_parts: Vec<String> = parts
-        .into_iter()
-        .filter_map(|s| {
-            if s.contains("{") {
-                if remove_first {
-                    get_struct_name(tcx, def_id)
-                } else {
-                    None
-                }
-            } else {
-                Some(s.to_string())
-            }
-        })
-        .collect();
-
-    let mut cleaned_path = new_parts.join("::");
-    cleaned_path = cleaned_path.trim_end_matches(')').to_string();
-    cleaned_path
 }
 
 pub fn get_sp_tags_json() -> serde_json::Value {
@@ -251,17 +187,6 @@ pub fn get_type(tcx: TyCtxt<'_>, def_id: DefId) -> FnKind {
     }
     return FnKind::Fn;
 }
-
-pub fn get_adt_ty(tcx: TyCtxt, def_id: DefId) -> Option<Ty> {
-    if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
-        if let Some(impl_id) = assoc_item.impl_container(tcx) {
-            return Some(tcx.type_of(impl_id).skip_binder());
-        }
-    }
-    None
-}
-
-// check whether this adt contains a literal constructor
 // result: adt_def_id, is_literal
 pub fn get_adt_via_method(tcx: TyCtxt<'_>, method_def_id: DefId) -> Option<AdtInfo> {
     let assoc_item = tcx.opt_associated_item(method_def_id)?;
@@ -426,24 +351,6 @@ pub fn get_unsafe_callees(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<DefId> {
     }
     unsafe_callees
 }
-
-pub fn get_all_callees(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<DefId> {
-    let mut callees = HashSet::new();
-    if tcx.is_mir_available(def_id) {
-        let body = tcx.optimized_mir(def_id);
-        for bb in body.basic_blocks.iter() {
-            if let TerminatorKind::Call { func, .. } = &bb.terminator().kind {
-                if let Operand::Constant(func_constant) = func {
-                    if let ty::FnDef(callee_def_id, _) = func_constant.const_.ty().kind() {
-                        callees.insert(*callee_def_id);
-                    }
-                }
-            }
-        }
-    }
-    callees
-}
-
 // return all the impls def id of corresponding struct
 pub fn get_impls_for_struct(tcx: TyCtxt<'_>, struct_def_id: DefId) -> Vec<DefId> {
     let mut impls = Vec::new();
@@ -497,20 +404,6 @@ pub fn is_ptr(matched_ty: Ty<'_>) -> bool {
     false
 }
 
-pub fn is_ref(matched_ty: Ty<'_>) -> bool {
-    if let ty::Ref(_, _, _) = matched_ty.kind() {
-        return true;
-    }
-    false
-}
-
-pub fn is_slice(matched_ty: Ty) -> Option<Ty> {
-    if let ty::Slice(inner) = matched_ty.kind() {
-        return Some(*inner);
-    }
-    None
-}
-
 pub fn has_mut_self_param(tcx: TyCtxt, def_id: DefId) -> bool {
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         match assoc_item.kind {
@@ -541,54 +434,8 @@ pub fn get_public_fields(tcx: TyCtxt, def_id: DefId) -> HashSet<usize> {
 }
 
 // general function for displaying hashmap
-pub fn display_hashmap<K, V>(map: &HashMap<K, V>, level: usize)
-where
-    K: Ord + Debug + Hash,
-    V: Debug,
-{
-    let indent = "  ".repeat(level);
-    let mut sorted_keys: Vec<_> = map.keys().collect();
-    sorted_keys.sort();
-
-    for key in sorted_keys {
-        if let Some(value) = map.get(key) {
-            println!("{}{:?}: {:?}", indent, key, value);
-        }
-    }
-}
-
-// Bug definition: (1) strict -> weak & dst is mutable;
 //                 (2) _ -> strict
-pub fn is_strict_ty_convert<'tcx>(tcx: TyCtxt<'tcx>, src_ty: Ty<'tcx>, dst_ty: Ty<'tcx>) -> bool {
-    (is_strict_ty(tcx, src_ty) && dst_ty.is_mutable_ptr()) || is_strict_ty(tcx, dst_ty)
-}
-
 // strict ty: bool, str, adt fields containing bool or str;
-pub fn is_strict_ty<'tcx>(tcx: TyCtxt<'tcx>, ori_ty: Ty<'tcx>) -> bool {
-    let ty = get_pointee(ori_ty);
-    let mut flag = false;
-    if let TyKind::Adt(adt_def, substs) = ty.kind() {
-        if adt_def.is_struct() {
-            for field_def in adt_def.all_fields() {
-                flag |= is_strict_ty(tcx, field_def.ty(tcx, substs))
-            }
-        }
-    }
-    ty.is_bool() || ty.is_str() || flag
-}
-
-pub fn reverse_op(op: BinOp) -> BinOp {
-    match op {
-        BinOp::Lt => BinOp::Ge,
-        BinOp::Ge => BinOp::Lt,
-        BinOp::Le => BinOp::Gt,
-        BinOp::Gt => BinOp::Le,
-        BinOp::Eq => BinOp::Eq,
-        BinOp::Ne => BinOp::Ne,
-        _ => op,
-    }
-}
-
 /// parse single expr into (local, fields, ty)
 pub fn parse_expr_into_local_and_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
@@ -897,61 +744,7 @@ fn find_generic_in_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, type_ident: &str) -
     }
     None
 }
-
-pub fn reflect_generic<'tcx>(
-    generic_mapping: &FxHashMap<String, Ty<'tcx>>,
-    func_name: &str,
-    ty: Ty<'tcx>,
-) -> Ty<'tcx> {
-    let mut actual_ty = ty;
-    match ty.kind() {
-        TyKind::Param(param_ty) => {
-            let generic_name = param_ty.name.to_string();
-            if let Some(actual_ty_from_map) = generic_mapping.get(&generic_name) {
-                actual_ty = *actual_ty_from_map;
-            }
-        }
-        _ => {}
-    }
-    rap_debug!(
-        "peel generic ty for {:?}, actual_ty is {:?}",
-        func_name,
-        actual_ty
-    );
-    actual_ty
-}
-
-// src_var = 0: for constructor
 // src_var = 1: for methods
-pub fn has_tainted_fields(tcx: TyCtxt, def_id: DefId, src_var: u32) -> bool {
-    let mut dataflow_analyzer = DataflowAnalyzer::new(tcx, false);
-    dataflow_analyzer.build_graph(def_id);
-
-    let body = tcx.optimized_mir(def_id);
-    let params = &body.args_iter().collect::<Vec<_>>();
-    rap_info!("params {:?}", params);
-    let self_local = Local::from(src_var);
-
-    let flowing_params: Vec<Local> = params
-        .iter()
-        .filter(|&&param_local| {
-            dataflow_analyzer.has_flow_between(def_id, self_local, param_local)
-                && self_local != param_local
-        })
-        .copied()
-        .collect();
-
-    if !flowing_params.is_empty() {
-        rap_info!(
-            "Taint flow found from self to other parameters: {:?}",
-            flowing_params
-        );
-        true
-    } else {
-        false
-    }
-}
-
 // 修改返回值类型为调用链的向量
 pub fn get_all_std_unsafe_chains(tcx: TyCtxt, def_id: DefId) -> Vec<Vec<String>> {
     let mut results = Vec::new();
@@ -1296,35 +1089,6 @@ pub fn get_cons(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DefId> {
 
 pub fn append_fn_with_types(tcx: TyCtxt, def_id: DefId) -> FnInfo {
     FnInfo::new(def_id, check_safety(tcx, def_id), get_type(tcx, def_id))
-}
-pub fn search_constructor(tcx: TyCtxt, def_id: DefId) -> Vec<DefId> {
-    let mut constructors = Vec::new();
-    if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
-        if let Some(impl_id) = assoc_item.impl_container(tcx) {
-            // get struct ty
-            let ty = tcx.type_of(impl_id).skip_binder();
-            if let Some(adt_def) = ty.ty_adt_def() {
-                let adt_def_id = adt_def.did();
-                let impl_vec = get_impls_for_struct(tcx, adt_def_id);
-                for impl_id in impl_vec {
-                    let associated_items = tcx.associated_items(impl_id);
-                    for item in associated_items.in_definition_order() {
-                        if let ty::AssocKind::Fn {
-                            name: _,
-                            has_self: _,
-                        } = item.kind
-                        {
-                            let item_def_id = item.def_id;
-                            if get_type(tcx, item_def_id) == FnKind::Constructor {
-                                constructors.push(item_def_id);
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    constructors
 }
 
 pub fn get_ptr_deref_dummy_def_id(tcx: TyCtxt<'_>) -> Option<DefId> {
