@@ -75,7 +75,7 @@ impl DataflowGraph {
                     graph.add_node_edge(src, dst, EdgeOp::SubSlice);
                 }
                 _ => {
-                    println!("{:?}", place_elem);
+                    rap_debug!("{:?}", place_elem);
                     todo!()
                 }
             }
@@ -151,7 +151,7 @@ impl DataflowGraph {
                             self.nodes[dst].ops[seq] = NodeOp::Aggregate(AggKind::RawPtr)
                         }
                         _ => {
-                            println!("{:?}", boxed_kind);
+                            rap_debug!("{:?}", boxed_kind);
                             todo!()
                         }
                     }
@@ -221,7 +221,7 @@ impl DataflowGraph {
                     self.nodes[dst].ops[seq] = NodeOp::CallOperand;
                 }
                 _ => {
-                    println!("{:?}", func);
+                    rap_debug!("{:?}", func);
                     todo!();
                 }
             }
