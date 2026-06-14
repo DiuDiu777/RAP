@@ -290,7 +290,8 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 // If multiplying by a known constant multiple of an alignment
                 // (e.g. i * 4), the result inherits that alignment property.
                 if *op == BinOp::Mul || *op == BinOp::MulWithOverflow {
-                    if let Some(divisor) = const_int_value(&rhs_val) {
+                    let rhs_resolved = resolve_value_chain(&rhs_val, result);
+                    if let Some(divisor) = const_int_value(&rhs_resolved) {
                         if divisor > 0 && is_power_of_two(divisor) {
                             result.facts.push(StateFact::KnownAligned {
                                 place: target_key.clone(),
@@ -304,13 +305,31 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 if *op == BinOp::Add || *op == BinOp::AddWithOverflow {
                     if let Some(a) = known_alignment_of(&lhs_val, result)
                         .and_then(|a| known_alignment_of(&rhs_val, result)
-                            .filter(|&b| b == a).map(|_| a))                     {
+                            .filter(|&b| b == a).map(|_| a))                    {
                         result.facts.push(StateFact::KnownAligned {
-                            place: target_key,
+                            place: target_key.clone(),
                             align: a,
                             ty_name: format!("sum of {a}-aligned"),
                             reason: "sum of two aligned values".into(),
                         });
+                    }
+                }
+                if *op == BinOp::Div {
+                    if let Some(src_align) = known_alignment_of(&lhs_val, result) {
+                        let rhs_resolved = resolve_value_chain(&rhs_val, result);
+                        if let Some(divisor) = const_int_value(&rhs_resolved) {
+                            if divisor > 0 && src_align % divisor as u64 == 0 {
+                                let new_align = src_align / divisor as u64;
+                                result.facts.push(StateFact::KnownAligned {
+                                    place: target_key.clone(),
+                                    align: new_align,
+                                    ty_name: format!("result of div by {divisor}"),
+                                    reason: format!(
+                                        "dividing {src_align}-aligned by {divisor}"
+                                    ),
+                                });
+                            }
+                        }
                     }
                 }
             }
@@ -917,8 +936,6 @@ fn known_alignment_of<'tcx>(
                     if place == p {
                         best = best.map_or(Some(*align), |b| Some(b.max(*align)));
                     }
-                    // Match known-aligned place without fields to current
-                    // place with fields (e.g., _19 matches _19.0).
                     if place.fields.is_empty() != p.fields.is_empty()
                         && place.base == p.base
                     {
