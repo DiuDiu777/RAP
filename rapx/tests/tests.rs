@@ -404,28 +404,28 @@ fn alias_11_mfp() {
 }
 
 #[test]
-fn leak_ctor() {
-    let output = run_with_args("leak/leak_ctor", CHECK_MLEAK_CMD);
+fn leak_01() {
+    let output = run_with_args("leak/leak_01", CHECK_MLEAK_CMD);
     assert_not_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn leak_orphan() {
-    let output = run_with_args("leak/leak_orphan", CHECK_MLEAK_CMD);
+fn leak_02() {
+    let output = run_with_args("leak/leak_02", CHECK_MLEAK_CMD);
     assert_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn leak_orphan_timeout() {
+fn leak_02_timeout() {
     let mut args = Vec::from(["--timeout", "0"]);
     args.extend(CHECK_MLEAK_CMD);
-    let output = run_with_args("leak/leak_orphan", &args);
+    let output = run_with_args("leak/leak_02", &args);
     assert!(output.contains("Process killed due to timeout"));
 }
 
 #[test]
-fn leak_proxy() {
-    let output = run_with_args("leak/leak_proxy", CHECK_MLEAK_CMD);
+fn leak_03() {
+    let output = run_with_args("leak/leak_03", CHECK_MLEAK_CMD);
     assert_contain(&output, "Memory Leak detected in function main");
 }
 
