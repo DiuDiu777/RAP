@@ -7,7 +7,7 @@
 //! focused on path-level decisions (calls, SCC exits, path conditions).
 
 use rustc_data_structures::fx::FxHashSet;
-use rustc_middle::mir::{Local, Operand, Place, ProjectionElem, Terminator, TerminatorKind};
+use rustc_middle::mir::{Local, Operand, Place, ProjectionElem, Rvalue, Terminator, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::source_map::Spanned;
 
@@ -418,4 +418,30 @@ pub fn place_projection_uses(place: &Place<'_>) -> RelevantPlaces {
         }
     }
     uses
+}
+
+/// Collect all MIR operands referenced by an rvalue.
+pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'tcx>> {
+    let mut operands = Vec::new();
+    match rvalue {
+        Rvalue::Use(op)
+        | Rvalue::Repeat(op, _)
+        | Rvalue::Cast(_, op, _)
+        | Rvalue::UnaryOp(_, op) => {
+            operands.push(op);
+        }
+        Rvalue::BinaryOp(_, box (lhs, rhs)) => {
+            operands.push(lhs);
+            operands.push(rhs);
+        }
+        Rvalue::Ref(_, _, _) | Rvalue::RawPtr(_, _) => {}
+        Rvalue::Discriminant(_)
+        | Rvalue::ShallowInitBox(_, _)
+        | Rvalue::CopyForDeref(_)
+        | Rvalue::NullaryOp(_)
+        | Rvalue::ThreadLocalRef(_)
+        | Rvalue::Aggregate(_, _)
+        | _ => {}
+    }
+    operands
 }
