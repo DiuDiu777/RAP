@@ -706,7 +706,7 @@ fn find_generic_param(tcx: TyCtxt, def_id: DefId, type_ident: String) -> Option<
 }
 
 /// Iterate the args' types recursively and find the matched generic one.
-fn find_generic_in_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, type_ident: &str) -> Option<Ty<'tcx>> {
+pub(crate) fn find_generic_in_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, type_ident: &str) -> Option<Ty<'tcx>> {
     match ty.kind() {
         TyKind::Param(param_ty) => {
             if param_ty.name.as_str() == type_ident {

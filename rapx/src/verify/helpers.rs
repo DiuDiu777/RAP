@@ -8,6 +8,9 @@ use rustc_span::Span;
 use serde_json::Value;
 use syn::Expr;
 
+use crate::analysis::helpers::fn_info::{check_safety, find_generic_in_ty};
+pub use crate::analysis::helpers::fn_info::parse_expr_into_number;
+
 /// Stable MIR location for a call terminator inside one function body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct CallsiteLocation {
@@ -283,15 +286,6 @@ pub fn access_ident_recursive(expr: &Expr) -> Option<(String, Vec<String>)> {
     }
 }
 
-pub fn parse_expr_into_number(expr: &Expr) -> Option<usize> {
-    if let Expr::Lit(expr_lit) = expr {
-        if let syn::Lit::Int(lit_int) = &expr_lit.lit {
-            return lit_int.base10_parse::<usize>().ok();
-        }
-    }
-    None
-}
-
 pub fn match_ty_with_ident<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
@@ -346,45 +340,6 @@ fn find_generic_param<'tcx>(
         }
     }
 
-    None
-}
-
-fn find_generic_in_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>, type_ident: &str) -> Option<Ty<'tcx>> {
-    match ty.kind() {
-        TyKind::Param(param_ty) => {
-            if param_ty.name.as_str() == type_ident {
-                return Some(ty);
-            }
-        }
-        TyKind::RawPtr(ty, _)
-        | TyKind::Ref(_, ty, _)
-        | TyKind::Slice(ty)
-        | TyKind::Array(ty, _) => {
-            if let Some(found) = find_generic_in_ty(tcx, *ty, type_ident) {
-                return Some(found);
-            }
-        }
-        TyKind::Tuple(tys) => {
-            for tuple_ty in tys.iter() {
-                if let Some(found) = find_generic_in_ty(tcx, tuple_ty, type_ident) {
-                    return Some(found);
-                }
-            }
-        }
-        TyKind::Adt(adt_def, substs) => {
-            let name = tcx.item_name(adt_def.did()).to_string();
-            if name == type_ident {
-                return Some(ty);
-            }
-            for field in adt_def.all_fields() {
-                let field_ty = field.ty(tcx, substs);
-                if let Some(found) = find_generic_in_ty(tcx, field_ty, type_ident) {
-                    return Some(found);
-                }
-            }
-        }
-        _ => {}
-    }
     None
 }
 
@@ -490,10 +445,4 @@ fn resolve_next_field<'tcx>(
         }
     }
     None
-}
-
-pub(crate) fn check_safety(tcx: TyCtxt<'_>, def_id: DefId) -> Safety {
-    let poly_fn_sig = tcx.fn_sig(def_id);
-    let fn_sig = poly_fn_sig.skip_binder();
-    fn_sig.safety()
 }
