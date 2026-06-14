@@ -114,7 +114,7 @@ const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
-fn dangling_min() {
+fn uaf_01() {
     let output = run_with_args("uaf/uaf_01", CHECK_UAF_CMD);
     assert_contain(
         &output,
@@ -123,63 +123,63 @@ fn dangling_min() {
 }
 
 #[test]
-fn df_min() {
+fn uaf_02() {
     let output = run_with_args("uaf/uaf_02", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"main\"");
 }
 
 #[test]
-fn df_unwinding() {
+fn uaf_03() {
     let output = run_with_args("uaf/uaf_03", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected");
 }
 
 /*
 #[test]
-fn dp_lengthy() {
+fn uaf_04() {
     let output = run_with_args("uaf/uaf_04", CHECK_UAF_CMD);
     assert_contain(&output, "Dangling pointer detected in function \"call\"");
 }
 */
 
 #[test]
-fn uaf_drop() {
+fn uaf_05() {
     let output = run_with_args("uaf/uaf_05", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_drop2() {
+fn uaf_06() {
     let output = run_with_args("uaf/uaf_06", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_drop_in_place() {
+fn uaf_07() {
     let output = run_with_args("uaf/uaf_07", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_lifetime() {
+fn uaf_08() {
     let output = run_with_args("uaf/uaf_08", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_small() {
+fn uaf_09() {
     let output = run_with_args("uaf/uaf_09", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_swithint() {
+fn uaf_10() {
     let output = run_with_args("uaf/uaf_10", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"evil_test\"");
 }
 
 #[test]
-fn false_wrapper() {
+fn uaf_false_01() {
     let output = run_with_args("uaf/uaf_false_01", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
@@ -189,13 +189,13 @@ fn false_wrapper() {
 }
 
 #[test]
-fn false_scc1() {
+fn uaf_false_02() {
     let output = run_with_args("uaf/uaf_false_02", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn false_tuple_transitive() {
+fn uaf_false_03() {
     let output = run_with_args("uaf/uaf_false_03", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
@@ -205,20 +205,20 @@ fn false_tuple_transitive() {
 }
 
 #[test]
-fn false_arc() {
+fn uaf_false_04() {
     let output = run_with_args("uaf/uaf_false_04", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn false_clone1() {
+fn uaf_false_05() {
     #[allow(unused)]
     let output = run_with_args("uaf/uaf_false_05", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn false_field_clone() {
+fn uaf_false_06() {
     #[allow(unused)]
     let output = run_with_args("uaf/uaf_false_06", CHECK_UAF_CMD);
     assert!(
@@ -229,28 +229,28 @@ fn false_field_clone() {
 }
 
 #[test]
-fn false_mutate() {
+fn uaf_false_08() {
     #[allow(unused)]
     let output = run_with_args("uaf/uaf_false_08", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn false_loop_drop() {
+fn uaf_false_09() {
     #[allow(unused)]
     let output = run_with_args("uaf/uaf_false_09", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn false_memtake() {
+fn uaf_false_10() {
     #[allow(unused)]
     let output = run_with_args("uaf/uaf_false_10", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn false_reference() {
+fn uaf_false_11() {
     #[allow(unused)]
     let output = run_with_args("uaf/uaf_false_11", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
@@ -258,25 +258,25 @@ fn false_reference() {
 
 // ===============Alias(MOP) Analysis Test==============
 #[test]
-fn alias_from_raw_parts_in() {
+fn alias_01() {
     let output = run_with_args("alias/alias_01", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0.0,1)");
 }
 
 #[test]
-fn alias_from_raw_parts() {
+fn alias_02() {
     let output = run_with_args("alias/alias_02", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn not_alias_iter() {
+fn alias_03() {
     let output = run_with_args("alias/alias_03", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": null");
 }
 
 #[test]
-fn alias_field() {
+fn alias_04() {
     let output = run_with_args("alias/alias_04", ANALYZE_ALIAS_CMD);
     let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
         || output.contains("\"foo\": (0,1.0), (0,1.1)");
@@ -288,69 +288,69 @@ fn alias_field() {
 }
 
 #[test]
-fn alias_lib_no_caller() {
+fn alias_05() {
     let output = run_with_args("alias/alias_05", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn alias_scc() {
+fn alias_06() {
     let output = run_with_args("alias/alias_06", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_sub_scc1() {
+fn alias_07() {
     let output = run_with_args("alias/alias_07", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_sub_scc2() {
+fn alias_08() {
     let output = run_with_args("alias/alias_08", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1), (0,2)");
 }
 
 #[test]
-fn alias_switch() {
+fn alias_09() {
     let output = run_with_args("alias/alias_09", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_copy_for_deref() {
+fn alias_10() {
     let output = run_with_args("alias/alias_10", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn alias_indirect() {
+fn alias_11() {
     let output = run_with_args("alias/alias_11", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "iter_prop\": (0.0,1.0)");
 }
 
 // ===============Alias(MFP) Analysis Test==============
 #[test]
-fn alias_from_raw_parts_in_mfp() {
+fn alias_01_mfp() {
     let output = run_with_args("alias/alias_01", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0.0,1)");
 }
 
 #[test]
-fn alias_from_raw_parts_mfp() {
+fn alias_02_mfp() {
     let output = run_with_args("alias/alias_02", ANALYZE_ALIAS_MFP_CMD);
     // MOP expects "foo": (0,1) but MFP reports a slightly different format.
     assert_contain(&output, "foo\": (0.0,1)"); // This is slightly different from MOP
 }
 
 #[test]
-fn not_alias_iter_mfp() {
+fn alias_03_mfp() {
     let output = run_with_args("alias/alias_03", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": null");
 }
 
 #[test]
-fn alias_field_mfp() {
+fn alias_04_mfp() {
     let output = run_with_args("alias/alias_04", ANALYZE_ALIAS_MFP_CMD);
     let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
         || output.contains("\"foo\": (0,1.0), (0,1.1)");
@@ -362,43 +362,43 @@ fn alias_field_mfp() {
 }
 
 #[test]
-fn alias_lib_no_caller_mfp() {
+fn alias_05_mfp() {
     let output = run_with_args("alias/alias_05", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn alias_scc_mfp() {
+fn alias_06_mfp() {
     let output = run_with_args("alias/alias_06", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_sub_scc1_mfp() {
+fn alias_07_mfp() {
     let output = run_with_args("alias/alias_07", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_sub_scc2_mfp() {
+fn alias_08_mfp() {
     let output = run_with_args("alias/alias_08", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1), (0,2)");
 }
 
 #[test]
-fn alias_switch_mfp() {
+fn alias_09_mfp() {
     let output = run_with_args("alias/alias_09", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_copy_for_deref_mfp() {
+fn alias_10_mfp() {
     let output = run_with_args("alias/alias_10", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn alias_indirect_mfp() {
+fn alias_11_mfp() {
     let output = run_with_args("alias/alias_11", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "iter_prop\": (0.0,1.0)");
 }
