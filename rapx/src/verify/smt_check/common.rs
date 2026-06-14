@@ -818,7 +818,15 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         pointer,
                         "created from a reference/raw pointer",
                     );
-                    self.assert_place_alignment(solver, pointer);
+                    // Only assert alignment on the pointer when the pointee types
+                    // match – pointer-arithmetic wrappers produce pointers of a
+                    // different pointee type whose alignment must be proved from
+                    // guard facts, not from the raw type alone.
+                    let ptr_pointee = self.place_ty(pointer).and_then(|ty| pointee_ty_str(ty));
+                    let src_pointee = self.place_ty(source).and_then(|ty| pointee_ty_str(ty));
+                    if ptr_pointee == src_pointee {
+                        self.assert_place_alignment(solver, pointer);
+                    }
                     self.assert_place_alignment(solver, source);
                 }
                 StateFact::Call(call) => {
@@ -1042,42 +1050,40 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     offset_arg,
                     stride,
                 } => {
-                    let base = call
-                        .args
-                        .get(*base_arg)
-                        .map(value_label)
-                        .unwrap_or_else(|| format!("arg{base_arg}"));
-                    let offset = call
-                        .args
-                        .get(*offset_arg)
-                        .map(value_label)
-                        .unwrap_or_else(|| format!("arg{offset_arg}"));
-                    let stride = stride.unwrap_or(1);
-                    self.assumptions.push(SmtPredicate::Eq(
-                        SmtTerm::Place(destination.clone()),
-                        SmtTerm::Value(format!("{base} + {offset} * {stride}")),
-                    ));
+                    let base_term = call.args.get(*base_arg).and_then(|v| {
+                        self.term_for_value(v, &mut HashSet::new())
+                    });
+                    let offset_term = call.args.get(*offset_arg).and_then(|v| {
+                        self.term_for_value(v, &mut HashSet::new())
+                    });
+                    if let (Some(base), Some(offset)) = (base_term, offset_term) {
+                        let stride = Int::from_u64(self.ctx, stride.unwrap_or(1));
+                        let term = Int::add(
+                            self.ctx,
+                            &[base, Int::mul(self.ctx, &[offset, stride])],
+                        );
+                        self.place_terms.insert(destination.clone(), term);
+                    }
                 }
                 crate::verify::call_summary::CallEffect::ReturnPointerSub {
                     base_arg,
                     offset_arg,
                     stride,
                 } => {
-                    let base = call
-                        .args
-                        .get(*base_arg)
-                        .map(value_label)
-                        .unwrap_or_else(|| format!("arg{base_arg}"));
-                    let offset = call
-                        .args
-                        .get(*offset_arg)
-                        .map(value_label)
-                        .unwrap_or_else(|| format!("arg{offset_arg}"));
-                    let stride = stride.unwrap_or(1);
-                    self.assumptions.push(SmtPredicate::Eq(
-                        SmtTerm::Place(destination.clone()),
-                        SmtTerm::Value(format!("{base} - {offset} * {stride}")),
-                    ));
+                    let base_term = call.args.get(*base_arg).and_then(|v| {
+                        self.term_for_value(v, &mut HashSet::new())
+                    });
+                    let offset_term = call.args.get(*offset_arg).and_then(|v| {
+                        self.term_for_value(v, &mut HashSet::new())
+                    });
+                    if let (Some(base), Some(offset)) = (base_term, offset_term) {
+                        let stride = Int::from_u64(self.ctx, stride.unwrap_or(1));
+                        let term = Int::sub(
+                            self.ctx,
+                            &[base, Int::mul(self.ctx, &[offset, stride])],
+                        );
+                        self.place_terms.insert(destination.clone(), term);
+                    }
                 }
                 crate::verify::call_summary::CallEffect::ReturnLengthOfArg { arg } => {
                     let source = call
@@ -1397,6 +1403,14 @@ fn value_for_place<'a, 'tcx>(
 fn pointee_ty<'tcx>(ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
     match ty.kind() {
         TyKind::RawPtr(ty, _) | TyKind::Ref(_, ty, _) => Some(*ty),
+        _ => None,
+    }
+}
+
+/// Return a string label for the pointee type, for type-level alias checks.
+fn pointee_ty_str<'tcx>(ty: Ty<'tcx>) -> Option<String> {
+    match ty.kind() {
+        TyKind::RawPtr(inner, _) | TyKind::Ref(_, inner, _) => Some(format!("{inner:?}")),
         _ => None,
     }
 }

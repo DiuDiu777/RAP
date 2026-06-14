@@ -13,7 +13,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
-    mir::{Local, Operand},
+    mir::{Local, Operand, Rvalue, StatementKind, TerminatorKind},
     ty::{PseudoCanonicalInput, Ty, TyCtxt, TyKind},
 };
 
@@ -319,6 +319,15 @@ pub fn effect_summary<'tcx>(
     }
 
     if let Some(callee) = callee {
+        if let Some(effect) = try_pointer_arith_wrapper_effect(tcx, callee, destination) {
+            return CallEffectSummary {
+                callee: Some(callee),
+                name,
+                destination,
+                effects: vec![effect],
+                unsupported: false,
+            };
+        }
         if let Some(return_deps) = local_return_dependencies(tcx, callee) {
             return CallEffectSummary {
                 callee: Some(callee),
@@ -440,6 +449,241 @@ fn layout_call_ty<'tcx>(func: &Operand<'tcx>) -> Option<Ty<'tcx>> {
         return None;
     };
     args.iter().find_map(|arg| arg.as_type())
+}
+
+/// Trace backward from an operand (inner call arg) through Copy/Move/Cast
+/// assignments to the outer callee's argument local, returning its index.
+fn trace_to_callee_arg<'tcx>(
+    body: &rustc_middle::mir::Body<'tcx>,
+    operand: &Operand<'_>,
+) -> Option<usize> {
+    use std::collections::{HashSet, VecDeque};
+
+    let local = match operand {
+        Operand::Copy(place) | Operand::Move(place) => place.local,
+        _ => return None,
+    };
+    let idx = local.as_usize();
+    if idx >= 1 && idx <= body.arg_count {
+        return Some(idx - 1);
+    }
+    let mut queue = VecDeque::from([local]);
+    let mut seen = HashSet::from([local]);
+    while let Some(current) = queue.pop_front() {
+        let cidx = current.as_usize();
+        if cidx >= 1 && cidx <= body.arg_count {
+            return Some(cidx - 1);
+        }
+        for bb in body.basic_blocks.iter() {
+            for stmt in &bb.statements {
+                let StatementKind::Assign(assign) = &stmt.kind else { continue };
+                let dest = assign.0.local;
+                if dest != current {
+                    continue;
+                }
+                let source = match &assign.1 {
+                    Rvalue::Use(Operand::Copy(place))
+                    | Rvalue::Use(Operand::Move(place))
+                    | Rvalue::Cast(_, Operand::Copy(place), _)
+                    | Rvalue::Cast(_, Operand::Move(place), _) => place.local,
+                    _ => continue,
+                };
+                if !seen.contains(&source) {
+                    seen.insert(source);
+                    queue.push_back(source);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Detect when a local callee wraps a pointer-arithmetic call (add/sub) and
+/// produce the correct `ReturnPointerAdd` / `ReturnPointerSub` effect.
+fn try_pointer_arith_wrapper_effect<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    callee: DefId,
+    _destination: Option<Local>,
+) -> Option<CallEffect> {
+    use std::collections::{HashSet, VecDeque};
+
+    let body = tcx.optimized_mir(callee);
+    let ret = Local::from_usize(0);
+
+    for bb in body.basic_blocks.iter() {
+        let Some(terminator) = &bb.terminator else { continue };
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination: call_dest,
+            ..
+        } = &terminator.kind
+        else {
+            continue;
+        };
+
+        let name = call_name(tcx, func);
+        let is_add = is_pointer_add_call(&name);
+        let is_sub = is_pointer_sub_call(&name);
+
+        // Also check if the inner callee is itself a pointer-arithmetic wrapper.
+        let inner_effect = if !is_add && !is_sub {
+            callee_def_id(func).and_then(|inner_callee| {
+                try_pointer_arith_wrapper_effect(tcx, inner_callee, Some(call_dest.local))
+            })
+        } else {
+            None
+        };
+
+        if !is_add && !is_sub && inner_effect.is_none() {
+            continue;
+        }
+
+        // Check that the call result flows to the return value.
+        let mut queue = VecDeque::from([call_dest.local]);
+        let mut seen = HashSet::from([call_dest.local]);
+        let mut reaches_ret = false;
+        while let Some(current) = queue.pop_front() {
+            if current == ret {
+                reaches_ret = true;
+                break;
+            }
+            for bb2 in body.basic_blocks.iter() {
+                for stmt in &bb2.statements {
+                    let StatementKind::Assign(assign) = &stmt.kind else { continue };
+                    let dest = assign.0.local;
+                    if seen.contains(&dest) {
+                        continue;
+                    }
+                    match &assign.1 {
+                        Rvalue::Use(Operand::Copy(place))
+                        | Rvalue::Use(Operand::Move(place)) => {
+                            if place.local == current {
+                                queue.push_back(dest);
+                                seen.insert(dest);
+                            }
+                        }
+                        Rvalue::Cast(_, Operand::Copy(place), _)
+                        | Rvalue::Cast(_, Operand::Move(place), _) => {
+                            if place.local == current {
+                                queue.push_back(dest);
+                                seen.insert(dest);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if !reaches_ret {
+            continue;
+        }
+
+        // For indirect wrappers: remap inner call args to outer callee args.
+        if let Some(effect) = inner_effect {
+            match effect {
+                CallEffect::ReturnPointerAdd {
+                    base_arg: inner_base,
+                    offset_arg: inner_offset,
+                    stride,
+                }
+                | CallEffect::ReturnPointerSub {
+                    base_arg: inner_base,
+                    offset_arg: inner_offset,
+                    stride,
+                } => {
+                    let base_arg =
+                        trace_to_callee_arg(body, &args.get(inner_base)?.node)?;
+                    let offset_arg =
+                        trace_to_callee_arg(body, &args.get(inner_offset)?.node)?;
+                    return Some(match effect {
+                        CallEffect::ReturnPointerSub { .. } => {
+                            CallEffect::ReturnPointerSub {
+                                base_arg,
+                                offset_arg,
+                                stride,
+                            }
+                        }
+                        _ => CallEffect::ReturnPointerAdd {
+                            base_arg,
+                            offset_arg,
+                            stride,
+                        },
+                    });
+                }
+                _ => {}
+            }
+            continue;
+        }
+
+        // Map inner call args to callee argument indices by tracing back
+        // through Copy/Move assignments to the callee's parameter locals.
+        let map_arg = |operand: &Operand<'_>| -> Option<usize> {
+            let local = match operand {
+                Operand::Copy(place) | Operand::Move(place) => place.local,
+                _ => return None,
+            };
+            // Direct: the operand is already a callee parameter.
+            let idx = local.as_usize();
+            if idx >= 1 && idx <= body.arg_count {
+                return Some(idx - 1);
+            }
+            // Indirect: trace back through assignments.
+            let mut queue = VecDeque::from([local]);
+            let mut seen = HashSet::from([local]);
+            while let Some(current) = queue.pop_front() {
+                let cidx = current.as_usize();
+                if cidx >= 1 && cidx <= body.arg_count {
+                    return Some(cidx - 1);
+                }
+                for bb2 in body.basic_blocks.iter() {
+                    for stmt in &bb2.statements {
+                        let StatementKind::Assign(assign) = &stmt.kind else { continue };
+                        let dest = assign.0.local;
+                        if dest != current {
+                            continue;
+                        }
+                        let source = match &assign.1 {
+                            Rvalue::Use(Operand::Copy(place))
+                            | Rvalue::Use(Operand::Move(place))
+                            | Rvalue::Cast(_, Operand::Copy(place), _)
+                            | Rvalue::Cast(_, Operand::Move(place), _) => {
+                                place.local
+                            }
+                            _ => continue,
+                        };
+                        if !seen.contains(&source) {
+                            seen.insert(source);
+                            queue.push_back(source);
+                        }
+                    }
+                }
+            }
+            None
+        };
+
+        let base_arg = map_arg(&args[0].node)?;
+        let offset_arg = map_arg(&args[1].node)?;
+        // Use the inner call's destination to compute the byte stride,
+        // not the wrapper's return type (which may differ after a cast).
+        let stride = destination_stride(tcx, callee, Some(call_dest.local));
+
+        return if is_sub {
+            Some(CallEffect::ReturnPointerSub {
+                base_arg,
+                offset_arg,
+                stride,
+            })
+        } else {
+            Some(CallEffect::ReturnPointerAdd {
+                base_arg,
+                offset_arg,
+                stride,
+            })
+        };
+    }
+
+    None
 }
 
 /// Use the existing dataflow graph to approximate local callee return deps.
