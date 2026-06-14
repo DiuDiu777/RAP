@@ -17,7 +17,7 @@ use super::{
     attribute::attr_parser::parse_rapx_attr,
     contract::Property,
     helpers::{Callsite, collect_return_block_indices, collect_unsafe_callsites},
-    path::{PathExtractor, PathStart},
+    path::PathExtractor,
 };
 
 /// A list of parsed `requires` contracts.
@@ -227,20 +227,29 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
         "Verify Identify Targets Analysis"
     }
 
-    /// Runs the collection pass and logs targets, struct invariants, unsafe callees, and contracts.
     fn run(&mut self) {
-        rap_debug!("======== #[rapx::verify] identify targets ========");
         let mut collector = VerifyTargetCollector::new(self.tcx);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
-        for function_target in collector
+        // Free functions (no owning struct)
+        let free_targets: Vec<_> = collector
             .function_targets
             .iter()
             .filter(|target| target.owner_struct_def_id.is_none())
-        {
-            self.log_function_target(function_target, false);
+            .collect();
+        for target in &free_targets {
+            let target_path = self.tcx.def_path_str(target.def_id);
+            rap_info!("============================================================");
+            rap_info!(
+                "[rapx::verify] prepare targets for free function: {}",
+                target_path
+            );
+            rap_info!("============================================================");
+            self.log_free_function_unsafe_callees(target);
+            rap_info!("");
         }
 
+        // Structs with annotated methods
         let mut struct_ids: Vec<_> = collector.struct_targets.keys().copied().collect();
         struct_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
 
@@ -249,93 +258,89 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
                 continue;
             };
             let struct_path = self.tcx.def_path_str(struct_target.def_id);
-            rap_debug!(
-                "[rapx::verify::identify-targets] struct target: {} (DefId: {:?})",
-                struct_path,
-                struct_target.def_id
+
+            rap_info!("============================================================");
+            rap_info!(
+                "[rapx::verify] prepare targets for struct: {}",
+                struct_path
             );
+            rap_info!("============================================================");
 
-            if struct_target.invariants.is_empty() {
-                rap_debug!("  struct invariants: <none>");
-            } else {
-                for property in &struct_target.invariants {
-                    rap_debug!(
-                        "  struct invariant: kind={:?}, args={:?}",
-                        property.kind,
-                        property.args
-                    );
-                }
+            self.log_struct_invariants(struct_target);
+
+            for target in &struct_target.function_targets {
+                self.log_method_target(target);
             }
 
-            for function_target in &struct_target.function_targets {
-                self.log_function_target(function_target, true);
-            }
+            rap_info!("");
         }
 
-        let total_free_function_targets = collector
-            .function_targets
-            .iter()
-            .filter(|target| target.owner_struct_def_id.is_none())
-            .count();
-        let total_method_targets = collector
+        let total_free = free_targets.len();
+        let total_method = collector
             .function_targets
             .iter()
             .filter(|target| target.owner_struct_def_id.is_some())
             .count();
-        let total_struct_targets = collector.struct_targets.len();
+        let total_struct = collector.struct_targets.len();
 
-        rap_debug!(
-            "total: {} free function target(s) to verify, {} method target(s) to verify, {} struct target(s) to verify",
-            total_free_function_targets,
-            total_method_targets,
-            total_struct_targets
+        rap_info!("============================================================");
+        rap_info!(
+            "[rapx::verify] total: {} free function(s), {} method(s), {} struct(s)",
+            total_free,
+            total_method,
+            total_struct
         );
-        rap_debug!("=======================================");
+        rap_info!("============================================================");
     }
 
     fn reset(&mut self) {}
 }
 
 impl<'tcx> PrepareTargets<'tcx> {
-    /// Creates a new analysis instance.
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         PrepareTargets { tcx }
     }
 
-    /// Logs one function target and all contracts collected from its unsafe callees.
-    fn log_function_target(&self, target: &FunctionTarget<'tcx>, nested_under_struct: bool) {
-        let target_path = self.tcx.def_path_str(target.def_id);
-        let prefix = if nested_under_struct {
-            "  method target"
+    fn log_struct_invariants(&self, struct_target: &StructTarget<'tcx>) {
+        if struct_target.invariants.is_empty() {
+            rap_info!("  struct invariants: <none>");
         } else {
-            "[rapx::verify::identify-targets] function target"
-        };
-        rap_info!("{}: {} (DefId: {:?})", prefix, target_path, target.def_id);
-
-        if let Some(struct_def_id) = target.owner_struct_def_id {
-            let struct_path = self.tcx.def_path_str(struct_def_id);
-            rap_info!(
-                "    owner struct: {} (DefId: {:?})",
-                struct_path,
-                struct_def_id
-            );
-        }
-
-        if !target.struct_invariants.is_empty() {
-            rap_info!("    struct invariants to verify:");
-            for property in &target.struct_invariants {
+            rap_info!("  struct invariants:");
+            for property in &struct_target.invariants {
                 rap_info!(
-                    "      invariant: kind={:?}, args={:?}",
+                    "    - {:?}, args={:?}",
                     property.kind,
                     property.args
                 );
             }
-            let return_blocks = collect_return_block_indices(self.tcx, target.def_id);
-            rap_info!("    return checkpoints: {} block(s) {:?}", return_blocks.len(), return_blocks);
         }
+    }
 
+    fn log_method_target(&self, target: &FunctionTarget<'tcx>) {
+        let target_path = self.tcx.def_path_str(target.def_id);
+        let name = target_path.rsplit("::").next().unwrap_or(&target_path);
+        let dashes = 62usize.saturating_sub(10 + name.len());
+        rap_info!("  --- method: {name} {}", "-".repeat(dashes));
+
+        let return_blocks = collect_return_block_indices(self.tcx, target.def_id);
+        rap_info!(
+            "      return checkpoints: {} block(s) {:?}",
+            return_blocks.len(),
+            return_blocks.iter().map(|bb| bb.as_usize()).collect::<Vec<_>>()
+        );
+
+        self.log_unsafe_callees_and_contracts(target);
+        self.log_callsite_paths(target);
+    }
+
+    fn log_free_function_unsafe_callees(&self, target: &FunctionTarget<'tcx>) {
+        self.log_unsafe_callees_and_contracts(target);
+        self.log_callsite_paths(target);
+    }
+
+    fn log_unsafe_callees_and_contracts(&self, target: &FunctionTarget<'tcx>) {
         if target.callee_requires.is_empty() {
-            rap_info!("    unsafe callees: <none>");
+            rap_info!("      unsafe callsites: <none>");
             return;
         }
 
@@ -345,41 +350,37 @@ impl<'tcx> PrepareTargets<'tcx> {
         for unsafe_callee_def_id in unsafe_callee_ids {
             let unsafe_callee_path = self.tcx.def_path_str(unsafe_callee_def_id);
             rap_info!(
-                "    unsafe callee: {} (DefId: {:?})",
+                "      unsafe callee: {}",
                 unsafe_callee_path,
-                unsafe_callee_def_id
             );
 
-            match target.callee_requires.get(&unsafe_callee_def_id) {
-                Some(requires) if !requires.is_empty() => {
+            if let Some(requires) = target.callee_requires.get(&unsafe_callee_def_id) {
+                if requires.is_empty() {
+                    rap_info!("        safety contracts: <none>");
+                } else {
+                    rap_info!("        safety contracts:");
                     for property in requires {
                         rap_info!(
-                            "      safety contract: kind={:?}, args={:?}",
+                            "          - {:?}, args={:?}",
                             property.kind,
                             property.args
                         );
                     }
                 }
-                _ => {
-                    rap_info!("      safety contract: <none>");
-                }
             }
         }
-
-        self.log_function_paths(target);
     }
 
-    /// Logs unsafe callsites and SCC-aware path skeletons for one target.
-    fn log_function_paths(&self, target: &FunctionTarget<'tcx>) {
+    fn log_callsite_paths(&self, target: &FunctionTarget<'tcx>) {
         if target.callsites.is_empty() {
-            rap_info!("    unsafe callsites: <none>");
             return;
         }
 
         let result = PathExtractor::new(self.tcx, target.def_id, target.callsites.clone(), 0).run();
+        rap_info!("      callsite paths:");
         for (display_index, callsite) in result.callsites().iter().enumerate() {
             rap_info!(
-                "    unsafe callsite #{}: {} at bb{} ({} arg(s))",
+                "        #{} {} at bb{} ({} arg(s))",
                 display_index,
                 callsite.callee_name(self.tcx),
                 callsite.block.as_usize(),
@@ -390,16 +391,12 @@ impl<'tcx> PrepareTargets<'tcx> {
             callsite_paths.sort_by_key(|path| path.describe());
 
             if callsite_paths.is_empty() {
-                rap_info!("      paths: <none>");
+                rap_info!("          paths: <none>");
                 continue;
             }
 
             for (path_idx, path) in callsite_paths.iter().enumerate() {
-                let kind = match path.start {
-                    PathStart::FunctionEntry => "entry",
-                };
-                rap_info!("      path {} kind: {}", path_idx, kind);
-                rap_info!("      path {}: {}", path_idx, path.describe());
+                rap_info!("          path {}: {}", path_idx, path.describe());
             }
         }
     }
