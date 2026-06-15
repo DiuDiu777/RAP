@@ -166,6 +166,30 @@
       ]
     }
   ],
+  "core::ptr::read": [
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "self",
+        "T",
+        "1"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "self",
+        "T"
+      ]
+    },
+    {
+      "tag": "Typed",
+      "args": [
+        "self",
+        "T"
+      ]
+    }
+  ],
   "core::ptr::const_ptr::read": [
     {
       "tag": "ValidPtr",
@@ -191,30 +215,6 @@
     }
   ],
   "core::ptr::mut_ptr::read": [
-    {
-      "tag": "ValidPtr",
-      "args": [
-        "self",
-        "T",
-        "1"
-      ]
-    },
-    {
-      "tag": "Align",
-      "args": [
-        "self",
-        "T"
-      ]
-    },
-    {
-      "tag": "Typed",
-      "args": [
-        "self",
-        "T"
-      ]
-    }
-  ],
-  "core::ptr::read": [
     {
       "tag": "ValidPtr",
       "args": [
@@ -432,6 +432,18 @@
     {
       "tag": "ValidNum",
       "args": []
+    }
+  ],
+  "core::slice::get_unchecked": [
+    {
+      "tag": "InBound",
+      "args": ["arg:0", "ty:T", "Arg_1 + 1"]
+    }
+  ],
+  "core::slice::get_unchecked_mut": [
+    {
+      "tag": "InBound",
+      "args": ["arg:0", "ty:T", "Arg_1 + 1"]
     }
   ],
   "core::str::converts::from_raw_parts": [

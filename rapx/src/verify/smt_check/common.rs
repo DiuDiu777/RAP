@@ -27,7 +27,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rustc_middle::{
-    mir::{BinOp, Local, Operand, TerminatorKind},
+    mir::{BinOp, Local, Operand, TerminatorKind, UnOp},
     ty::{GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind},
 };
 use z3::{
@@ -38,7 +38,10 @@ use z3::{
 use super::{align, in_bound, init, non_null, valid_ptr};
 
 use crate::verify::{
-    contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
+    contract::{
+        ContractExpr, ContractPlace, ContractProjection, NumericOp, PlaceBase, Property,
+        PropertyArg, PropertyKind,
+    },
     def_use::{PlaceBaseKey, PlaceKey},
     forward_visit::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
     generic::GenericTypeCandidates,
@@ -257,6 +260,9 @@ impl<'tcx> SmtChecker<'tcx> {
             } => {
                 let target_label = place_label(place);
                 let Some(bounds) = model.pointer_bounds_for_place(place) else {
+                    rap_debug!(
+                        "  [SMT InBound] could not recover pointer bounds for {target_label}"
+                    );
                     return SmtCheckResult::unknown(format!(
                         "could not connect {target_label} to a slice length and pointer-add index"
                     ))
@@ -265,7 +271,7 @@ impl<'tcx> SmtChecker<'tcx> {
                         model.assumptions().to_vec(),
                         SmtPredicate::Not(Box::new(SmtPredicate::InBounds {
                             index: SmtTerm::Value("index(?)".to_string()),
-                            access_count: *access_count,
+                            access_count: access_count.clone(),
                             len: SmtTerm::Value("len(?)".to_string()),
                         })),
                     ))
@@ -275,22 +281,48 @@ impl<'tcx> SmtChecker<'tcx> {
                 };
 
                 let zero = Int::from_u64(&ctx, 0);
-                let access = Int::from_u64(&ctx, *access_count);
+                let Some(access) = model.term_for_smt_term(access_count) else {
+                    rap_debug!(
+                        "  [SMT InBound] could not lower access-count term {}",
+                        access_count.describe()
+                    );
+                    return SmtCheckResult::unknown(format!(
+                        "could not build an access-count term for {}",
+                        access_count.describe()
+                    ))
+                    .with_query(SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Not(Box::new(SmtPredicate::InBounds {
+                            index: bounds.index_term,
+                            access_count: access_count.clone(),
+                            len: bounds.len_term,
+                        })),
+                    ));
+                };
                 let index_non_negative = bounds.index.ge(&zero);
+                let access_non_negative = access.ge(&zero);
                 let covered_end = Int::add(&ctx, &[bounds.index.clone(), access]);
                 let within_len = covered_end.le(&bounds.len);
                 solver.assert(&index_non_negative);
+                solver.assert(&access_non_negative);
                 model.assumptions.push(SmtPredicate::Ge(
                     bounds.index_term.clone(),
                     SmtTerm::Const(0),
                 ));
-                let goal = Bool::and(&ctx, &[&index_non_negative, &within_len]);
+                model
+                    .assumptions
+                    .push(SmtPredicate::Ge(access_count.clone(), SmtTerm::Const(0)));
+                let goal = Bool::and(
+                    &ctx,
+                    &[&index_non_negative, &access_non_negative, &within_len],
+                );
                 let query = SmtQuery::new(
                     obligation.clone(),
                     model.assumptions().to_vec(),
                     SmtPredicate::Not(Box::new(SmtPredicate::InBounds {
                         index: bounds.index_term,
-                        access_count: *access_count,
+                        access_count: access_count.clone(),
                         len: bounds.len_term,
                     })),
                 );
@@ -298,14 +330,24 @@ impl<'tcx> SmtChecker<'tcx> {
                 solver.assert(&goal.not());
                 match solver.check() {
                     SatResult::Unsat => SmtCheckResult::proved(format!(
-                        "in-bounds proved for {target_label}; {access_count} {ty_name} element(s) fit under the matched slice length"
+                        "in-bounds proved for {target_label}; {} {ty_name} element(s) fit under the matched slice length",
+                        access_count.describe()
                     ))
                     .with_query(query),
-                    SatResult::Sat => SmtCheckResult::unknown(
-                        "current path facts do not prove the required bounds",
-                    )
-                    .with_query(query)
-                    .with_note("hint: add an index < len guard or provide a richer object-size summary"),
+                    SatResult::Sat => {
+                        rap_debug!(
+                            "  [SMT InBound] sat for {target_label}; assumptions: {:?}; negated goal: {}",
+                            query.assumptions,
+                            query.negated_goal.describe()
+                        );
+                        SmtCheckResult::unknown(
+                            "current path facts do not prove the required bounds",
+                        )
+                        .with_query(query)
+                        .with_note(
+                            "hint: add an index < len guard or provide a richer object-size summary",
+                        )
+                    }
                     SatResult::Unknown => {
                         SmtCheckResult::unknown("solver returned unknown").with_query(query)
                     }
@@ -509,6 +551,90 @@ impl<'tcx> SmtChecker<'tcx> {
         })
     }
 
+    /// Resolve the trailing length expression at a concrete callsite.
+    ///
+    /// This keeps constants unchanged and rewrites callee argument places, such
+    /// as `Arg_2` from std-contract JSON, to the concrete MIR place passed by
+    /// the caller at this callsite.  Composite numeric expressions are rebound
+    /// recursively.
+    pub(crate) fn property_len_expr(
+        &self,
+        callsite: &Callsite<'tcx>,
+        property: &Property<'tcx>,
+    ) -> Option<ContractExpr<'tcx>> {
+        property.args.iter().rev().find_map(|arg| {
+            let PropertyArg::Expr(expr) = arg else {
+                return None;
+            };
+            self.bind_contract_expr_to_callsite(callsite, expr)
+        })
+    }
+
+    /// Lower a rebound contract arithmetic expression into the common SMT term model.
+    pub(crate) fn contract_expr_to_smt_term(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        expr: &ContractExpr<'tcx>,
+    ) -> Option<SmtTerm> {
+        match expr {
+            ContractExpr::Place(place) => {
+                Some(SmtTerm::Place(PlaceKey::from_contract_place(place)))
+            }
+            ContractExpr::Const(value) => u64::try_from(*value).ok().map(SmtTerm::Const),
+            ContractExpr::SizeOf(ty) => {
+                let (_, size) = self.type_layout(caller, *ty)?;
+                Some(SmtTerm::Const(size))
+            }
+            ContractExpr::AlignOf(ty) => {
+                let (align, _) = self.type_layout(caller, *ty)?;
+                Some(SmtTerm::Const(align))
+            }
+            ContractExpr::Binary { op, lhs, rhs } => {
+                let lhs = Box::new(self.contract_expr_to_smt_term(caller, lhs)?);
+                let rhs = Box::new(self.contract_expr_to_smt_term(caller, rhs)?);
+                match op {
+                    NumericOp::Add => Some(SmtTerm::Add(lhs, rhs)),
+                    NumericOp::Sub => Some(SmtTerm::Sub(lhs, rhs)),
+                    NumericOp::Mul => Some(SmtTerm::Mul(lhs, rhs)),
+                    NumericOp::Rem => Some(SmtTerm::Rem(lhs, rhs)),
+                    NumericOp::Div | NumericOp::BitAnd | NumericOp::BitOr | NumericOp::BitXor => {
+                        None
+                    }
+                }
+            }
+            ContractExpr::Unary { .. } | ContractExpr::Unknown => None,
+        }
+    }
+
+    fn bind_contract_expr_to_callsite(
+        &self,
+        callsite: &Callsite<'tcx>,
+        expr: &ContractExpr<'tcx>,
+    ) -> Option<ContractExpr<'tcx>> {
+        match expr {
+            ContractExpr::Place(place) => self
+                .contract_place_to_callsite_place(callsite, place)
+                .map(contract_expr_from_place_key),
+            ContractExpr::Const(value) => Some(ContractExpr::Const(*value)),
+            ContractExpr::SizeOf(ty) => Some(ContractExpr::SizeOf(
+                self.instantiate_callsite_ty(callsite, *ty),
+            )),
+            ContractExpr::AlignOf(ty) => Some(ContractExpr::AlignOf(
+                self.instantiate_callsite_ty(callsite, *ty),
+            )),
+            ContractExpr::Binary { op, lhs, rhs } => Some(ContractExpr::Binary {
+                op: *op,
+                lhs: Box::new(self.bind_contract_expr_to_callsite(callsite, lhs)?),
+                rhs: Box::new(self.bind_contract_expr_to_callsite(callsite, rhs)?),
+            }),
+            ContractExpr::Unary { op, expr } => Some(ContractExpr::Unary {
+                op: *op,
+                expr: Box::new(self.bind_contract_expr_to_callsite(callsite, expr)?),
+            }),
+            ContractExpr::Unknown => Some(ContractExpr::Unknown),
+        }
+    }
+
     /// Convert a contract place into a concrete MIR place when possible.
     pub(crate) fn contract_place_to_callsite_place(
         &self,
@@ -667,7 +793,7 @@ pub enum SmtObligation {
         place: PlaceKey,
         ty_name: String,
         elem_size: u64,
-        access_count: u64,
+        access_count: SmtTerm,
     },
     /// Prove that `place` denotes initialized memory for `elements` elements.
     Initialized {
@@ -711,7 +837,7 @@ impl SmtObligation {
                 "InBound({}, {}, {} element(s), {} byte(s) each)",
                 place_label(place),
                 ty_name,
-                access_count,
+                access_count.describe(),
                 elem_size
             ),
             SmtObligation::Initialized {
@@ -735,6 +861,7 @@ pub enum SmtTerm {
     Value(String),
     Const(u64),
     Add(Box<SmtTerm>, Box<SmtTerm>),
+    Sub(Box<SmtTerm>, Box<SmtTerm>),
     Mul(Box<SmtTerm>, Box<SmtTerm>),
     Rem(Box<SmtTerm>, Box<SmtTerm>),
 }
@@ -747,6 +874,7 @@ impl SmtTerm {
             SmtTerm::Value(value) => value.clone(),
             SmtTerm::Const(value) => value.to_string(),
             SmtTerm::Add(lhs, rhs) => format!("({} + {})", lhs.describe(), rhs.describe()),
+            SmtTerm::Sub(lhs, rhs) => format!("({} - {})", lhs.describe(), rhs.describe()),
             SmtTerm::Mul(lhs, rhs) => format!("({} * {})", lhs.describe(), rhs.describe()),
             SmtTerm::Rem(lhs, rhs) => format!("({} % {})", lhs.describe(), rhs.describe()),
         }
@@ -769,7 +897,7 @@ pub enum SmtPredicate {
     },
     InBounds {
         index: SmtTerm,
-        access_count: u64,
+        access_count: SmtTerm,
         len: SmtTerm,
     },
     Not(Box<SmtPredicate>),
@@ -802,7 +930,7 @@ impl SmtPredicate {
                 "0 <= {} && {} + {} <= {}",
                 index.describe(),
                 index.describe(),
-                access_count,
+                access_count.describe(),
                 len.describe()
             ),
             SmtPredicate::Not(predicate) => format!("not({})", predicate.describe()),
@@ -1117,38 +1245,72 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         &self.assumptions
     }
 
-    /// Try to recover the slice index/length terms behind a `ptr.add(index)` result.
+    /// Try to recover the slice index/length terms behind a pointer result.
+    ///
+    /// Supported forms:
+    ///
+    /// - `slice.as_ptr().add(index)` and wrappers summarized as `ReturnPointerAdd`
+    /// - plain `slice.as_ptr()` / `slice.as_mut_ptr()`, treated as index `0`
     pub(crate) fn pointer_bounds_for_place(
         &mut self,
         place: &PlaceKey,
     ) -> Option<PointerBounds<'ctx>> {
-        let call = self.pointer_add_call_for_place(place)?;
-        if !is_pointer_add_call(&call.func) {
-            return None;
-        }
-        let (base_arg, offset_arg) = call.effects.iter().find_map(|effect| {
-            let crate::verify::call_summary::CallEffect::ReturnPointerAdd {
-                base_arg,
-                offset_arg,
-                ..
-            } = effect
-            else {
-                return None;
-            };
-            Some((*base_arg, *offset_arg))
-        })?;
-        let base = call.args.get(base_arg)?;
-        let index = call.args.get(offset_arg)?;
-        let base_origin = self.origin_key_for_value(base, &mut HashSet::new())?;
-        let len_place = self.len_place_for_origin(&base_origin)?;
+        if let Some(call) = self.pointer_add_call_for_place(place) {
+            let (base_arg, offset_arg) = call.effects.iter().find_map(|effect| {
+                let crate::verify::call_summary::CallEffect::ReturnPointerAdd {
+                    base_arg,
+                    offset_arg,
+                    ..
+                } = effect
+                else {
+                    return None;
+                };
+                Some((*base_arg, *offset_arg))
+            })?;
+            let base = call.args.get(base_arg)?;
+            let index = call.args.get(offset_arg)?;
+            let base_origin = self.origin_key_for_value(base, &mut HashSet::new())?;
 
-        let index_term = self.term_for_value(index, &mut HashSet::new())?;
-        let len_term_int = self.term_for_place(&len_place)?;
+            let index_term = self.term_for_value(index, &mut HashSet::new())?;
+            let (len_term_int, len_term) =
+                if let Some(len_place) = self.len_place_for_origin(&base_origin) {
+                    (self.term_for_place(&len_place)?, SmtTerm::Place(len_place))
+                } else {
+                    let len_value = self.guarded_len_for_index(&base_origin, index)?;
+                    (
+                        self.term_for_value(&len_value, &mut HashSet::new())?,
+                        SmtTerm::Value(value_label(&len_value)),
+                    )
+                };
+            return Some(PointerBounds {
+                index: index_term,
+                len: len_term_int,
+                index_term: SmtTerm::Value(value_label(index)),
+                len_term,
+            });
+        }
+
+        let value = self
+            .resolved_value_for_place(place, &mut HashSet::new())
+            .unwrap_or_else(|| AbstractValue::Place(place.clone()));
+        let base_origin = self.origin_key_for_value(&value, &mut HashSet::new())?;
+        let (len_term_int, len_term) =
+            if let Some(len_place) = self.len_place_for_origin(&base_origin) {
+                (self.term_for_place(&len_place)?, SmtTerm::Place(len_place))
+            } else {
+                let zero = AbstractValue::ConstInt(0);
+                let len_value = self.guarded_len_for_index(&base_origin, &zero)?;
+                (
+                    self.term_for_value(&len_value, &mut HashSet::new())?,
+                    SmtTerm::Value(value_label(&len_value)),
+                )
+            };
+
         Some(PointerBounds {
-            index: index_term,
+            index: Int::from_u64(self.ctx, 0),
             len: len_term_int,
-            index_term: SmtTerm::Value(value_label(index)),
-            len_term: SmtTerm::Place(len_place),
+            index_term: SmtTerm::Const(0),
+            len_term,
         })
     }
 
@@ -1412,6 +1574,35 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
+    /// Build an SMT integer term from a property-independent diagnostic term.
+    fn term_for_smt_term(&mut self, term: &SmtTerm) -> Option<Int<'ctx>> {
+        match term {
+            SmtTerm::Place(place) => self.term_for_place(place),
+            SmtTerm::Value(name) => Some(Int::new_const(self.ctx, sanitize_smt_name(name))),
+            SmtTerm::Const(value) => Some(Int::from_u64(self.ctx, *value)),
+            SmtTerm::Add(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(Int::add(self.ctx, &[lhs, rhs]))
+            }
+            SmtTerm::Sub(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(Int::sub(self.ctx, &[lhs, rhs]))
+            }
+            SmtTerm::Mul(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(Int::mul(self.ctx, &[lhs, rhs]))
+            }
+            SmtTerm::Rem(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs.modulo(&rhs))
+            }
+        }
+    }
+
     /// Lower a binary MIR operation to an integer term.
     fn term_for_binary(&self, op: BinOp, lhs: &Int<'ctx>, rhs: &Int<'ctx>) -> Option<Int<'ctx>> {
         let one = Int::from_u64(self.ctx, 1);
@@ -1493,11 +1684,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
-    /// Return the pointer-add call that produced a place after copies/casts.
+    /// Return the pointer-add call/effect that produced a place after copies/casts.
     fn pointer_add_call_for_place(&self, place: &PlaceKey) -> Option<CallSummary<'tcx>> {
         let value = self.resolved_value_for_place(place, &mut HashSet::new())?;
         match value {
-            AbstractValue::CallResult(call) if is_pointer_add_call(&call.func) => Some(call),
+            AbstractValue::CallResult(call) if call_has_pointer_add_effect(&call) => Some(call),
             _ => None,
         }
     }
@@ -1554,6 +1745,93 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 self.origin_key_for_value(call.args.get(source_arg)?, seen)
             }
             _ => Some(value_label(&resolved)),
+        }
+    }
+
+    /// Recover a length value from a path guard that mentions `index`.
+    fn guarded_len_for_index(
+        &self,
+        base_origin: &str,
+        index: &AbstractValue<'tcx>,
+    ) -> Option<AbstractValue<'tcx>> {
+        let index = self
+            .resolved_value(index, &mut HashSet::new())
+            .unwrap_or_else(|| index.clone());
+        for fact in &self.forward.facts {
+            let StateFact::BranchEq { value, equals: 1 } = fact else {
+                continue;
+            };
+            let predicate = self
+                .resolved_value(value, &mut HashSet::new())
+                .unwrap_or_else(|| value.clone());
+            let AbstractValue::Binary(op, lhs, rhs) = predicate else {
+                continue;
+            };
+            match op {
+                BinOp::Lt | BinOp::Le => {
+                    if self.value_mentions(&lhs, &index)
+                        && self.len_matches_origin(&rhs, base_origin)
+                    {
+                        return Some(*rhs);
+                    }
+                }
+                BinOp::Gt | BinOp::Ge => {
+                    if self.value_mentions(&rhs, &index)
+                        && self.len_matches_origin(&lhs, base_origin)
+                    {
+                        return Some(*lhs);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    /// Return true when `haystack` contains the same resolved value as `needle`.
+    fn value_mentions(&self, haystack: &AbstractValue<'tcx>, needle: &AbstractValue<'tcx>) -> bool {
+        let haystack = self
+            .resolved_value(haystack, &mut HashSet::new())
+            .unwrap_or_else(|| haystack.clone());
+        let needle = self
+            .resolved_value(needle, &mut HashSet::new())
+            .unwrap_or_else(|| needle.clone());
+        if value_label(&haystack) == value_label(&needle) {
+            return true;
+        }
+        match haystack {
+            AbstractValue::Cast(inner, _) | AbstractValue::Unary(_, inner) => {
+                self.value_mentions(&inner, &needle)
+            }
+            AbstractValue::Binary(_, lhs, rhs) => {
+                self.value_mentions(&lhs, &needle) || self.value_mentions(&rhs, &needle)
+            }
+            _ => false,
+        }
+    }
+
+    /// Return true when a length-like value is the metadata/len of `base_origin`.
+    fn len_matches_origin(&self, len: &AbstractValue<'tcx>, base_origin: &str) -> bool {
+        let resolved = self
+            .resolved_value(len, &mut HashSet::new())
+            .unwrap_or_else(|| len.clone());
+        match resolved {
+            AbstractValue::Place(place) => value_for_place(self.forward, &place)
+                .is_some_and(|value| self.len_matches_origin(value, base_origin)),
+            AbstractValue::Unary(UnOp::PtrMetadata, inner) => self
+                .origin_key_for_value(&inner, &mut HashSet::new())
+                .is_some_and(|origin| origin == base_origin),
+            AbstractValue::CallResult(call) => call.effects.iter().any(|effect| {
+                let crate::verify::call_summary::CallEffect::ReturnLengthOfArg { arg } = effect
+                else {
+                    return false;
+                };
+                call.args
+                    .get(*arg)
+                    .and_then(|value| self.origin_key_for_value(value, &mut HashSet::new()))
+                    .is_some_and(|origin| origin == base_origin)
+            }),
+            _ => false,
         }
     }
 
@@ -1616,6 +1894,20 @@ fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
     }
 }
 
+fn contract_expr_from_place_key<'tcx>(place: PlaceKey) -> ContractExpr<'tcx> {
+    let base = match place.base {
+        PlaceBaseKey::Return => PlaceBase::Return,
+        PlaceBaseKey::Local(local) => PlaceBase::Local(local),
+        PlaceBaseKey::Arg(arg) => PlaceBase::Arg(arg),
+    };
+    let projections = place
+        .fields
+        .into_iter()
+        .map(|index| ContractProjection::Field { index, ty: None })
+        .collect();
+    ContractExpr::Place(ContractPlace { base, projections })
+}
+
 /// Return the abstract value assigned to a place when it is tracked by local.
 fn value_for_place<'a, 'tcx>(
     forward: &'a ForwardVisitResult<'tcx>,
@@ -1654,6 +1946,16 @@ fn is_pointer_sub_call(func: &str) -> bool {
 /// Return true when a call summary extracts a pointer from a slice-like object.
 fn is_as_ptr_call(func: &str) -> bool {
     PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_as_ptr_like)
+}
+
+/// Return true when a call summary carries pointer-add semantics.
+fn call_has_pointer_add_effect(call: &CallSummary<'_>) -> bool {
+    call.effects.iter().any(|effect| {
+        matches!(
+            effect,
+            crate::verify::call_summary::CallEffect::ReturnPointerAdd { .. }
+        )
+    })
 }
 
 /// Stable SMT variable name for a place key.
@@ -1815,4 +2117,17 @@ fn const_int_from_debug(text: &str) -> Option<u128> {
     } else {
         u128::from_str_radix(&digits, 16).ok()
     }
+}
+
+/// Stable SMT identifier for diagnostic-only symbolic terms.
+fn sanitize_smt_name(name: &str) -> String {
+    name.chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() || ch == '_' {
+                ch
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
