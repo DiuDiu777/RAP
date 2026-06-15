@@ -1,10 +1,10 @@
-# ![logo](https://raw.githubusercontent.com/Artisan-Lab/RAPx/main/logo.png)
-RAPx (Rust Analysis Platform with Extensions) [![license](https://img.shields.io/github/license/Artisan-Lab/RAPx)](./LICENSE-MPL)[![docs.rs](https://img.shields.io/docsrs/rapx)](https://docs.rs/rapx) is an advanced static analysis platform for Rust. It provides an extensible framework for building and integrating powerful analysis capabilities that go beyond those available in the standard rustc compiler, empowering developers to reason about safety, robustness, and performance at a deeper level.
+# ![logo](https://raw.githubusercontent.com/safer-rust/RAPx/main/logo.png)
+RAPx (Rust Analysis Platform with Extensions) [![license](https://img.shields.io/github/license/safer-rust/RAPx)](./LICENSE-MPL)[![docs.rs](https://img.shields.io/docsrs/rapx)](https://docs.rs/rapx) is an advanced static analysis platform for Rust. It provides an extensible framework for building and integrating powerful analysis capabilities that go beyond those available in the standard rustc compiler, empowering developers to reason about safety, robustness, and performance at a deeper level.
 
 RAPx is available on crates.io. [![crates.io](https://img.shields.io/crates/v/rapx.svg)](https://crates.io/crates/rapx)
 
 ## Features
-# ![logo](https://raw.githubusercontent.com/Artisan-Lab/RAPx/main/feature.png)
+# ![logo](https://raw.githubusercontent.com/safer-rust/RAPx/main/feature.png)
 RAPx is structured into two layers: a core layer offering essential program analysis algorithms (e.g., alias and dataflow analysis), and an application layer implementing specific tasks such as bug detection. This separation of concerns promotes modular development and fosters collaboration between algorithm and application developers.
 
 The project is still under heavy development. For further details, please refer to the [RAPx-Book](https://safer-rust.github.io/RAPx-Book/).
@@ -16,7 +16,7 @@ this will do nothing.
 
 ```shell
 rustup toolchain install nightly-2025-12-06 --profile minimal --component rustc-dev,rust-src,llvm-tools-preview
-cargo +nightly-2025-12-06 install rapx --git https://github.com/Artisan-Lab/RAPx.git
+cargo +nightly-2025-12-06 install rapx --git https://github.com/safer-rust/RAPx.git
 ```
 
 ## Usage

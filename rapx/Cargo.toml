@@ -1,13 +1,13 @@
 [package]
 name = "rapx"
-version = "0.7.11"
+version = "0.7.13"
 edition = "2024"
-authors = ["Artisan-Lab <xuh@fudan.edu.cn>"]
+authors = ["safer-rust <xuh@fudan.edu.cn>"]
 default-run = "rapx"
 license = "MPL-2.0"
-description = "A static analysis platform for use-after-free, memory leakage detection, etc"
-documentation = "https://artisan-lab.github.io/RAPx-Book/"
-repository = "https://github.com/Artisan-Lab/RAPx"
+description = "A static analysis platform for Rust program analysis and verification"
+documentation = "https://safer-rust.github.io/RAPx-Book/"
+repository = "https://github.com/safer-rust/RAPx"
 readme = "../README.md"
 
 [[bin]]
