@@ -1,4 +1,5 @@
 use crate::analysis::Analysis;
+use crate::cli::VerifyMode;
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind,
     def_id::{DefId, LocalDefId},
@@ -54,6 +55,7 @@ pub struct StructTarget<'tcx> {
 /// Visitor that collects targets annotated with `#[rapx::verify]`.
 pub struct VerifyTargetCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
+    mode: VerifyMode,
     /// All function targets to verify collected from the current crate.
     pub function_targets: Vec<FunctionTarget<'tcx>>,
     /// All struct targets to verify collected from the current crate.
@@ -64,9 +66,10 @@ pub struct VerifyTargetCollector<'tcx> {
 
 impl<'tcx> VerifyTargetCollector<'tcx> {
     /// Creates a new collector for the current type context.
-    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, mode: VerifyMode) -> Self {
         VerifyTargetCollector {
             tcx,
+            mode,
             function_targets: Vec::new(),
             struct_targets: HashMap::new(),
             fn_contract_cache: HashMap::new(),
@@ -197,10 +200,10 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         self.tcx
     }
 
-    /// Visits each function body and records those annotated with `#[rapx::verify]`.
+    /// Visits each function body and records verification targets.
     ///
-    /// For every function target to verify, this also computes its unsafe callees
-    /// and the safety preconditions required by those callees.
+    /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are collected.
+    /// In `all` mode, every function with an unsafe callee or a struct invariant is collected.
     fn visit_fn(
         &mut self,
         _fk: FnKind<'tcx>,
@@ -209,17 +212,31 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         _span: Span,
         id: LocalDefId,
     ) -> Self::Result {
-        if self.has_rapx_verify_attr(id) {
-            let def_id = id.to_def_id();
-            let function_target = self.build_function_target(def_id);
-            self.push_function_target(function_target);
+        if matches!(self.mode, VerifyMode::Targeted) && !self.has_rapx_verify_attr(id) {
+            return;
         }
+
+        let def_id = id.to_def_id();
+        let function_target = self.build_function_target(def_id);
+
+        if matches!(self.mode, VerifyMode::All)
+            && function_target.callsites.is_empty()
+            && function_target.struct_invariants.is_empty()
+        {
+            return;
+        }
+
+        self.push_function_target(function_target);
     }
 }
 
-/// Analysis pass that finds all targets annotated with `#[rapx::verify]`.
+/// Analysis pass that finds all verification targets.
+///
+/// In `targeted` mode, only functions annotated with `#[rapx::verify]` are listed.
+/// In `all` mode, all functions with unsafe callees or struct invariants are listed.
 pub struct PrepareTargets<'tcx> {
     tcx: TyCtxt<'tcx>,
+    mode: VerifyMode,
 }
 
 impl<'tcx> Analysis for PrepareTargets<'tcx> {
@@ -228,7 +245,7 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
     }
 
     fn run(&mut self) {
-        let mut collector = VerifyTargetCollector::new(self.tcx);
+        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         // Free functions (no owning struct)
@@ -249,7 +266,7 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
             rap_info!("");
         }
 
-        // Structs with annotated methods
+        // Structs with methods
         let mut struct_ids: Vec<_> = collector.struct_targets.keys().copied().collect();
         struct_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
 
@@ -297,8 +314,8 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
 }
 
 impl<'tcx> PrepareTargets<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>) -> Self {
-        PrepareTargets { tcx }
+    pub fn new(tcx: TyCtxt<'tcx>, mode: VerifyMode) -> Self {
+        PrepareTargets { tcx, mode }
     }
 
     fn log_struct_invariants(&self, struct_target: &StructTarget<'tcx>) {

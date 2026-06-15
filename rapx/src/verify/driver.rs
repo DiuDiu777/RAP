@@ -8,6 +8,7 @@
 
 use crate::analysis::Analysis;
 use crate::analysis::path_analysis::graph::PathGraph;
+use crate::cli::VerifyMode;
 
 use indexmap::IndexMap;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -30,6 +31,7 @@ pub struct VerifyDriver<'target, 'tcx> {
     path_info: FunctionPaths<'tcx>,
     properties_to_verify: FxHashMap<super::helpers::CallsiteLocation, &'target [Property<'tcx>]>,
     engine: VerifyEngine<'tcx>,
+    allow_repeat: usize,
 }
 
 impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
@@ -54,6 +56,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             path_info,
             properties_to_verify,
             engine,
+            allow_repeat,
         }
     }
 
@@ -216,7 +219,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     ) -> FxHashMap<CallsiteLocation, Vec<Path>> {
         let mut pg = PathGraph::new(self.tcx, self.target.def_id);
         pg.find_scc();
-        let all_paths = pg.enumerate_paths_repeat(0);
+        let all_paths = pg.enumerate_paths_repeat(self.allow_repeat);
 
         let kind_label = if is_constructor { "constructor" } else { "method" };
         rap_debug!(
@@ -341,14 +344,16 @@ pub struct CallsiteCheckView<'view, 'target, 'tcx> {
 pub struct VerifyRun<'tcx> {
     tcx: TyCtxt<'tcx>,
     allow_pathseg_repeat: usize,
+    mode: VerifyMode,
 }
 
 impl<'tcx> VerifyRun<'tcx> {
     /// Create the default verify pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize, mode: VerifyMode) -> Self {
         Self {
             tcx,
             allow_pathseg_repeat,
+            mode,
         }
     }
 }
@@ -365,7 +370,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
     /// level. Earlier rounds use fewer loop unrollings; later rounds incrementally
     /// add deeper paths.
     fn run(&mut self) {
-        let mut collector = VerifyTargetCollector::new(self.tcx);
+        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {
@@ -381,7 +386,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
             // Phase 2: struct invariant verification
             if !target.struct_invariants.is_empty() {
-                let driver = VerifyDriver::new(self.tcx, target);
+                let driver = VerifyDriver::new_with_repeat(self.tcx, target, self.allow_pathseg_repeat);
                 let struct_report = driver.verify_struct_invariants();
                 all_results.extend(struct_report.results);
             }
@@ -480,14 +485,16 @@ fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
 pub struct VerifyVisitDump<'tcx> {
     tcx: TyCtxt<'tcx>,
     allow_pathseg_repeat: usize,
+    mode: VerifyMode,
 }
 
 impl<'tcx> VerifyVisitDump<'tcx> {
     /// Create a diagnostic dump pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize, mode: VerifyMode) -> Self {
         Self {
             tcx,
             allow_pathseg_repeat,
+            mode,
         }
     }
 }
@@ -500,7 +507,7 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
     /// Collect verify targets and print the current staged visitor output.
     fn run(&mut self) {
         rap_debug!("======== #[rapx::verify] visitor diagnostics ========");
-        let mut collector = VerifyTargetCollector::new(self.tcx);
+        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {

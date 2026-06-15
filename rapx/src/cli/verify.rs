@@ -1,5 +1,13 @@
 use clap::Args;
 
+#[derive(Debug, Clone, Copy, clap::ValueEnum)]
+pub enum VerifyMode {
+    #[value(help = "Auto-detect: verify all functions with unsafe callees or struct invariants")]
+    All,
+    #[value(help = "Only verify functions annotated with #[rapx::verify]")]
+    Targeted,
+}
+
 /// Arguments for the `verify` command.
 #[derive(Debug, Clone, Args)]
 pub struct VerifyArgs {
@@ -10,4 +18,7 @@ pub struct VerifyArgs {
     /// Default is 0 (postfix segments appear once each). Set to 1 to allow one extra repetition (two total occurrences), etc.
     #[arg(long, default_value_t = 0)]
     pub allow_pathseg_repeat: usize,
+    /// Verification mode: `all` auto-detects targets without annotations (default), `targeted` requires #[rapx::verify].
+    #[arg(long, default_value = "all")]
+    pub mode: VerifyMode,
 }
