@@ -137,6 +137,65 @@ unsafe fn custom_ptr_op(ptr: *const i32) -> i32 {
 
 Safety properties include: `Align`, `NonNull`, `Allocated`, `InBound`, `Init`, `ValidPtr`, `Deref`, `Ptr2Ref`, and more. See the [RAPx-Book](https://safer-rust.github.io/RAPx-Book/) for the full list.
 
+### Verification Property Support Checklist
+
+This checklist maps RAPx's contract verification to the [Primitive Safety Properties](https://github.com/safer-rust/safety-tags/blob/main/primitive-sp.md) defined in `safer-rust/safety-tags`.
+
+#### Layout (Section I)
+
+| ID   | Primitive SP    | RAPx tag    | Supported? |
+|------|-----------------|-------------|:----------:|
+| I.1  | Align(p, T)     | `Align`     | Yes |
+| I.2  | Size(T, c)      | `Size`      | - |
+| I.3  | !Padding(T)     | `NoPadding` | - |
+
+#### Pointer Validity (Section II)
+
+| ID   | Primitive SP                 | RAPx tag     | Supported? |
+|------|------------------------------|--------------|:----------:|
+| II.1 | !Null(p)                     | `NonNull`    | - |
+| II.2 | Allocated(p, T, len, A)      | `Allocated`  | - |
+| II.3 | InBound(p, T, len)           | `InBound`    | - |
+| II.4 | !Overlap(dst, src, T, len)   | `NonOverlap` | - |
+
+#### Content (Section III)
+
+| ID   | Primitive SP         | RAPx tag      | Supported? |
+|------|----------------------|---------------|:----------:|
+| III.1 | ValidNum(exp, vrange)| `ValidNum`    | - |
+| III.2 | ValidString(arange)  | `ValidString` | - |
+| III.3 | ValidCStr(p, len)    | `ValidCStr`   | - |
+| III.4 | Init(p, T, len)      | `Init`        | - |
+| III.5 | Unwrap(x, T)         | `Unwrap`      | - |
+| III.6 | Typed(p, T)          | `Typed`       | - |
+
+#### Alias & Ownership (Section IV)
+
+| ID   | Primitive SP     | RAPx tag  | Supported? |
+|------|------------------|-----------|:----------:|
+| IV.1 | !Owned(p)        | `Owning`  | - |
+| IV.2 | Alias(p1, p2)    | `Alias`   | - |
+| IV.3 | Alive(p, l)      | `Alive`   | - |
+
+#### Miscellaneous (Section V)
+
+| ID   | Primitive SP         | RAPx tag       | Supported? |
+|------|----------------------|----------------|:----------:|
+| V.1  | Pinned(p, l)         | `Pinned`       | - |
+| V.2  | !Volatile(p, T, len) | `NonVolatile`  | - |
+| V.3  | Opened(fd)           | `Opened`       | - |
+| V.4  | Trait(T, trait)      | `Trait`        | - |
+| V.5  | !Reachable()         | `Unreachable`  | - |
+
+#### Compound Properties (Section 2.2)
+
+| Compound SP              | RAPx tag    | Supported? |
+|--------------------------|-------------|:----------:|
+| ValidPtr(p, T, len)      | `ValidPtr`  | - |
+| Deref(p, T, len)         | `Deref`     | - |
+| Ptr2Ref(p, T)            | `Ptr2Ref`   | - |
+| Layout(p, layout)        | `Layout`    | - |
+
 ### Environment Variables (values are case insensitive)
 
 | var             | default when absent | possible values     | description                  |
