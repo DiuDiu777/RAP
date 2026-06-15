@@ -173,8 +173,6 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Ptr2Ref(p, T)                 | `Ptr2Ref`      |     —     |
 | Layout(p, layout)             | `Layout`       |     —     |
 
-¹ Currently requires a constant element-count argument; variable-length support pending.
-
 ### Environment Variables (values are case insensitive)
 
 | var             | default when absent | possible values     | description                  |
