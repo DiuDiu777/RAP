@@ -128,7 +128,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                     }
                 }
 
-                if requires.is_empty() && matches!(self.mode, VerifyMode::Invariantless) {
+                if requires.is_empty() {
                     requires.push(Property::new(
                         self.tcx,
                         callee_def_id,
