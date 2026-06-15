@@ -152,7 +152,7 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | !Padding(T)                  | `NoPadding`    |     —     |
 | !Null(p)                     | `NonNull`      |     ✅    |
 | Allocated(p, T, len, A)      | `Allocated`    |     —     |
-| InBound(p, T, len)           | `InBound`      |    ⚠️ ¹   |
+| InBound(p, T, len)           | `InBound`      |     ✅    |
 | !Overlap(dst, src, T, len)   | `NonOverlap`   |     —     |
 | ValidNum(exp, vrange)        | `ValidNum`     |     —     |
 | ValidString(arange)          | `ValidString`  |     —     |
@@ -174,7 +174,7 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Layout(p, layout)             | `Layout`       |     —     |
 
 ¹ Currently requires a constant element-count argument; variable-length support pending.
-² Decomposed into `NonNull`, `Align`, `InBound`, and `Init` primitives; returns Unknown until all pieces are implemented.
+² Decomposed into `NonNull`, `Align`, `InBound`, and `Init` primitives; limited by Init's constant-length requirement.
 
 ### Environment Variables (values are case insensitive)
 
