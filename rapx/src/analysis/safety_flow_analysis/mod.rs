@@ -4,9 +4,9 @@
 pub mod chain;
 pub mod fn_collector;
 pub mod hir_visitor;
-pub mod std_upg;
-pub mod upg_graph;
-pub mod upg_unit;
+pub mod safety_flow_graph;
+pub mod safety_flow_unit;
+pub mod std_analysis;
 
 use crate::{
     helpers::{draw_dot::render_dot_graphs, fn_info::*},
@@ -17,8 +17,8 @@ use hir_visitor::ContainsUnsafe;
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::{mir::Local, ty::TyCtxt};
 use std::collections::{HashMap, HashSet};
-use upg_graph::{UPGEdge, UPGraph};
-use upg_unit::UPGUnit;
+use safety_flow_graph::{SafetyFlowEdge, SafetyFlowGraph};
+use safety_flow_unit::SafetyFlowUnit;
 
 #[derive(PartialEq)]
 pub enum TargetCrate {
@@ -26,16 +26,16 @@ pub enum TargetCrate {
     Other,
 }
 
-pub struct UPGAnalysis<'tcx> {
+pub struct SafetyFlowAnalysis<'tcx> {
     pub tcx: TyCtxt<'tcx>,
-    pub upgs: Vec<UPGUnit>,
+    pub units: Vec<SafetyFlowUnit>,
 }
 
-impl<'tcx> UPGAnalysis<'tcx> {
+impl<'tcx> SafetyFlowAnalysis<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self {
             tcx,
-            upgs: Vec::new(),
+            units: Vec::new(),
         }
     }
 
@@ -108,7 +108,7 @@ impl<'tcx> UPGAnalysis<'tcx> {
         }
         let mut_methods_set = get_all_mutable_methods(self.tcx, def_id);
         let mut_methods = mut_methods_set.keys().copied().collect();
-        let upg = UPGUnit::new(
+        let upg = SafetyFlowUnit::new(
             caller_typed,
             callees_typed,
             raw_ptrs_filtered,
@@ -116,19 +116,19 @@ impl<'tcx> UPGAnalysis<'tcx> {
             cons_typed,
             mut_methods,
         );
-        self.upgs.push(upg);
+        self.units.push(upg);
     }
 
     /// Main function to aggregate data and render DOT graphs per module.
     pub fn generate_graph_dots(&self) {
-        let mut modules_data: HashMap<String, UPGraph> = HashMap::new();
+        let mut modules_data: HashMap<String, SafetyFlowGraph> = HashMap::new();
 
-        let mut collect_unit = |unit: &UPGUnit| {
+        let mut collect_unit = |unit: &SafetyFlowUnit| {
             let caller_id = unit.caller.def_id;
             let module_name = get_module_name(self.tcx, caller_id);
             rap_info!("module name: {:?}", module_name);
 
-            let module_data = modules_data.entry(module_name).or_insert_with(UPGraph::new);
+            let module_data = modules_data.entry(module_name).or_insert_with(SafetyFlowGraph::new);
 
             module_data.add_node(self.tcx, unit.caller, None);
 
@@ -138,7 +138,7 @@ impl<'tcx> UPGAnalysis<'tcx> {
                     let label = format!("Literal Constructor: {}", self.tcx.item_name(adt.def_id));
                     module_data.add_node(self.tcx, adt_node_type, Some(label));
                     if unit.caller.fn_kind == FnKind::Method {
-                        module_data.add_edge(adt.def_id, caller_id, UPGEdge::ConsToMethod);
+                        module_data.add_edge(adt.def_id, caller_id, SafetyFlowEdge::ConsToMethod);
                     }
                 } else {
                     let adt_node_type = FnInfo::new(adt.def_id, Safety::Safe, FnKind::Method);
@@ -148,7 +148,7 @@ impl<'tcx> UPGAnalysis<'tcx> {
                     );
                     module_data.add_node(self.tcx, adt_node_type, Some(label));
                     if unit.caller.fn_kind == FnKind::Method {
-                        module_data.add_edge(adt.def_id, caller_id, UPGEdge::MutToCaller);
+                        module_data.add_edge(adt.def_id, caller_id, SafetyFlowEdge::MutToCaller);
                     }
                 }
             }
@@ -156,7 +156,7 @@ impl<'tcx> UPGAnalysis<'tcx> {
             // Edge from associated item (constructor) to the method.
             for cons in &unit.caller_cons {
                 module_data.add_node(self.tcx, *cons, None);
-                module_data.add_edge(cons.def_id, unit.caller.def_id, UPGEdge::ConsToMethod);
+                module_data.add_edge(cons.def_id, unit.caller.def_id, SafetyFlowEdge::ConsToMethod);
             }
 
             // Edge from mutable access to the caller.
@@ -166,13 +166,13 @@ impl<'tcx> UPGAnalysis<'tcx> {
                 let node = FnInfo::new(*mut_method_id, fn_safety, node_type);
 
                 module_data.add_node(self.tcx, node, None);
-                module_data.add_edge(*mut_method_id, unit.caller.def_id, UPGEdge::MutToCaller);
+                module_data.add_edge(*mut_method_id, unit.caller.def_id, SafetyFlowEdge::MutToCaller);
             }
 
             // Edge representing a call from caller to callee.
             for callee in &unit.callees {
                 module_data.add_node(self.tcx, *callee, None);
-                module_data.add_edge(unit.caller.def_id, callee.def_id, UPGEdge::CallerToCallee);
+                module_data.add_edge(unit.caller.def_id, callee.def_id, SafetyFlowEdge::CallerToCallee);
             }
 
             rap_debug!("raw ptrs: {:?}", unit.raw_ptrs);
@@ -196,7 +196,7 @@ impl<'tcx> UPGAnalysis<'tcx> {
                         module_data.add_edge(
                             unit.caller.def_id,
                             dummy_fn_def_id,
-                            UPGEdge::CallerToCallee,
+                            SafetyFlowEdge::CallerToCallee,
                         );
                     }
                     None => {
@@ -209,19 +209,19 @@ impl<'tcx> UPGAnalysis<'tcx> {
             for def_id in &unit.static_muts {
                 let node = FnInfo::new(*def_id, Safety::Unsafe, FnKind::Intrinsic);
                 module_data.add_node(self.tcx, node, None);
-                module_data.add_edge(unit.caller.def_id, *def_id, UPGEdge::CallerToCallee);
+                module_data.add_edge(unit.caller.def_id, *def_id, SafetyFlowEdge::CallerToCallee);
             }
         };
 
         // Aggregate all Units
-        for upg in &self.upgs {
+        for upg in &self.units {
             collect_unit(upg);
         }
 
         // Generate string of dot
         let mut final_dots = Vec::new();
         for (mod_name, data) in modules_data {
-            let dot = data.upg_unit_string(&mod_name);
+            let dot = data.safety_flow_unit_string(&mod_name);
             final_dots.push((mod_name, dot));
         }
         rap_info!("{:?}", final_dots); // Output required for tests; do not change.

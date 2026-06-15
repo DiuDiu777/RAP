@@ -54,7 +54,7 @@ use analysis::{
         PathConstraintMapWrapper, RAResultMapWrapper, RangeAnalysis, default::RangeAnalyzer,
     },
     ssa_transform::SSATrans,
-    safety_flow_analysis::{TargetCrate, UPGAnalysis},
+    safety_flow_analysis::{TargetCrate, SafetyFlowAnalysis},
 };
 use helpers::show_mir::ShowMir;
 use rustc_ast::ast;
@@ -204,10 +204,10 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 analyzer.run();
             }
             AnalysisKind::SafetyFlow => {
-                UPGAnalysis::new(tcx).start(TargetCrate::Other);
+                SafetyFlowAnalysis::new(tcx).start(TargetCrate::Other);
             }
             AnalysisKind::SafetyFlowStd => {
-                UPGAnalysis::new(tcx).start(TargetCrate::Std);
+                SafetyFlowAnalysis::new(tcx).start(TargetCrate::Std);
             }
             AnalysisKind::Callgraph => {
                 let mut analyzer = CallGraphAnalyzer::new(tcx);

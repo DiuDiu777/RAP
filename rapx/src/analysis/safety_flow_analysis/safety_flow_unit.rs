@@ -4,7 +4,7 @@ use rustc_middle::mir::Local;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone)]
-pub struct UPGUnit {
+pub struct SafetyFlowUnit {
     pub caller: FnInfo,
     pub callees: HashSet<FnInfo>,
     pub raw_ptrs: HashSet<Local>,
@@ -55,7 +55,7 @@ impl BasicUnitCounts {
     }
 }
 
-impl UPGUnit {
+impl SafetyFlowUnit {
     pub fn new(
         caller: FnInfo,
         callees: HashSet<FnInfo>,
