@@ -732,10 +732,10 @@ where
         while visited.insert(current_block) {
             let data = &body.basic_blocks[current_block];
 
-            // 逆序扫描当前块
+            // Scan the current block in reverse order
             for stmt in data.statements.iter().rev() {
                 if let StatementKind::Assign(box (lhs, rvalue)) = &stmt.kind {
-                    // 只要找到了对目标变量的赋值语句
+                    // Once we find an assignment to the target variable
                     if lhs.local == target_local {
                         rap_debug!(
                             "Tracing source for {:?} in block {:?} {:?}\n",
@@ -744,19 +744,18 @@ where
                             rvalue
                         );
                         return match rvalue {
-                            // 如果右值是 Operand (例如 _2 = _1 或 _2 = const 5)
-                            // 直接返回这个 Operand 的引用，不再往上追 _1 的来源
+                            // If the rvalue is an Operand (e.g. _2 = _1 or _2 = const 5)
+                            // return a reference to this Operand; stop tracing _1's source
                             Rvalue::Use(op) => Some(op),
-
-                            // 如果右值是计算结果 (例如 _2 = Add(_3, _4))
-                            // 说明 _2 的来源就在这里，但它不是一个独立的 Operand 对象，返回 None
+                            // If the rvalue is a computed result (e.g. _2 = Add(_3, _4))
+                            // _2's source is here but it's not an Operand; return None
                             _ => None,
                         };
                     }
                 }
             }
 
-            // 当前块没找到，尝试回溯唯一的前驱块
+            // Not found in current block, try tracing back through the unique predecessor
             let preds = &body.basic_blocks.predecessors()[current_block];
             if preds.len() == 1 {
                 current_block = preds[0];

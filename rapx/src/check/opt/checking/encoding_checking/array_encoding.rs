@@ -71,7 +71,7 @@ impl OptCheck for ArrayEncodingCheck {
             .edges
             .iter()
             .filter_map(|edge| {
-                // 另外这里index必须是左值，且右值必须来自const
+                // The index must be an lvalue and the rvalue must come from a const
                 if is_valid_index_edge(graph, edge) {
                     Some(graph.collect_ancestor_locals(edge.src, true))
                 } else {

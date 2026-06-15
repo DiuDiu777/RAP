@@ -353,7 +353,7 @@ impl<'tcx> AliasGraph<'tcx> {
                     return false;
                 }
             } else {
-                // 不是 ADT（struct/tuple），不能投影 field
+                // Not an ADT (struct/tuple), cannot project field
                 return false;
             }
         }

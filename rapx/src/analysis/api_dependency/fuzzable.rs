@@ -111,7 +111,7 @@ pub fn is_fuzzable_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>, depth: usize) -> bo
             true
         }
 
-        // 其他类型默认不可 Fuzz
+        // Other types are not fuzzable by default
         _ => false,
     }
 }
