@@ -102,7 +102,7 @@ Options:
   -h, --help           Print help
 ```
 
-### `verify` command (under development)
+### `verify` command
 
 The `verify` command provides a contract-based verification pipeline for functions annotated with `#[rapx::verify]`. It uses path-sensitive backward/forward analysis and Z3-based SMT solving to prove safety properties.
 
@@ -110,28 +110,20 @@ The `verify` command provides a contract-based verification pipeline for functio
 Usage: cargo rapx verify [OPTIONS]
 
 Options:
-      --prepare-targets  identify #[rapx::verify] functions and list their safety contracts
-      --dump-visits      dump backward and forward visitor diagnostics for each callsite
-  -h, --help             Print help
+      --prepare-targets            identify #[rapx::verify] functions and list their safety contracts
+      --allow-pathseg-repeat <N>  number of extra SCC postfix repetitions during path enumeration (default 0)
+      --mode <MODE>               verification mode: all, targeted, invariantless (default all)
+  -h, --help                      Print help
 ```
 
-Annotate functions with `#[rapx::verify]` and safety contracts with `#[rapx::requires(...)]`:
+Verification modes:
+- `all` — auto-detect: verify all functions with unsafe callees or struct invariants
+- `targeted` — only verify functions annotated with `#[rapx::verify]`
+- `invariantless` — like `all` but skip struct invariant checks; missing callee contracts are flagged as Unknown
 
-```rust
-#![feature(register_tool)]
-#![register_tool(rapx)]
-
-#[rapx::verify]
-fn init_buffer(buf: *mut u32, len: usize) {
-    unsafe {
-        // rapx checks: NonNull(buf), Align(buf, u32), InBound(buf, len)
-        core::ptr::write(buf.add(len - 1), 0);
-    }
-}
-
-#[rapx::requires(NonNull(Arg_0))]
-unsafe fn custom_ptr_op(ptr: *const i32) -> i32 {
-    unsafe { *ptr }
+[rapx::requires(NonNull(_ptr))]
+unsafe fn custom_ptr_op(_ptr: *const i32) -> i32 {
+    unsafe { *_ptr }
 }
 ```
 
@@ -146,14 +138,14 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Align(p, T)                  | `Align`        | ✅ |
 | Size(T, c)                   | `Size`         | — |
 | !Padding(T)                  | `NoPadding`    | — |
-| !Null(p)                     | `NonNull`      | — |
+| !Null(p)                     | `NonNull`      | ✅ |
 | Allocated(p, T, len, A)      | `Allocated`    | — |
-| InBound(p, T, len)           | `InBound`      | — |
+| InBound(p, T, len)           | `InBound`      | ⚠️ ¹ |
 | !Overlap(dst, src, T, len)   | `NonOverlap`   | — |
 | ValidNum(exp, vrange)        | `ValidNum`     | — |
 | ValidString(arange)          | `ValidString`  | — |
 | ValidCStr(p, len)            | `ValidCStr`    | — |
-| Init(p, T, len)              | `Init`         | — |
+| Init(p, T, len)              | `Init`         | ⚠️ ¹ |
 | Unwrap(x, T)                 | `Unwrap`       | — |
 | Typed(p, T)                  | `Typed`        | — |
 | !Owned(p)                    | `Owning`       | — |
@@ -164,12 +156,15 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Opened(fd)                   | `Opened`       | — |
 | Trait(T, trait)              | `Trait`        | — |
 | !Reachable()                 | `Unreachable`  | — |
-| ValidPtr(p, T, len) *        | `ValidPtr`     | — |
+| ValidPtr(p, T, len) *        | `ValidPtr`     | ⚠️ ² |
 | Deref(p, T, len) *           | `Deref`        | — |
 | Ptr2Ref(p, T) *              | `Ptr2Ref`      | — |
 | Layout(p, layout) *          | `Layout`       | — |
 
 \* Compound property (see [safety-tags §2.2](https://github.com/safer-rust/safety-tags/blob/main/primitive-sp.md#22-compound-sps-used-in-rustdoc))
+
+¹ Currently requires a constant element-count argument; variable-length support pending.
+² Decomposed into `NonNull`, `Align`, `InBound`, and `Init` primitives; returns Unknown until all pieces are implemented.
 
 ### Environment Variables (values are case insensitive)
 
