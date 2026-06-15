@@ -1,10 +1,7 @@
 use std::hash::Hash;
 
 use super::ty_wrapper::TyWrapper;
-use rustc_middle::{
-    query::IntoQueryParam,
-    ty::{self, Ty, TyCtxt},
-};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 
 use rustc_hir::def_id::DefId;
 
@@ -15,8 +12,8 @@ pub enum DepNode<'tcx> {
 }
 
 impl<'tcx> DepNode<'tcx> {
-    pub fn api(id: impl IntoQueryParam<DefId>, args: ty::GenericArgsRef<'tcx>) -> DepNode<'tcx> {
-        DepNode::Api(id.into_query_param(), args)
+    pub fn api(id: DefId, args: ty::GenericArgsRef<'tcx>) -> DepNode<'tcx> {
+        DepNode::Api(id, args)
     }
     pub fn ty(ty: Ty<'tcx>) -> DepNode<'tcx> {
         DepNode::Ty(TyWrapper::from(ty))

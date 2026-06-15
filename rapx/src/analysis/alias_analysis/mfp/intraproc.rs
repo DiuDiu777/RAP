@@ -7,6 +7,10 @@ use rustc_middle::{
     },
     ty::{self, Ty, TyCtxt, TypingEnv},
 };
+#[cfg(not(rustc_spanned_at_root))]
+use rustc_span::source_map::Spanned;
+#[cfg(rustc_spanned_at_root)]
+use rustc_span::Spanned;
 use rustc_mir_dataflow::{Analysis, JoinSemiLattice, fmt::DebugWithContext};
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -86,7 +90,7 @@ fn apply_function_summary<'tcx>(
 fn apply_conservative_alias_for_call<'tcx>(
     state: &mut AliasDomain,
     destination: Place<'tcx>,
-    args: &[rustc_span::source_map::Spanned<rustc_middle::mir::Operand<'tcx>>],
+    args: &[Spanned<rustc_middle::mir::Operand<'tcx>>],
     place_info: &PlaceInfo<'tcx>,
 ) {
     // Get destination place

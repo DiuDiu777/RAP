@@ -8,7 +8,11 @@ use rustc_middle::{
     },
     ty::{self, InstanceKind::Item, Ty, TyKind, TypeVisitable},
 };
-use rustc_span::{Symbol, source_map::Spanned};
+#[cfg(not(rustc_spanned_at_root))]
+use rustc_span::source_map::Spanned;
+#[cfg(rustc_spanned_at_root)]
+use rustc_span::Spanned;
+use rustc_span::Symbol;
 
 use annotate_snippets::{Level, Renderer, Snippet};
 use std::ops::Add;

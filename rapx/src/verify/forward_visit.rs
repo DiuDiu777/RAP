@@ -17,6 +17,10 @@ use rustc_middle::{
     },
     ty::{FloatTy, IntTy, ParamEnv, Ty, TyCtxt, TyKind, UintTy},
 };
+#[cfg(not(rustc_spanned_at_root))]
+use rustc_span::source_map::Spanned;
+#[cfg(rustc_spanned_at_root)]
+use rustc_span::Spanned;
 
 use super::{
     call_summary::{self, CallEffect, CallEffectSummary},
@@ -341,7 +345,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
     fn apply_call_effects(
         &self,
         summary: &CallEffectSummary,
-        args: &[rustc_span::source_map::Spanned<Operand<'tcx>>],
+        args: &[Spanned<Operand<'tcx>>],
         result: &mut ForwardVisitResult<'tcx>,
     ) {
         result.facts.push(StateFact::CallEffect(summary.clone()));

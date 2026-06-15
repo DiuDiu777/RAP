@@ -9,7 +9,10 @@
 use rustc_data_structures::fx::FxHashSet;
 use rustc_middle::mir::{Local, Operand, Place, ProjectionElem, Rvalue, Terminator, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
+#[cfg(not(rustc_spanned_at_root))]
 use rustc_span::source_map::Spanned;
+#[cfg(rustc_spanned_at_root)]
+use rustc_span::Spanned;
 
 use super::{
     contract::{
