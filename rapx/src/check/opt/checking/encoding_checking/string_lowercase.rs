@@ -8,7 +8,7 @@ use rustc_middle::ty::TypeckResults;
 use rustc_span::Span;
 
 use crate::analysis::dataflow::Graph;
-use crate::analysis::helpers::def_path::DefPath;
+use crate::helpers::def_path::DefPath;
 use crate::check::opt::OptCheck;
 
 use crate::utils::log::{

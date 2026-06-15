@@ -8,7 +8,7 @@ pub mod upg_graph;
 pub mod upg_unit;
 
 use crate::{
-    analysis::helpers::{draw_dot::render_dot_graphs, fn_info::*},
+    helpers::{draw_dot::render_dot_graphs, fn_info::*},
     utils::source::{get_fn_name_byid, get_module_name},
 };
 use fn_collector::FnCollector;

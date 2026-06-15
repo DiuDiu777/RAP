@@ -11,7 +11,7 @@ use crate::analysis::api_dependency::utils::{
 };
 use crate::analysis::api_dependency::visit::FnVisitor;
 use crate::analysis::api_dependency::{mono, utils};
-use crate::analysis::helpers::def_path::path_str_def_id;
+use crate::helpers::def_path::path_str_def_id;
 use crate::utils::fs::rap_create_file;
 use crate::{rap_debug, rap_info, rap_trace};
 use petgraph::Direction::{self, Incoming};

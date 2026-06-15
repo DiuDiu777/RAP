@@ -3,8 +3,9 @@ use annotate_snippets::{Level, Renderer, Snippet};
 use once_cell::sync::OnceCell;
 
 use crate::{
-    analysis::{dataflow::Graph, helpers::def_path::DefPath},
+    analysis::dataflow::Graph,
     check::opt::OptCheck,
+    helpers::def_path::DefPath,
     utils::log::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
 use rustc_hir::{Expr, ExprKind, intravisit};
