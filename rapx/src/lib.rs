@@ -203,11 +203,11 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 let mut analyzer = ApiDependencyAnalyzer::new(tcx, config);
                 analyzer.run();
             }
-            AnalysisKind::SafetyFlow => {
-                SafetyFlowAnalysis::new(tcx).start(TargetCrate::Other);
+            &AnalysisKind::SafetyFlow { draw } => {
+                SafetyFlowAnalysis::new(tcx).with_draw(draw).start(TargetCrate::Other);
             }
-            AnalysisKind::SafetyFlowStd => {
-                SafetyFlowAnalysis::new(tcx).start(TargetCrate::Std);
+            &AnalysisKind::SafetyFlowStd { draw } => {
+                SafetyFlowAnalysis::new(tcx).with_draw(draw).start(TargetCrate::Std);
             }
             AnalysisKind::Callgraph => {
                 let mut analyzer = CallGraphAnalyzer::new(tcx);

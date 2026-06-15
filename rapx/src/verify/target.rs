@@ -98,22 +98,38 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         self.fn_contract_cache
             .entry(callee_def_id)
             .or_insert_with(|| {
-                // Try to collect contracts from inline RAPx annotations first.
                 let mut requires = get_contract_from_annotation(self.tcx, callee_def_id);
 
-                // If no annotation is found and this is a std item,
-                // fall back to the precomputed JSON contracts.
                 if requires.is_empty() && is_std {
                     requires = get_contract_from_entry(
                         self.tcx,
                         callee_def_id,
                         get_std_contracts_from_assets(self.tcx, callee_def_id),
                     );
+
+                    if requires.is_empty() {
+                        let path = crate::helpers::name::get_cleaned_def_path_name(
+                            self.tcx,
+                            callee_def_id,
+                        );
+                        rap_warn!(
+                            "no safety contracts found for std callee \"{path}\" \
+                             (missing from std-contracts.json)"
+                        );
+                    } else {
+                        let path = crate::helpers::name::get_cleaned_def_path_name(
+                            self.tcx,
+                            callee_def_id,
+                        );
+                        rap_debug!(
+                            "loaded {} safety contract(s) for std callee \"{path}\" from std-contracts.json",
+                            requires.len()
+                        );
+                    }
                 }
 
                 requires
             })
-            // `entry` returns a mutable reference; clone to return an owned value.
             .clone()
     }
 

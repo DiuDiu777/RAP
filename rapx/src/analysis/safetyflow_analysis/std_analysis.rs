@@ -20,7 +20,9 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
                 self.insert_upg(def_id);
             }
         }
-        self.render_dot();
+        if self.draw {
+            self.render_dot();
+        }
     }
 
     pub fn render_dot(&mut self) {

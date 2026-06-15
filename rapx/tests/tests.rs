@@ -104,7 +104,7 @@ const ANALYZE_ALIAS_CMD: &[&str] = &["analyze", "alias"];
 const ANALYZE_ALIAS_MFP_CMD: &[&str] = &["analyze", "alias", "--strategy", "mfp"];
 const ANALYZE_OWNED_HEAP_CMD: &[&str] = &["analyze", "ownedheap"];
 const ANALYZE_PATHS_CMD: &[&str] = &["analyze", "paths"];
-const ANALYZE_UPG_CMD: &[&str] = &["analyze", "safetyflow"];
+const ANALYZE_SAFETYFLOW_CMD: &[&str] = &["analyze", "safetyflow"];
 const ANALYZE_SSA_CMD: &[&str] = &["analyze", "ssa"];
 const ANALYZE_RANGE_CMD: &[&str] = &["analyze", "range"];
 const ANALYZE_CALLGRAPH_CMD: &[&str] = &["analyze", "callgraph"];
@@ -870,20 +870,20 @@ fn invariantless_sound_callee() {
 }
 
 #[test]
-fn upg_safe_caller() {
-    let output = run_with_args("upg/safe_caller", ANALYZE_UPG_CMD);
+fn safetyflow_safe_caller() {
+    let output = run_with_args("safetyflow/safe_caller", ANALYZE_SAFETYFLOW_CMD);
     assert_contain(&output, "from_raw_parts");
 }
 
 #[test]
-fn upg_raw_ptr() {
-    let output = run_with_args("upg/raw_ptr", ANALYZE_UPG_CMD);
-    assert_contain(&output, "raw_ptr_deref_dummy");
+fn safetyflow_raw_ptr() {
+    let output = run_with_args("safetyflow/raw_ptr", ANALYZE_SAFETYFLOW_CMD);
+    assert_contain(&output, "*raw* ptr deref");
 }
 
 #[test]
-fn upg_static_mut() {
-    let output = run_with_args("upg/static_mut", ANALYZE_UPG_CMD);
+fn safetyflow_static_mut() {
+    let output = run_with_args("safetyflow/static_mut", ANALYZE_SAFETYFLOW_CMD);
     assert_contain(&output, "COUNTER");
 }
 

@@ -508,6 +508,9 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
 ) -> Option<CallEffect> {
     use std::collections::{HashSet, VecDeque};
 
+    if !tcx.is_mir_available(callee) {
+        return None;
+    }
     let body = tcx.optimized_mir(callee);
     let ret = Local::from_usize(0);
 

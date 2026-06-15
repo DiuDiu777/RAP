@@ -30,6 +30,7 @@ pub enum TargetCrate {
 pub struct SafetyFlowAnalysis<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub units: Vec<SafetyFlowUnit>,
+    pub draw: bool,
 }
 
 impl<'tcx> SafetyFlowAnalysis<'tcx> {
@@ -37,7 +38,13 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
         Self {
             tcx,
             units: Vec::new(),
+            draw: false,
         }
+    }
+
+    pub fn with_draw(mut self, draw: bool) -> Self {
+        self.draw = draw;
+        self
     }
 
     pub fn start(&mut self, ins: TargetCrate) {
@@ -59,9 +66,11 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
                     }
                 }
                 self.display_summary();
-                let final_dots = self.collect_dots();
-                rap_info!("{:?}", final_dots); // Output required for tests; do not change.
-                render_dot_graphs(final_dots);
+                if self.draw {
+                    let final_dots = self.collect_dots();
+                    rap_info!("{:?}", final_dots);
+                    render_dot_graphs(final_dots);
+                }
             }
         }
     }

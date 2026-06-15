@@ -13,7 +13,7 @@ pub struct SafetyFlowUnit {
     pub mut_methods: HashSet<DefId>,
 }
 
-/// Counts of different unit categories collected across all UPG units.
+/// Counts of different unit categories collected across all SafetyFlow units.
 ///
 /// Fields are indexed as per the original comment:
 ///   [uf/um, sf-uf, sf-um, uf-uf, uf-um, um(sf)-uf, um(uf)-uf, um(sf)-um,

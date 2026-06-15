@@ -42,10 +42,18 @@ pub enum AnalysisKind {
     Adg(AdgArgs),
     /// perform safety flow analysis (unsafety propagation graph)
     #[clap(name = "safetyflow")]
-    SafetyFlow,
+    SafetyFlow {
+        /// render safety flow graphs as PNG images (requires Graphviz)
+        #[arg(short, long)]
+        draw: bool,
+    },
     /// perform safety flow analysis on the Rust standard library
     #[clap(name = "safetyflowstd")]
-    SafetyFlowStd,
+    SafetyFlowStd {
+        /// render safety flow graphs as PNG images (requires Graphviz)
+        #[arg(short, long)]
+        draw: bool,
+    },
     /// generate callgraphs
     Callgraph,
     /// generate dataflow graphs
