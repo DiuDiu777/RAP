@@ -54,7 +54,7 @@ use analysis::{
         PathConstraintMapWrapper, RAResultMapWrapper, RangeAnalysis, default::RangeAnalyzer,
     },
     ssa_transform::SSATrans,
-    unsafety_propagation_analysis::{TargetCrate, UPGAnalysis},
+    safety_flow_analysis::{TargetCrate, UPGAnalysis},
 };
 use helpers::show_mir::ShowMir;
 use rustc_ast::ast;
@@ -203,10 +203,10 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 let mut analyzer = ApiDependencyAnalyzer::new(tcx, config);
                 analyzer.run();
             }
-            AnalysisKind::UnsafetyPropagation => {
+            AnalysisKind::SafetyFlow => {
                 UPGAnalysis::new(tcx).start(TargetCrate::Other);
             }
-            AnalysisKind::UnsafetyPropagationStd => {
+            AnalysisKind::SafetyFlowStd => {
                 UPGAnalysis::new(tcx).start(TargetCrate::Std);
             }
             AnalysisKind::Callgraph => {

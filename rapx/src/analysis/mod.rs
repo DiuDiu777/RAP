@@ -7,7 +7,7 @@ pub mod path_analysis;
 pub mod range_analysis;
 pub mod scan;
 pub mod ssa_transform;
-pub mod unsafety_propagation_analysis;
+pub mod safety_flow_analysis;
 
 /// This is a general trait designed for all program analysis features.
 pub trait Analysis {
