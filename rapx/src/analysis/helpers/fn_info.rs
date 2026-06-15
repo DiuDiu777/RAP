@@ -4,8 +4,7 @@ use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::{Safety, def::DefKind, def_id::DefId};
 use rustc_middle::{
     mir::{
-        Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, Terminator,
-        TerminatorKind,
+        Local, Operand, Terminator, TerminatorKind,
     },
     ty,
     ty::{AssocKind, Mutability, Ty, TyCtxt, TyKind},
@@ -334,122 +333,6 @@ pub fn parse_expr_into_number(expr: &Expr) -> Option<usize> {
         if let syn::Lit::Int(lit_int) = &expr_lit.lit {
             return lit_int.base10_parse::<usize>().ok();
         }
-    }
-    None
-}
-
-/// Match a type identifier string to a concrete Rust type
-///
-/// This function attempts to match a given type identifier (e.g., "u32", "T", "MyStruct")
-/// to a type in the provided parameter type list. It handles:
-/// 1. Built-in primitive types (u32, usize, etc.)
-/// 2. Generic type parameters (T, U, etc.)
-/// 3. User-defined types found in the parameter list
-///
-/// Arguments:
-/// - `tcx`: Type context for querying compiler information
-/// - `type_ident`: String representing the type identifier to match
-/// - `param_ty`: List of parameter types from the function signature
-///
-/// Returns:
-/// - `Some(Ty)` if a matching type is found
-/// - `None` if no match is found
-pub fn match_ty_with_ident(tcx: TyCtxt, def_id: DefId, type_ident: String) -> Option<Ty> {
-    // 1. First check for built-in primitive types
-    if let Some(primitive_ty) = match_primitive_type(tcx, type_ident.clone()) {
-        return Some(primitive_ty);
-    }
-    // 2. Check if the identifier matches any generic type parameter
-    return find_generic_param(tcx, def_id, type_ident.clone());
-    // 3. Check if the identifier matches any user-defined type in the parameters
-    // find_user_defined_type(tcx, def_id, type_ident)
-}
-
-/// Match built-in primitive types from String
-fn match_primitive_type(tcx: TyCtxt, type_ident: String) -> Option<Ty> {
-    match type_ident.as_str() {
-        "i8" => Some(tcx.types.i8),
-        "i16" => Some(tcx.types.i16),
-        "i32" => Some(tcx.types.i32),
-        "i64" => Some(tcx.types.i64),
-        "i128" => Some(tcx.types.i128),
-        "isize" => Some(tcx.types.isize),
-        "u8" => Some(tcx.types.u8),
-        "u16" => Some(tcx.types.u16),
-        "u32" => Some(tcx.types.u32),
-        "u64" => Some(tcx.types.u64),
-        "u128" => Some(tcx.types.u128),
-        "usize" => Some(tcx.types.usize),
-        "f16" => Some(tcx.types.f16),
-        "f32" => Some(tcx.types.f32),
-        "f64" => Some(tcx.types.f64),
-        "f128" => Some(tcx.types.f128),
-        "bool" => Some(tcx.types.bool),
-        "char" => Some(tcx.types.char),
-        "str" => Some(tcx.types.str_),
-        _ => None,
-    }
-}
-
-/// Find generic type parameters in the parameter list
-fn find_generic_param(tcx: TyCtxt, def_id: DefId, type_ident: String) -> Option<Ty> {
-    rap_debug!(
-        "Searching for generic param: {} in {:?}",
-        type_ident,
-        def_id
-    );
-    let (_, param_tys) = parse_signature(tcx, def_id);
-    rap_debug!("Function parameter types: {:?} of {:?}", param_tys, def_id);
-    // 递归查找泛型参数
-    for &ty in &param_tys {
-        if let Some(found) = find_generic_in_ty(tcx, ty, &type_ident) {
-            return Some(found);
-        }
-    }
-
-    None
-}
-
-/// Iterate the args' types recursively and find the matched generic one.
-pub(crate) fn find_generic_in_ty<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    ty: Ty<'tcx>,
-    type_ident: &str,
-) -> Option<Ty<'tcx>> {
-    match ty.kind() {
-        TyKind::Param(param_ty) => {
-            if param_ty.name.as_str() == type_ident {
-                return Some(ty);
-            }
-        }
-        TyKind::RawPtr(ty, _)
-        | TyKind::Ref(_, ty, _)
-        | TyKind::Slice(ty)
-        | TyKind::Array(ty, _) => {
-            if let Some(found) = find_generic_in_ty(tcx, *ty, type_ident) {
-                return Some(found);
-            }
-        }
-        TyKind::Tuple(tys) => {
-            for tuple_ty in tys.iter() {
-                if let Some(found) = find_generic_in_ty(tcx, tuple_ty, type_ident) {
-                    return Some(found);
-                }
-            }
-        }
-        TyKind::Adt(adt_def, substs) => {
-            let name = tcx.item_name(adt_def.did()).to_string();
-            if name == type_ident {
-                return Some(ty);
-            }
-            for field in adt_def.all_fields() {
-                let field_ty = field.ty(tcx, substs);
-                if let Some(found) = find_generic_in_ty(tcx, field_ty, type_ident) {
-                    return Some(found);
-                }
-            }
-        }
-        _ => {}
     }
     None
 }

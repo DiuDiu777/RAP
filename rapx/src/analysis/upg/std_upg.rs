@@ -1,7 +1,6 @@
 use super::{UPGAnalysis, upg_graph::UPGraph, upg_unit::BasicUnitCounts};
 use crate::analysis::{
-    helpers::{fn_info::*, show_mir::display_mir},
-    upg::draw_dot::render_dot_graphs,
+    helpers::{draw_dot::render_dot_graphs, fn_info::*, show_mir::display_mir},
 };
 use rustc_hir::{Safety, def::DefKind, def_id::DefId};
 use rustc_middle::{

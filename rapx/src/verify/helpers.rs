@@ -7,7 +7,10 @@ use rustc_middle::{
 use syn::Expr;
 
 pub use crate::analysis::helpers::fn_info::parse_expr_into_number;
-use crate::analysis::helpers::fn_info::{check_safety, find_generic_in_ty};
+pub use crate::analysis::helpers::mir_scan::{Callsite, CallsiteLocation, collect_unsafe_callsites};
+pub use crate::analysis::helpers::name::{
+    access_ident_recursive, get_cleaned_def_path_name, match_ty_with_ident, parse_signature,
+};
 
 /// Collect all return basic block indices for a function body.
 pub fn collect_return_block_indices(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<BasicBlock> {
