@@ -1,4 +1,4 @@
-use super::{SafetyFlowAnalysis, safety_flow_graph::SafetyFlowGraph, safety_flow_unit::BasicUnitCounts};
+use super::{SafetyFlowAnalysis, safetyflow_graph::SafetyFlowGraph, safetyflow_unit::BasicUnitCounts};
 use super::chain::*;
 use crate::helpers::{draw_dot::render_dot_graphs, fn_info::*, show_mir::display_mir};
 use rustc_hir::{Safety, def::DefKind, def_id::DefId};
@@ -26,7 +26,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
     pub fn render_dot(&mut self) {
         let mut dot_strs = Vec::new();
         for upg in &self.units {
-            let dot_str = SafetyFlowGraph::generate_dot_from_safety_flow_unit(self.tcx, upg);
+            let dot_str = SafetyFlowGraph::generate_dot_from_unit(self.tcx, upg);
             let caller_name = get_cleaned_def_path_name(self.tcx, upg.caller.def_id);
             dot_strs.push((caller_name, dot_str));
         }

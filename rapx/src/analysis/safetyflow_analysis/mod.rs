@@ -4,8 +4,8 @@
 pub mod chain;
 pub mod fn_collector;
 pub mod hir_visitor;
-pub mod safety_flow_graph;
-pub mod safety_flow_unit;
+pub mod safetyflow_graph;
+pub mod safetyflow_unit;
 pub mod std_analysis;
 
 use crate::{
@@ -17,8 +17,8 @@ use hir_visitor::ContainsUnsafe;
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::{mir::Local, ty::TyCtxt};
 use std::collections::{HashMap, HashSet};
-use safety_flow_graph::{SafetyFlowEdge, SafetyFlowGraph};
-use safety_flow_unit::SafetyFlowUnit;
+use safetyflow_graph::{SafetyFlowEdge, SafetyFlowGraph};
+use safetyflow_unit::SafetyFlowUnit;
 
 #[derive(PartialEq)]
 pub enum TargetCrate {
@@ -107,7 +107,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
             return;
         }
         let mut_methods_set = get_all_mutable_methods(self.tcx, def_id);
-        let mut_methods = mut_methods_set.keys().copied().collect();
+        let mut_methods: HashSet<_> = mut_methods_set.keys().copied().collect();
         let upg = SafetyFlowUnit::new(
             caller_typed,
             callees_typed,
@@ -221,7 +221,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
         // Generate string of dot
         let mut final_dots = Vec::new();
         for (mod_name, data) in modules_data {
-            let dot = data.safety_flow_unit_string(&mod_name);
+            let dot = data.to_dot(&mod_name);
             final_dots.push((mod_name, dot));
         }
         rap_info!("{:?}", final_dots); // Output required for tests; do not change.

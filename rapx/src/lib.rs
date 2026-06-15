@@ -54,7 +54,7 @@ use analysis::{
         PathConstraintMapWrapper, RAResultMapWrapper, RangeAnalysis, default::RangeAnalyzer,
     },
     ssa_transform::SSATrans,
-    safety_flow_analysis::{TargetCrate, SafetyFlowAnalysis},
+    safetyflow_analysis::{TargetCrate, SafetyFlowAnalysis},
 };
 use helpers::show_mir::ShowMir;
 use rustc_ast::ast;

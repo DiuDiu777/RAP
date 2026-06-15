@@ -7,7 +7,7 @@ use crate::{helpers::fn_info::*, utils::source::get_adt_name};
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 
-use super::safety_flow_unit::SafetyFlowUnit;
+use super::safetyflow_unit::SafetyFlowUnit;
 use petgraph::{
     Graph,
     dot::{Config, Dot},
@@ -18,8 +18,8 @@ use petgraph::{
 pub enum SafetyFlowNode {
     SafeFn(DefId),
     UnsafeFn(DefId),
-    MergedCallerCons(String),
-    MutMethods(String),
+    MergedCallerCons(Vec<DefId>),
+    MutMethods(Vec<DefId>),
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
@@ -67,6 +67,14 @@ fn shape_for_fn_kind(kind: FnKind) -> &'static str {
     }
 }
 
+fn def_ids_to_label(tcx: TyCtxt<'_>, def_ids: &[DefId]) -> String {
+    def_ids
+        .iter()
+        .map(|did| tcx.def_path_str(*did))
+        .collect::<Vec<_>>()
+        .join("\\n")
+}
+
 /// Holds graph data for a single module before DOT generation.
 pub struct SafetyFlowGraph {
     structs: HashMap<String, HashSet<FnInfo>>,
@@ -95,8 +103,8 @@ impl SafetyFlowGraph {
                     label, shape
                 )
             } else {
-                let upg_node = SafetyFlowNode::from(node);
-                Self::node_to_dot_attr(tcx, &upg_node, node.fn_kind)
+                let sf_node = SafetyFlowNode::from(node);
+                Self::node_to_dot_attr(tcx, &sf_node, node.fn_kind)
             };
 
             self.nodes.insert(node.def_id, attr);
@@ -110,7 +118,7 @@ impl SafetyFlowGraph {
         self.edges.insert((from, to, edge_type));
     }
 
-    pub fn safety_flow_unit_string(&self, module_name: &str) -> String {
+    pub fn to_dot(&self, module_name: &str) -> String {
         let mut dot = String::new();
         let graph_id = module_name
             .replace("::", "_")
@@ -175,7 +183,7 @@ impl SafetyFlowGraph {
         }
     }
 
-    pub fn generate_dot_from_safety_flow_unit(tcx: TyCtxt<'_>, upg: &SafetyFlowUnit) -> String {
+    pub fn generate_dot_from_unit(tcx: TyCtxt<'_>, unit: &SafetyFlowUnit) -> String {
         let mut graph: Graph<SafetyFlowNode, SafetyFlowEdge> = DiGraph::new();
 
         let get_edge_attr = |_graph: &Graph<SafetyFlowNode, SafetyFlowEdge>,
@@ -192,54 +200,46 @@ impl SafetyFlowGraph {
             |_graph: &Graph<SafetyFlowNode, SafetyFlowEdge>, node_ref: (NodeIndex, &SafetyFlowNode)| match node_ref.1 {
                 SafetyFlowNode::SafeFn(def_id) => {
                     let label = tcx.def_path_str(*def_id);
-                    let shape = shape_for_fn_kind(upg.caller.fn_kind);
                     format!(
                         "label=\"{}\", color=black, shape=\"{}\"",
-                        label, shape
+                        label,
+                        shape_for_fn_kind(unit.caller.fn_kind)
                     )
                 }
                 SafetyFlowNode::UnsafeFn(def_id) => {
                     let label = tcx.def_path_str(*def_id);
                     format!(
-                        "label=\"{}\n \", shape=\"box\", color=red",
+                        "label=\"{}\\n \", shape=\"box\", color=red",
                         label
                     )
                 }
-                SafetyFlowNode::MergedCallerCons(label) => {
+                SafetyFlowNode::MergedCallerCons(def_ids) => {
+                    let label = def_ids_to_label(tcx, def_ids);
                     format!(
-                        "label=\"{}\", shape=box, style=filled, fillcolor=lightgrey",
+                        "label=\"Caller Constructors\\n{}\", shape=box, style=filled, fillcolor=lightgrey",
                         label
                     )
                 }
-                SafetyFlowNode::MutMethods(label) => {
+                SafetyFlowNode::MutMethods(def_ids) => {
+                    let label = def_ids_to_label(tcx, def_ids);
                     format!(
-                        "label=\"{}\", shape=octagon, style=filled, fillcolor=lightyellow",
+                        "label=\"Mutable Methods\\n{}\", shape=octagon, style=filled, fillcolor=lightyellow",
                         label
                     )
                 }
             };
 
-        let caller_node = graph.add_node(SafetyFlowNode::from(upg.caller));
-        if !upg.caller_cons.is_empty() {
-            let cons_labels: Vec<String> = upg
-                .caller_cons
-                .iter()
-                .map(|con| tcx.def_path_str(con.def_id).to_string())
-                .collect();
-            let merged_label = format!("Caller Constructors\n{}", cons_labels.join("\n"));
-            let merged_cons_node = graph.add_node(SafetyFlowNode::MergedCallerCons(merged_label));
+        let caller_node = graph.add_node(SafetyFlowNode::from(unit.caller));
+        if !unit.caller_cons.is_empty() {
+            let cons_def_ids: Vec<DefId> =
+                unit.caller_cons.iter().map(|con| con.def_id).collect();
+            let merged_cons_node = graph.add_node(SafetyFlowNode::MergedCallerCons(cons_def_ids));
             graph.add_edge(merged_cons_node, caller_node, SafetyFlowEdge::ConsToMethod);
         }
 
-        if !upg.mut_methods.is_empty() {
-            let mut_method_labels: Vec<String> = upg
-                .mut_methods
-                .iter()
-                .map(|def_id| tcx.def_path_str(*def_id).to_string())
-                .collect();
-            let merged_label = format!("Mutable Methods\n{}", mut_method_labels.join("\n"));
-
-            let mut_methods_node = graph.add_node(SafetyFlowNode::MutMethods(merged_label));
+        if !unit.mut_methods.is_empty() {
+            let def_ids: Vec<DefId> = unit.mut_methods.iter().copied().collect();
+            let mut_methods_node = graph.add_node(SafetyFlowNode::MutMethods(def_ids));
             graph.add_edge(mut_methods_node, caller_node, SafetyFlowEdge::MutToCaller);
         }
 
