@@ -168,12 +168,10 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Opened(fd)                   | `Opened`       |     —     |
 | Trait(T, trait)              | `Trait`        |     —     |
 | !Reachable()                 | `Unreachable`  |     —     |
-| ValidPtr(p, T, len) *        | `ValidPtr`     |    ⚠️ ²   |
-| Deref(p, T, len) *           | `Deref`        |     —     |
-| Ptr2Ref(p, T) *              | `Ptr2Ref`      |     —     |
-| Layout(p, layout) *          | `Layout`       |     —     |
-
-\* Compound property (see [safety-tags §2.2](https://github.com/safer-rust/safety-tags/blob/main/primitive-sp.md#22-compound-sps-used-in-rustdoc))
+| ValidPtr(p, T, len)           | `ValidPtr`     |    ⚠️ ²   |
+| Deref(p, T, len)              | `Deref`        |     —     |
+| Ptr2Ref(p, T)                 | `Ptr2Ref`      |     —     |
+| Layout(p, layout)             | `Layout`       |     —     |
 
 ¹ Currently requires a constant element-count argument; variable-length support pending.
 ² Decomposed into `NonNull`, `Align`, `InBound`, and `Init` primitives; returns Unknown until all pieces are implemented.
