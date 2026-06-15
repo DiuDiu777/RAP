@@ -17,7 +17,7 @@ use fn_collector::FnCollector;
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 use std::collections::{HashMap, HashSet};
-use root::contains_unsafe;
+use root::hir_contains_unsafe;
 use safetyflow_graph::{SafetyFlowEdge, SafetyFlowGraph};
 use safetyflow_unit::SafetyFlowUnit;
 
@@ -58,7 +58,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
                     // each function or associated function in
                     // structs and traits
                     let def_id = self.tcx.hir_body_owner_def_id(*body_id).to_def_id();
-                    if contains_unsafe(self.tcx, *body_id) {
+                    if hir_contains_unsafe(self.tcx, *body_id) {
                         self.insert_upg(def_id);
                     }
                 }
@@ -69,7 +69,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
     }
 
     pub fn insert_upg(&mut self, def_id: DefId) {
-        let Some(root) = root::detect(self.tcx, def_id) else {
+        let Some(root) = root::scan_mir(self.tcx, def_id) else {
             return;
         };
 

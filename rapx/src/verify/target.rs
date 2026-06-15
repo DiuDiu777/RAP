@@ -1,5 +1,5 @@
 use crate::analysis::Analysis;
-use crate::analysis::safetyflow_analysis::root::{contains_unsafe, function_has_struct_invariant};
+use crate::analysis::safetyflow_analysis::root::{function_has_struct_invariant, hir_contains_unsafe};
 use crate::cli::VerifyMode;
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind,
@@ -226,7 +226,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         // `function_has_struct_invariant` catches methods on structs with invariants.
         let def_id = id.to_def_id();
         if !matches!(self.mode, VerifyMode::Targeted) {
-            if !contains_unsafe(self.tcx, body_id)
+            if !hir_contains_unsafe(self.tcx, body_id)
                 && !function_has_struct_invariant(self.tcx, def_id)
             {
                 return;

@@ -32,7 +32,7 @@ pub struct UnsafeRoot {
 ///
 /// This is a cheap check that can quickly filter out functions that are
 /// entirely safe and have no unsafe operations of any kind.
-pub fn contains_unsafe(tcx: TyCtxt<'_>, body_id: BodyId) -> bool {
+pub fn hir_contains_unsafe(tcx: TyCtxt<'_>, body_id: BodyId) -> bool {
     let (fn_unsafe, block_unsafe) = ContainsUnsafe::contains_unsafe(tcx, body_id);
     fn_unsafe || block_unsafe
 }
@@ -76,7 +76,7 @@ pub fn function_has_struct_invariant(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
 ///
 /// Returns `None` if the function has no unsafe callees, no raw pointer
 /// dereferences, and no static mutable accesses.
-pub fn detect(tcx: TyCtxt<'_>, def_id: DefId) -> Option<UnsafeRoot> {
+pub fn scan_mir(tcx: TyCtxt<'_>, def_id: DefId) -> Option<UnsafeRoot> {
     if !tcx.is_mir_available(def_id) {
         return None;
     }
