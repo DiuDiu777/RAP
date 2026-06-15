@@ -112,6 +112,7 @@ const ANALYZE_ADG_CMD: &[&str] = &["analyze", "adg", "--dump", "api_graph.yml"];
 const VERIFY_CMD: &[&str] = &["verify"];
 const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "1"];
 const VERIFY_ALLOW_REPEAT2_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "2"];
+const VERIFY_INVARIANTLESS_CMD: &[&str] = &["verify", "--mode", "invariantless"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
@@ -846,6 +847,26 @@ fn struct_invariant_1() {
     assert_contain(&output, "function: Wrapper::<T>::unsound_read");
     // Alignment is proved in sound_read via the guard
     assert_contain(&output, "Align | Proved");
+}
+
+#[test]
+fn invariantless_skips_struct_invariant() {
+    let output = run_with_args("verify/struct_invariant_1", VERIFY_INVARIANTLESS_CMD);
+    // Only functions with unsafe callees are verified in invariantless mode
+    assert_contain(&output, "function: Wrapper::<T>::sound_read");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
+    // Struct constructors/setters without unsafe callees are skipped
+    assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
+    assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
+    // invariantless should not output struct-invariant checks
+    assert_not_contain(&output, "struct-invariant");
+}
+
+#[test]
+fn invariantless_sound_callee() {
+    let output = run_with_args("verify/align_sound_01", VERIFY_INVARIANTLESS_CMD);
+    assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
+    assert_contain(&output, "result: SOUND");
 }
 
 #[test]
