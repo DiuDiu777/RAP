@@ -385,7 +385,9 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
 
             // Phase 2: struct invariant verification
-            if !target.struct_invariants.is_empty() {
+            if !target.struct_invariants.is_empty()
+                && !matches!(self.mode, VerifyMode::Invariantless)
+            {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, self.allow_pathseg_repeat);
                 let struct_report = driver.verify_struct_invariants();
                 all_results.extend(struct_report.results);

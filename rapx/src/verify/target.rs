@@ -203,7 +203,8 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
     /// Visits each function body and records verification targets.
     ///
     /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are collected.
-    /// In `all` mode, every function with an unsafe callee or a struct invariant is collected.
+    /// In `all` and `invariantless` modes, every function with an unsafe callee is collected
+    /// (plus struct invariants where applicable, except in `invariantless` mode).
     fn visit_fn(
         &mut self,
         _fk: FnKind<'tcx>,
@@ -219,11 +220,22 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         let def_id = id.to_def_id();
         let function_target = self.build_function_target(def_id);
 
-        if matches!(self.mode, VerifyMode::All)
-            && function_target.callsites.is_empty()
-            && function_target.struct_invariants.is_empty()
-        {
-            return;
+        match self.mode {
+            VerifyMode::Targeted => {}
+            VerifyMode::All => {
+                if function_target.callsites.is_empty()
+                    && function_target.struct_invariants.is_empty()
+                {
+                    return;
+                }
+            }
+            VerifyMode::Invariantless => {
+                // TODO: skip struct invariant checks during verification.
+                // For now, target collection works like `all` but ignores invariants.
+                if function_target.callsites.is_empty() {
+                    return;
+                }
+            }
         }
 
         self.push_function_target(function_target);

@@ -109,8 +109,8 @@ const ANALYZE_SSA_CMD: &[&str] = &["analyze", "ssa"];
 const ANALYZE_RANGE_CMD: &[&str] = &["analyze", "range"];
 const ANALYZE_CALLGRAPH_CMD: &[&str] = &["analyze", "callgraph"];
 const ANALYZE_ADG_CMD: &[&str] = &["analyze", "adg", "--dump", "api_graph.yml"];
-const VERIFY_CMD: &[&str] = &["verify", "--mode", "targeted"];
-const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--mode", "targeted", "--allow-pathseg-repeat", "1"];
+const VERIFY_CMD: &[&str] = &["verify", "--mode", "all"];
+const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--mode", "all", "--allow-pathseg-repeat", "1"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]

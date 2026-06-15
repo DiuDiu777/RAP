@@ -6,6 +6,8 @@ pub enum VerifyMode {
     All,
     #[value(help = "Only verify functions annotated with #[rapx::verify]")]
     Targeted,
+    #[value(help = "Like `all` or `targeted` but skip struct invariant checks (not yet implemented)")]
+    Invariantless,
 }
 
 /// Arguments for the `verify` command.
