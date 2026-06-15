@@ -141,60 +141,35 @@ Safety properties include: `Align`, `NonNull`, `Allocated`, `InBound`, `Init`, `
 
 This checklist maps RAPx's contract verification to the [Primitive Safety Properties](https://github.com/safer-rust/safety-tags/blob/main/primitive-sp.md) defined in `safer-rust/safety-tags`.
 
-#### Layout (Section I)
+| Primitive SP                 | RAPx tag       | Supported? |
+|------------------------------|----------------|:----------:|
+| Align(p, T)                  | `Align`        | ✅ |
+| Size(T, c)                   | `Size`         | — |
+| !Padding(T)                  | `NoPadding`    | — |
+| !Null(p)                     | `NonNull`      | — |
+| Allocated(p, T, len, A)      | `Allocated`    | — |
+| InBound(p, T, len)           | `InBound`      | — |
+| !Overlap(dst, src, T, len)   | `NonOverlap`   | — |
+| ValidNum(exp, vrange)        | `ValidNum`     | — |
+| ValidString(arange)          | `ValidString`  | — |
+| ValidCStr(p, len)            | `ValidCStr`    | — |
+| Init(p, T, len)              | `Init`         | — |
+| Unwrap(x, T)                 | `Unwrap`       | — |
+| Typed(p, T)                  | `Typed`        | — |
+| !Owned(p)                    | `Owning`       | — |
+| Alias(p1, p2)                | `Alias`        | — |
+| Alive(p, l)                  | `Alive`        | — |
+| Pinned(p, l)                 | `Pinned`       | — |
+| !Volatile(p, T, len)         | `NonVolatile`  | — |
+| Opened(fd)                   | `Opened`       | — |
+| Trait(T, trait)              | `Trait`        | — |
+| !Reachable()                 | `Unreachable`  | — |
+| ValidPtr(p, T, len) *        | `ValidPtr`     | — |
+| Deref(p, T, len) *           | `Deref`        | — |
+| Ptr2Ref(p, T) *              | `Ptr2Ref`      | — |
+| Layout(p, layout) *          | `Layout`       | — |
 
-| ID   | Primitive SP    | RAPx tag    | Supported? |
-|------|-----------------|-------------|:----------:|
-| I.1  | Align(p, T)     | `Align`     | Yes |
-| I.2  | Size(T, c)      | `Size`      | - |
-| I.3  | !Padding(T)     | `NoPadding` | - |
-
-#### Pointer Validity (Section II)
-
-| ID   | Primitive SP                 | RAPx tag     | Supported? |
-|------|------------------------------|--------------|:----------:|
-| II.1 | !Null(p)                     | `NonNull`    | - |
-| II.2 | Allocated(p, T, len, A)      | `Allocated`  | - |
-| II.3 | InBound(p, T, len)           | `InBound`    | - |
-| II.4 | !Overlap(dst, src, T, len)   | `NonOverlap` | - |
-
-#### Content (Section III)
-
-| ID   | Primitive SP         | RAPx tag      | Supported? |
-|------|----------------------|---------------|:----------:|
-| III.1 | ValidNum(exp, vrange)| `ValidNum`    | - |
-| III.2 | ValidString(arange)  | `ValidString` | - |
-| III.3 | ValidCStr(p, len)    | `ValidCStr`   | - |
-| III.4 | Init(p, T, len)      | `Init`        | - |
-| III.5 | Unwrap(x, T)         | `Unwrap`      | - |
-| III.6 | Typed(p, T)          | `Typed`       | - |
-
-#### Alias & Ownership (Section IV)
-
-| ID   | Primitive SP     | RAPx tag  | Supported? |
-|------|------------------|-----------|:----------:|
-| IV.1 | !Owned(p)        | `Owning`  | - |
-| IV.2 | Alias(p1, p2)    | `Alias`   | - |
-| IV.3 | Alive(p, l)      | `Alive`   | - |
-
-#### Miscellaneous (Section V)
-
-| ID   | Primitive SP         | RAPx tag       | Supported? |
-|------|----------------------|----------------|:----------:|
-| V.1  | Pinned(p, l)         | `Pinned`       | - |
-| V.2  | !Volatile(p, T, len) | `NonVolatile`  | - |
-| V.3  | Opened(fd)           | `Opened`       | - |
-| V.4  | Trait(T, trait)      | `Trait`        | - |
-| V.5  | !Reachable()         | `Unreachable`  | - |
-
-#### Compound Properties (Section 2.2)
-
-| Compound SP              | RAPx tag    | Supported? |
-|--------------------------|-------------|:----------:|
-| ValidPtr(p, T, len)      | `ValidPtr`  | - |
-| Deref(p, T, len)         | `Deref`     | - |
-| Ptr2Ref(p, T)            | `Ptr2Ref`   | - |
-| Layout(p, layout)        | `Layout`    | - |
+\* Compound property (see [safety-tags §2.2](https://github.com/safer-rust/safety-tags/blob/main/primitive-sp.md#22-compound-sps-used-in-rustdoc))
 
 ### Environment Variables (values are case insensitive)
 
