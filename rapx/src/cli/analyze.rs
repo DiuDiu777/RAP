@@ -41,9 +41,9 @@ pub enum AnalysisKind {
     /// generate API dependency graphs
     Adg(AdgArgs),
     /// generate unsafety propagation graphs for each module
-    Upg,
+    UnsafetyPropagation,
     /// generate unsafety propagation graphs for each module of the Rust standard library
-    UpgStd,
+    UnsafetyPropagationStd,
     /// generate callgraphs
     Callgraph,
     /// generate dataflow graphs
