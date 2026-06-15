@@ -3,15 +3,15 @@
     {
       "tag": "Allocated",
       "args": [
-        "Arg_0",
+        "buf",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "buf",
         "T"
       ]
     },
@@ -22,7 +22,7 @@
     {
       "tag": "ValidString",
       "args": [
-        "Arg_0"
+        "buf"
       ]
     }
   ],
@@ -30,24 +30,24 @@
     {
       "tag": "Allocated",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "ptr",
         "T"
       ]
     },
     {
       "tag": "InBound",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
@@ -57,7 +57,7 @@
     {
       "tag": "Layout",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     }
   ],
@@ -65,24 +65,24 @@
     {
       "tag": "Allocated",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "ptr",
         "T"
       ]
     },
     {
       "tag": "InBound",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
@@ -92,7 +92,7 @@
     {
       "tag": "Layout",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     }
   ],
@@ -100,24 +100,24 @@
     {
       "tag": "Allocated",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "ptr",
         "T"
       ]
     },
     {
       "tag": "InBound",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
@@ -127,7 +127,7 @@
     {
       "tag": "Layout",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     }
   ],
@@ -135,24 +135,24 @@
     {
       "tag": "Allocated",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "ptr",
         "T"
       ]
     },
     {
       "tag": "InBound",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "length"
       ]
     },
     {
@@ -162,7 +162,7 @@
     {
       "tag": "Layout",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     }
   ],
@@ -170,22 +170,22 @@
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "self",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "self",
         "T"
       ]
     },
     {
       "tag": "Typed",
       "args": [
-        "Arg_0",
+        "self",
         "T"
       ]
     }
@@ -194,22 +194,22 @@
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "self",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "self",
         "T"
       ]
     },
     {
       "tag": "Typed",
       "args": [
-        "Arg_0",
+        "self",
         "T"
       ]
     }
@@ -218,22 +218,22 @@
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "src",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "src",
         "T"
       ]
     },
     {
       "tag": "Typed",
       "args": [
-        "Arg_0",
+        "src",
         "T"
       ]
     }
@@ -242,35 +242,35 @@
     {
       "tag": "NonNull",
       "args": [
-        "Arg_0"
+        "range"
       ]
     },
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "range",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Init",
       "args": [
-        "Arg_0",
+        "range",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Alive",
       "args": [
-        "Arg_0"
+        "range"
       ]
     },
     {
       "tag": "Alias",
       "args": [
-        "Arg_0"
+        "range"
       ]
     },
     {
@@ -280,7 +280,7 @@
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "range",
         "T"
       ]
     }
@@ -289,35 +289,35 @@
     {
       "tag": "NonNull",
       "args": [
-        "Arg_0"
+        "range"
       ]
     },
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "range",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Init",
       "args": [
-        "Arg_0",
+        "range",
         "T",
-        "Arg_1"
+        "1"
       ]
     },
     {
       "tag": "Alive",
       "args": [
-        "Arg_0"
+        "range"
       ]
     },
     {
       "tag": "Alias",
       "args": [
-        "Arg_0"
+        "range"
       ]
     },
     {
@@ -327,16 +327,16 @@
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "range",
         "T"
       ]
     },
     {
       "tag": "InBound",
       "args": [
-        "Arg_0",
+        "range",
         "T",
-        "Arg_1"
+        "1"
       ]
     }
   ],
@@ -344,41 +344,41 @@
     {
       "tag": "NonNull",
       "args": [
-        "Arg_0"
+        "data"
       ]
     },
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "data",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Init",
       "args": [
-        "Arg_0",
+        "data",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Alive",
       "args": [
-        "Arg_0"
+        "data"
       ]
     },
     {
       "tag": "Alias",
       "args": [
-        "Arg_0"
+        "data"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "data",
         "T"
       ]
     },
@@ -391,41 +391,41 @@
     {
       "tag": "NonNull",
       "args": [
-        "Arg_0"
+        "data"
       ]
     },
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "data",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Init",
       "args": [
-        "Arg_0",
+        "data",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Alive",
       "args": [
-        "Arg_0"
+        "data"
       ]
     },
     {
       "tag": "Alias",
       "args": [
-        "Arg_0"
+        "data"
       ]
     },
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "data",
         "T"
       ]
     },
@@ -438,35 +438,35 @@
     {
       "tag": "NonNull",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     },
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Init",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Alive",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     },
     {
       "tag": "Alias",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     },
     {
@@ -476,7 +476,7 @@
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "ptr",
         "T"
       ]
     }
@@ -485,35 +485,35 @@
     {
       "tag": "NonNull",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     },
     {
       "tag": "ValidPtr",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Init",
       "args": [
-        "Arg_0",
+        "ptr",
         "T",
-        "Arg_1"
+        "len"
       ]
     },
     {
       "tag": "Alive",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     },
     {
       "tag": "Alias",
       "args": [
-        "Arg_0"
+        "ptr"
       ]
     },
     {
@@ -523,7 +523,7 @@
     {
       "tag": "Align",
       "args": [
-        "Arg_0",
+        "ptr",
         "T"
       ]
     }
