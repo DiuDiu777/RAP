@@ -4,6 +4,7 @@
 pub mod chain;
 pub mod fn_collector;
 pub mod hir_visitor;
+pub mod root;
 pub mod safetyflow_graph;
 pub mod safetyflow_unit;
 pub mod std_analysis;
@@ -13,10 +14,10 @@ use crate::{
     utils::source::{get_fn_name_byid, get_module_name},
 };
 use fn_collector::FnCollector;
-use hir_visitor::ContainsUnsafe;
 use rustc_hir::{Safety, def_id::DefId};
-use rustc_middle::{mir::Local, ty::TyCtxt};
+use rustc_middle::ty::TyCtxt;
 use std::collections::{HashMap, HashSet};
+use root::contains_unsafe;
 use safetyflow_graph::{SafetyFlowEdge, SafetyFlowGraph};
 use safetyflow_unit::SafetyFlowUnit;
 
@@ -53,17 +54,14 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
                  */
                 let fns = FnCollector::collect(self.tcx);
                 for vec in fns.values() {
-                    for (body_id, _span) in vec {
-                        // each function or associated function in
-                        // structs and traits
-                        let (fn_unsafe, block_unsafe) =
-                            ContainsUnsafe::contains_unsafe(self.tcx, *body_id);
-                        // map the function body_id back to its def_id;
-                        let def_id = self.tcx.hir_body_owner_def_id(*body_id).to_def_id();
-                        if fn_unsafe | block_unsafe {
-                            self.insert_upg(def_id);
-                        }
+                for (body_id, _span) in vec {
+                    // each function or associated function in
+                    // structs and traits
+                    let def_id = self.tcx.hir_body_owner_def_id(*body_id).to_def_id();
+                    if contains_unsafe(self.tcx, *body_id) {
+                        self.insert_upg(def_id);
                     }
+                }
                 }
                 self.generate_graph_dots();
             }
@@ -71,20 +69,24 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
     }
 
     pub fn insert_upg(&mut self, def_id: DefId) {
-        let callees = get_unsafe_callees(self.tcx, def_id);
-        let raw_ptrs = get_rawptr_deref(self.tcx, def_id);
-        let global_locals = collect_global_local_pairs(self.tcx, def_id);
-        let static_muts: HashSet<DefId> = global_locals.keys().copied().collect();
+        let Some(root) = root::detect(self.tcx, def_id) else {
+            return;
+        };
 
-        /*Static mutable access is in nature via raw ptr; We have to prune the duplication.*/
-        let global_locals_set: HashSet<Local> = global_locals.values().flatten().copied().collect();
-        let raw_ptrs_filtered: HashSet<Local> =
-            raw_ptrs.difference(&global_locals_set).copied().collect();
+        // If the function is entirely safe (no unsafe code, no unsafe callees,
+        // no raw pointer dereferences, and no static mutable accesses), skip.
+        if check_safety(self.tcx, def_id) == Safety::Safe
+            && root.unsafe_callees.is_empty()
+            && root.raw_ptr_locals.is_empty()
+            && root.static_muts.is_empty()
+        {
+            return;
+        }
 
         let constructors = get_cons(self.tcx, def_id);
         let caller_typed = append_fn_with_types(self.tcx, def_id);
         let mut callees_typed = HashSet::new();
-        for callee in &callees {
+        for callee in &root.unsafe_callees {
             callees_typed.insert(append_fn_with_types(self.tcx, *callee));
         }
         let mut cons_typed = HashSet::new();
@@ -98,25 +100,17 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
             return;
         }
 
-        // If the function is entirely safe (no unsafe code, no unsafe callees, no raw pointer dereferences, and no static mutable accesses), skip further analysis
-        if check_safety(self.tcx, def_id) == Safety::Safe
-            && callees.is_empty()
-            && raw_ptrs.is_empty()
-            && static_muts.is_empty()
-        {
-            return;
-        }
         let mut_methods_set = get_all_mutable_methods(self.tcx, def_id);
         let mut_methods: HashSet<_> = mut_methods_set.keys().copied().collect();
-        let upg = SafetyFlowUnit::new(
+        let unit = SafetyFlowUnit::new(
             caller_typed,
             callees_typed,
-            raw_ptrs_filtered,
-            static_muts,
+            root.raw_ptr_locals,
+            root.static_muts,
             cons_typed,
             mut_methods,
         );
-        self.units.push(upg);
+        self.units.push(unit);
     }
 
     /// Main function to aggregate data and render DOT graphs per module.

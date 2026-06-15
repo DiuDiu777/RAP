@@ -1,4 +1,5 @@
 use crate::analysis::Analysis;
+use crate::analysis::safetyflow_analysis::root::{contains_unsafe, function_has_struct_invariant};
 use crate::cli::VerifyMode;
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind,
@@ -205,13 +206,14 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
     /// Visits each function body and records verification targets.
     ///
     /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are collected.
-    /// In `all` and `invariantless` modes, every function with an unsafe callee is collected
-    /// (plus struct invariants where applicable, except in `invariantless` mode).
+    /// In `all` and `invariantless` modes, a HIR-level pre-filter (`contains_unsafe`
+    /// and `function_has_struct_invariant`) avoids expensive MIR scanning for functions
+    /// that have no unsafe content and no struct invariants.
     fn visit_fn(
         &mut self,
         _fk: FnKind<'tcx>,
         _fd: &'tcx FnDecl<'tcx>,
-        _b: BodyId,
+        body_id: BodyId,
         _span: Span,
         id: LocalDefId,
     ) -> Self::Result {
@@ -219,7 +221,18 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             return;
         }
 
+        // HIR pre-filter: skip functions that have nothing to verify.
+        // `contains_unsafe` catches functions with unsafe blocks/declarations;
+        // `function_has_struct_invariant` catches methods on structs with invariants.
         let def_id = id.to_def_id();
+        if !matches!(self.mode, VerifyMode::Targeted) {
+            if !contains_unsafe(self.tcx, body_id)
+                && !function_has_struct_invariant(self.tcx, def_id)
+            {
+                return;
+            }
+        }
+
         let function_target = self.build_function_target(def_id);
 
         match self.mode {
@@ -232,8 +245,6 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                 }
             }
             VerifyMode::Invariantless => {
-                // TODO: skip struct invariant checks during verification.
-                // For now, target collection works like `all` but ignores invariants.
                 if function_target.callsites.is_empty() {
                     return;
                 }
