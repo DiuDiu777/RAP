@@ -20,8 +20,8 @@ pub fn sound_unrelated_scc_does_not_pollute_align(data: &[u32], limit: usize, ch
 
     while i < limit {
         scratch = match choice {
-            Selector::First => unsafe { base.add(i * 4) },
-            Selector::Second => unsafe { base.add(i * 4 + 1) },
+            Selector::First => base.wrapping_add(i * 4),
+            Selector::Second => base.wrapping_add(i * 4 + 1),
         };
 
         i += 1;

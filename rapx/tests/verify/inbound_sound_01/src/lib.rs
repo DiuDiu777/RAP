@@ -10,7 +10,7 @@ unsafe fn require_ptr_add_inbound(_ptr: *const u32) {}
 pub fn sound_ptr_add_guarded(data: &[u32], index: usize) {
     if index < data.len() {
         let ptr = data.as_ptr();
-        let current = unsafe { ptr.add(index) };
+        let current = ptr.wrapping_add(index);
 
         unsafe {
             require_ptr_add_inbound(current);

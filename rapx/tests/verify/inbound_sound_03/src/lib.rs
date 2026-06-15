@@ -10,7 +10,7 @@ unsafe fn require_get_unchecked_like<T>(_ptr: *const T) {}
 pub fn sound_get_unchecked_generic<T>(data: &[T], index: usize) {
     if index < data.len() {
         let ptr = data.as_ptr();
-        let current = unsafe { ptr.add(index) };
+        let current = ptr.wrapping_add(index);
 
         unsafe {
             require_get_unchecked_like::<T>(current);

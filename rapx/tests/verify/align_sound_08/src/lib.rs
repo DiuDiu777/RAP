@@ -29,7 +29,7 @@ pub fn sound_unrelated_nested_scc_with_bad_scratch(
         while inner < inner_limit {
             scratch = match choice {
                 Selector::First => base,
-                Selector::Second => unsafe { base.add(1) },
+                Selector::Second => base.wrapping_add(1),
             };
 
             inner += 1;

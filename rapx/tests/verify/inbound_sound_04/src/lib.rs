@@ -10,8 +10,8 @@ unsafe fn require_copy_nonoverlapping_one(_src: *const u32, _dst: *mut u32) {}
 #[rapx::verify]
 pub fn sound_copy_nonoverlapping_one(src: &[u32], dst: &mut [u32], i: usize, j: usize) {
     if i < src.len() && j < dst.len() {
-        let src_ptr = unsafe { src.as_ptr().add(i) };
-        let dst_ptr = unsafe { dst.as_mut_ptr().add(j) };
+        let src_ptr = src.as_ptr().wrapping_add(i);
+        let dst_ptr = dst.as_mut_ptr().wrapping_add(j);
 
         unsafe {
             require_copy_nonoverlapping_one(src_ptr, dst_ptr);

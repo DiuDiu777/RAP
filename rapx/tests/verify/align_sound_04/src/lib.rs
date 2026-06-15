@@ -27,7 +27,7 @@ pub fn sound_scc_computes_aligned_offset(data: &[u32], limit: usize, choice: Sel
         i += 1;
     }
 
-    let selected = unsafe { base.add(byte_offset) };
+    let selected = base.wrapping_add(byte_offset);
 
     unsafe {
         require_align_arg0(selected as *const u32);

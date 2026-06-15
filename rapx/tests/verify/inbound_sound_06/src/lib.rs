@@ -12,7 +12,7 @@ pub fn sound_scc_loop_index_guard(data: &[u32]) {
     let mut i = 0usize;
 
     while i < data.len() {
-        let current = unsafe { ptr.add(i) };
+        let current = ptr.wrapping_add(i);
 
         unsafe {
             require_loop_inbound(current);

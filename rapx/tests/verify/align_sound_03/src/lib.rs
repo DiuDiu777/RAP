@@ -22,7 +22,7 @@ pub fn sound_scc_selects_aligned_source(data: &[u32], limit: usize, choice: Sele
 
     while i < limit {
         selected = match choice {
-            Selector::First => unsafe { slice_base.add(i) },
+            Selector::First => slice_base.wrapping_add(i),
             Selector::Second => stack_ptr,
         };
 

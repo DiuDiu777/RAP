@@ -26,10 +26,10 @@ pub fn sound_nested_scc_controller(
     while outer < outer_limit {
         let mut p = match choice {
             Selector::First => base,
-            Selector::Second => unsafe { base.add(outer) },
+            Selector::Second => base.wrapping_add(outer),
         };
 
-        let q = unsafe { base.add(outer + 1) };
+        let q = base.wrapping_add(outer + 1);
         let mut inner = 0;
 
         while inner < inner_limit {

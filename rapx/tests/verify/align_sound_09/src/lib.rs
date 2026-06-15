@@ -23,7 +23,7 @@ pub fn sound_pre_scc_guard_with_scc_offsets(data: &[u8], limit: usize, choice: S
         while i < limit {
             selected = match choice {
                 Selector::First => base,
-                Selector::Second => unsafe { base.add(i * 4) },
+                Selector::Second => base.wrapping_add(i * 4),
             };
 
             i += 1;

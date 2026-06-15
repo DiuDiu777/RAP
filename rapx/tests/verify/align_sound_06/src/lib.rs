@@ -22,7 +22,7 @@ pub fn sound_iteration_count_switches_aligned_offsets(data: &[u32], limit: usize
         selected = if i % 2 == 0 {
             base
         } else {
-            unsafe { base.add(4) }
+            base.wrapping_add(4)
         };
 
         i += 1;

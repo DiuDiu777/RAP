@@ -23,7 +23,7 @@ pub fn sound_scc_internal_noise_ignored(data: &[u32], limit: usize, choice: Sele
         if i % 2 == 0 {
             scratch = match choice {
                 Selector::First => base as *const u8,
-                Selector::Second => unsafe { (base as *const u8).add(1) },
+                Selector::Second => (base as *const u8).wrapping_add(1),
             };
         }
 

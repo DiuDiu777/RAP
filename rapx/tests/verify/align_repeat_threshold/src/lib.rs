@@ -9,7 +9,7 @@ unsafe fn require_align_u32(_ptr: *const u32) {}
 #[rapx::verify]
 pub fn repeat2_reveals_delayed_unaligned(data: &[u32], limit: usize) {
     let base = data.as_ptr() as *const u8;
-    let bad = unsafe { base.add(1) };
+    let bad = base.wrapping_add(1);
     let mut selected = base;
     let mut current = base;
     let mut next = base;

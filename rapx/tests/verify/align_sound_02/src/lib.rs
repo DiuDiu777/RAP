@@ -21,7 +21,7 @@ pub fn sound_enum_paths_inside_scc(data: &[u32], limit: usize, choice: Selector)
     while i < limit {
         selected = match choice {
             Selector::First => base,
-            Selector::Second => unsafe { base.add(i) },
+            Selector::Second => base.wrapping_add(i),
         };
 
         i += 1;
