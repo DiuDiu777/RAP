@@ -9,7 +9,8 @@ use syn::Expr;
 pub use crate::helpers::fn_info::parse_expr_into_number;
 pub use crate::helpers::mir_scan::{Callsite, CallsiteLocation, collect_unsafe_callsites};
 pub use crate::helpers::name::{
-    access_ident_recursive, get_cleaned_def_path_name, match_ty_with_ident, parse_signature,
+    access_ident_recursive, get_cleaned_def_path_name, get_struct_self_ty, match_ty_with_ident,
+    parse_signature,
 };
 
 /// Collect all return basic block indices for a function body.
@@ -74,16 +75,6 @@ pub fn callee_param_index_for_local(tcx: TyCtxt<'_>, callee: DefId, local: usize
     };
 
     (local <= arg_count).then_some(local - 1)
-}
-
-fn get_struct_self_ty<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Ty<'tcx>> {
-    let assoc_item = tcx.opt_associated_item(def_id)?;
-    let impl_id = assoc_item.impl_container(tcx)?;
-    let self_ty = tcx.type_of(impl_id).skip_binder();
-    match self_ty.kind() {
-        TyKind::Adt(_, _) => Some(self_ty),
-        _ => None,
-    }
 }
 
 fn resolve_projection_from_base_ident<'tcx>(

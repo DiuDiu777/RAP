@@ -5,7 +5,7 @@ pub mod memory_cloning;
 
 use rustc_middle::ty::TyCtxt;
 
-use crate::utils::log::span_to_source_code;
+use crate::utils::span::span_to_source_code;
 
 use crate::analysis::dataflow::{Graph, default::DataflowAnalyzer};
 use checking::bounds_checking::BoundsCheck;

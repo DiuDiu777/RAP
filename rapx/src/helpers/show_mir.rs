@@ -1,5 +1,8 @@
-use crate::helpers::fn_info::*;
+use crate::def_id::is_drop_fn;
+use crate::helpers::draw_dot::render_dot_string;
+use crate::helpers::name::get_cleaned_def_path_name;
 use colorful::{Color, Colorful};
+use rustc_data_structures::fx::FxHashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{
     BasicBlockData, BasicBlocks, Body, LocalDecl, LocalDecls, Operand, Rvalue, Statement,
@@ -229,4 +232,80 @@ impl<'tcx> ShowMir<'tcx> {
             let _ = generate_mir_cfg_dot(self.tcx, def_id, &Vec::new());
         }
     }
+}
+
+pub fn generate_mir_cfg_dot<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    alias_sets: &Vec<FxHashSet<usize>>,
+) -> Result<(), std::io::Error> {
+    let mir = tcx.optimized_mir(def_id);
+    let mut dot_content = String::new();
+    let alias_info_str = format!("Alias Sets: {:?}", alias_sets);
+
+    dot_content.push_str(&format!(
+        "digraph mir_cfg_{} {{\n",
+        get_cleaned_def_path_name(tcx, def_id)
+    ));
+    dot_content.push_str(&format!(
+        "    label = \"MIR CFG for {}\\n{}\\n\";\n",
+        tcx.def_path_str(def_id),
+        alias_info_str.replace("\"", "\\\"")
+    ));
+    dot_content.push_str("    labelloc = \"t\";\n");
+    dot_content.push_str("    node [shape=box, fontname=\"Courier\", align=\"left\"];\n\n");
+
+    for (bb_index, bb_data) in mir.basic_blocks.iter_enumerated() {
+        let mut lines: Vec<String> = bb_data
+            .statements
+            .iter()
+            .map(|stmt| format!("{:?}", stmt))
+            .collect();
+        let mut node_style = String::new();
+
+        if let Some(terminator) = &bb_data.terminator {
+            let mut is_drop_related = false;
+            match &terminator.kind {
+                TerminatorKind::Drop { .. } => is_drop_related = true,
+                TerminatorKind::Call { func, .. } => {
+                    if let Operand::Constant(c) = func
+                        && let ty::FnDef(def_id, _) = *c.ty().kind()
+                        && is_drop_fn(def_id)
+                    {
+                        is_drop_related = true;
+                    }
+                }
+                _ => {}
+            }
+            if is_drop_related {
+                node_style = ", style=\"filled\", fillcolor=\"#ffdddd\", color=\"red\"".to_string();
+            }
+            lines.push(format!("{:?}", terminator.kind));
+        } else {
+            lines.push("(no terminator)".to_string());
+        }
+
+        let label_content = lines.join("\\l");
+        let node_label = format!("BB{}:\\l{}\\l", bb_index.index(), label_content);
+        dot_content.push_str(&format!(
+            "    BB{} [label=\"{}\"{}];\n",
+            bb_index.index(),
+            node_label.replace("\"", "\\\""),
+            node_style
+        ));
+
+        if let Some(terminator) = &bb_data.terminator {
+            for target in terminator.successors() {
+                dot_content.push_str(&format!(
+                    "    BB{} -> BB{} [label=\"\"];\n",
+                    bb_index.index(),
+                    target.index(),
+                ));
+            }
+        }
+    }
+    dot_content.push_str("}\n");
+    let name = get_cleaned_def_path_name(tcx, def_id);
+    render_dot_string(name, dot_content);
+    Ok(())
 }
