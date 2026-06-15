@@ -41,8 +41,10 @@ pub enum AnalysisKind {
     /// generate API dependency graphs
     Adg(AdgArgs),
     /// perform safety flow analysis (unsafety propagation graph)
+    #[clap(name = "safetyflow")]
     SafetyFlow,
     /// perform safety flow analysis on the Rust standard library
+    #[clap(name = "safetyflowstd")]
     SafetyFlowStd,
     /// generate callgraphs
     Callgraph,
@@ -56,6 +58,7 @@ pub enum AnalysisKind {
         draw: bool,
     },
     /// analyze if the type holds a piece of memory on heap
+    #[clap(name = "ownedheap")]
     OwnedHeap,
     /// extract path-sensitive CFG paths
     Paths,
