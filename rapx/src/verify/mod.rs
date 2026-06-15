@@ -5,7 +5,7 @@ pub mod def_use;
 pub mod driver;
 pub mod engine;
 pub mod forward_visit;
-mod helpers;
+pub mod helpers;
 pub mod path;
 pub mod path_refine;
 pub mod report;
