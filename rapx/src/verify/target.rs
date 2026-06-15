@@ -107,7 +107,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                         get_std_contracts_from_assets(self.tcx, callee_def_id),
                     );
 
-                    if requires.is_empty() {
+                if requires.is_empty() {
                         let path = crate::helpers::name::get_cleaned_def_path_name(
                             self.tcx,
                             callee_def_id,
