@@ -214,6 +214,45 @@
       ]
     }
   ],
+  "core::ptr::copy_nonoverlapping": [
+    {
+      "tag": "Align",
+      "args": [
+        "src",
+        "T"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dst",
+        "T"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "src",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dst",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "NonOverlap",
+      "args": [
+        "dst",
+        "src"
+      ]
+    }
+  ],
   "core::ptr::mut_ptr::read": [
     {
       "tag": "ValidPtr",

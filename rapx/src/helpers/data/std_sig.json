@@ -35,6 +35,11 @@
     "core::ptr::const_ptr::read_unaligned": [
         "self"
     ],
+    "core::ptr::copy_nonoverlapping": [
+        "src",
+        "dst",
+        "count"
+    ],
     "core::ptr::mut_ptr::read": [
         "self"
     ],
