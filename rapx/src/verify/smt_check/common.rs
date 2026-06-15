@@ -41,7 +41,9 @@ use crate::verify::{
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
     def_use::{PlaceBaseKey, PlaceKey},
     forward_visit::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
+    generic::GenericTypeCandidates,
     helpers::{Callsite, callee_param_index_for_local},
+    primitive::PrimitiveCall,
     report::CheckResult,
 };
 
@@ -86,10 +88,18 @@ impl<'tcx> SmtChecker<'tcx> {
     ) -> SmtCheckResult {
         match property.kind {
             PropertyKind::Align => align::check_for_checkpoint(self, caller, property, forward),
-            PropertyKind::NonNull => SmtCheckResult::unknown("NonNull struct invariant not implemented yet"),
-            PropertyKind::InBound => SmtCheckResult::unknown("InBound struct invariant not implemented yet"),
-            PropertyKind::Init => SmtCheckResult::unknown("Init struct invariant not implemented yet"),
-            PropertyKind::ValidPtr => SmtCheckResult::unknown("ValidPtr struct invariant not implemented yet"),
+            PropertyKind::NonNull => {
+                SmtCheckResult::unknown("NonNull struct invariant not implemented yet")
+            }
+            PropertyKind::InBound => {
+                SmtCheckResult::unknown("InBound struct invariant not implemented yet")
+            }
+            PropertyKind::Init => {
+                SmtCheckResult::unknown("Init struct invariant not implemented yet")
+            }
+            PropertyKind::ValidPtr => {
+                SmtCheckResult::unknown("ValidPtr struct invariant not implemented yet")
+            }
             _ => SmtCheckResult::unknown("no struct invariant SMT lowering for this property yet"),
         }
     }
@@ -188,10 +198,7 @@ impl<'tcx> SmtChecker<'tcx> {
                     )
                     .with_query(query),
                     SatResult::Sat => {
-                        rap_debug!(
-                            "  [SMT Align] {} sat: counterexample found",
-                            target_label
-                        );
+                        rap_debug!("  [SMT Align] {} sat: counterexample found", target_label);
                         SmtCheckResult::unknown(
                             "current path facts do not prove the required alignment",
                         )
@@ -445,10 +452,7 @@ impl<'tcx> SmtChecker<'tcx> {
 
     /// Resolve the target place of a property directly from a contract place
     /// without going through callee argument mapping.
-    pub(crate) fn property_target_direct(
-        &self,
-        property: &Property<'tcx>,
-    ) -> Option<PlaceKey> {
+    pub(crate) fn property_target_direct(&self, property: &Property<'tcx>) -> Option<PlaceKey> {
         let arg = property.args.first()?;
         match arg {
             PropertyArg::Place(place) => Some(self.resolve_contract_place(place)),
@@ -600,6 +604,43 @@ impl<'tcx> SmtChecker<'tcx> {
             Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
             Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
             Err(_) => None,
+        }
+    }
+
+    /// Return the alignment required by a property type.
+    ///
+    /// For concrete types this is the ABI alignment. For generic parameters with
+    /// finite representative candidates, the requirement must hold for every
+    /// candidate, so we use the maximum candidate alignment.
+    pub(crate) fn required_alignment(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        ty: Ty<'tcx>,
+    ) -> Option<u64> {
+        if let Some((align, _)) = self.type_layout(caller, ty).filter(|(align, _)| *align > 0) {
+            return Some(align);
+        }
+        self.generic_candidate_alignments(caller, ty)?
+            .into_iter()
+            .max()
+    }
+
+    fn generic_candidate_alignments(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        ty: Ty<'tcx>,
+    ) -> Option<Vec<u64>> {
+        let candidates = GenericTypeCandidates::for_def(self.tcx, caller);
+        let alignments = candidates
+            .candidates_for_ty(ty)?
+            .iter()
+            .filter_map(|candidate| self.type_layout(caller, *candidate).map(|(align, _)| align))
+            .filter(|align| *align > 0)
+            .collect::<Vec<_>>();
+        if alignments.is_empty() {
+            None
+        } else {
+            Some(alignments)
         }
     }
 }
@@ -904,7 +945,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             return term.clone();
         }
         let term = Int::new_const(self.ctx, format!("align_{ty_name}"));
-        self.symbolic_align_terms.insert(ty_name.to_string(), term.clone());
+        self.symbolic_align_terms
+            .insert(ty_name.to_string(), term.clone());
         term
     }
 
@@ -992,9 +1034,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             self.assert_place_alignment(solver, source_place);
                         }
                     }
-                    if let Some(term) =
-                        self.term_for_value(source, &mut HashSet::new())
-                    {
+                    if let Some(term) = self.term_for_value(source, &mut HashSet::new()) {
                         self.place_terms.insert(target.clone(), term);
                     }
                 }
@@ -1014,46 +1054,56 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         )),
                     ));
                 }
-                StateFact::Contract(property) => {
-                    match property.kind {
-                        PropertyKind::Align => {
-                            let Some(target) = (|| {
-                                let arg = property.args.first()?;
-                                let PropertyArg::Place(place) = arg else { return None };
-                                let mut key = PlaceKey::from_contract_place(place);
-                                if let PlaceBaseKey::Arg(index) = key.base {
-                                    key.base = PlaceBaseKey::Local(index + 1);
-                                }
-                                Some(key)
-                            })() else { continue; };
-                            let Some(required_ty) = property.args.iter().find_map(|arg| {
-                                if let PropertyArg::Ty(ty) = arg { Some(*ty) } else { None }
-                            }) else { continue; };
-                            let Some((align, _)) = self.type_layout(required_ty) else { continue; };
-                            if align == 0 {
-                                let ty_name = format!("{required_ty:?}");
-                                if let Some(term) = self.term_for_place(&target) {
-                                    let align_term = self.symbolic_align_term(&ty_name);
-                                    let zero = Int::from_u64(self.ctx, 0);
-                                    solver.assert(&term.modulo(&align_term)._eq(&zero));
-                                    self.assumptions.push(SmtPredicate::Custom(format!(
-                                        "{} aligned for {ty_name} (symbolic, struct-invariant)",
-                                        place_label(&target)
-                                    )));
-                                }
-                            } else {
-                                self.assert_known_alignment(
-                                    solver,
-                                    &target,
-                                    align,
-                                    &format!("{required_ty:?}"),
-                                    "struct-invariant",
-                                );
+                StateFact::Contract(property) => match property.kind {
+                    PropertyKind::Align => {
+                        let Some(target) = (|| {
+                            let arg = property.args.first()?;
+                            let PropertyArg::Place(place) = arg else {
+                                return None;
+                            };
+                            let mut key = PlaceKey::from_contract_place(place);
+                            if let PlaceBaseKey::Arg(index) = key.base {
+                                key.base = PlaceBaseKey::Local(index + 1);
                             }
+                            Some(key)
+                        })() else {
+                            continue;
+                        };
+                        let Some(required_ty) = property.args.iter().find_map(|arg| {
+                            if let PropertyArg::Ty(ty) = arg {
+                                Some(*ty)
+                            } else {
+                                None
+                            }
+                        }) else {
+                            continue;
+                        };
+                        let Some((align, _)) = self.type_layout(required_ty) else {
+                            continue;
+                        };
+                        if align == 0 {
+                            let ty_name = format!("{required_ty:?}");
+                            if let Some(term) = self.term_for_place(&target) {
+                                let align_term = self.symbolic_align_term(&ty_name);
+                                let zero = Int::from_u64(self.ctx, 0);
+                                solver.assert(&term.modulo(&align_term)._eq(&zero));
+                                self.assumptions.push(SmtPredicate::Custom(format!(
+                                    "{} aligned for {ty_name} (symbolic, struct-invariant)",
+                                    place_label(&target)
+                                )));
+                            }
+                        } else {
+                            self.assert_known_alignment(
+                                solver,
+                                &target,
+                                align,
+                                &format!("{required_ty:?}"),
+                                "struct-invariant",
+                            );
                         }
-                        _ => {}
                     }
-                }
+                    _ => {}
+                },
                 StateFact::PathCondition(_)
                 | StateFact::Drop(_)
                 | StateFact::LocalDead(_)
@@ -1127,7 +1177,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         let Some(align_ty) = pointee_ty(ty).or(Some(ty)) else {
             return;
         };
-        let Some((align, _)) = self.type_layout(align_ty) else {
+        let Some(align) = self.guaranteed_alignment(align_ty) else {
             return;
         };
         if align <= 1 {
@@ -1158,10 +1208,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
         if let Some(term) = self.term_for_place(place) {
             let align_term = Int::from_u64(self.ctx, align);
-            let k = Int::new_const(
-                self.ctx,
-                format!("{}_ka_k", place_label(place)),
-            );
+            let k = Int::new_const(self.ctx, format!("{}_ka_k", place_label(place)));
             solver.assert(&term._eq(&Int::mul(self.ctx, &[k, align_term.clone()])));
             let zero = Int::from_u64(self.ctx, 0);
             solver.assert(&term.modulo(&align_term)._eq(&zero));
@@ -1203,18 +1250,18 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     offset_arg,
                     stride,
                 } => {
-                    let base_term = call.args.get(*base_arg).and_then(|v| {
-                        self.term_for_value(v, &mut HashSet::new())
-                    });
-                    let offset_term = call.args.get(*offset_arg).and_then(|v| {
-                        self.term_for_value(v, &mut HashSet::new())
-                    });
+                    let base_term = call
+                        .args
+                        .get(*base_arg)
+                        .and_then(|v| self.term_for_value(v, &mut HashSet::new()));
+                    let offset_term = call
+                        .args
+                        .get(*offset_arg)
+                        .and_then(|v| self.term_for_value(v, &mut HashSet::new()));
                     if let (Some(base), Some(offset)) = (base_term, offset_term) {
                         let stride = Int::from_u64(self.ctx, stride.unwrap_or(1));
-                        let term = Int::add(
-                            self.ctx,
-                            &[base, Int::mul(self.ctx, &[offset, stride])],
-                        );
+                        let term =
+                            Int::add(self.ctx, &[base, Int::mul(self.ctx, &[offset, stride])]);
                         self.place_terms.insert(destination.clone(), term);
                     }
                 }
@@ -1223,18 +1270,18 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     offset_arg,
                     stride,
                 } => {
-                    let base_term = call.args.get(*base_arg).and_then(|v| {
-                        self.term_for_value(v, &mut HashSet::new())
-                    });
-                    let offset_term = call.args.get(*offset_arg).and_then(|v| {
-                        self.term_for_value(v, &mut HashSet::new())
-                    });
+                    let base_term = call
+                        .args
+                        .get(*base_arg)
+                        .and_then(|v| self.term_for_value(v, &mut HashSet::new()));
+                    let offset_term = call
+                        .args
+                        .get(*offset_arg)
+                        .and_then(|v| self.term_for_value(v, &mut HashSet::new()));
                     if let (Some(base), Some(offset)) = (base_term, offset_term) {
                         let stride = Int::from_u64(self.ctx, stride.unwrap_or(1));
-                        let term = Int::sub(
-                            self.ctx,
-                            &[base, Int::mul(self.ctx, &[offset, stride])],
-                        );
+                        let term =
+                            Int::sub(self.ctx, &[base, Int::mul(self.ctx, &[offset, stride])]);
                         self.place_terms.insert(destination.clone(), term);
                     }
                 }
@@ -1423,6 +1470,29 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
+    /// Return the alignment guaranteed by a concrete or generic type.
+    fn guaranteed_alignment(&self, ty: Ty<'tcx>) -> Option<u64> {
+        if let Some((align, _)) = self.type_layout(ty).filter(|(align, _)| *align > 0) {
+            return Some(align);
+        }
+        self.generic_candidate_alignments(ty)?.into_iter().min()
+    }
+
+    fn generic_candidate_alignments(&self, ty: Ty<'tcx>) -> Option<Vec<u64>> {
+        let candidates = GenericTypeCandidates::for_def(self.tcx, self.callsite.caller);
+        let alignments = candidates
+            .candidates_for_ty(ty)?
+            .iter()
+            .filter_map(|candidate| self.type_layout(*candidate).map(|(align, _)| align))
+            .filter(|align| *align > 0)
+            .collect::<Vec<_>>();
+        if alignments.is_empty() {
+            None
+        } else {
+            Some(alignments)
+        }
+    }
+
     /// Return the pointer-add call that produced a place after copies/casts.
     fn pointer_add_call_for_place(&self, place: &PlaceKey) -> Option<CallSummary<'tcx>> {
         let value = self.resolved_value_for_place(place, &mut HashSet::new())?;
@@ -1573,17 +1643,17 @@ fn pointee_ty_str<'tcx>(ty: Ty<'tcx>) -> Option<String> {
 
 /// Return true when a call summary is a typed pointer addition.
 fn is_pointer_add_call(func: &str) -> bool {
-    func.contains("::add") || func.contains("::wrapping_add")
+    PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_pointer_add_like)
 }
 
 /// Return true when a call summary is a typed pointer subtraction.
 fn is_pointer_sub_call(func: &str) -> bool {
-    func.contains("::sub") || func.contains("::wrapping_sub")
+    PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_pointer_sub_like)
 }
 
 /// Return true when a call summary extracts a pointer from a slice-like object.
 fn is_as_ptr_call(func: &str) -> bool {
-    func.ends_with("::as_ptr") || func.contains("::as_ptr")
+    PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_as_ptr_like)
 }
 
 /// Stable SMT variable name for a place key.
@@ -1746,4 +1816,3 @@ fn const_int_from_debug(text: &str) -> Option<u128> {
         u128::from_str_radix(&digits, 16).ok()
     }
 }
-
