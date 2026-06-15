@@ -3,10 +3,10 @@ use super::chain::*;
 use crate::helpers::{draw_dot::render_dot_graphs, fn_info::*, show_mir::display_mir};
 use rustc_hir::{Safety, def::DefKind, def_id::DefId};
 use rustc_middle::{
-    ty::{TyCtxt, Visibility},
+    ty::Visibility,
 };
 use rustc_span::Symbol;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 impl<'tcx> SafetyFlowAnalysis<'tcx> {
     pub fn audit_std_unsafe(&mut self) {
@@ -67,61 +67,12 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
         }
     }
 
-    pub fn get_all_std_unsafe_def_id_by_treat_std_as_local_crate(
-        &mut self,
-        tcx: TyCtxt<'tcx>,
-    ) -> HashSet<DefId> {
-        let mut unsafe_fn = HashSet::default();
-        let mut total_cnt = 0;
-        let mut api_cnt = 0;
-        let mut sp_cnt = 0;
-        let mut sp_count_map: HashMap<String, usize> = HashMap::new();
-        let all_std_fn_def = get_all_std_fns_by_rustc_public(self.tcx);
-
-        for def_id in &all_std_fn_def {
-            if check_safety(tcx, *def_id) == Safety::Unsafe {
-                let sp_set = get_sp(tcx, *def_id);
-                if !sp_set.is_empty() {
-                    unsafe_fn.insert(*def_id);
-                    let mut flag = false;
-                    for sp in &sp_set {
-                        if sp.is_empty()
-                            || sp == "Function_sp"
-                            || sp == "System_sp"
-                            || sp == "ValidSlice"
-                        {
-                            flag = true;
-                        }
-                    }
-                    if !flag {
-                        api_cnt += 1;
-                        sp_cnt += sp_set.len();
-                    }
-                    total_cnt += 1;
-                }
-                for sp in sp_set {
-                    *sp_count_map.entry(sp).or_insert(0) += 1;
-                }
-            }
-            self.insert_upg(*def_id);
-        }
-
-        rap_info!(
-            "fn_def : {}, count : {:?} and {:?}, sp cnt : {}",
-            all_std_fn_def.len(),
-            total_cnt,
-            api_cnt,
-            sp_cnt
-        );
-        unsafe_fn
-    }
-
-    pub fn get_units_data(&mut self, tcx: TyCtxt<'tcx>) {
+    pub fn get_units_data(&mut self) {
         let mut counts = BasicUnitCounts::default();
-        let def_id_sets = tcx.mir_keys(());
+        let def_id_sets = self.tcx.mir_keys(());
         for local_def_id in def_id_sets {
             let def_id = local_def_id.to_def_id();
-            if tcx.def_kind(def_id) == DefKind::Fn || tcx.def_kind(def_id) == DefKind::AssocFn {
+            if self.tcx.def_kind(def_id) == DefKind::Fn || self.tcx.def_kind(def_id) == DefKind::AssocFn {
                 self.insert_upg(def_id);
             }
         }

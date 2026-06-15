@@ -70,32 +70,6 @@ pub fn check_visibility(tcx: TyCtxt, func_defid: DefId) -> bool {
     true
 }
 
-pub fn get_sp_tags_json() -> serde_json::Value {
-    let json_data: serde_json::Value =
-        serde_json::from_str(include_str!("data/std_sps.json")).expect("Unable to parse JSON");
-    json_data
-}
-
-pub fn get_sp(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<String> {
-    let cleaned_path_name = get_cleaned_def_path_name(tcx, def_id);
-    let json_data: serde_json::Value = get_sp_tags_json();
-
-    if let Some(function_info) = json_data.get(&cleaned_path_name) {
-        if let Some(sp_list) = function_info.get("0") {
-            let mut result = HashSet::new();
-            if let Some(sp_array) = sp_list.as_array() {
-                for sp in sp_array {
-                    if let Some(sp_name) = sp.as_str() {
-                        result.insert(sp_name.to_string());
-                    }
-                }
-            }
-            return result;
-        }
-    }
-    HashSet::new()
-}
-
 pub fn get_type(tcx: TyCtxt<'_>, def_id: DefId) -> FnKind {
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         match assoc_item.kind {
