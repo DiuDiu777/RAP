@@ -157,7 +157,7 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | ValidNum(exp, vrange)        | `ValidNum`     |     —     |
 | ValidString(arange)          | `ValidString`  |     —     |
 | ValidCStr(p, len)            | `ValidCStr`    |     —     |
-| Init(p, T, len)              | `Init`         |    ⚠️ ¹   |
+| Init(p, T, len)              | `Init`         |     —     |
 | Unwrap(x, T)                 | `Unwrap`       |     —     |
 | Typed(p, T)                  | `Typed`        |     —     |
 | !Owned(p)                    | `Owning`       |     —     |
@@ -168,13 +168,12 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Opened(fd)                   | `Opened`       |     —     |
 | Trait(T, trait)              | `Trait`        |     —     |
 | !Reachable()                 | `Unreachable`  |     —     |
-| ValidPtr(p, T, len)           | `ValidPtr`     |    ⚠️ ²   |
+| ValidPtr(p, T, len)           | `ValidPtr`     |     —     |
 | Deref(p, T, len)              | `Deref`        |     —     |
 | Ptr2Ref(p, T)                 | `Ptr2Ref`      |     —     |
 | Layout(p, layout)             | `Layout`       |     —     |
 
 ¹ Currently requires a constant element-count argument; variable-length support pending.
-² Decomposed into `NonNull`, `Align`, `InBound`, and `Init` primitives; limited by Init's constant-length requirement.
 
 ### Environment Variables (values are case insensitive)
 
