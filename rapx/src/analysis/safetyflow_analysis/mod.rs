@@ -41,29 +41,27 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
     }
 
     pub fn start(&mut self, ins: TargetCrate) {
+        // SafetyFlowAnalysis does not implement Analysis directly because
+        // std analysis has a different pipeline. This method is called from lib.rs.
         match ins {
             TargetCrate::Std => {
                 self.audit_std_unsafe();
                 return;
             }
             _ => {
-                /* Type of collected data: FxHashMap<Option<HirId>, Vec<(BodyId, Span)>>;
-                 * For a function, the Vec contains only one entry;
-                 * For implementations of structs and traits, the Vec contains all associated
-                 * function entries.
-                 */
                 let fns = FnCollector::collect(self.tcx);
                 for vec in fns.values() {
-                for (body_id, _span) in vec {
-                    // each function or associated function in
-                    // structs and traits
-                    let def_id = self.tcx.hir_body_owner_def_id(*body_id).to_def_id();
-                    if hir_contains_unsafe(self.tcx, *body_id) {
-                        self.insert_upg(def_id);
+                    for (body_id, _span) in vec {
+                        let def_id = self.tcx.hir_body_owner_def_id(*body_id).to_def_id();
+                        if hir_contains_unsafe(self.tcx, *body_id) {
+                            self.insert_upg(def_id);
+                        }
                     }
                 }
-                }
-                self.generate_graph_dots();
+                self.display_summary();
+                let final_dots = self.collect_dots();
+                rap_info!("{:?}", final_dots); // Output required for tests; do not change.
+                render_dot_graphs(final_dots);
             }
         }
     }
@@ -113,8 +111,80 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
         self.units.push(unit);
     }
 
-    /// Main function to aggregate data and render DOT graphs per module.
-    pub fn generate_graph_dots(&self) {
+    /// Print a human-readable text summary of all safety flow units,
+    /// grouped by module, similar to callgraph's output format.
+    pub fn display_summary(&self) {
+        if self.units.is_empty() {
+            rap_info!("SafetyFlow: no unsafe operations detected.");
+            return;
+        }
+
+        // Group units by module
+        let mut modules: HashMap<String, Vec<&SafetyFlowUnit>> = HashMap::new();
+        for unit in &self.units {
+            let mod_name = get_module_name(self.tcx, unit.caller.def_id);
+            modules.entry(mod_name).or_default().push(unit);
+        }
+        let mut mod_names: Vec<String> = modules.keys().cloned().collect();
+        mod_names.sort();
+
+        let mut total_callers = 0usize;
+        let mut total_callees = 0usize;
+        let mut total_rawptrs = 0usize;
+        let mut total_staticmuts = 0usize;
+
+        for mod_name in &mod_names {
+            let units = &modules[mod_name];
+            rap_info!("");
+            rap_info!("SafetyFlow: {} ({} function(s))", mod_name, units.len());
+
+            for unit in units {
+                let caller_name = self.tcx.def_path_str(unit.caller.def_id);
+                let safety = if unit.caller.fn_safety == Safety::Unsafe { "[Unsafe]" } else { "[Safe]" };
+                rap_info!("  {} {}", caller_name, safety);
+                total_callers += 1;
+
+                for callee in &unit.callees {
+                    let name = self.tcx.def_path_str(callee.def_id);
+                    rap_info!("    -> {}", name);
+                    total_callees += 1;
+                }
+
+                if !unit.raw_ptrs.is_empty() {
+                    let locals: Vec<String> = unit.raw_ptrs.iter().map(|l| format!("{:?}", l)).collect();
+                    rap_info!("    *raw* ptr deref: {}", locals.join(", "));
+                    total_rawptrs += 1;
+                }
+
+                for def_id in &unit.static_muts {
+                    let name = self.tcx.def_path_str(*def_id);
+                    rap_info!("    !static! mut: {}", name);
+                    total_staticmuts += 1;
+                }
+
+                for cons in &unit.caller_cons {
+                    let name = self.tcx.def_path_str(cons.def_id);
+                    rap_info!("    + constructor: {}", name);
+                }
+
+                for m in &unit.mut_methods {
+                    let name = self.tcx.def_path_str(*m);
+                    rap_info!("    ~ mut_self: {}", name);
+                }
+            }
+        }
+
+        rap_info!("");
+        rap_info!("============================================================");
+        rap_info!(
+            "SafetyFlow summary: {} function(s), {} call edge(s), {} raw ptr deref(s), {} static mut access(es)",
+            total_callers, total_callees, total_rawptrs, total_staticmuts
+        );
+        rap_info!("============================================================");
+    }
+
+    /// Aggregate units into per-module DOT graphs and return them.
+    pub fn collect_dots(&self) -> Vec<(String, String)> {
         let mut modules_data: HashMap<String, SafetyFlowGraph> = HashMap::new();
 
         let mut collect_unit = |unit: &SafetyFlowUnit| {
@@ -218,7 +288,6 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
             let dot = data.to_dot(&mod_name);
             final_dots.push((mod_name, dot));
         }
-        rap_info!("{:?}", final_dots); // Output required for tests; do not change.
-        render_dot_graphs(final_dots);
+        final_dots
     }
 }
