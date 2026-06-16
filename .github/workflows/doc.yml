@@ -21,16 +21,19 @@ jobs:
 
       - name: Install rustc internal docs
         run: |
+          set -e
           rustup toolchain list -v
-          # Find toolchain path
           export TOOLCHAIN=$(rustc --print sysroot)
           echo "toolchain=\"$TOOLCHAIN\""
-          # Remove rustc book
-          rm $TOOLCHAIN/share/doc/rust/html/rustc -rf
-          # Download rustc API docs
           rustup component add rustc-docs
-          # Move the docs to deployment path
-          mv $TOOLCHAIN/share/doc/rust/html/rustc rapx/target/doc/rustc
+          DOC_SRC="$TOOLCHAIN/share/doc/rust/html/rustc"
+          if [ -d "$DOC_SRC" ]; then
+            cp -r "$DOC_SRC" rapx/target/doc/rustc
+          else
+            echo "rustc docs not found at $DOC_SRC, searching..."
+            find "$TOOLCHAIN/share/doc" -name rustc -type d | head -5
+            find "$TOOLCHAIN/share/doc" -name "*.html" | head -5
+          fi
 
       - name: Prepare index.html
         run: |
