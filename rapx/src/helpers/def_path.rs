@@ -195,7 +195,15 @@ fn local_item_children_by_name(tcx: &TyCtxt<'_>, local_id: LocalDefId, name: Sym
                 res(tcx.hir_ident(HirId::from(owner_id)), owner_id)
             })
             .collect(),
+        #[cfg(not(rapx_rustc_ge_198))]
         ItemKind::Trait(.., trait_item_refs) => trait_item_refs
+            .iter()
+            .filter_map(|&TraitItemId { owner_id }| {
+                res(tcx.hir_ident(HirId::from(owner_id)), owner_id)
+            })
+            .collect(),
+        #[cfg(rapx_rustc_ge_198)]
+        ItemKind::Trait { items: trait_item_refs, .. } => trait_item_refs
             .iter()
             .filter_map(|&TraitItemId { owner_id }| {
                 res(tcx.hir_ident(HirId::from(owner_id)), owner_id)

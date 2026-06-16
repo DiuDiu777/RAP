@@ -430,7 +430,7 @@ pub fn place_projection_uses(place: &Place<'_>) -> RelevantPlaces {
 pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'tcx>> {
     let mut operands = Vec::new();
     match rvalue {
-        Rvalue::Use(op)
+        Rvalue::Use(op, ..)
         | Rvalue::Repeat(op, _)
         | Rvalue::Cast(_, op, _)
         | Rvalue::UnaryOp(_, op) => {

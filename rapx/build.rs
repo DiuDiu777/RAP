@@ -7,6 +7,7 @@ fn main() {
     emit_check_cfg("rustc_spanned_at_root");
     emit_check_cfg("rapx_rustc_ge_193");
     emit_check_cfg("rapx_rustc_ge_196");
+    emit_check_cfg("rapx_rustc_ge_198");
 
     // ─── Version-gated compatibility flags ───────────────────────────────
     //
@@ -34,9 +35,19 @@ fn main() {
     //                               |       | DefKind::Const/AssocConst
     //                               |       |   unit→struct variants
     //                               |       | Query key ref changes
+    // rapx_rustc_ge_198            | 1.98  | Ty/TraitRef/Clause/FnSig
+    //                               |       |   wrapped in Unnormalized
+    //                               |       | StatementKind::Retag removed
+    //                               |       | TerminatorKind::Drop
+    //                               |       |   async_fut field removed
+    //                               |       | ItemKind::Trait struct variant
+    //                               |       | FieldDef::mut_restriction added
+    //                               |       | Various tuple variant field
+    //                               |       |   count changes
     emit_cfg("rustc_spanned_at_root", minor >= 96);
     emit_cfg("rapx_rustc_ge_193", minor >= 93);
     emit_cfg("rapx_rustc_ge_196", minor >= 96);
+    emit_cfg("rapx_rustc_ge_198", minor >= 98);
 }
 
 fn emit_check_cfg(name: &str) {

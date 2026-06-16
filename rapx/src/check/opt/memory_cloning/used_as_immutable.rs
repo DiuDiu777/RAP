@@ -6,12 +6,11 @@ use crate::{
 };
 use annotate_snippets::{Level, Renderer, Snippet};
 use once_cell::sync::OnceCell;
-use rustc_ast::Mutability;
 
 use super::super::LEVEL;
 use rustc_middle::{
     mir::Local,
-    ty::{TyCtxt, TyKind},
+    ty::{Mutability, ParamEnv, TyCtxt, TyKind},
 };
 use rustc_span::Span;
 use std::cell::Cell;
@@ -109,18 +108,22 @@ impl OptCheck for UsedAsImmutableCheck {
                             .collect();
                         let index = filtered_in_edges.binary_search(&&edge_idx).unwrap();
                         if let NodeOp::Call(callee_def_id) = use_node.ops[seq] {
+                            let callee_fn_sig = tcx.fn_sig(callee_def_id).skip_binder();
+                            #[cfg(not(rapx_rustc_ge_198))]
                             let fn_sig = tcx.try_normalize_erasing_regions(
                                 rustc_middle::ty::TypingEnv::post_analysis(*tcx, def_id),
-                                tcx.fn_sig(callee_def_id).skip_binder(),
+                                callee_fn_sig,
+                            );
+                            #[cfg(rapx_rustc_ge_198)]
+                            let fn_sig = tcx.try_normalize_erasing_regions(
+                                rustc_middle::ty::TypingEnv::post_analysis(*tcx, def_id),
+                                rustc_type_ir::Unnormalized::dummy(callee_fn_sig),
                             );
                             if fn_sig.is_ok() {
                                 let fn_sig = fn_sig.unwrap().skip_binder();
                                 let ty = fn_sig.inputs().iter().nth(index).unwrap();
-                                if let TyKind::Ref(_, _, mutability) = ty.kind() {
-                                    //not &mut T
-                                    if *mutability == Mutability::Mut {
-                                        break;
-                                    }
+                                if let TyKind::Ref(_, _, Mutability::Mut) = ty.kind() {
+                                    break;
                                 }
                                 let callee_func_name = format!("{:?}", callee_def_id);
                                 if *level != 2

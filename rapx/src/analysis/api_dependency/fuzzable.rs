@@ -98,7 +98,11 @@ pub fn is_fuzzable_ty<'tcx>(ty: Ty<'tcx>, tcx: TyCtxt<'tcx>, depth: usize) -> bo
 
             // if any field is not public or not fuzzable, then we consider it non-fuzzable
             if !adt_def.all_fields().all(|field| {
-                field.vis.is_public() && is_fuzzable_ty(field.ty(tcx, args), tcx, depth + 1)
+                #[cfg(not(rapx_rustc_ge_198))]
+                let field_ty = field.ty(tcx, args);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = field.ty(tcx, args).skip_norm_wip();
+                field.vis.is_public() && is_fuzzable_ty(field_ty, tcx, depth + 1)
             }) {
                 return false;
             }

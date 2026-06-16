@@ -60,6 +60,7 @@ use rustc_ast::ast;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::{self, Compiler};
 use rustc_middle::{ty::TyCtxt, util::Providers};
+#[cfg(not(rapx_rustc_ge_196))]
 use rustc_session::search_paths::PathKind;
 use std::path::PathBuf;
 use std::sync::Arc;

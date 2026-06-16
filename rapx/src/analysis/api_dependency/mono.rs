@@ -254,6 +254,8 @@ fn is_args_fit_trait_bound<'tcx>(
     );
 
     for pred in inst_pred.predicates.iter() {
+        #[cfg(rapx_rustc_ge_198)]
+        let pred = pred.skip_norm_wip();
         let obligation = Obligation::new(
             tcx,
             ObligationCause::dummy(),
@@ -286,6 +288,8 @@ fn is_fn_solvable<'tcx>(fn_did: DefId, tcx: TyCtxt<'tcx>) -> bool {
         .instantiate_identity(tcx)
         .predicates
     {
+        #[cfg(rapx_rustc_ge_198)]
+        let pred = pred.skip_norm_wip();
         if let Some(pred) = pred.as_trait_clause() {
             let trait_did = pred.skip_binder().trait_ref.def_id;
             if tcx.is_lang_item(trait_did, LangItem::Fn)
@@ -418,6 +422,8 @@ fn solve_unbound_type_generics<'tcx>(
     rap_debug!("[solve_unbound] did = {did:?}, mset={mset:?}");
     for pred in preds.predicates.iter() {
         rap_debug!("[solve_unbound] pred = {:?}", pred);
+        #[cfg(rapx_rustc_ge_198)]
+        let pred = pred.skip_norm_wip();
         if let Some(trait_pred) = pred.as_trait_clause() {
             let trait_pred = trait_pred.skip_binder();
 
@@ -648,6 +654,8 @@ pub fn get_impls<'tcx>(
     let mut impls = HashSet::new();
     let preds = tcx.predicates_of(fn_did).instantiate(tcx, args);
     for (pred, _) in preds {
+        #[cfg(rapx_rustc_ge_198)]
+        let pred = pred.skip_norm_wip();
         if let Some(trait_pred) = pred.as_trait_clause() {
             let trait_ref: rustc_type_ir::TraitRef<TyCtxt<'tcx>> = tcx
                 .liberate_late_bound_regions(fn_did, trait_pred)

@@ -257,7 +257,10 @@ impl<'tcx> PlaceInfo<'tcx> {
             // For ADTs (structs/enums), create fields
             ty::Adt(adt_def, substs) => {
                 for (field_idx, field) in adt_def.all_fields().enumerate() {
+                    #[cfg(not(rapx_rustc_ge_198))]
                     let field_ty = field.ty(tcx, substs);
+                    #[cfg(rapx_rustc_ge_198)]
+                    let field_ty = field.ty(tcx, substs).skip_norm_wip();
                     let field_place = base_place.project_field(field_idx);
 
                     // Check if field may/need drop
@@ -651,7 +654,7 @@ fn apply_statement_effect<'tcx>(
         StatementKind::Assign(assign) => {
             let (lv, rvalue) = &**assign;
             match rvalue {
-                Rvalue::Use(operand) => {
+                Rvalue::Use(operand, ..) => {
                     transfer::transfer_assign(state, *lv, operand, &analyzer.place_info);
                 }
                 Rvalue::Ref(_, _, rv) | Rvalue::RawPtr(_, rv) => {

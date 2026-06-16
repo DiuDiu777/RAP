@@ -88,7 +88,7 @@ pub fn get_rawptr_deref(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<Local> {
                     if place_has_raw_deref(tcx, &body, lhs) {
                         raw_ptrs.insert(lhs.local);
                     }
-                    if let Rvalue::Use(op) = rhs {
+                    if let Rvalue::Use(op, ..) = rhs {
                         match op {
                             Operand::Copy(place) | Operand::Move(place) => {
                                 if place_has_raw_deref(tcx, &body, place) {
@@ -142,7 +142,7 @@ pub fn collect_global_local_pairs(tcx: TyCtxt<'_>, def_id: DefId) -> HashMap<Def
         for stmt in &bb.statements {
             if let StatementKind::Assign(assign) = &stmt.kind {
                 let (lhs, rhs) = &**assign;
-                if let Rvalue::Use(Operand::Constant(c)) = rhs {
+                if let Rvalue::Use(Operand::Constant(c), ..) = rhs {
                     if let Some(static_def_id) = c.check_static_ptr(tcx) {
                         globals.entry(static_def_id).or_default().push(lhs.local);
                     }
@@ -247,7 +247,7 @@ pub fn collect_raw_ptr_deref_info<'tcx>(
 
             let is_write = place_has_raw_deref(tcx, &body, lhs);
             let is_read = match rhs {
-                Rvalue::Use(Operand::Copy(place) | Operand::Move(place)) => {
+                Rvalue::Use(Operand::Copy(place) | Operand::Move(place), ..) => {
                     place_has_raw_deref(tcx, &body, place)
                 }
                 _ => false,
@@ -259,7 +259,7 @@ pub fn collect_raw_ptr_deref_info<'tcx>(
 
             let deref_place = if is_write { lhs } else {
                 match rhs {
-                    Rvalue::Use(Operand::Copy(place) | Operand::Move(place)) => place,
+                    Rvalue::Use(Operand::Copy(place) | Operand::Move(place), ..) => place,
                     _ => continue,
                 }
             };

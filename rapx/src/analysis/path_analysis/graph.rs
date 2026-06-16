@@ -142,6 +142,7 @@ impl<'tcx> PathGraph<'tcx> {
                     unwind,
                     replace: _,
                     drop: _,
+                    #[cfg(not(rapx_rustc_ge_198))]
                     async_fut: _,
                 } => {
                     cfg_block.add_next(target.as_usize());

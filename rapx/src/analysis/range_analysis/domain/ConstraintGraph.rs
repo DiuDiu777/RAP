@@ -430,7 +430,11 @@ where
 
                 // Return the field's type as the result of this match arm.
                 // (The "let field_ty =" is removed from this line)
-                field_def.ty(self.tcx, substs)
+                #[cfg(not(rapx_rustc_ge_198))]
+                let ft = field_def.ty(self.tcx, substs);
+                #[cfg(rapx_rustc_ge_198)]
+                let ft = field_def.ty(self.tcx, substs).skip_norm_wip();
+                ft
             }
             _ => {
                 panic!("get_field_place expected an ADT, but found {:?}", adt_ty);
@@ -744,7 +748,7 @@ where
                         return match rvalue {
                             // If the rvalue is an Operand (e.g. _2 = _1 or _2 = const 5)
                             // return a reference to this Operand; stop tracing _1's source
-                            Rvalue::Use(op) => Some(op),
+                            Rvalue::Use(op, ..) => Some(op),
                             // If the rvalue is a computed result (e.g. _2 = Add(_3, _4))
                             // _2's source is here but it's not an Operand; return None
                             _ => None,
@@ -1193,7 +1197,7 @@ where
                         },
                         _ => {}
                     },
-                    Rvalue::Use(operend) => {
+                    Rvalue::Use(operend, ..) => {
                         self.add_use_op(sink, inst, rvalue, operend);
                     }
                     Rvalue::Ref(_, borrowkind, place) => {

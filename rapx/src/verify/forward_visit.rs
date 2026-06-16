@@ -101,13 +101,14 @@ impl<'tcx> ForwardVisitor<'tcx> {
             StatementKind::FakeRead(..)
             | StatementKind::SetDiscriminant { .. }
             | StatementKind::StorageLive(..)
-            | StatementKind::Retag(..)
             | StatementKind::AscribeUserType(..)
             | StatementKind::Coverage(..)
             | StatementKind::PlaceMention(..)
             | StatementKind::Intrinsic(..)
             | StatementKind::ConstEvalCounter
             | StatementKind::Nop => {}
+            #[cfg(not(rapx_rustc_ge_198))]
+            StatementKind::Retag(..) => {}
             StatementKind::StorageDead(local) => {
                 result.values.remove(local);
                 result.facts.push(StateFact::LocalDead(*local));
@@ -214,7 +215,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
     /// Build an abstract value for a MIR rvalue.
     fn value_from_rvalue(&self, rvalue: &Rvalue<'tcx>) -> AbstractValue<'tcx> {
         match rvalue {
-            Rvalue::Use(operand) => value_from_operand(operand),
+            Rvalue::Use(operand, ..) => value_from_operand(operand),
             Rvalue::Repeat(operand, _) => {
                 AbstractValue::Repeat(Box::new(value_from_operand(operand)))
             }

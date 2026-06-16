@@ -40,6 +40,7 @@ impl<'tcx> Visitor<'tcx> for FnCollector<'tcx> {
                         .map(|body| (body.id(), self.tcx.hir_impl_item(*impl_item_id).span))
                 }));
             }
+            #[cfg(not(rapx_rustc_ge_198))]
             ItemKind::Trait(
                 _,
                 _is_auto,
@@ -49,6 +50,30 @@ impl<'tcx> Visitor<'tcx> for FnCollector<'tcx> {
                 _generic_bounds,
                 trait_item_ids,
             ) => {
+                let key = None;
+                let entry = self.fnmap.entry(key).or_default();
+                entry.extend(trait_item_ids.iter().filter_map(|trait_item_id| {
+                    let trait_item = self.tcx.hir_trait_item(*trait_item_id);
+                    if let TraitItemKind::Fn(_, _) = trait_item.kind {
+                        self.tcx
+                            .hir_maybe_body_owned_by(trait_item.owner_id.def_id)
+                            .map(|body| (body.id(), trait_item.span))
+                    } else {
+                        None
+                    }
+                }));
+            }
+            #[cfg(rapx_rustc_ge_198)]
+            ItemKind::Trait {
+                is_auto: _is_auto,
+                safety: _safety,
+                ident: _ident,
+                generics: _generics,
+                bounds: _generic_bounds,
+                items: trait_item_ids,
+                impl_restriction: _,
+                constness: _,
+            } => {
                 let key = None;
                 let entry = self.fnmap.entry(key).or_default();
                 entry.extend(trait_item_ids.iter().filter_map(|trait_item_id| {

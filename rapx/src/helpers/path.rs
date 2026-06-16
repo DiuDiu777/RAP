@@ -126,6 +126,9 @@ impl<'tcx> PathResolver<'tcx> {
                         .expect("trait impl must have trait ref")
                         .instantiate(self.tcx, parent_args);
 
+                    #[cfg(rapx_rustc_ge_198)]
+                    let trait_ref = trait_ref.skip_norm_wip();
+
                     let self_ty_str = self.ty_str(trait_ref.self_ty());
                     let trait_str = self.non_assoc_path_str(trait_ref.def_id);
                     if trait_ref.args.len() > 1 {
@@ -145,6 +148,8 @@ impl<'tcx> PathResolver<'tcx> {
                         .tcx
                         .type_of(assoc_id)
                         .instantiate(self.tcx, parent_args);
+                    #[cfg(rapx_rustc_ge_198)]
+                    let self_ty = self_ty.skip_norm_wip();
                     self.ty_str(self_ty)
                 }
                 // Trait

@@ -210,7 +210,10 @@ impl<'tcx> OwnedHeapAnalyzer<'tcx> {
             let mut raw_generic = IsolatedParam::new(substs.len());
 
             for field in &variant.fields {
+                #[cfg(not(rapx_rustc_ge_198))]
                 let field_ty = field.ty(self.tcx, substs);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                 let _ = field_ty.visit_with(&mut raw_generic);
             }
             v_res.push((OwnedHeap::False, raw_generic.record_mut().clone()));
@@ -271,7 +274,10 @@ impl<'tcx> OwnedHeapAnalyzer<'tcx> {
             );
 
             for field in &variant.fields {
+                #[cfg(not(rapx_rustc_ge_198))]
                 let field_ty = field.ty(self.tcx, substs);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                 let _ = field_ty.visit_with(&mut raw_generic_prop);
             }
             v_res[variant_index as usize] =
@@ -302,7 +308,10 @@ impl<'tcx> OwnedHeapAnalyzer<'tcx> {
             let mut res = self.adt_heap_mut().get_mut(&did).unwrap()[0].clone();
             // Extract all fields in one given struct
             for field in adt_def.all_fields() {
+                #[cfg(not(rapx_rustc_ge_198))]
                 let field_ty = field.ty(self.tcx, substs);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                 match field_ty.kind() {
                     // Filter the field which is also a struct due to PhantomData<T> is struct
                     TyKind::Adt(field_adt_def, field_substs) => {
@@ -320,7 +329,10 @@ impl<'tcx> OwnedHeapAnalyzer<'tcx> {
                                                 // pointer to store T
                                                 let mut has_ptr = false;
                                                 for field in adt_def.all_fields() {
+                                                    #[cfg(not(rapx_rustc_ge_198))]
                                                     let field_ty = field.ty(self.tcx, substs);
+                                                    #[cfg(rapx_rustc_ge_198)]
+                                                    let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                                                     let mut find_ptr = FindPtr::new(self.tcx);
                                                     let _ = field_ty.visit_with(&mut find_ptr);
                                                     if find_ptr.has_ptr() {
@@ -371,7 +383,10 @@ impl<'tcx> OwnedHeapAnalyzer<'tcx> {
             let mut heap_prop = HeapPropagation::new(self.tcx, res.0, self.adt_heap());
 
             for field in &variant.fields {
+                #[cfg(not(rapx_rustc_ge_198))]
                 let field_ty = field.ty(self.tcx, substs);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                 let _ = field_ty.visit_with(&mut heap_prop);
             }
             v_res[variant_index as usize].0 = heap_prop.heap();
@@ -421,7 +436,11 @@ impl<'tcx> Visitor<'tcx> for OwnedHeapAnalyzer<'tcx> {
                 self.adt_recorder_mut().insert(adtdef.did());
 
                 for field in adtdef.all_fields() {
-                    self.visit_ty(field.ty(self.tcx, substs), copy_ty_context(&ty_context))
+                    #[cfg(not(rapx_rustc_ge_198))]
+                    let fty = field.ty(self.tcx, substs);
+                    #[cfg(rapx_rustc_ge_198)]
+                    let fty = field.ty(self.tcx, substs).skip_norm_wip();
+                    self.visit_ty(fty, copy_ty_context(&ty_context))
                 }
 
                 for ty in substs.types() {
@@ -552,7 +571,10 @@ impl<'tcx, 'a> TypeVisitor<TyCtxt<'tcx>> for IsolatedParamPropagation<'tcx, 'a> 
                 }
 
                 for field in adtdef.all_fields() {
+                    #[cfg(not(rapx_rustc_ge_198))]
                     let field_ty = field.ty(self.tcx, substs);
+                    #[cfg(rapx_rustc_ge_198)]
+                    let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                     let _ = field_ty.visit_with(self);
                 }
 
@@ -600,7 +622,10 @@ impl<'tcx, 'a> TypeVisitor<TyCtxt<'tcx>> for HeapPropagation<'tcx, 'a> {
                 };
 
                 for field in adtdef.all_fields() {
+                    #[cfg(not(rapx_rustc_ge_198))]
                     let field_ty = field.ty(self.tcx, substs);
+                    #[cfg(rapx_rustc_ge_198)]
+                    let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                     let _ = field_ty.visit_with(self);
                 }
 
@@ -627,7 +652,10 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for FindPtr<'tcx> {
                     }
 
                     for field in adtdef.all_fields() {
+                        #[cfg(not(rapx_rustc_ge_198))]
                         let field_ty = field.ty(self.tcx, substs);
+                        #[cfg(rapx_rustc_ge_198)]
+                        let field_ty = field.ty(self.tcx, substs).skip_norm_wip();
                         let _ = field_ty.visit_with(self);
                     }
                     self.unique_mut().remove(&adtdef.did());
@@ -808,7 +836,10 @@ impl<'tcx> Encoder {
                 // check the ty if it is a struct or union
                 if adtdef.is_struct() || adtdef.is_union() {
                     for field in adtdef.all_fields() {
+                        #[cfg(not(rapx_rustc_ge_198))]
                         let field_ty = field.ty(tcx, substs);
+                        #[cfg(rapx_rustc_ge_198)]
+                        let field_ty = field.ty(tcx, substs).skip_norm_wip();
 
                         let mut default_heap = DefaultOwnership::new(tcx, &adt_heap);
 
@@ -821,7 +852,10 @@ impl<'tcx> Encoder {
                     let vidx = variant.unwrap();
 
                     for field in &adtdef.variants()[vidx].fields {
+                        #[cfg(not(rapx_rustc_ge_198))]
                         let field_ty = field.ty(tcx, substs);
+                        #[cfg(rapx_rustc_ge_198)]
+                        let field_ty = field.ty(tcx, substs).skip_norm_wip();
 
                         let mut default_heap = DefaultOwnership::new(tcx, &adt_heap);
 

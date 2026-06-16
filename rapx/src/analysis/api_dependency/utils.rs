@@ -42,7 +42,10 @@ pub fn fn_sig_with_generic_args<'tcx>(
 ) -> FnSig<'tcx> {
     let early_fn_sig = tcx.fn_sig(fn_did);
     let binder_fn_sig = early_fn_sig.instantiate(tcx, args);
-    tcx.liberate_late_bound_regions(fn_did, binder_fn_sig)
+    #[cfg(rapx_rustc_ge_198)]
+    let binder_fn_sig = binder_fn_sig.skip_norm_wip();
+    let result = tcx.liberate_late_bound_regions(fn_did, binder_fn_sig);
+    result
 }
 
 pub fn fn_requires_monomorphization<'tcx>(fn_did: DefId, tcx: TyCtxt<'_>) -> bool {

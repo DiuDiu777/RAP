@@ -191,7 +191,7 @@ impl<'tcx> Replacer<'tcx> {
                     let (lhs, rvalue) = &**assign;
                     if *lhs == current_place {
                         match rvalue {
-                            Rvalue::Use(op) => return op.clone(),
+                            Rvalue::Use(op, ..) => return op.clone(),
                             _ => return Operand::Copy(current_place),
                         }
                     }
@@ -654,7 +654,7 @@ impl<'tcx> Replacer<'tcx> {
 
     fn replace_rvalue(&mut self, rvalue: &mut Rvalue<'tcx>, bb: &BasicBlock) {
         match rvalue {
-            Rvalue::Use(operand)
+            Rvalue::Use(operand, ..)
             | Rvalue::Repeat(operand, _)
             | Rvalue::UnaryOp(_, operand)
             | Rvalue::Cast(_, operand, _) => {

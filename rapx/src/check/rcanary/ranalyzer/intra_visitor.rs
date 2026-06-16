@@ -364,7 +364,7 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         let lvalue_has_projection = has_projection(lplace);
 
         match rvalue {
-            Rvalue::Use(op) => {
+            Rvalue::Use(op, ..) => {
                 let kind = AsgnKind::Assign;
                 let aggre = None;
                 match op {

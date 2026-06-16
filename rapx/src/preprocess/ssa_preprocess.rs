@@ -1,5 +1,9 @@
 use super::set_attrs;
 use rustc_ast::*;
+#[cfg(rapx_rustc_ge_198)]
+use rustc_ast::MutRestriction;
+#[cfg(rapx_rustc_ge_198)]
+use rustc_ast::RestrictionKind;
 use rustc_span::{
     DUMMY_SP,
     symbol::{Ident, Symbol},
@@ -54,6 +58,12 @@ pub(crate) fn create_struct(
             vis: Visibility {
                 span: DUMMY_SP,
                 kind: VisibilityKind::Public,
+                tokens: None,
+            },
+            #[cfg(rapx_rustc_ge_198)]
+            mut_restriction: MutRestriction {
+                kind: RestrictionKind::Unrestricted,
+                span: DUMMY_SP,
                 tokens: None,
             },
             ident: Some(Ident::from_str(fname)),

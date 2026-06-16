@@ -101,7 +101,7 @@ impl DataflowGraph {
                 self.nodes[dst].ops.push(NodeOp::Nop);
             }
             match rvalue {
-                Rvalue::Use(op) => {
+                Rvalue::Use(op, ..) => {
                     self.add_operand(op, dst);
                     self.nodes[dst].ops[seq] = NodeOp::Use;
                 }

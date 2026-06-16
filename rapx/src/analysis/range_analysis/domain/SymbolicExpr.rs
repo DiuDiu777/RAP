@@ -86,7 +86,7 @@ impl<'tcx> SymbExpr<'tcx> {
 
     pub fn from_rvalue(rvalue: &'tcx Rvalue<'tcx>, place_ctx: Vec<&'tcx Place<'tcx>>) -> Self {
         match rvalue {
-            Rvalue::Use(op) => Self::from_operand(op, &place_ctx),
+            Rvalue::Use(op, ..) => Self::from_operand(op, &place_ctx),
             Rvalue::BinaryOp(bin_op, pair) => {
                 let (lhs, rhs) = &**pair;
                 let left = Self::from_operand(lhs, &place_ctx);
@@ -117,10 +117,13 @@ impl<'tcx> SymbExpr<'tcx> {
             | Rvalue::Aggregate(..)
             | Rvalue::Repeat(..)
             | Rvalue::Discriminant(..)
-            | Rvalue::CopyForDeref(..) => SymbExpr::Unknown,
+            | Rvalue::CopyForDeref(..)
+            => SymbExpr::Unknown,
             #[cfg(not(rapx_rustc_ge_196))]
             Rvalue::ShallowInitBox(..)
             | Rvalue::NullaryOp(..) => SymbExpr::Unknown,
+            #[cfg(rapx_rustc_ge_198)]
+            Rvalue::Reborrow(..) => SymbExpr::Unknown,
             Rvalue::RawPtr(raw_ptr_kind, place) => todo!(),
             Rvalue::WrapUnsafeBinder(operand, ty) => todo!(),
         }

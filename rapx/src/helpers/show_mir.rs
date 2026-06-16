@@ -80,6 +80,7 @@ impl<'tcx> Display for StatementKind<'tcx> {
             StatementKind::SetDiscriminant { .. } => s += "SetDiscriminant",
             StatementKind::StorageLive(..) => s += "StorageLive",
             StatementKind::StorageDead(..) => s += "StorageDead",
+            #[cfg(not(rapx_rustc_ge_198))]
             StatementKind::Retag(..) => s += "Retag",
             StatementKind::AscribeUserType(..) => s += "AscribeUserType",
             StatementKind::Coverage(..) => s += "Coverage",

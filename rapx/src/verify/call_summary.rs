@@ -484,8 +484,8 @@ fn trace_to_callee_arg<'tcx>(
                     continue;
                 }
                 let source = match &assign.1 {
-                    Rvalue::Use(Operand::Copy(place))
-                    | Rvalue::Use(Operand::Move(place))
+                    Rvalue::Use(Operand::Copy(place), ..)
+                    | Rvalue::Use(Operand::Move(place), ..)
                     | Rvalue::Cast(_, Operand::Copy(place), _)
                     | Rvalue::Cast(_, Operand::Move(place), _)
                     | Rvalue::Ref(_, _, place)
@@ -601,7 +601,7 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
                         continue;
                     }
                     match &assign.1 {
-                        Rvalue::Use(Operand::Copy(place)) | Rvalue::Use(Operand::Move(place)) => {
+                        Rvalue::Use(Operand::Copy(place), ..) | Rvalue::Use(Operand::Move(place), ..) => {
                             if place.local == current {
                                 queue.push_back(dest);
                                 seen.insert(dest);
