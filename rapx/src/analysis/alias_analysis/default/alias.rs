@@ -1,12 +1,19 @@
 use super::{MopAliasPair, MopFnAliasMap, graph::*, types::*, value::*};
 use crate::def_id::*;
-use crate::compat::FxHashSet;
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{Local, Operand, Place, ProjectionElem, TerminatorKind},
     ty,
 };
 use std::collections::HashSet;
+
+/// Maximum number of Value nodes allowed per path.
+/// Once exceeded, further field nodes are not created (precision trade-off).
+const MAX_VALUES_PER_PATH: usize = 1000;
+
+/// Maximum field-sync recursion depth.
+const MAX_FIELD_DEPTH: usize = 10;
 
 impl<'tcx> AliasGraph<'tcx> {
     /* alias analysis for a single block */
@@ -145,17 +152,20 @@ impl<'tcx> AliasGraph<'tcx> {
                 ProjectionElem::Deref => {}
                 ProjectionElem::Field(field, ty) => {
                     let field_idx = field.as_usize();
-                    // If the field has not been created as a value, we crate a value;
                     if !self.values[value_idx].fields.contains_key(&field_idx) {
-                        let ty_env = ty::TypingEnv::post_analysis(self.tcx(), self.def_id());
-                        let need_drop = ty.needs_drop(self.tcx(), ty_env);
-                        let may_drop = !is_not_drop(self.tcx(), ty);
-                        let mut node =
-                            Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
-                        node.kind = kind(ty);
-                        node.father = Some(FatherInfo::new(value_idx, field_idx));
-                        self.values[value_idx].fields.insert(field_idx, node.index);
-                        self.values.push(node);
+                        if self.values.len() < MAX_VALUES_PER_PATH {
+                            let ty_env = ty::TypingEnv::post_analysis(self.tcx(), self.def_id());
+                            let need_drop = ty.needs_drop(self.tcx(), ty_env);
+                            let may_drop = !is_not_drop(self.tcx(), ty);
+                            let mut node =
+                                Value::new(new_value_idx, local, need_drop, need_drop || may_drop);
+                            node.kind = kind(ty);
+                            node.father = Some(FatherInfo::new(value_idx, field_idx));
+                            self.values[value_idx].fields.insert(field_idx, node.index);
+                            self.values.push(node);
+                        } else {
+                            break;
+                        }
                     }
                     value_idx = *self.values[value_idx].fields.get(&field_idx).unwrap();
                 }
@@ -202,13 +212,10 @@ impl<'tcx> AliasGraph<'tcx> {
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
     pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
-        rap_debug!("sync field aliases for lv:{} rv:{}", lv, rv);
-
-        let max_field_depth = 15;
-
-        if depth > max_field_depth {
+        if depth > MAX_FIELD_DEPTH || self.values.len() >= MAX_VALUES_PER_PATH {
             return;
         }
+        rap_debug!("sync field aliases for lv:{} rv:{}", lv, rv);
 
         // For the fields of lv; we should remove them from the alias sets;
         if clear_left {
@@ -221,16 +228,20 @@ impl<'tcx> AliasGraph<'tcx> {
         for rv_field in self.values[rv].fields.clone().into_iter() {
             rap_debug!("rv_field: {:?}", rv_field);
             if !self.values[lv].fields.contains_key(&rv_field.0) {
-                let mut node = Value::new(
-                    self.values.len(),
-                    self.values[lv].local,
-                    self.values[rv_field.1].need_drop,
-                    self.values[rv_field.1].may_drop,
-                );
-                node.kind = self.values[rv_field.1].kind;
-                node.father = Some(FatherInfo::new(lv, rv_field.0));
-                self.values[lv].fields.insert(rv_field.0, node.index);
-                self.values.push(node);
+                if self.values.len() < MAX_VALUES_PER_PATH {
+                    let mut node = Value::new(
+                        self.values.len(),
+                        self.values[lv].local,
+                        self.values[rv_field.1].need_drop,
+                        self.values[rv_field.1].may_drop,
+                    );
+                    node.kind = self.values[rv_field.1].kind;
+                    node.father = Some(FatherInfo::new(lv, rv_field.0));
+                    self.values[lv].fields.insert(rv_field.0, node.index);
+                    self.values.push(node);
+                } else {
+                    continue;
+                }
             }
             let lv_field_value_idx = *(self.values[lv].fields.get(&rv_field.0).unwrap());
 
@@ -255,7 +266,18 @@ impl<'tcx> AliasGraph<'tcx> {
         rap_debug!("sync father aliases for lv:{} rv:{}", lv, rv);
         let mut father_id = rv;
         let mut father = self.values[father_id].father.clone();
+        let mut iteration = 0usize;
         while let Some(father_info) = father {
+            iteration += 1;
+            if iteration > 1000 {
+                rap_warn!(
+                    "sync_father_alias exceeded 1000 iterations: lv={} rv={} father_id={}",
+                    lv,
+                    rv,
+                    father_id
+                );
+                break;
+            }
             father_id = father_info.father_value_id;
             let field_id = father_info.field_id;
             let father_value = self.values[father_id].clone();
@@ -264,7 +286,7 @@ impl<'tcx> AliasGraph<'tcx> {
                     // create a new node if the node does not exist;
                     let field_value_idx = if self.values[value_idx].fields.contains_key(&field_id) {
                         *self.values[value_idx].fields.get(&field_id).unwrap()
-                    } else {
+                    } else if self.values.len() < MAX_VALUES_PER_PATH {
                         let mut node = Value::new(
                             self.values.len(),
                             self.values[value_idx].local,
@@ -276,6 +298,8 @@ impl<'tcx> AliasGraph<'tcx> {
                         self.values.push(node.clone());
                         self.values[value_idx].fields.insert(field_id, node.index);
                         node.index
+                    } else {
+                        continue;
                     };
                     // add the node to the alias_set of lv;
                     self.alias_sets[lv_alias_set_idx].insert(field_value_idx);
@@ -303,25 +327,33 @@ impl<'tcx> AliasGraph<'tcx> {
 
         for index in fn_alias.lhs_fields().iter() {
             if !self.values[lv].fields.contains_key(index) {
-                let need_drop = fn_alias.lhs_need_drop;
-                let may_drop = fn_alias.lhs_may_drop;
-                let mut node = Value::new(self.values.len(), left_local, need_drop, may_drop);
-                node.kind = ValueKind::RawPtr;
-                node.father = Some(FatherInfo::new(lv, *index));
-                self.values[lv].fields.insert(*index, node.index);
-                self.values.push(node);
+                if self.values.len() < MAX_VALUES_PER_PATH {
+                    let need_drop = fn_alias.lhs_need_drop;
+                    let may_drop = fn_alias.lhs_may_drop;
+                    let mut node = Value::new(self.values.len(), left_local, need_drop, may_drop);
+                    node.kind = ValueKind::RawPtr;
+                    node.father = Some(FatherInfo::new(lv, *index));
+                    self.values[lv].fields.insert(*index, node.index);
+                    self.values.push(node);
+                } else {
+                    break;
+                }
             }
             lv = *self.values[lv].fields.get(index).unwrap();
         }
         for index in fn_alias.rhs_fields().iter() {
             if !self.values[rv].fields.contains_key(index) {
-                let need_drop = fn_alias.rhs_need_drop;
-                let may_drop = fn_alias.rhs_may_drop;
-                let mut node = Value::new(self.values.len(), right_local, need_drop, may_drop);
-                node.kind = ValueKind::RawPtr;
-                node.father = Some(FatherInfo::new(rv, *index));
-                self.values[rv].fields.insert(*index, node.index);
-                self.values.push(node);
+                if self.values.len() < MAX_VALUES_PER_PATH {
+                    let need_drop = fn_alias.rhs_need_drop;
+                    let may_drop = fn_alias.rhs_may_drop;
+                    let mut node = Value::new(self.values.len(), right_local, need_drop, may_drop);
+                    node.kind = ValueKind::RawPtr;
+                    node.father = Some(FatherInfo::new(rv, *index));
+                    self.values[rv].fields.insert(*index, node.index);
+                    self.values.push(node);
+                } else {
+                    break;
+                }
             }
             rv = *self.values[rv].fields.get(index).unwrap();
         }
@@ -333,7 +365,16 @@ impl<'tcx> AliasGraph<'tcx> {
     pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
         let mut field_id_seq = vec![];
         let mut node_ref = value;
+        let mut iteration = 0usize;
         while let Some(father) = &node_ref.father {
+            iteration += 1;
+            if iteration > 1000 {
+                rap_warn!(
+                    "get_field_seq exceeded 1000 iterations: value={:?}",
+                    value
+                );
+                break;
+            }
             field_id_seq.push(father.field_id);
             node_ref = &self.values[father.father_value_id];
         }
@@ -364,31 +405,46 @@ impl<'tcx> AliasGraph<'tcx> {
 
     //merge the result of current path to the final result.
     pub fn merge_results(&mut self) {
-        rap_debug!("merge results");
+            rap_debug!("merge results");
         let f_node: Vec<Option<FatherInfo>> =
             self.values.iter().map(|v| v.father.clone()).collect();
+        let set_index = self.build_set_index();
+        // Pre-compute: for each alias set, which values have local <= arg_size
+        let mut set_arg_values: Vec<Vec<usize>> = vec![Vec::new(); self.alias_sets.len()];
+        for (set_idx, set) in self.alias_sets.iter().enumerate() {
+            for &v in set {
+                if self.values[v].local <= self.arg_size() {
+                    set_arg_values[set_idx].push(v);
+                }
+            }
+        }
         for node in self.values.iter() {
             if node.local > self.arg_size() {
                 continue;
             }
-            for idx in 1..self.values.len() {
-                if !self.is_aliasing(idx, node.index) {
+            // Skip expensive scan when values are huge
+            let scan_limit = MAX_VALUES_PER_PATH.min(self.values.len());
+            for idx in 1..scan_limit {
+                if !self.is_aliasing_indexed(idx, node.index, &set_index) {
                     continue;
                 }
 
                 let mut replace = None;
                 if self.values[idx].local > self.arg_size() {
                     for (i, fidx) in f_node.iter().enumerate() {
+                        if replace.is_some() {
+                            break;
+                        }
                         if let Some(father_info) = fidx {
                             if i != idx && i != node.index {
-                                // && father_info.father_value_id == f_node[idx] {
-                                for (j, v) in self.values.iter().enumerate() {
-                                    if j != idx
-                                        && j != node.index
-                                        && self.is_aliasing(j, father_info.father_value_id)
-                                        && v.local <= self.arg_size()
-                                    {
-                                        replace = Some(&self.values[j]);
+                                if let Some(set_idx) =
+                                    set_index.get(&father_info.father_value_id)
+                                {
+                                    for &j in &set_arg_values[*set_idx] {
+                                        if j != idx && j != node.index {
+                                            replace = Some(&self.values[j]);
+                                            break;
+                                        }
                                     }
                                 }
                             }
@@ -521,6 +577,24 @@ impl<'tcx> AliasGraph<'tcx> {
         let s1 = self.find_alias_set(e1);
         let s2 = self.find_alias_set(e2);
         s1.is_some() && s1 == s2
+    }
+
+    fn build_set_index(&self) -> FxHashMap<usize, usize> {
+        let mut map = FxHashMap::default();
+        for (set_idx, set) in self.alias_sets.iter().enumerate() {
+            for &v in set {
+                map.insert(v, set_idx);
+            }
+        }
+        map
+    }
+
+    #[inline(always)]
+    fn is_aliasing_indexed(&self, e1: usize, e2: usize, index: &FxHashMap<usize, usize>) -> bool {
+        match (index.get(&e1), index.get(&e2)) {
+            (Some(s1), Some(s2)) => s1 == s2,
+            _ => false,
+        }
     }
 
     pub fn merge_alias(&mut self, e1: usize, e2: usize) {

@@ -40,7 +40,17 @@ impl<'tcx> AliasGraph<'tcx> {
         fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
+        rap_debug!(
+            "process_function_paths: def_id={:?} blocks={}",
+            self.def_id(),
+            self.path_graph.cfg.blocks.len()
+        );
         let paths = self.path_graph.enumerate_paths();
+        rap_debug!(
+            "process_function_paths: def_id={:?} paths_enumerated={}",
+            self.def_id(),
+            paths.len()
+        );
         let initial_snapshot = self.snapshot_state();
         let initial_recursion = recursion_set.clone();
 

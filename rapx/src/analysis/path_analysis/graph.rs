@@ -746,9 +746,11 @@ impl<'tcx> PathGraph<'tcx> {
         depth: usize,
         postfix_repeat: usize,
     ) {
+        if current >= self.cfg.blocks.len() {
+            return;
+        }
         if depth > WHOLE_CFG_PATH_DEPTH_LIMIT
             || all_paths.len() >= WHOLE_CFG_PATH_LIMIT
-            || current >= self.cfg.blocks.len()
         {
             return;
         }

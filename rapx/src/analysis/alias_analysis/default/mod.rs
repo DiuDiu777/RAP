@@ -14,7 +14,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use std::{collections::HashSet, convert::From, fmt};
 
-pub const VISIT_LIMIT: usize = 1000;
+pub const VISIT_LIMIT: usize = 80;
 
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct MopAliasPair {
