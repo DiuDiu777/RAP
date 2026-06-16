@@ -27,7 +27,8 @@ jobs:
     - name: Setup latest nightly
       if: matrix.rust == 'latest'
       run: |
-        rustup toolchain install nightly --component rustc-dev rust-src llvm-tools-preview rustfmt --profile minimal
+        rustup toolchain install nightly --profile minimal
+        rustup component add rustc-dev rust-src llvm-tools-preview rustfmt --toolchain nightly
         rustup override set nightly
 
     - name: Build RAPx
