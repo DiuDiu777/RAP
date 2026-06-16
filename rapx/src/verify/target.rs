@@ -266,7 +266,10 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                 if function_target.callsites.is_empty()
                     && function_target.struct_invariants.is_empty()
                 {
-                    return;
+                    let root = crate::analysis::safetyflow_analysis::root::scan_mir(self.tcx, def_id);
+                    if root.is_none() {
+                        return;
+                    }
                 }
             }
             VerifyMode::Invariantless => {

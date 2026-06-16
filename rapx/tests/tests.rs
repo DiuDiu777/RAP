@@ -1003,6 +1003,22 @@ fn safetyflow_static_mut() {
 }
 
 #[test]
+fn verify_raw_ptr_unknown() {
+    let output = run_with_args("safetyflow/raw_ptr", VERIFY_CMD);
+    assert_contain(&output, "[rapx::verify] function: main");
+    assert_contain(&output, "Unknown");
+    assert_contain(&output, "UNSOUND");
+}
+
+#[test]
+fn verify_static_mut_unknown() {
+    let output = run_with_args("safetyflow/static_mut", VERIFY_CMD);
+    assert_contain(&output, "[rapx::verify] function: main");
+    assert_contain(&output, "Unknown");
+    assert_contain(&output, "UNSOUND");
+}
+
+#[test]
 fn ssa_transform() {
     let output = run_with_args("ssa/ssa_transform", ANALYZE_SSA_CMD);
     assert_contain(&output, "ssa lvalue check true");

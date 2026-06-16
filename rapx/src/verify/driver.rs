@@ -395,6 +395,16 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
 
             if all_results.is_empty() {
+                if target.callsites.is_empty() && target.struct_invariants.is_empty() {
+                    rap_info!("============================================================");
+                    rap_info!("[rapx::verify] function: {target_path}");
+                    rap_info!("============================================================");
+                    rap_info!("  --- unsafe callsites ---");
+                    rap_info!("      <none>");
+                    rap_info!("        Unknown | Unproved");
+                    rap_warn!("  result: UNSOUND (no safety contracts found)");
+                    rap_info!("");
+                }
                 continue;
             }
 
