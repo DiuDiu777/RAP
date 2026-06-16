@@ -277,6 +277,40 @@
       ]
     }
   ],
+  "core::ptr::write": [
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dst",
+        "T",
+        "1"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dst",
+        "T"
+      ]
+    }
+  ],
+  "core::ptr::mut_ptr::write": [
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "self",
+        "T",
+        "1"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "self",
+        "T"
+      ]
+    }
+  ],
   "core::slice::raw::from_mut_ptr_range": [
     {
       "tag": "NonNull",

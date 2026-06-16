@@ -1,7 +1,8 @@
 use crate::analysis::Analysis;
 use crate::analysis::safetyflow_analysis::root::{function_has_struct_invariant, hir_contains_unsafe};
 use crate::cli::VerifyMode;
-use crate::helpers::fn_info::get_cons;
+use crate::helpers::fn_info::{get_cons, get_ptr_deref_dummy_def_id};
+use crate::helpers::mir_scan::collect_raw_ptr_deref_info;
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind,
     def_id::{DefId, LocalDefId},
@@ -18,7 +19,9 @@ use syn::Expr;
 use super::{
     attribute::assets_parser::*,
     attribute::attr_parser::parse_rapx_attr,
-    contract::Property,
+    contract::{
+        ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind,
+    },
     helpers::{Callsite, collect_return_block_indices, collect_unsafe_callsites},
     path::PathExtractor,
 };
@@ -42,6 +45,8 @@ pub struct FunctionTarget<'tcx> {
     pub callee_requires: HashMap<DefId, FnContracts<'tcx>>,
     /// Parsed struct invariants that methods of the owning struct must maintain.
     pub struct_invariants: Vec<Property<'tcx>>,
+    /// Raw pointer dereference sites with their required safety properties.
+    pub raw_ptr_deref_checks: Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)>,
 }
 
 /// Collected verification data for a struct that owns methods marked with `#[rapx::verify]`.
@@ -172,6 +177,8 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             .map(|callee_def_id| (*callee_def_id, self.get_fn_contracts(*callee_def_id)))
             .collect();
 
+        let raw_ptr_deref_checks = build_raw_ptr_deref_checks(self.tcx, def_id);
+
         let owner_struct_def_id = self.get_owner_struct_def_id(def_id);
         let struct_invariants = owner_struct_def_id
             .map(|struct_def_id| {
@@ -185,6 +192,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             callsites,
             callee_requires,
             struct_invariants,
+            raw_ptr_deref_checks,
         }
     }
 
@@ -265,6 +273,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             VerifyMode::Targeted => {}
             VerifyMode::Scan => {
                 if function_target.callsites.is_empty()
+                    && function_target.raw_ptr_deref_checks.is_empty()
                     && function_target.struct_invariants.is_empty()
                 {
                     let root = crate::analysis::safetyflow_analysis::root::scan_mir(self.tcx, def_id);
@@ -274,7 +283,9 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                 }
             }
             VerifyMode::Invless => {
-                if function_target.callsites.is_empty() {
+                if function_target.callsites.is_empty()
+                    && function_target.raw_ptr_deref_checks.is_empty()
+                {
                     return;
                 }
             }
@@ -634,4 +645,57 @@ fn get_struct_invariants_from_annotation<'tcx>(
         "invariant",
     ));
     invariants
+}
+
+/// Build (pseudo-callsite, properties) pairs for every raw pointer dereference
+/// in the target function.
+fn build_raw_ptr_deref_checks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+) -> Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)> {
+    let Some(dummy_def_id) = get_ptr_deref_dummy_def_id(tcx) else {
+        return Vec::new();
+    };
+
+    let infos = collect_raw_ptr_deref_info(tcx, def_id);
+    infos
+        .into_iter()
+        .map(|info| {
+            let target = PropertyArg::Place(ContractPlace {
+                base: PlaceBase::Arg(0),
+                projections: vec![],
+            });
+            let ty = PropertyArg::Ty(info.pointee_ty);
+            let count = PropertyArg::Expr(ContractExpr::Const(1));
+
+            let mut properties = vec![
+                Property {
+                    kind: PropertyKind::ValidPtr,
+                    args: vec![target.clone(), ty.clone(), count.clone()],
+                },
+                Property {
+                    kind: PropertyKind::Align,
+                    args: vec![target.clone(), ty.clone()],
+                },
+            ];
+
+            if info.is_read {
+                properties.push(Property {
+                    kind: PropertyKind::Typed,
+                    args: vec![target, ty],
+                });
+            }
+
+            (
+                Callsite {
+                    caller: def_id,
+                    callee: dummy_def_id,
+                    block: info.block,
+                    span: rustc_span::DUMMY_SP,
+                    args: vec![info.ptr_operand],
+                },
+                properties,
+            )
+        })
+        .collect()
 }

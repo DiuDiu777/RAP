@@ -4,7 +4,7 @@ use rustc_middle::{
         BasicBlock, Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
         TerminatorKind,
     },
-    ty::{self, TyCtxt, TyKind},
+    ty::{self, Ty, TyCtxt, TyKind},
 };
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet};
@@ -213,4 +213,101 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
     }
 
     callsites
+}
+
+/// Metadata for a single raw pointer dereference operation found in MIR.
+#[derive(Clone, Debug)]
+pub struct RawPtrDerefInfo<'tcx> {
+    pub block: BasicBlock,
+    pub ptr_operand: Operand<'tcx>,
+    pub pointee_ty: Ty<'tcx>,
+    pub is_read: bool,
+}
+
+/// Collect all raw pointer dereference operations in `def_id` as
+/// metadata records (block, pointer operand, pointee type, read-vs-write).
+pub fn collect_raw_ptr_deref_info<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+) -> Vec<RawPtrDerefInfo<'tcx>> {
+    let mut infos = Vec::new();
+    if !tcx.is_mir_available(def_id) {
+        return infos;
+    }
+
+    let body = tcx.optimized_mir(def_id);
+    for (bb, data) in body.basic_blocks.iter_enumerated() {
+        for stmt in &data.statements {
+            let StatementKind::Assign(box (lhs, rhs)) = &stmt.kind else {
+                continue;
+            };
+
+            let is_write = place_has_raw_deref(tcx, &body, lhs);
+            let is_read = match rhs {
+                Rvalue::Use(Operand::Copy(place) | Operand::Move(place)) => {
+                    place_has_raw_deref(tcx, &body, place)
+                }
+                _ => false,
+            };
+
+            if !is_write && !is_read {
+                continue;
+            }
+
+            let deref_place = if is_write { lhs } else {
+                match rhs {
+                    Rvalue::Use(Operand::Copy(place) | Operand::Move(place)) => place,
+                    _ => continue,
+                }
+            };
+
+            let Some(ptr_operand) = ptr_operand_for_deref_place(deref_place) else {
+                continue;
+            };
+
+            let Some(pointee_ty) = deref_place_pointee_ty(&body, deref_place) else {
+                continue;
+            };
+
+            infos.push(RawPtrDerefInfo {
+                block: bb,
+                ptr_operand,
+                pointee_ty,
+                is_read,
+            });
+        }
+    }
+
+    infos
+}
+
+/// Return the pointee type of the raw pointer being dereferenced.
+fn deref_place_pointee_ty<'tcx>(
+    body: &Body<'tcx>,
+    place: &Place<'tcx>,
+) -> Option<Ty<'tcx>> {
+    let ty = body.local_decls[place.local].ty;
+    match ty.kind() {
+        TyKind::RawPtr(inner, _) => Some(*inner),
+        _ => None,
+    }
+}
+
+/// Extract the pointer operand from a dereference place.
+fn ptr_operand_for_deref_place<'tcx>(place: &Place<'tcx>) -> Option<Operand<'tcx>> {
+    use rustc_middle::ty::List;
+
+    let first_deref_idx = place
+        .projection
+        .iter()
+        .position(|p| matches!(p.kind(), ProjectionElem::Deref))?;
+
+    if first_deref_idx > 0 {
+        return None;
+    }
+
+    Some(Operand::Copy(Place {
+        local: place.local,
+        projection: List::empty(),
+    }))
 }

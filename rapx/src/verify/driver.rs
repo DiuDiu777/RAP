@@ -47,8 +47,12 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         target: &'target FunctionTarget<'tcx>,
         allow_repeat: usize,
     ) -> Self {
+        let mut all_callsites = target.callsites.clone();
+        for (callsite, _) in &target.raw_ptr_deref_checks {
+            all_callsites.push(callsite.clone());
+        }
         let path_info =
-            PathExtractor::new(tcx, target.def_id, target.callsites.clone(), allow_repeat).run();
+            PathExtractor::new(tcx, target.def_id, all_callsites, allow_repeat).run();
         let properties_to_verify = Self::build_properties_to_verify(target);
         let engine = VerifyEngine::new(tcx);
         Self {
@@ -296,7 +300,8 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     fn build_properties_to_verify(
         target: &'target FunctionTarget<'tcx>,
     ) -> FxHashMap<super::helpers::CallsiteLocation, &'target [Property<'tcx>]> {
-        target
+        use super::helpers::CallsiteLocation;
+        let mut map: FxHashMap<CallsiteLocation, &'target [Property<'tcx>]> = target
             .callsites
             .iter()
             .map(|callsite| {
@@ -307,7 +312,22 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     .unwrap_or(&[]);
                 (callsite.location(), properties)
             })
-            .collect()
+            .collect();
+
+        for (callsite, properties) in &target.raw_ptr_deref_checks {
+            let props: &'target [Property<'tcx>] = properties;
+            map.entry(callsite.location())
+                .and_modify(|existing| {
+                    // If both raw ptr deref and regular callsite exist at same
+                    // location (different blocks won't collide), merge properties.
+                    // Since they're slices, we can't trivially merge; just replace
+                    // with the new one for now (raw ptr takes priority).
+                    *existing = props;
+                })
+                .or_insert(props);
+        }
+
+        map
     }
 }
 
@@ -381,7 +401,10 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
 
             if all_results.is_empty() {
-                if target.callsites.is_empty() && target.struct_invariants.is_empty() {
+                if target.callsites.is_empty()
+                    && target.raw_ptr_deref_checks.is_empty()
+                    && target.struct_invariants.is_empty()
+                {
                     rap_info!("============================================================");
                     rap_info!("[rapx::verify] function: {target_path}");
                     rap_info!("============================================================");

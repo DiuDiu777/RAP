@@ -119,7 +119,7 @@ Options:
 Verification modes:
 - `scan` — auto-detect: verify all functions with unsafe callees or struct invariants
 - `targeted` — only verify functions annotated with `#[rapx::verify]`
-- `invless` — like `scan` but skip struct invariant checks; missing callee contracts are flagged as Unknown
+- `invless` — verify without struct invariants as pre/post-conditions, deriving safety requirements automatically from the safety flow graph
 
 ```rust
 #![feature(register_tool)]

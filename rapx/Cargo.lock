@@ -898,7 +898,7 @@ dependencies = [
 
 [[package]]
 name = "rapx"
-version = "0.7.11"
+version = "0.7.13"
 dependencies = [
  "annotate-snippets",
  "anyhow",
