@@ -112,7 +112,7 @@ const ANALYZE_ADG_CMD: &[&str] = &["analyze", "adg", "--dump", "api_graph.yml"];
 const VERIFY_CMD: &[&str] = &["verify"];
 const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "1"];
 const VERIFY_ALLOW_REPEAT2_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "2"];
-const VERIFY_INVARIANTLESS_CMD: &[&str] = &["verify", "--mode", "invariantless"];
+const VERIFY_INVLESS_CMD: &[&str] = &["verify", "--mode", "invless"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
@@ -966,7 +966,7 @@ fn struct_invariant_1() {
 
 #[test]
 fn invariantless_skips_struct_invariant() {
-    let output = run_with_args("verify/struct_invariant_1", VERIFY_INVARIANTLESS_CMD);
+    let output = run_with_args("verify/struct_invariant_1", VERIFY_INVLESS_CMD);
     // Only functions with unsafe callees are verified in invariantless mode
     assert_contain(&output, "function: Wrapper::<T>::sound_read");
     assert_contain(&output, "function: Wrapper::<T>::unsound_read");
@@ -979,7 +979,7 @@ fn invariantless_skips_struct_invariant() {
 
 #[test]
 fn invariantless_sound_callee() {
-    let output = run_with_args("verify/align_sound_01", VERIFY_INVARIANTLESS_CMD);
+    let output = run_with_args("verify/align_sound_01", VERIFY_INVLESS_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
     assert_contain(&output, "result: SOUND");
 }

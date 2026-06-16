@@ -112,14 +112,14 @@ Usage: cargo rapx verify [OPTIONS]
 Options:
       --prepare-targets            identify #[rapx::verify] functions and list their safety contracts
       --allow-pathseg-repeat <N>  number of extra SCC postfix repetitions during path enumeration (default 0)
-      --mode <MODE>               verification mode: all, targeted, invariantless (default all)
+      --mode <MODE>               verification mode: scan, targeted, invless (default scan)
   -h, --help                      Print help
 ```
 
 Verification modes:
-- `all` — auto-detect: verify all functions with unsafe callees or struct invariants
+- `scan` — auto-detect: verify all functions with unsafe callees or struct invariants
 - `targeted` — only verify functions annotated with `#[rapx::verify]`
-- `invariantless` — like `all` but skip struct invariant checks; missing callee contracts are flagged as Unknown
+- `invless` — like `scan` but skip struct invariant checks; missing callee contracts are flagged as Unknown
 
 ```rust
 #![feature(register_tool)]

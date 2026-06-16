@@ -262,7 +262,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 
         match self.mode {
             VerifyMode::Targeted => {}
-            VerifyMode::All => {
+            VerifyMode::Scan => {
                 if function_target.callsites.is_empty()
                     && function_target.struct_invariants.is_empty()
                 {
@@ -272,7 +272,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                     }
                 }
             }
-            VerifyMode::Invariantless => {
+            VerifyMode::Invless => {
                 if function_target.callsites.is_empty() {
                     return;
                 }
@@ -286,7 +286,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 /// Analysis pass that finds all verification targets.
 ///
 /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are listed.
-/// In `all` mode, all functions with unsafe callees or struct invariants are listed.
+/// In `scan` mode, all functions with unsafe callees or struct invariants are listed.
 pub struct PrepareTargets<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,

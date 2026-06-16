@@ -9,11 +9,12 @@
 use crate::analysis::Analysis;
 use crate::analysis::path_analysis::graph::PathGraph;
 use crate::cli::VerifyMode;
+use crate::helpers::fn_info::{FnKind, get_type};
 
 use indexmap::IndexMap;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
 use rustc_middle::mir::BasicBlock;
-use rustc_middle::ty::{TyCtxt, TyKind};
+use rustc_middle::ty::TyCtxt;
 
 use super::{
     contract::Property,
@@ -151,11 +152,8 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             return report;
         }
 
-        let is_constructor = self
-            .target
-            .owner_struct_def_id
-            .map(|sid| returns_self(self.tcx, self.target.def_id, sid))
-            .unwrap_or(false);
+        let is_constructor =
+            get_type(self.tcx, self.target.def_id) == FnKind::Constructor;
 
         for (checkpoint, paths) in self.build_invariant_paths(is_constructor) {
             rap_debug!(
@@ -314,18 +312,6 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
 }
 
 /// Returns whether a function returns the owning struct type (i.e. is a constructor).
-fn returns_self(
-    tcx: TyCtxt<'_>,
-    def_id: rustc_hir::def_id::DefId,
-    struct_def_id: rustc_hir::def_id::DefId,
-) -> bool {
-    let output = tcx.fn_sig(def_id).skip_binder().output().skip_binder();
-    match output.kind() {
-        TyKind::Adt(adt_def, _) => adt_def.did() == struct_def_id,
-        _ => false,
-    }
-}
-
 /// Borrowed view of all verification inputs for one unsafe callsite.
 pub struct CallsiteCheckView<'view, 'target, 'tcx> {
     /// Position among callsites that have properties to verify.
@@ -385,7 +371,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
             // Phase 2: struct invariant verification
             if !target.struct_invariants.is_empty()
-                && !matches!(self.mode, VerifyMode::Invariantless)
+                && !matches!(self.mode, VerifyMode::Invless)
             {
                 let driver =
                     VerifyDriver::new_with_repeat(self.tcx, target, self.allow_pathseg_repeat);
