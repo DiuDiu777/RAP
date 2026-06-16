@@ -325,7 +325,6 @@ pub fn get_cons(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DefId> {
     }
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         if let Some(impl_id) = assoc_item.impl_container(tcx) {
-            // get struct ty
             let ty = tcx.type_of(impl_id).skip_binder();
             if let Some(adt_def) = ty.ty_adt_def() {
                 let adt_def_id = adt_def.did();

@@ -1,6 +1,7 @@
 use crate::analysis::Analysis;
 use crate::analysis::safetyflow_analysis::root::{function_has_struct_invariant, hir_contains_unsafe};
 use crate::cli::VerifyMode;
+use crate::helpers::fn_info::get_cons;
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind,
     def_id::{DefId, LocalDefId},
@@ -394,6 +395,11 @@ impl<'tcx> PrepareTargets<'tcx> {
                 .map(|bb| bb.as_usize())
                 .collect::<Vec<_>>()
         );
+
+        let cons = get_cons(self.tcx, target.def_id);
+        for con in &cons {
+            rap_info!("      + constructor: {}", self.tcx.def_path_str(*con));
+        }
 
         self.log_unsafe_callees_and_contracts(target);
         self.log_callsite_paths(target);

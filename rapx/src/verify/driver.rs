@@ -9,7 +9,7 @@
 use crate::analysis::Analysis;
 use crate::analysis::path_analysis::graph::PathGraph;
 use crate::cli::VerifyMode;
-use crate::helpers::fn_info::{FnKind, get_type};
+use crate::helpers::fn_info::{FnKind, get_cons, get_type};
 
 use indexmap::IndexMap;
 use rustc_data_structures::fx::{FxHashMap, FxHashSet};
@@ -385,6 +385,10 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                     rap_info!("============================================================");
                     rap_info!("[rapx::verify] function: {target_path}");
                     rap_info!("============================================================");
+                    let cons = get_cons(self.tcx, target.def_id);
+                    for con in &cons {
+                        rap_info!("  + constructor: {}", self.tcx.def_path_str(*con));
+                    }
                     rap_info!("  --- unsafe callsites ---");
                     rap_info!("      <none>");
                     rap_info!("        Unknown | Unproved");
@@ -394,14 +398,19 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 continue;
             }
 
-            emit_verify_summary(&target_path, &all_results);
+            emit_verify_summary(self.tcx, &target_path, target.def_id, &all_results);
         }
     }
 
     fn reset(&mut self) {}
 }
 
-fn emit_verify_summary(target_path: &str, all_results: &[PropertyCheckResult<'_>]) {
+fn emit_verify_summary<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target_path: &str,
+    def_id: rustc_hir::def_id::DefId,
+    all_results: &[PropertyCheckResult<'tcx>],
+) {
     let unproved = all_results
         .iter()
         .filter(|r| !matches!(r.result, super::report::CheckResult::Proved))
@@ -410,6 +419,11 @@ fn emit_verify_summary(target_path: &str, all_results: &[PropertyCheckResult<'_>
     rap_info!("============================================================");
     rap_info!("[rapx::verify] function: {target_path}");
     rap_info!("============================================================");
+
+    let cons = get_cons(tcx, def_id);
+    for con in &cons {
+        rap_info!("  + constructor: {}", tcx.def_path_str(*con));
+    }
 
     // Group results by (callsite, callee_name)
     let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> =
