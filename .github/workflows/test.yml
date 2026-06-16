@@ -11,41 +11,17 @@ env:
 jobs:
   build:
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        rust:
-          - pinned
-          - latest
-          - stable
-    continue-on-error: ${{ matrix.rust == 'stable' }}
-
     steps:
     - uses: actions/checkout@v4
 
-    - name: Setup pinned nightly (via rust-toolchain.toml)
-      if: matrix.rust == 'pinned'
+    - name: Setup asterinas (via rust-toolchain.toml)
       run: rustup show active-toolchain
-
-    - name: Setup latest nightly
-      if: matrix.rust == 'latest'
-      run: |
-        rustup toolchain install nightly --component rustc-dev rust-src llvm-tools-preview rustfmt --profile minimal
-        rustup override set nightly
-
-    - name: Setup stable (informational — expected to fail)
-      if: matrix.rust == 'stable'
-      run: |
-        rustup toolchain install stable
-        rustup override set stable
-      continue-on-error: true
 
     - name: Build RAPx
       run: ./install.sh
-      continue-on-error: ${{ matrix.rust == 'stable' }}
 
     - name: Running Cargo Test
       run: cd rapx && cargo test
-      continue-on-error: ${{ matrix.rust == 'stable' }}
 
   verify-std:
     runs-on: ubuntu-22.04
