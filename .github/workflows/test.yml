@@ -30,7 +30,8 @@ jobs:
 
     - name: Setup nightly-2025-10-09 for verify-std
       run: |
-        rustup toolchain install nightly-2025-10-09 --component rustc-dev rust-src llvm-tools-preview rustfmt --profile minimal
+        rustup toolchain install nightly-2025-10-09 --profile minimal
+        rustup component add rustc-dev rust-src llvm-tools-preview rustfmt --toolchain nightly-2025-10-09
         rustup override set nightly-2025-10-09
 
     - name: Build RAPx
