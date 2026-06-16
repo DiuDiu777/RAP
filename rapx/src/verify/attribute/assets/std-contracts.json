@@ -566,6 +566,103 @@
       ]
     }
   ],
+  "core::mem::maybe_uninit::assume_init": [
+    {
+      "tag": "NonNull",
+      "args": [
+        "self"
+      ]
+    }
+  ],
+  "core::ptr::const_ptr::add": [
+    {
+      "tag": "NonNull",
+      "args": [
+        "self"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "self",
+        "ty:T"
+      ]
+    }
+  ],
+  "core::ptr::mut_ptr::add": [
+    {
+      "tag": "NonNull",
+      "args": [
+        "self"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "self",
+        "ty:T"
+      ]
+    }
+  ],
+  "core::ptr::swap": [
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "x",
+        "ty:T",
+        "1"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "x",
+        "ty:T"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "y",
+        "ty:T",
+        "1"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "y",
+        "ty:T"
+      ]
+    },
+    {
+      "tag": "NonOverlap",
+      "args": [
+        "x",
+        "y"
+      ]
+    }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked": [
+    {
+      "tag": "InBound",
+      "args": [
+        "Arg_0",
+        "ty:T",
+        "arg:0 + 1"
+      ]
+    }
+  ],
+  "core::slice::index::SliceIndex::get_unchecked_mut": [
+    {
+      "tag": "InBound",
+      "args": [
+        "Arg_0",
+        "ty:T",
+        "arg:0 + 1"
+      ]
+    }
+  ],
   "core::str::converts::from_raw_parts_mut": [
     {
       "tag": "NonNull",

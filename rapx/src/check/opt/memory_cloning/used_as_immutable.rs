@@ -10,7 +10,7 @@ use once_cell::sync::OnceCell;
 use super::super::LEVEL;
 use rustc_middle::{
     mir::Local,
-    ty::{Mutability, ParamEnv, TyCtxt, TyKind},
+    ty::{Mutability, TyCtxt, TyKind},
 };
 use rustc_span::Span;
 use std::cell::Cell;
