@@ -552,13 +552,8 @@ fn normalize_json_contract_arg(arg: &str) -> String {
 }
 
 fn is_rapx_named_attr(attr: &Attribute, name: &str) -> bool {
-    matches!(
-        attr,
-        Attribute::Unparsed(tool_attr)
-            if tool_attr.path.segments.len() == 2
-                && tool_attr.path.segments[0].as_str() == "rapx"
-                && tool_attr.path.segments[1].as_str() == name
-    )
+    let path = attr.path();
+    path.len() >= 2 && path[path.len() - 2].as_str() == "rapx" && path[path.len() - 1].as_str() == name
 }
 
 /// Collects properties from `#[rapx::requires(...)]` attributes.
