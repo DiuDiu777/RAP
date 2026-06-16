@@ -77,13 +77,31 @@ fn cargo_check(dir: &Utf8Path) {
 fn cargo_clean(dir: &Utf8Path, really: bool) {
     if really {
         rap_trace!("cargo clean in package folder {dir}");
-        if let Err(err) = Command::new("cargo")
+        let out = Command::new("cargo")
             .arg("clean")
-            .arg("--workspace") // use --workspace to clean all members of the workspace, which may be more thorough but also more time-consuming to rebuild
+            .arg("--workspace")
             .current_dir(dir)
-            .output()
-        {
-            rap_error_and_exit(format!("`cargo clean` exits unexpectedly:\n{err}"));
+            .output();
+        match out {
+            Ok(o) if o.status.success() => {}
+            _ => {
+                let out = Command::new("cargo")
+                    .arg("clean")
+                    .current_dir(dir)
+                    .output();
+                match out {
+                    Ok(o) if o.status.success() => {}
+                    Ok(o) => {
+                        rap_debug!(
+                            "cargo clean non-zero exit: {}",
+                            String::from_utf8_lossy(&o.stderr)
+                        );
+                    }
+                    Err(err) => {
+                        rap_error_and_exit(format!("`cargo clean` exits unexpectedly:\n{err}"));
+                    }
+                }
+            }
         }
     }
 }
