@@ -671,6 +671,11 @@ impl<'tcx> TypeVisitor<TyCtxt<'tcx>> for FindPtr<'tcx> {
                 self.set_ptr(true);
                 ControlFlow::Break(())
             }
+            #[cfg(rapx_rustc_ge_198)]
+            TyKind::Pat(..) => {
+                self.set_ptr(true);
+                ControlFlow::Break(())
+            }
             _ => ControlFlow::Continue(()),
         }
     }
