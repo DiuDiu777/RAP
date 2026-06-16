@@ -441,7 +441,6 @@ pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'t
         Rvalue::Discriminant(_)
         | Rvalue::ShallowInitBox(_, _)
         | Rvalue::CopyForDeref(_)
-        | Rvalue::NullaryOp(_)
         | Rvalue::ThreadLocalRef(_)
         | Rvalue::Aggregate(_, _)
         | _ => {}

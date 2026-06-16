@@ -52,11 +52,16 @@ impl<'tcx> GenericTypeCandidates<'tcx> {
                 let item = tcx.hir_item(ItemId {
                     owner_id: impl_owner_id,
                 });
+                #[cfg(rapx_rustc_ge_193)]
+                let trait_ref_opt = tcx.impl_opt_trait_ref(impl_def_id);
+                #[cfg(not(rapx_rustc_ge_193))]
+                let trait_ref_opt = tcx.impl_trait_ref(impl_def_id);
+
                 if_chain! {
                     if let ItemKind::Impl(impl_item) = item.kind;
                     if let Some(trait_impl_header) = impl_item.of_trait;
                     if trait_impl_header.polarity == ImplPolarity::Positive;
-                    if let Some(binder) = tcx.impl_opt_trait_ref(impl_def_id);
+                    if let Some(binder) = trait_ref_opt;
                     then {
                         let impl_ty = binder.skip_binder().self_ty();
                         match impl_ty.kind() {

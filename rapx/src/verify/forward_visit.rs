@@ -232,7 +232,10 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     Box::new(value_from_operand(rhs)),
                 )
             },
+            #[cfg(rapx_rustc_ge_193)]
             Rvalue::NullaryOp(op) => AbstractValue::Nullary(format!("{op:?}")),
+            #[cfg(not(rapx_rustc_ge_193))]
+            Rvalue::NullaryOp(op, _) => AbstractValue::Nullary(format!("{op:?}")),
             Rvalue::UnaryOp(op, operand) => {
                 AbstractValue::Unary(*op, Box::new(value_from_operand(operand)))
             }

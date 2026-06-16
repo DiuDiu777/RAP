@@ -562,19 +562,58 @@ impl<'tcx> FnAliasAnalyzer<'tcx> {
 }
 
 // Implement Analysis for FnAliasAnalyzer
+// rustc >= 1.93 changed trait methods from &mut self to &self.
+// We provide two impl blocks conditionally compiled for the correct rustc version.
+#[cfg(not(rapx_rustc_ge_193))]
 impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
     type Domain = AliasDomain;
 
     const NAME: &'static str = "FnAliasAnalyzer";
 
     fn bottom_value(&self, _body: &Body<'tcx>) -> Self::Domain {
-        // Bottom is no aliases
         AliasDomain::new(self.place_info.num_places())
     }
 
-    fn initialize_start_block(&self, _body: &Body<'tcx>, _state: &mut Self::Domain) {
-        // Entry state: no initial aliases between parameters
+    fn initialize_start_block(&self, _body: &Body<'tcx>, _state: &mut Self::Domain) {}
+
+    fn apply_primary_statement_effect(
+        &mut self,
+        state: &mut Self::Domain,
+        statement: &Statement<'tcx>,
+        _location: Location,
+    ) {
+        apply_statement_effect(self, state, statement)
     }
+
+    fn apply_primary_terminator_effect<'mir>(
+        &mut self,
+        state: &mut Self::Domain,
+        terminator: &'mir Terminator<'tcx>,
+        _location: Location,
+    ) -> TerminatorEdges<'mir, 'tcx> {
+        apply_terminator_effect(self, state, terminator)
+    }
+
+    fn apply_call_return_effect(
+        &mut self,
+        _state: &mut Self::Domain,
+        _block: rustc_middle::mir::BasicBlock,
+        _return_places: CallReturnPlaces<'_, 'tcx>,
+    ) {
+    }
+}
+
+#[cfg(rapx_rustc_ge_193)]
+impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
+    type Domain = AliasDomain;
+
+    const NAME: &'static str = "FnAliasAnalyzer";
+
+    fn bottom_value(&self, _body: &Body<'tcx>) -> Self::Domain {
+        AliasDomain::new(self.place_info.num_places())
+    }
+
+    fn initialize_start_block(&self, _body: &Body<'tcx>, _state: &mut Self::Domain) {}
 
     fn apply_primary_statement_effect(
         &self,
@@ -582,42 +621,7 @@ impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
         statement: &Statement<'tcx>,
         _location: Location,
     ) {
-        match &statement.kind {
-            StatementKind::Assign(assign) => {
-                let (lv, rvalue) = &**assign;
-                match rvalue {
-                    // Use(operand): lv = operand
-                    Rvalue::Use(operand) => {
-                        transfer::transfer_assign(state, *lv, operand, &self.place_info);
-                    }
-                    // Ref: lv = &rv or lv = &raw rv
-                    Rvalue::Ref(_, _, rv) | Rvalue::RawPtr(_, rv) => {
-                        transfer::transfer_ref(state, *lv, *rv, &self.place_info);
-                    }
-                    // CopyForDeref: similar to ref
-                    Rvalue::CopyForDeref(rv) => {
-                        transfer::transfer_ref(state, *lv, *rv, &self.place_info);
-                    }
-                    // Cast: lv = operand as T
-                    Rvalue::Cast(_, operand, _) => {
-                        transfer::transfer_assign(state, *lv, operand, &self.place_info);
-                    }
-                    // Aggregate: lv = (operands...)
-                    Rvalue::Aggregate(_, operands) => {
-                        let operand_slice: Vec<_> = operands.iter().map(|op| op.clone()).collect();
-                        transfer::transfer_aggregate(state, *lv, &operand_slice, &self.place_info);
-                    }
-                    // ShallowInitBox: lv = ShallowInitBox(operand, T)
-                    Rvalue::ShallowInitBox(operand, _) => {
-                        transfer::transfer_assign(state, *lv, operand, &self.place_info);
-                    }
-                    // Other rvalues don't create aliases
-                    _ => {}
-                }
-            }
-            // Other statement kinds don't affect alias analysis
-            _ => {}
-        }
+        apply_statement_effect(self, state, statement)
     }
 
     fn apply_primary_terminator_effect<'mir>(
@@ -626,93 +630,7 @@ impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
         terminator: &'mir Terminator<'tcx>,
         _location: Location,
     ) -> TerminatorEdges<'mir, 'tcx> {
-        // (Debug)
-        {
-            *self.bb_iter_cnt.borrow_mut() += 1;
-        }
-        match &terminator.kind {
-            // Call: apply both kill and gen effects
-            // Note: Ideally gen effect should be in apply_call_return_effect, but that method
-            // is not being called by rustc's dataflow framework in current version.
-            // Therefore, we handle both effects here, following MOP's approach.
-            TerminatorKind::Call {
-                target,
-                destination,
-                args,
-                func,
-                ..
-            } => {
-                // Step 1: Apply kill effect for the destination
-                let operand_slice: Vec<_> = args
-                    .iter()
-                    .map(|spanned_arg| spanned_arg.node.clone())
-                    .collect();
-                transfer::transfer_call(state, *destination, &operand_slice, &self.place_info);
-
-                // Step 2: Apply gen effect - function summary or fallback
-                if let Operand::Constant(c) = func {
-                    if let ty::FnDef(callee_def_id, _) = c.ty().kind() {
-                        // Try to get the function summary
-                        let fn_summaries = self.fn_summaries.borrow();
-                        if let Some(summary) = fn_summaries.get(callee_def_id) {
-                            // Apply the function summary
-                            apply_function_summary(
-                                state,
-                                *destination,
-                                &operand_slice,
-                                summary,
-                                &self.place_info,
-                            );
-                        } else {
-                            // No summary available (e.g., library function without MIR)
-                            // Drop the borrow before calling the fallback function
-                            drop(fn_summaries);
-
-                            // Apply conservative fallback: assume return value may alias with any may_drop argument
-                            apply_conservative_alias_for_call(
-                                state,
-                                *destination,
-                                args,
-                                &self.place_info,
-                            );
-                        }
-                    } else {
-                        // FnPtr? Closure?
-                        // rap_warn!(
-                        //     "[MFP-alias] Ignoring call to {:?} because it's not a FnDef",
-                        //     c
-                        // );
-                    }
-                }
-
-                // Step 3: Return control flow edges
-                if let Some(target_bb) = target {
-                    TerminatorEdges::Single(*target_bb)
-                } else {
-                    TerminatorEdges::None
-                }
-            }
-
-            // Drop: doesn't affect alias relationships
-            TerminatorKind::Drop { target, .. } => TerminatorEdges::Single(*target),
-
-            // SwitchInt: return all possible edges
-            TerminatorKind::SwitchInt { discr, targets } => {
-                TerminatorEdges::SwitchInt { discr, targets }
-            }
-
-            // Assert: return normal edge
-            TerminatorKind::Assert { target, .. } => TerminatorEdges::Single(*target),
-
-            // Goto: return target
-            TerminatorKind::Goto { target } => TerminatorEdges::Single(*target),
-
-            // Return: no successors
-            TerminatorKind::Return => TerminatorEdges::None,
-
-            // All other terminators: assume no successors for safety
-            _ => TerminatorEdges::None,
-        }
+        apply_terminator_effect(self, state, terminator)
     }
 
     fn apply_call_return_effect(
@@ -721,10 +639,108 @@ impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
         _block: rustc_middle::mir::BasicBlock,
         _return_places: CallReturnPlaces<'_, 'tcx>,
     ) {
-        // Note: This method is part of the rustc Analysis trait but is not being called
-        // by the dataflow framework in current rustc version when using iterate_to_fixpoint.
-        // The call return effect (gen effect) is instead handled directly in
-        // apply_primary_terminator_effect to ensure it is actually executed.
-        // This is consistent with how MOP analysis handles function calls.
+    }
+}
+
+fn apply_statement_effect<'tcx>(
+    analyzer: &FnAliasAnalyzer<'tcx>,
+    state: &mut AliasDomain,
+    statement: &Statement<'tcx>,
+) {
+    match &statement.kind {
+        StatementKind::Assign(assign) => {
+            let (lv, rvalue) = &**assign;
+            match rvalue {
+                Rvalue::Use(operand) => {
+                    transfer::transfer_assign(state, *lv, operand, &analyzer.place_info);
+                }
+                Rvalue::Ref(_, _, rv) | Rvalue::RawPtr(_, rv) => {
+                    transfer::transfer_ref(state, *lv, *rv, &analyzer.place_info);
+                }
+                Rvalue::CopyForDeref(rv) => {
+                    transfer::transfer_ref(state, *lv, *rv, &analyzer.place_info);
+                }
+                Rvalue::Cast(_, operand, _) => {
+                    transfer::transfer_assign(state, *lv, operand, &analyzer.place_info);
+                }
+                Rvalue::Aggregate(_, operands) => {
+                    let operand_slice: Vec<_> = operands.iter().map(|op| op.clone()).collect();
+                    transfer::transfer_aggregate(state, *lv, &operand_slice, &analyzer.place_info);
+                }
+                Rvalue::ShallowInitBox(operand, _) => {
+                    transfer::transfer_assign(state, *lv, operand, &analyzer.place_info);
+                }
+                _ => {}
+            }
+        }
+        _ => {}
+    }
+}
+
+fn apply_terminator_effect<'tcx, 'mir>(
+    analyzer: &FnAliasAnalyzer<'tcx>,
+    state: &mut AliasDomain,
+    terminator: &'mir Terminator<'tcx>,
+) -> TerminatorEdges<'mir, 'tcx> {
+    {
+        *analyzer.bb_iter_cnt.borrow_mut() += 1;
+    }
+    match &terminator.kind {
+        TerminatorKind::Call {
+            target,
+            destination,
+            args,
+            func,
+            ..
+        } => {
+            let operand_slice: Vec<_> = args
+                .iter()
+                .map(|spanned_arg| spanned_arg.node.clone())
+                .collect();
+            transfer::transfer_call(state, *destination, &operand_slice, &analyzer.place_info);
+
+            if let Operand::Constant(c) = func {
+                if let ty::FnDef(callee_def_id, _) = c.ty().kind() {
+                    let fn_summaries = analyzer.fn_summaries.borrow();
+                    if let Some(summary) = fn_summaries.get(callee_def_id) {
+                        apply_function_summary(
+                            state,
+                            *destination,
+                            &operand_slice,
+                            summary,
+                            &analyzer.place_info,
+                        );
+                    } else {
+                        drop(fn_summaries);
+                        apply_conservative_alias_for_call(
+                            state,
+                            *destination,
+                            args,
+                            &analyzer.place_info,
+                        );
+                    }
+                }
+            }
+
+            if let Some(target_bb) = target {
+                TerminatorEdges::Single(*target_bb)
+            } else {
+                TerminatorEdges::None
+            }
+        }
+
+        TerminatorKind::Drop { target, .. } => TerminatorEdges::Single(*target),
+
+        TerminatorKind::SwitchInt { discr, targets } => {
+            TerminatorEdges::SwitchInt { discr, targets }
+        }
+
+        TerminatorKind::Assert { target, .. } => TerminatorEdges::Single(*target),
+
+        TerminatorKind::Goto { target } => TerminatorEdges::Single(*target),
+
+        TerminatorKind::Return => TerminatorEdges::None,
+
+        _ => TerminatorEdges::None,
     }
 }

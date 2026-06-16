@@ -46,3 +46,19 @@ jobs:
     - name: Running Cargo Test
       run: cd rapx && cargo test
       continue-on-error: ${{ matrix.rust == 'stable' }}
+
+  verify-std:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Setup nightly-2025-10-09 for verify-std
+      run: |
+        rustup toolchain install nightly-2025-10-09 --component rustc-dev rust-src llvm-tools-preview rustfmt --profile minimal
+        rustup override set nightly-2025-10-09
+
+    - name: Build RAPx
+      run: ./install.sh
+
+    - name: Running Cargo Test (verify-std)
+      run: cd rapx && cargo test

@@ -158,7 +158,12 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         let attrs = self.tcx.hir_attrs(hir_id);
 
         attrs.iter().any(|attr| {
+            #[cfg(rapx_rustc_ge_193)]
             if attr.is_doc_comment().is_some() {
+                return false;
+            }
+            #[cfg(not(rapx_rustc_ge_193))]
+            if attr.is_doc_comment() {
                 return false;
             }
 

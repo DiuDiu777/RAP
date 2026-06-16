@@ -160,7 +160,12 @@ impl DataflowGraph {
                     self.add_operand(operand, dst);
                     self.nodes[dst].ops[seq] = NodeOp::UnaryOp;
                 }
+                #[cfg(rapx_rustc_ge_193)]
                 Rvalue::NullaryOp(_) => {
+                    self.nodes[dst].ops[seq] = NodeOp::NullaryOp;
+                }
+                #[cfg(not(rapx_rustc_ge_193))]
+                Rvalue::NullaryOp(_, _) => {
                     self.nodes[dst].ops[seq] = NodeOp::NullaryOp;
                 }
                 Rvalue::ThreadLocalRef(_) => {}

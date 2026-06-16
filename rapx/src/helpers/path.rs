@@ -114,9 +114,16 @@ impl<'tcx> PathResolver<'tcx> {
             let parent_path_str = match kind {
                 // Trait Impl
                 DefKind::Impl { of_trait: true } => {
+                    #[cfg(rapx_rustc_ge_193)]
                     let trait_ref = self
                         .tcx
                         .impl_trait_ref(assoc_id)
+                        .instantiate(self.tcx, parent_args);
+                    #[cfg(not(rapx_rustc_ge_193))]
+                    let trait_ref = self
+                        .tcx
+                        .impl_trait_ref(assoc_id)
+                        .expect("trait impl must have trait ref")
                         .instantiate(self.tcx, parent_args);
 
                     let self_ty_str = self.ty_str(trait_ref.self_ty());

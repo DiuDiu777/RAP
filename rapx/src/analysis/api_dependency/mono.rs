@@ -437,7 +437,10 @@ fn solve_unbound_type_generics<'tcx>(
             // .chain(tcx.inherent_impls(trait_def_id).iter().map(|did| *did))
             {
                 // format: <arg0 as Trait<arg1, arg2>>
+                #[cfg(rapx_rustc_ge_193)]
                 let impl_trait_ref = tcx.impl_trait_ref(impl_did).skip_binder();
+                #[cfg(not(rapx_rustc_ge_193))]
+                let impl_trait_ref = tcx.impl_trait_ref(impl_did).expect("impl must have trait ref").skip_binder();
 
                 // filter irrelevant implementation. We only consider implementation that:
                 // 1. it is local
