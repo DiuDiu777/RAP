@@ -7,10 +7,7 @@
 
 use rustc_middle::mir::{BasicBlock, Body, Operand, Place};
 use rustc_middle::ty::TyCtxt;
-#[cfg(rustc_spanned_at_root)]
-use rustc_span::Spanned;
-#[cfg(not(rustc_spanned_at_root))]
-use rustc_span::source_map::Spanned;
+use crate::compat::Spanned;
 
 use crate::graphs::dataflow::DataflowGraph;
 

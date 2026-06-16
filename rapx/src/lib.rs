@@ -1,12 +1,11 @@
 #![feature(rustc_private)]
-#![feature(box_patterns)]
-#![feature(macro_metavar_expr_concat)]
 
 #[macro_use]
 pub mod utils;
 pub mod analysis;
 pub mod check;
 pub mod cli;
+pub mod compat;
 pub mod def_id;
 pub mod graphs;
 pub mod help;
@@ -18,7 +17,7 @@ extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_data_structures;
 extern crate rustc_driver;
-extern crate rustc_errors;
+
 extern crate rustc_hir;
 extern crate rustc_hir_pretty;
 extern crate rustc_index;
@@ -30,9 +29,9 @@ extern crate rustc_mir_dataflow;
 extern crate rustc_public;
 extern crate rustc_session;
 extern crate rustc_span;
-extern crate rustc_target;
+
 extern crate rustc_trait_selection;
-extern crate rustc_traits;
+
 extern crate rustc_type_ir;
 extern crate thin_vec;
 

@@ -1,5 +1,5 @@
 use annotate_snippets::{Level, Renderer, Snippet};
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_span::{Span, symbol::Symbol};
 
 use crate::utils::log::{

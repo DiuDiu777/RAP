@@ -158,7 +158,8 @@ impl<'tcx> BackwardVisitor<'tcx> {
     ) {
         let mut defs = RelevantPlaces::new();
         match &statement.kind {
-            StatementKind::Assign(box (place, _)) => {
+            StatementKind::Assign(assign) => {
+                let (place, _) = &**assign;
                 defs.insert_mir_place(place);
             }
             StatementKind::StorageDead(local) => {
@@ -279,13 +280,16 @@ impl<'tcx> BackwardVisitor<'tcx> {
 
 fn statement_keep_reason(statement: &rustc_middle::mir::Statement<'_>) -> KeepReason {
     match &statement.kind {
-        StatementKind::Assign(box (_, rvalue)) => match rvalue {
-            rustc_middle::mir::Rvalue::Ref(_, _, _)
-            | rustc_middle::mir::Rvalue::RawPtr(_, _)
-            | rustc_middle::mir::Rvalue::Cast(_, _, _)
-            | rustc_middle::mir::Rvalue::CopyForDeref(_)
-            | rustc_middle::mir::Rvalue::BinaryOp(_, _) => KeepReason::PointerFlow,
-            _ => KeepReason::Definition,
+        StatementKind::Assign(assign) => {
+            let (_, rvalue) = &**assign;
+            match rvalue {
+                rustc_middle::mir::Rvalue::Ref(_, _, _)
+                | rustc_middle::mir::Rvalue::RawPtr(_, _)
+                | rustc_middle::mir::Rvalue::Cast(_, _, _)
+                | rustc_middle::mir::Rvalue::CopyForDeref(_)
+                | rustc_middle::mir::Rvalue::BinaryOp(_, _) => KeepReason::PointerFlow,
+                _ => KeepReason::Definition,
+            }
         },
         StatementKind::StorageDead(_) => KeepReason::Invalidation,
         _ => KeepReason::Definition,
@@ -293,15 +297,15 @@ fn statement_keep_reason(statement: &rustc_middle::mir::Statement<'_>) -> KeepRe
 }
 
 fn statement_can_refine(statement: &rustc_middle::mir::Statement<'_>) -> bool {
-    matches!(
-        &statement.kind,
-        StatementKind::Assign(box (
+    matches!(&statement.kind, StatementKind::Assign(assign) if matches!(
+        &**assign,
+        (
             _,
             rustc_middle::mir::Rvalue::BinaryOp(_, _)
             | rustc_middle::mir::Rvalue::UnaryOp(_, _)
             | rustc_middle::mir::Rvalue::Cast(_, _, _),
-        ))
-    )
+        )
+    ))
 }
 
 fn statement_invalidates_relevant(
@@ -354,7 +358,8 @@ fn collect_statement_uses<'tcx>(
 
     // Collect def locals (we know there are defs — caller already checked)
     let def_locals = match &statement.kind {
-        StatementKind::Assign(box (place, _)) => {
+        StatementKind::Assign(assign) => {
+            let (place, _) = &**assign;
             vec![place.local]
         }
         StatementKind::StorageDead(local) => vec![*local],
@@ -373,7 +378,8 @@ fn collect_statement_uses<'tcx>(
     // Also collect uses directly from operands — the dataflow graph
     // creates synthetic nodes for field projections (e.g. _13.0),
     // so we need the direct operand uses to reach through.
-    if let StatementKind::Assign(box (_, rvalue)) = &statement.kind {
+    if let StatementKind::Assign(assign) = &statement.kind {
+        let (_, rvalue) = &**assign;
         for operand in super::super::def_use::rvalue_operands(rvalue) {
             uses.extend(operand_uses(operand));
         }

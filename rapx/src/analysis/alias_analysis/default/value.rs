@@ -1,5 +1,5 @@
 use crate::analysis::alias_analysis::default::types::ValueKind;
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 
 /// Represents a value node in the alias analysis graph.
 /// Each value may correspond to local variables, or fields of structures temporarily crated in the alias analysis

@@ -6,15 +6,12 @@
 //! finite verification path; keeping it separate lets the core visit logic stay
 //! focused on path-level decisions (calls, SCC exits, path conditions).
 
-use rustc_data_structures::fx::FxHashSet;
+use crate::compat::FxHashSet;
 use rustc_middle::mir::{
     Local, Operand, Place, ProjectionElem, Rvalue, Terminator, TerminatorKind,
 };
 use rustc_middle::ty::TyCtxt;
-#[cfg(rustc_spanned_at_root)]
-use rustc_span::Spanned;
-#[cfg(not(rustc_spanned_at_root))]
-use rustc_span::source_map::Spanned;
+use crate::compat::Spanned;
 
 use super::{
     contract::{
@@ -435,7 +432,8 @@ pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'t
         | Rvalue::UnaryOp(_, op) => {
             operands.push(op);
         }
-        Rvalue::BinaryOp(_, box (lhs, rhs)) => {
+        Rvalue::BinaryOp(_, pair) => {
+            let (lhs, rhs) = &**pair;
             operands.push(lhs);
             operands.push(rhs);
         }

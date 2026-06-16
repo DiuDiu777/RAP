@@ -17,7 +17,7 @@ use num_traits::Bounded;
 use once_cell::sync::{Lazy, OnceCell};
 // use rand::Rng;
 use rustc_abi::FieldIdx;
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_hir::{def, def_id::DefId};
 use rustc_index::IndexVec;
@@ -26,10 +26,7 @@ use rustc_middle::{
     mir::*,
     ty::{self, ScalarInt, TyCtxt, print},
 };
-#[cfg(rustc_spanned_at_root)]
-use rustc_span::Spanned;
-#[cfg(not(rustc_spanned_at_root))]
-use rustc_span::source_map::Spanned;
+use crate::compat::Spanned;
 use rustc_span::sym::var;
 
 use core::borrow;
@@ -734,7 +731,8 @@ where
 
             // Scan the current block in reverse order
             for stmt in data.statements.iter().rev() {
-                if let StatementKind::Assign(box (lhs, rvalue)) = &stmt.kind {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (lhs, rvalue) = &**assign;
                     // Once we find an assignment to the target variable
                     if lhs.local == target_local {
                         rap_debug!(
@@ -945,10 +943,11 @@ where
         switch_block: &'tcx BasicBlockData<'tcx>,
     ) -> Option<(&'tcx Operand<'tcx>, &'tcx Operand<'tcx>, BinOp)> {
         for stmt in &switch_block.statements {
-            if let StatementKind::Assign(box (lhs, Rvalue::BinaryOp(bin_op, box (op1, op2)))) =
-                &stmt.kind
-            {
-                if lhs == place {
+            if let StatementKind::Assign(assign) = &stmt.kind {
+                let (lhs, rvalue) = &**assign;
+                if let Rvalue::BinaryOp(bin_op, pair) = rvalue {
+                    let (op1, op2) = &**pair;
+                    if lhs == place {
                     let mut return_op1: &Operand<'tcx> = &op1;
                     let mut return_op2: &Operand<'tcx> = &op2;
                     // for stmt_original in &switch_block.statements {
@@ -975,6 +974,7 @@ where
                     // }
 
                     return Some((return_op1, return_op2, *bin_op));
+                    }
                 }
             }
         }
@@ -1136,70 +1136,76 @@ where
         body: &'tcx Body<'tcx>,
     ) {
         match &inst.kind {
-            StatementKind::Assign(box (sink, rvalue)) => match rvalue {
-                Rvalue::BinaryOp(op, box (op1, op2)) => match op {
-                    BinOp::Add
-                    | BinOp::Sub
-                    | BinOp::Mul
-                    | BinOp::Div
-                    | BinOp::Rem
-                    | BinOp::AddUnchecked => {
-                        self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
-                    }
-                    BinOp::AddWithOverflow => {
-                        self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
-                    }
-                    BinOp::SubUnchecked => {
-                        self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
-                    }
-                    BinOp::SubWithOverflow => {
-                        self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
-                    }
-                    BinOp::MulUnchecked => {
-                        self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
-                    }
-                    BinOp::MulWithOverflow => {
-                        self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
-                    }
+            StatementKind::Assign(assign) => {
+                let (sink, rvalue) = &**assign;
+                match rvalue {
+                    Rvalue::BinaryOp(op, pair) => {
+                        let (op1, op2) = &**pair;
+                        match op {
+                            BinOp::Add
+                            | BinOp::Sub
+                            | BinOp::Mul
+                            | BinOp::Div
+                            | BinOp::Rem
+                            | BinOp::AddUnchecked => {
+                                self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
+                            }
+                            BinOp::AddWithOverflow => {
+                                self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
+                            }
+                            BinOp::SubUnchecked => {
+                                self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
+                            }
+                            BinOp::SubWithOverflow => {
+                                self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
+                            }
+                            BinOp::MulUnchecked => {
+                                self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
+                            }
+                            BinOp::MulWithOverflow => {
+                                self.add_binary_op(sink, inst, rvalue, op1, op2, *op);
+                            }
 
-                    _ => {}
-                },
-                Rvalue::UnaryOp(unop, operand) => {
-                    self.add_unary_op(sink, inst, rvalue, operand, *unop);
-                }
-                Rvalue::Aggregate(kind, operends) => match **kind {
-                    AggregateKind::Adt(def_id, _, _, _, _) => match def_id {
-                        _ if def_id == self.essa => {
-                            self.add_essa_op(sink, inst, rvalue, operends, block)
+                            _ => {}
                         }
-                        _ if def_id == self.ssa => self.add_ssa_op(sink, inst, rvalue, operends),
-                        _ => match self.unique_adt_handler(def_id) {
-                            1 => {
-                                self.add_aggregate_op(sink, inst, rvalue, operends, 1);
-                            }
-                            _ => {
-                                rap_trace!(
-                                    "AggregateKind::Adt with def_id {:?} in statement {:?} is not handled specially.\n",
-                                    def_id,
-                                    inst
-                                );
-                            }
-                        },
                     },
+                    Rvalue::UnaryOp(unop, operand) => {
+                        self.add_unary_op(sink, inst, rvalue, operand, *unop);
+                    }
+                    Rvalue::Aggregate(kind, operends) => match **kind {
+                        AggregateKind::Adt(def_id, _, _, _, _) => match def_id {
+                            _ if def_id == self.essa => {
+                                self.add_essa_op(sink, inst, rvalue, operends, block)
+                            }
+                            _ if def_id == self.ssa => self.add_ssa_op(sink, inst, rvalue, operends),
+                            _ => match self.unique_adt_handler(def_id) {
+                                1 => {
+                                    self.add_aggregate_op(sink, inst, rvalue, operends, 1);
+                                }
+                                _ => {
+                                    rap_trace!(
+                                        "AggregateKind::Adt with def_id {:?} in statement {:?} is not handled specially.\n",
+                                        def_id,
+                                        inst
+                                    );
+                                }
+                            },
+                        },
+                        _ => {}
+                    },
+                    Rvalue::Use(operend) => {
+                        self.add_use_op(sink, inst, rvalue, operend);
+                    }
+                    Rvalue::Ref(_, borrowkind, place) => {
+                        self.add_ref_op(sink, inst, rvalue, place, *borrowkind);
+                    }
                     _ => {}
-                },
-                Rvalue::Use(operend) => {
-                    self.add_use_op(sink, inst, rvalue, operend);
                 }
-                Rvalue::Ref(_, borrowkind, place) => {
-                    self.add_ref_op(sink, inst, rvalue, place, *borrowkind);
-                }
-                _ => {}
             },
             _ => {}
         }
     }
-    // ... inside your struct impl ...
+
     fn unique_adt_handler(&mut self, def_id: DefId) -> usize {
         let adt_path = self.tcx.def_path_str(def_id);
         rap_trace!("adt_path: {:?}\n", adt_path);
@@ -1230,7 +1236,8 @@ where
         // We only care about Places for our analysis.
         let mut path = String::new();
         let mut func_def_id = None;
-        if let Operand::Constant(box const_operand) = func {
+        if let Operand::Constant(c_box) = func {
+            let const_operand = &**c_box;
             let fn_ty = const_operand.ty();
             if let ty::TyKind::FnDef(def_id, _substs) = fn_ty.kind() {
                 // Found the DefId for a direct function call!

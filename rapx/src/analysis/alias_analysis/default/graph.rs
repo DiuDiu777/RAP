@@ -1,6 +1,6 @@
 use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
 use crate::{analysis::path_analysis::graph::PathGraph, graphs::cfg::CfgBlock, utils::source::*};
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_middle::{
     mir::{AggregateKind, BasicBlock, Const, Operand, Rvalue, StatementKind, Terminator},
     ty::{self, TyCtxt, TypingEnv},
@@ -64,7 +64,8 @@ impl<'tcx> AliasGraph<'tcx> {
             for stmt in &bb.statements {
                 let span = stmt.source_info.span;
                 match &stmt.kind {
-                    StatementKind::Assign(box (place, rvalue)) => {
+                    StatementKind::Assign(assign) => {
+                        let (place, rvalue) = &**assign;
                         let lv_place = *place;
                         let lv_local = place.local.as_usize();
                         match rvalue.clone() {

@@ -7,7 +7,7 @@
 
 use std::collections::HashSet;
 
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
@@ -16,10 +16,7 @@ use rustc_middle::{
     },
     ty::{Ty, TyCtxt, TyKind},
 };
-#[cfg(rustc_spanned_at_root)]
-use rustc_span::Spanned;
-#[cfg(not(rustc_spanned_at_root))]
-use rustc_span::source_map::Spanned;
+use crate::compat::Spanned;
 
 use super::{
     call_summary::{self, CallEffect, CallEffectSummary},
@@ -95,7 +92,8 @@ impl<'tcx> ForwardVisitor<'tcx> {
         });
 
         match &statement.kind {
-            StatementKind::Assign(box (place, rvalue)) => {
+            StatementKind::Assign(assign) => {
+                let (place, rvalue) = &**assign;
                 let value = self.value_from_rvalue(rvalue);
                 result.values.insert(place.local, value);
                 self.record_rvalue_facts(place, rvalue, result);
@@ -226,11 +224,14 @@ impl<'tcx> ForwardVisitor<'tcx> {
             Rvalue::Cast(_, operand, ty) => {
                 AbstractValue::Cast(Box::new(value_from_operand(operand)), *ty)
             }
-            Rvalue::BinaryOp(op, box (lhs, rhs)) => AbstractValue::Binary(
-                *op,
-                Box::new(value_from_operand(lhs)),
-                Box::new(value_from_operand(rhs)),
-            ),
+            Rvalue::BinaryOp(op, pair) => {
+                let (lhs, rhs) = &**pair;
+                AbstractValue::Binary(
+                    *op,
+                    Box::new(value_from_operand(lhs)),
+                    Box::new(value_from_operand(rhs)),
+                )
+            },
             Rvalue::NullaryOp(op) => AbstractValue::Nullary(format!("{op:?}")),
             Rvalue::UnaryOp(op, operand) => {
                 AbstractValue::Unary(*op, Box::new(value_from_operand(operand)))
@@ -281,7 +282,8 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     });
                 }
             }
-            Rvalue::BinaryOp(op, box (lhs, rhs)) => {
+            Rvalue::BinaryOp(op, pair) => {
+                let (lhs, rhs) = &**pair;
                 let lhs_val = value_from_operand(lhs);
                 let rhs_val = value_from_operand(rhs);
                 let target_key = target.clone();

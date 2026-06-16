@@ -19,7 +19,7 @@ use crate::{
     rap_debug, rap_info,
 };
 
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::{def::DefKind, def_id::DefId};
 use rustc_middle::{
     mir::{Body, Place},

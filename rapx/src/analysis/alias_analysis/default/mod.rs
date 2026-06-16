@@ -9,7 +9,7 @@ pub mod value;
 use super::{AliasAnalysis, AliasPair, FnAliasMap, FnAliasPairs};
 use crate::{analysis::Analysis, def_id::*, utils::source::*};
 use graph::AliasGraph;
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 use std::{collections::HashSet, convert::From, fmt};

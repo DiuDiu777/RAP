@@ -141,14 +141,16 @@ impl<'tcx> Replacer<'tcx> {
         switch_block: &BasicBlockData<'tcx>,
     ) -> Option<(Operand<'tcx>, Operand<'tcx>, BinOp)> {
         for stmt in &switch_block.statements {
-            if let StatementKind::Assign(box (lhs, Rvalue::BinaryOp(bin_op, box (op1, op2)))) =
-                &stmt.kind
-            {
-                if lhs == place {
-                    let return_op1: &Operand<'tcx> = &op1;
-                    let return_op2: &Operand<'tcx> = &op2;
+            if let StatementKind::Assign(assign) = &stmt.kind {
+                let (lhs, rvalue) = &**assign;
+                if let Rvalue::BinaryOp(bin_op, pair) = rvalue {
+                    let (op1, op2) = &**pair;
+                    if lhs == place {
+                        let return_op1: &Operand<'tcx> = &op1;
+                        let return_op2: &Operand<'tcx> = &op2;
 
-                    return Some((return_op1.clone(), return_op2.clone(), *bin_op));
+                        return Some((return_op1.clone(), return_op2.clone(), *bin_op));
+                    }
                 }
             }
         }
@@ -185,7 +187,8 @@ impl<'tcx> Replacer<'tcx> {
         while visited.insert(current_block) {
             let data = &body.basic_blocks[current_block];
             for stmt in data.statements.iter().rev() {
-                if let StatementKind::Assign(box (lhs, rvalue)) = &stmt.kind {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (lhs, rvalue) = &**assign;
                     if *lhs == current_place {
                         match rvalue {
                             Rvalue::Use(op) => return op.clone(),
@@ -519,7 +522,8 @@ impl<'tcx> Replacer<'tcx> {
                     }
 
                     // Proceed to rename the variable in the ESSA statement.
-                    if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
+                    if let StatementKind::Assign(assign) = &mut statement.kind {
+                        let (_, rvalue) = &mut **assign;
                         if let Rvalue::Aggregate(_, operands) = rvalue {
                             // The first operand (index 0) is the variable that needs to be renamed/replaced.
                             let index = 0;
@@ -554,7 +558,8 @@ impl<'tcx> Replacer<'tcx> {
             };
 
             if SSATransformer::is_phi_statement(&self.ssatransformer, statement) {
-                if let StatementKind::Assign(box (_, rvalue)) = &mut statement.kind {
+                if let StatementKind::Assign(assign) = &mut statement.kind {
+                    let (_, rvalue) = &mut **assign;
                     if let Rvalue::Aggregate(_, operands) = rvalue {
                         let operand_count = operands.len();
                         let index = *self.ssatransformer.phi_index.entry(location).or_insert(0);
@@ -586,7 +591,8 @@ impl<'tcx> Replacer<'tcx> {
                 is_essa
             );
             match &mut statement.kind {
-                StatementKind::Assign(box (place, rvalue)) => {
+                StatementKind::Assign(assign) => {
+                    let (place, rvalue) = &mut **assign;
                     if !is_phi {
                         if !is_essa {
                             rap_trace!(
@@ -653,7 +659,8 @@ impl<'tcx> Replacer<'tcx> {
             | Rvalue::ShallowInitBox(operand, _) => {
                 self.replace_operand(operand, &bb);
             }
-            Rvalue::BinaryOp(_, box (lhs, rhs)) => {
+            Rvalue::BinaryOp(_, pair) => {
+                let (lhs, rhs) = &mut **pair;
                 self.replace_operand(lhs, &bb);
                 self.replace_operand(rhs, &bb);
             }

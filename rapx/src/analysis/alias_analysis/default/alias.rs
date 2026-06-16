@@ -1,6 +1,6 @@
 use super::{MopAliasPair, MopFnAliasMap, graph::*, types::*, value::*};
 use crate::def_id::*;
-use rustc_data_structures::fx::FxHashSet;
+use crate::compat::FxHashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{Local, Operand, Place, ProjectionElem, TerminatorKind},

@@ -14,7 +14,7 @@ use crate::analysis::range_analysis::{Range, RangeType};
 use crate::{rap_debug, rap_trace};
 use num_traits::{Bounded, CheckedAdd, CheckedSub, One, ToPrimitive, Zero, ops};
 use rustc_abi::Size;
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::coverage::Op;
 use rustc_middle::mir::{
@@ -873,7 +873,9 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
         }
         let mut result = Range::default(T::min_value());
         match &self.inst.kind {
-            StatementKind::Assign(box (place, rvalue)) => match rvalue {
+            StatementKind::Assign(assign) => {
+                let (place, rvalue) = &**assign;
+                match rvalue {
                 Rvalue::BinaryOp(binop, _) => match binop {
                     BinOp::Add | BinOp::AddUnchecked | BinOp::AddWithOverflow => {
                         result = op1.add(&op2);
@@ -890,9 +892,9 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
                     _ => {}
                 },
                 _ => {}
-            },
-
-            _ => {}
+            }
+        },
+        _ => {}
         }
 
         result

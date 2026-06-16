@@ -77,25 +77,17 @@ macro_rules! intrinsics {
     ($( $id:ident : $paths:expr ,)+ ) => {
         const INTRINSICS: &[&[&str]] = &[$( $paths ,)+];
         $(
-            // Retrieved the fn DefId. Panic if the fn doesn't exist.
-            // pub fn $id() -> DefId {
-            //     ${concat($id, _opt)} ().unwrap_or_else(||
-            //         panic!("Failed to retrieve the DefId of {:#?}.", $paths)
-            //     )
-            // }
-
-            // Retrieved the fn DefId. Returns None if the fn doesn't exist.
-            // This is preferred especially RAPx is used to compile nostd crates or build-std,
-            // where the fn is likely absent.
-            pub fn ${concat($id, _opt)} () -> Option<DefId> {
-                let map = &INIT.get().expect("Intrinsics DefIds haven't been initialized.").map;
-                for path in $paths {
-                    match map.get(*path) {
-                        Some(id) => return Some(*id),
-                        None => ()
+            paste::paste! {
+                pub fn [<$id _opt>] () -> Option<DefId> {
+                    let map = &INIT.get().expect("Intrinsics DefIds haven't been initialized.").map;
+                    for path in $paths {
+                        match map.get(*path) {
+                            Some(id) => return Some(*id),
+                            None => ()
+                        }
                     }
+                    None
                 }
-                None
             }
         )+
     };

@@ -1,4 +1,4 @@
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::{BodyId, HirId, Impl, ItemKind, TraitItemKind, intravisit::Visitor};
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;

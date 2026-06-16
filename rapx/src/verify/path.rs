@@ -16,7 +16,7 @@
 //! (currently 1024) per search. Searches stop producing new paths once the limit
 //! is reached.
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 

@@ -2,7 +2,7 @@ pub mod interproc;
 pub mod intraproc;
 pub mod transfer;
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{Operand, TerminatorKind};
 use rustc_middle::ty::{self, TyCtxt};

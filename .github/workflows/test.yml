@@ -10,19 +10,34 @@ env:
 
 jobs:
   build:
-
     runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        rust:
+          - pinned
+          - latest
+    continue-on-error: ${{ matrix.rust == 'latest' }}
 
     steps:
     - uses: actions/checkout@v4
 
-    - name: Build RAPx 
+    - name: Setup pinned nightly (via rust-toolchain.toml)
+      if: matrix.rust == 'pinned'
+      run: rustup show active-toolchain
+
+    - name: Setup latest nightly
+      if: matrix.rust == 'latest'
+      run: |
+        rustup toolchain install nightly --component rustc-dev rust-src llvm-tools-preview rustfmt --profile minimal
+        rustup override set nightly
+
+    - name: Build RAPx
       run: ./install.sh
 
     - name: Running Cargo Test
       run: cd rapx && cargo test
-      
-    - run: sudo apt install colorized-logs -y # Insall ansi2txt
 
-    - name: Running Other Test Cases 
+    - run: sudo apt install colorized-logs -y
+
+    - name: Running Other Test Cases
       run: cd ./rapx/tests/others && ./batch.sh -F -M -O

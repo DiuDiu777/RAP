@@ -14,7 +14,7 @@ use crate::analysis::range_analysis::{Range, RangeType};
 use crate::{rap_debug, rap_trace};
 use num_traits::{Bounded, CheckedAdd, CheckedSub, One, ToPrimitive, Zero, ops};
 use rustc_abi::Size;
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::coverage::Op;
 use rustc_middle::mir::{
@@ -85,7 +85,8 @@ impl<'tcx> SymbExpr<'tcx> {
     pub fn from_rvalue(rvalue: &'tcx Rvalue<'tcx>, place_ctx: Vec<&'tcx Place<'tcx>>) -> Self {
         match rvalue {
             Rvalue::Use(op) => Self::from_operand(op, &place_ctx),
-            Rvalue::BinaryOp(bin_op, box (lhs, rhs)) => {
+            Rvalue::BinaryOp(bin_op, pair) => {
+                let (lhs, rhs) = &**pair;
                 let left = Self::from_operand(lhs, &place_ctx);
                 let right = Self::from_operand(rhs, &place_ctx);
 

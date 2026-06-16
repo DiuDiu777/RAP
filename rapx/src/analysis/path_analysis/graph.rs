@@ -2,7 +2,7 @@ use crate::graphs::{
     cfg::{CfgBlock, ControlFlowGraph},
     scc::{Scc, SccInfo},
 };
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_middle::{
     mir::{
         BasicBlock, Local, Operand, Rvalue, StatementKind, SwitchTargets, Terminator,
@@ -110,7 +110,8 @@ impl<'tcx> PathGraph<'tcx> {
             let mut block_assigned_locals = FxHashSet::default();
 
             for stmt in &bb.statements {
-                if let StatementKind::Assign(box (place, rvalue)) = &stmt.kind {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (place, rvalue) = &**assign;
                     block_assigned_locals.insert(place.local.as_usize());
                     if let Rvalue::Discriminant(rv_place) = rvalue {
                         discriminants.insert(place.local.as_usize(), rv_place.local.as_usize());

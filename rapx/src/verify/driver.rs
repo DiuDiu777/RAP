@@ -12,7 +12,7 @@ use crate::cli::VerifyMode;
 use crate::helpers::fn_info::{FnKind, get_cons, get_type};
 
 use indexmap::IndexMap;
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::TyCtxt;
 

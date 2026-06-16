@@ -2,7 +2,7 @@ use rustc_hir::def_id::DefId;
 
 use std::collections::HashSet;
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 
 use super::value::Value;
 use super::{graph::*, *};

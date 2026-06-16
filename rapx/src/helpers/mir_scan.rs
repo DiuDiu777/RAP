@@ -83,7 +83,8 @@ pub fn get_rawptr_deref(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<Local> {
         let body = tcx.optimized_mir(def_id);
         for bb in body.basic_blocks.iter() {
             for stmt in &bb.statements {
-                if let StatementKind::Assign(box (lhs, rhs)) = &stmt.kind {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (lhs, rhs) = &**assign;
                     if place_has_raw_deref(tcx, &body, lhs) {
                         raw_ptrs.insert(lhs.local);
                     }
@@ -139,7 +140,8 @@ pub fn collect_global_local_pairs(tcx: TyCtxt<'_>, def_id: DefId) -> HashMap<Def
 
     for bb in body.basic_blocks.iter() {
         for stmt in &bb.statements {
-            if let StatementKind::Assign(box (lhs, rhs)) = &stmt.kind {
+            if let StatementKind::Assign(assign) = &stmt.kind {
+                let (lhs, rhs) = &**assign;
                 if let Rvalue::Use(Operand::Constant(c)) = rhs {
                     if let Some(static_def_id) = c.check_static_ptr(tcx) {
                         globals.entry(static_def_id).or_default().push(lhs.local);
@@ -238,9 +240,10 @@ pub fn collect_raw_ptr_deref_info<'tcx>(
     let body = tcx.optimized_mir(def_id);
     for (bb, data) in body.basic_blocks.iter_enumerated() {
         for stmt in &data.statements {
-            let StatementKind::Assign(box (lhs, rhs)) = &stmt.kind else {
+            let StatementKind::Assign(assign) = &stmt.kind else {
                 continue;
             };
+            let (lhs, rhs) = &**assign;
 
             let is_write = place_has_raw_deref(tcx, &body, lhs);
             let is_read = match rhs {

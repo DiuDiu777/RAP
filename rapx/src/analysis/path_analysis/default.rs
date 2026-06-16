@@ -1,5 +1,5 @@
 use crate::analysis::{Analysis, path_analysis::graph::PathGraph};
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::{def::DefKind, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 

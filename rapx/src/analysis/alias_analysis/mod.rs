@@ -3,7 +3,7 @@ pub mod mfp;
 use crate::utils::source::get_fn_name_byid;
 
 use super::super::Analysis;
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_span::def_id::LOCAL_CRATE;
 use std::{collections::HashSet, fmt};

@@ -8,11 +8,8 @@ use rustc_middle::{
     },
     ty::{self, InstanceKind::Item, Ty, TyKind, TypeVisitable},
 };
-#[cfg(rustc_spanned_at_root)]
-use rustc_span::Spanned;
+use crate::compat::Spanned;
 use rustc_span::Symbol;
-#[cfg(not(rustc_spanned_at_root))]
-use rustc_span::source_map::Spanned;
 
 use annotate_snippets::{Level, Renderer, Snippet};
 use std::ops::Add;
@@ -262,7 +259,8 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         sidx: usize,
     ) {
         match &stmt.kind {
-            StatementKind::Assign(box (place, rvalue)) => {
+            StatementKind::Assign(assign) => {
+                let (place, rvalue) = &**assign;
                 help_debug_goal_stmt(ctx, goal, bidx, sidx);
 
                 let disc: Disc = None;

@@ -1,4 +1,4 @@
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::{
     Block, BlockCheckMode, Body, BodyId, ExprKind, ImplItemKind, QPath, def_id::DefId, intravisit,
     intravisit::Visitor,

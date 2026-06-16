@@ -118,7 +118,8 @@ impl<'tcx> SSATransformer<'tcx> {
         for (bb, block_data) in body.basic_blocks.iter_enumerated() {
             for statement in &block_data.statements {
                 match &statement.kind {
-                    StatementKind::Assign(box (place, _)) => {
+                    StatementKind::Assign(assign) => {
+                        let (place, _) = &**assign;
                         if let Some(local) = place.as_local() {
                             if local.as_u32() == 0 {
                                 continue; // Skip the return place
@@ -205,7 +206,8 @@ impl<'tcx> SSATransformer<'tcx> {
 
         for (bb, data) in body.basic_blocks.iter_enumerated() {
             for stmt in &data.statements {
-                if let StatementKind::Assign(box (place, _)) = &stmt.kind {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (place, _) = &**assign;
                     let local = place.local;
                     if local.as_u32() == 0 {
                         continue; // Skip the return place
@@ -287,8 +289,10 @@ impl<'tcx> SSATransformer<'tcx> {
     }
 
     pub fn is_phi_statement(&self, statement: &Statement<'tcx>) -> bool {
-        if let StatementKind::Assign(box (_, rvalue)) = &statement.kind {
-            if let Rvalue::Aggregate(box aggregate_kind, _) = rvalue {
+        if let StatementKind::Assign(assign) = &statement.kind {
+            let (_, rvalue) = &**assign;
+            if let Rvalue::Aggregate(k_box, _) = rvalue {
+                let aggregate_kind = &**k_box;
                 if let AggregateKind::Adt(def_id, ..) = aggregate_kind {
                     return *def_id == self.phi_def_id;
                 }
@@ -298,8 +302,10 @@ impl<'tcx> SSATransformer<'tcx> {
     }
 
     pub fn is_essa_statement(&self, statement: &Statement<'tcx>) -> bool {
-        if let StatementKind::Assign(box (_, rvalue)) = &statement.kind {
-            if let Rvalue::Aggregate(box aggregate_kind, _) = rvalue {
+        if let StatementKind::Assign(assign) = &statement.kind {
+            let (_, rvalue) = &**assign;
+            if let Rvalue::Aggregate(k_box, _) = rvalue {
+                let aggregate_kind = &**k_box;
                 if let AggregateKind::Adt(def_id, ..) = aggregate_kind {
                     return *def_id == self.essa_def_id;
                 }
@@ -312,11 +318,15 @@ impl<'tcx> SSATransformer<'tcx> {
             return None;
         }
 
-        if let StatementKind::Assign(box (_, Rvalue::Aggregate(_, operands))) = &statement.kind {
-            if let Some(last_op) = operands.into_iter().last() {
-                if let Operand::Constant(box ConstOperand { const_: c, .. }) = last_op {
-                    if let Some(val) = self.try_const_to_usize(c) {
-                        return Some(BasicBlock::from_usize(val as usize));
+        if let StatementKind::Assign(assign) = &statement.kind {
+            let (_, rvalue) = &**assign;
+            if let Rvalue::Aggregate(_, operands) = rvalue {
+                if let Some(last_op) = operands.into_iter().last() {
+                    if let Operand::Constant(c_box) = last_op {
+                        let ConstOperand { const_: c, .. } = &**c_box;
+                        if let Some(val) = self.try_const_to_usize(c) {
+                            return Some(BasicBlock::from_usize(val as usize));
+                        }
                     }
                 }
             }

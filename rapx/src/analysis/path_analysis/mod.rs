@@ -5,7 +5,7 @@ use crate::utils::source::get_fn_name_byid;
 use rustc_hir::def_id::DefId;
 use std::fmt::{self, Display};
 
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 
 pub type PathSet = Vec<Vec<usize>>;
 pub type PathMap = FxHashMap<DefId, PathSet>;

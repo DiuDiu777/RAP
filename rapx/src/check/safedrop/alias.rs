@@ -7,7 +7,7 @@ use super::{drop::*, graph::*};
 use crate::analysis::alias_analysis::default::{
     MopAliasPair, MopFnAliasMap, alias::is_no_alias_intrinsic, types::*, value::*,
 };
-use rustc_data_structures::fx::FxHashSet;
+use crate::compat::FxHashSet;
 
 impl<'tcx> SafeDropGraph<'tcx> {
     /* alias analysis for a single block */

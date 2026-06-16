@@ -1,4 +1,4 @@
-use rustc_data_structures::fx::FxHashMap;
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
@@ -8,10 +8,7 @@ use rustc_middle::{
     ty::{self, Ty, TyCtxt, TypingEnv},
 };
 use rustc_mir_dataflow::{Analysis, JoinSemiLattice, fmt::DebugWithContext};
-#[cfg(rustc_spanned_at_root)]
-use rustc_span::Spanned;
-#[cfg(not(rustc_spanned_at_root))]
-use rustc_span::source_map::Spanned;
+use crate::compat::Spanned;
 use std::cell::RefCell;
 use std::rc::Rc;
 
@@ -586,7 +583,8 @@ impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
         _location: Location,
     ) {
         match &statement.kind {
-            StatementKind::Assign(box (lv, rvalue)) => {
+            StatementKind::Assign(assign) => {
+                let (lv, rvalue) = &**assign;
                 match rvalue {
                     // Use(operand): lv = operand
                     Rvalue::Use(operand) => {

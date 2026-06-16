@@ -5,7 +5,7 @@
 //! agnostic: clients provide successor queries and receive each discovered SCC
 //! through `on_scc_found`.
 
-use rustc_data_structures::fx::{FxHashMap, FxHashSet};
+use crate::compat::{FxHashMap, FxHashSet};
 use rustc_middle::mir::BasicBlock;
 use std::cmp;
 
