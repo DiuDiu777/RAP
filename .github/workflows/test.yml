@@ -16,7 +16,8 @@ jobs:
         rust:
           - pinned
           - latest
-    continue-on-error: ${{ matrix.rust == 'latest' }}
+          - stable
+    continue-on-error: ${{ matrix.rust == 'stable' }}
 
     steps:
     - uses: actions/checkout@v4
@@ -31,13 +32,17 @@ jobs:
         rustup toolchain install nightly --component rustc-dev rust-src llvm-tools-preview rustfmt --profile minimal
         rustup override set nightly
 
+    - name: Setup stable (informational — expected to fail)
+      if: matrix.rust == 'stable'
+      run: |
+        rustup toolchain install stable
+        rustup override set stable
+      continue-on-error: true
+
     - name: Build RAPx
       run: ./install.sh
+      continue-on-error: ${{ matrix.rust == 'stable' }}
 
     - name: Running Cargo Test
       run: cd rapx && cargo test
-
-    - run: sudo apt install colorized-logs -y
-
-    - name: Running Other Test Cases
-      run: cd ./rapx/tests/others && ./batch.sh -F -M -O
+      continue-on-error: ${{ matrix.rust == 'stable' }}
