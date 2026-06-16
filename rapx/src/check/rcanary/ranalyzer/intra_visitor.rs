@@ -2251,6 +2251,8 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
                     }
                 }
                 Operand::Constant(..) => continue,
+                #[cfg(rapx_rustc_ge_196)]
+                Operand::RuntimeChecks(_) => continue,
             }
         }
 

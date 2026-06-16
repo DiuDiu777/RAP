@@ -104,10 +104,12 @@ impl<'tcx> Display for Rvalue<'tcx> {
             Rvalue::ThreadLocalRef(..) => s += "ThreadLocalRef",
             Rvalue::Cast(..) => s += "Cast",
             Rvalue::BinaryOp(..) => s += "BinaryOp",
+            #[cfg(not(rapx_rustc_ge_196))]
             Rvalue::NullaryOp(..) => s += "NullaryOp",
             Rvalue::UnaryOp(..) => s += "UnaryOp",
             Rvalue::Discriminant(..) => s += "Discriminant",
             Rvalue::Aggregate(..) => s += "Aggregate",
+            #[cfg(not(rapx_rustc_ge_196))]
             Rvalue::ShallowInitBox(..) => s += "ShallowInitBox",
             Rvalue::CopyForDeref(..) => s += "CopyForDeref",
             Rvalue::RawPtr(_, _) => s += "RawPtr",

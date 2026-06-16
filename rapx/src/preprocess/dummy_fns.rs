@@ -35,12 +35,17 @@ fn make_dummy_fn(ident_name: &str, build_std: bool) -> Box<Item> {
     let ident = Ident::from_str(ident_name);
 
     let fn_ast = Fn {
+        #[cfg(rapx_rustc_ge_196)]
+        defaultness: Defaultness::Implicit,
+        #[cfg(not(rapx_rustc_ge_196))]
         defaultness: Defaultness::Final,
         ident,
         generics: Generics::default(),
         sig: make_dummy_fn_sig(),
         contract: None,
         define_opaque: None,
+        #[cfg(rapx_rustc_ge_196)]
+        eii_impls: Default::default(),
         body: Some(Box::new(make_dummy_block())),
     };
 

@@ -65,6 +65,8 @@ impl<'tcx> AliasGraph<'tcx> {
                         Operand::Constant(_) => {
                             merge_vec.push(0);
                         }
+                        #[cfg(rapx_rustc_ge_196)]
+                        Operand::RuntimeChecks(_) => {}
                     }
                 }
                 if let &ty::FnDef(target_id, _) = constant.const_.ty().kind() {

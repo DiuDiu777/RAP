@@ -41,11 +41,19 @@ fn stability_attr() -> Attribute {
             .map(|t| TokenTree::Token(t, Spacing::Alone))
             .collect()
     };
-    attr.item.args = AttrArgs::Delimited(DelimArgs {
+    let delim_args = DelimArgs {
         dspan: DelimSpan::dummy(),
         delim: Delimiter::Parenthesis,
         tokens: TokenStream::new(tokens),
-    });
+    };
+    #[cfg(rapx_rustc_ge_196)]
+    {
+        attr.item.args = rustc_ast::AttrItemKind::Unparsed(AttrArgs::Delimited(delim_args));
+    }
+    #[cfg(not(rapx_rustc_ge_196))]
+    {
+        attr.item.args = AttrArgs::Delimited(delim_args);
+    }
     Attribute {
         kind: AttrKind::Normal(attr.into()),
         id: AttrId::ZERO,

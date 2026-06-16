@@ -144,7 +144,7 @@ impl<'tcx> DataflowAnalyzer<'tcx> {
             .expect("Failed to create directory.");
 
         for (def_id, graph) in self.graphs.iter() {
-            let name = self.tcx.def_path_str(def_id);
+            let name = self.tcx.def_path_str(*def_id);
             let dot_file_name = format!("DataflowGraph/{}.dot", &name);
             let png_file_name = format!("DataflowGraph/{}.png", &name);
             let mut file = File::create(&dot_file_name).expect("Unable to create file.");

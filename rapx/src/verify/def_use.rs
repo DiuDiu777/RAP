@@ -340,6 +340,8 @@ fn bind_operand_place(operand: &Operand<'_>, fields: &[usize]) -> Option<PlaceKe
     let mut place = match operand {
         Operand::Copy(place) | Operand::Move(place) => PlaceKey::from_mir_place(place),
         Operand::Constant(_) => return None,
+        #[cfg(rapx_rustc_ge_196)]
+        Operand::RuntimeChecks(_) => return None,
     };
     place.fields.extend(fields.iter().copied());
     Some(place)
@@ -399,6 +401,8 @@ pub fn operand_uses<'tcx>(operand: &Operand<'tcx>) -> RelevantPlaces {
             uses.extend(place_uses(place));
         }
         Operand::Constant(_) => {}
+        #[cfg(rapx_rustc_ge_196)]
+        Operand::RuntimeChecks(_) => {}
     }
     uses
 }
@@ -438,8 +442,9 @@ pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'t
             operands.push(rhs);
         }
         Rvalue::Ref(_, _, _) | Rvalue::RawPtr(_, _) => {}
+        #[cfg(not(rapx_rustc_ge_196))]
+        Rvalue::ShallowInitBox(_, _) => {}
         Rvalue::Discriminant(_)
-        | Rvalue::ShallowInitBox(_, _)
         | Rvalue::CopyForDeref(_)
         | Rvalue::ThreadLocalRef(_)
         | Rvalue::Aggregate(_, _)

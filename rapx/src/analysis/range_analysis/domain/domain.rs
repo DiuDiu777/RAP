@@ -425,6 +425,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     }
                     Some(Operand::Constant(c)) => {}
                     None => {}
+                    #[cfg(rapx_rustc_ge_196)]
+                    _ => {}
                 }
                 rap_trace!(
                     "len() detected on place {:?}, returning its range: {:?}",
@@ -442,6 +444,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     }
                     Some(Operand::Constant(c)) => {}
                     None => {}
+                    #[cfg(rapx_rustc_ge_196)]
+                    _ => {}
                 }
 
                 rap_trace!(
@@ -460,6 +464,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     }
                     Some(Operand::Constant(c)) => {}
                     None => {}
+                    #[cfg(rapx_rustc_ge_196)]
+                    _ => {}
                 }
 
                 rap_trace!(
@@ -552,6 +558,8 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                             }
                             // Find the corresponding Place and VarNode in the callee.
                         }
+                        #[cfg(rapx_rustc_ge_196)]
+                        Operand::RuntimeChecks(_) => {}
                     }
                 }
 

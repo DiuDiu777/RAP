@@ -69,7 +69,7 @@ impl<'tcx> FnVisitor<'tcx> {
 
     pub fn write_funcs<T: Write>(&self, f: &mut T) {
         for id in &self.apis {
-            write!(f, "{}\n", self.tcx.def_path_str(id)).expect("fail when write funcs");
+            write!(f, "{}\n", self.tcx.def_path_str(*id)).expect("fail when write funcs");
         }
     }
 }

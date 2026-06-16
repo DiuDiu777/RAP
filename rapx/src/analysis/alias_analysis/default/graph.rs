@@ -125,6 +125,8 @@ impl<'tcx> AliasGraph<'tcx> {
                                             }
                                         }
                                     }
+                                    #[cfg(rapx_rustc_ge_196)]
+                                    Operand::RuntimeChecks(_) => {}
                                 }
                             }
                             Rvalue::Ref(_, _, rv_place)
@@ -137,6 +139,7 @@ impl<'tcx> AliasGraph<'tcx> {
                                     alias_block.assignments.push(assign);
                                 }
                             }
+                            #[cfg(not(rapx_rustc_ge_196))]
                             Rvalue::ShallowInitBox(operand, _) => {
                                 /*
                                  * Original ShllowInitBox is a two-level pointer: lvl0 -> lvl1 -> lvl2
@@ -191,6 +194,8 @@ impl<'tcx> AliasGraph<'tcx> {
                                     }
                                 }
                                 Operand::Constant(_) => {}
+                                #[cfg(rapx_rustc_ge_196)]
+                                Operand::RuntimeChecks(_) => {}
                             },
                             Rvalue::Aggregate(kind, operands) => {
                                 match kind.as_ref() {
@@ -244,6 +249,8 @@ impl<'tcx> AliasGraph<'tcx> {
                                                 Operand::Constant(_) => {
                                                     // Constants don't need alias analysis
                                                 }
+                                                #[cfg(rapx_rustc_ge_196)]
+                                                Operand::RuntimeChecks(_) => {}
                                             }
                                         }
                                     }
@@ -307,6 +314,8 @@ impl<'tcx> AliasGraph<'tcx> {
                                                 Operand::Constant(_) => {
                                                     // Constants don't need alias analysis for this context.
                                                 }
+                                                #[cfg(rapx_rustc_ge_196)]
+                                                Operand::RuntimeChecks(_) => {}
                                             }
                                         }
                                     }
@@ -332,6 +341,8 @@ impl<'tcx> AliasGraph<'tcx> {
                                                     }
                                                 }
                                                 Operand::Constant(_) => {}
+                                                #[cfg(rapx_rustc_ge_196)]
+                                                Operand::RuntimeChecks(_) => {}
                                             }
                                         }
                                     }

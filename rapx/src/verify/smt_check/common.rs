@@ -1569,8 +1569,9 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             | AbstractValue::Unary(_, _)
             | AbstractValue::Nullary(_)
             | AbstractValue::Discriminant(_)
-            | AbstractValue::Aggregate(_, _)
-            | AbstractValue::ShallowInitBox(_, _) => None,
+            | AbstractValue::Aggregate(_, _) => None,
+            #[cfg(not(rapx_rustc_ge_196))]
+            AbstractValue::ShallowInitBox(_, _) => None,
         }
     }
 
@@ -1891,6 +1892,8 @@ fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
     match operand {
         Operand::Copy(place) | Operand::Move(place) => Some(PlaceKey::from_mir_place(place)),
         Operand::Constant(_) => None,
+        #[cfg(rapx_rustc_ge_196)]
+        Operand::RuntimeChecks(_) => None,
     }
 }
 
@@ -2030,6 +2033,7 @@ pub(crate) fn value_label(value: &AbstractValue<'_>) -> String {
         AbstractValue::Nullary(name) => name.clone(),
         AbstractValue::Discriminant(place) => format!("discriminant({})", place_label(place)),
         AbstractValue::Aggregate(name, len) => format!("{name}[{len}]"),
+        #[cfg(not(rapx_rustc_ge_196))]
         AbstractValue::ShallowInitBox(inner, ty) => {
             format!("box({}, {ty:?})", value_label(inner))
         }

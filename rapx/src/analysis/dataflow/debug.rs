@@ -72,7 +72,7 @@ impl DataflowNode {
                 NodeOp::Nop => {}
                 NodeOp::Const(..) => {}
                 NodeOp::Call(def_id) => {
-                    let func_name = tcx.def_path_str(def_id);
+                    let func_name = tcx.def_path_str(*def_id);
                     write!(
                         attr,
                         "| <f{}> ({})fn {} ",
@@ -84,7 +84,7 @@ impl DataflowNode {
                 }
                 NodeOp::Aggregate(agg_kind) => match agg_kind {
                     AggKind::Adt(def_id) => {
-                        let agg_name = format!("{}::{{..}}", tcx.def_path_str(def_id));
+                        let agg_name = format!("{}::{{..}}", tcx.def_path_str(*def_id));
                         write!(
                             attr,
                             "| <f{}> ({})Agg {} ",
@@ -95,7 +95,7 @@ impl DataflowNode {
                         .unwrap();
                     }
                     AggKind::Closure(def_id) => {
-                        let agg_name = tcx.def_path_str(def_id);
+                        let agg_name = tcx.def_path_str(*def_id);
                         write!(
                             attr,
                             "| <f{}> ({})Clos {} ",

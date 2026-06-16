@@ -207,7 +207,7 @@ impl<'tcx> RapxAnalysis for MfpAliasAnalyzer<'tcx> {
                         changed = true;
                         rap_trace!(
                             "Summary changed for {:?}: {} -> {}",
-                            self.tcx.def_path_str(def_id),
+                            self.tcx.def_path_str(*def_id),
                             old_summary.len(),
                             new_summary.len()
                         );
@@ -232,7 +232,7 @@ impl<'tcx> RapxAnalysis for MfpAliasAnalyzer<'tcx> {
 
         // Step 3: Sort and display results
         for (fn_id, fn_alias) in &mut self.fn_map {
-            let fn_name = self.tcx.def_path_str(fn_id);
+            let fn_name = self.tcx.def_path_str(*fn_id);
             fn_alias.sort_alias_index();
             if fn_alias.len() > 0 {
                 rap_trace!("Alias found in {:?}: {}", fn_name, fn_alias);

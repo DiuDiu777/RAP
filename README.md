@@ -11,12 +11,12 @@ The project is still under heavy development. For further details, please refer 
 
 ## Quick Start
 
-Install `nightly-2025-12-06` on which rapx is compiled with. This just needs to do once on your machine. If the toolchain exists,
+Install `nightly-2026-04-03` on which rapx is compiled with. This just needs to do once on your machine. If the toolchain exists,
 this will do nothing.
 
 ```shell
-rustup toolchain install nightly-2025-12-06 --profile minimal --component rustc-dev,rust-src,llvm-tools-preview
-cargo +nightly-2025-12-06 install rapx --git https://github.com/safer-rust/RAPx.git
+rustup toolchain install nightly-2026-04-03 --profile minimal --component rustc-dev,rust-src,llvm-tools-preview
+cargo +nightly-2026-04-03 install rapx --git https://github.com/safer-rust/RAPx.git
 ```
 
 ## Usage
@@ -24,12 +24,12 @@ cargo +nightly-2025-12-06 install rapx --git https://github.com/safer-rust/RAPx.
 Navigate to your Rust project folder containing a `Cargo.toml` file. Then run `rapx` by manually specifying the toolchain version according to the [toolchain override shorthand syntax](https://rust-lang.github.io/rustup/overrides.html#toolchain-override-shorthand).
 
 ```shell
-cargo +nightly-2025-12-06 rapx [rapx options] -- [cargo check options]
+cargo +nightly-2026-04-03 rapx [rapx options] -- [cargo check options]
 ```
 
 or by setting up default toolchain to the required version.
 ```shell
-rustup default nightly-2025-12-06
+rustup default nightly-2026-04-03
 ```
 
 Check out supported options with `-help`:

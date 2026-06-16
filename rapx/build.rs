@@ -6,6 +6,7 @@ fn main() {
     // Register all cfg flags with Cargo for expected warnings suppression.
     emit_check_cfg("rustc_spanned_at_root");
     emit_check_cfg("rapx_rustc_ge_193");
+    emit_check_cfg("rapx_rustc_ge_196");
 
     // ─── Version-gated compatibility flags ───────────────────────────────
     //
@@ -14,8 +15,9 @@ fn main() {
     //
     // Flag name                     | since | Description
     // ------------------------------|-------|-------------------------------
-    // rustc_spanned_at_root         | 1.97  | Spanned moved from
-    //                               |       | source_map to rustc_span root
+    // rustc_spanned_at_root         | 1.96  | Spanned: source_map::Spanned
+    //                               |       | became private; only
+    //                               |       | rustc_span::Spanned is public
     // rapx_rustc_ge_193            | 1.93  | Analysis trait: &mut self→&self
     //                               |       | NullaryOp: 1→2 fields
     //                               |       | Option<EarlyBinder<T>> blanket
@@ -23,8 +25,18 @@ fn main() {
     //                               |       | impl_trait_id, impl_opt_trait_ref
     //                               |       |   added to TyCtxt
     //                               |       | is_doc_comment: bool→Option<bool>
-    emit_cfg("rustc_spanned_at_root", minor >= 97);
+    // rapx_rustc_ge_196            | 1.96  | Rvalue::NullaryOp removed
+    //                               |       | Rvalue::ShallowInitBox removed
+    //                               |       | Spanned: re-export→re-export of
+    //                               |       |   private type
+    //                               |       | Operand::RuntimeChecks added
+    //                               |       | Fn::eii_impls added
+    //                               |       | DefKind::Const/AssocConst
+    //                               |       |   unit→struct variants
+    //                               |       | Query key ref changes
+    emit_cfg("rustc_spanned_at_root", minor >= 96);
     emit_cfg("rapx_rustc_ge_193", minor >= 93);
+    emit_cfg("rapx_rustc_ge_196", minor >= 96);
 }
 
 fn emit_check_cfg(name: &str) {

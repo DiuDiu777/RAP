@@ -667,6 +667,7 @@ fn apply_statement_effect<'tcx>(
                     let operand_slice: Vec<_> = operands.iter().map(|op| op.clone()).collect();
                     transfer::transfer_aggregate(state, *lv, &operand_slice, &analyzer.place_info);
                 }
+                #[cfg(not(rapx_rustc_ge_196))]
                 Rvalue::ShallowInitBox(operand, _) => {
                     transfer::transfer_assign(state, *lv, operand, &analyzer.place_info);
                 }

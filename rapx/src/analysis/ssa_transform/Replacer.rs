@@ -633,6 +633,8 @@ impl<'tcx> Replacer<'tcx> {
                             self.replace_place(place, &bb);
                         }
                         Operand::Constant(const_operand) => {}
+                        #[cfg(rapx_rustc_ge_196)]
+                        Operand::RuntimeChecks(_) => {}
                     }
                 }
                 self.rename_local_def(destination, &bb, true);
@@ -655,8 +657,11 @@ impl<'tcx> Replacer<'tcx> {
             Rvalue::Use(operand)
             | Rvalue::Repeat(operand, _)
             | Rvalue::UnaryOp(_, operand)
-            | Rvalue::Cast(_, operand, _)
-            | Rvalue::ShallowInitBox(operand, _) => {
+            | Rvalue::Cast(_, operand, _) => {
+                self.replace_operand(operand, &bb);
+            }
+            #[cfg(not(rapx_rustc_ge_196))]
+            Rvalue::ShallowInitBox(operand, _) => {
                 self.replace_operand(operand, &bb);
             }
             Rvalue::BinaryOp(_, pair) => {

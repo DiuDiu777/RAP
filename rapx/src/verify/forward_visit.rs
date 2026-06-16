@@ -232,9 +232,9 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     Box::new(value_from_operand(rhs)),
                 )
             },
-            #[cfg(rapx_rustc_ge_193)]
+            #[cfg(all(rapx_rustc_ge_193, not(rapx_rustc_ge_196)))]
             Rvalue::NullaryOp(op) => AbstractValue::Nullary(format!("{op:?}")),
-            #[cfg(not(rapx_rustc_ge_193))]
+            #[cfg(all(not(rapx_rustc_ge_193), not(rapx_rustc_ge_196)))]
             Rvalue::NullaryOp(op, _) => AbstractValue::Nullary(format!("{op:?}")),
             Rvalue::UnaryOp(op, operand) => {
                 AbstractValue::Unary(*op, Box::new(value_from_operand(operand)))
@@ -245,6 +245,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
             Rvalue::Aggregate(kind, operands) => {
                 AbstractValue::Aggregate(aggregate_name(kind), operands.len())
             }
+            #[cfg(not(rapx_rustc_ge_196))]
             Rvalue::ShallowInitBox(operand, ty) => {
                 AbstractValue::ShallowInitBox(Box::new(value_from_operand(operand)), *ty)
             }
@@ -554,6 +555,7 @@ pub enum AbstractValue<'tcx> {
     Nullary(String),
     Discriminant(PlaceKey),
     Aggregate(String, usize),
+    #[cfg(not(rapx_rustc_ge_196))]
     ShallowInitBox(Box<AbstractValue<'tcx>>, Ty<'tcx>),
     CallResult(CallSummary<'tcx>),
 }
@@ -632,6 +634,8 @@ fn value_from_operand<'tcx>(operand: &Operand<'tcx>) -> AbstractValue<'tcx> {
                 .map(AbstractValue::ConstInt)
                 .unwrap_or(AbstractValue::Const(text))
         }
+        #[cfg(rapx_rustc_ge_196)]
+        Operand::RuntimeChecks(_) => AbstractValue::Unknown("RuntimeChecks".to_string()),
     }
 }
 
@@ -640,6 +644,8 @@ fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
     match operand {
         Operand::Copy(place) | Operand::Move(place) => Some(PlaceKey::from_mir_place(place)),
         Operand::Constant(_) => None,
+        #[cfg(rapx_rustc_ge_196)]
+        Operand::RuntimeChecks(_) => None,
     }
 }
 

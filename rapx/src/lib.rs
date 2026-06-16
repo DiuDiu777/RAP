@@ -107,7 +107,14 @@ impl Callbacks for RapCallback {
                 // HACK: rustc will emit "crate ... required to be available in rlib format, but
                 // was not found in this form" errors once we use `tcx.dependency_formats()` if
                 // there's no rlib provided, so setting a dummy path here to workaround those errors.
-                Arc::make_mut(&mut crate_source).rlib = Some((PathBuf::new(), PathKind::All));
+                #[cfg(rapx_rustc_ge_196)]
+                {
+                    Arc::make_mut(&mut crate_source).rlib = Some(PathBuf::new());
+                }
+                #[cfg(not(rapx_rustc_ge_196))]
+                {
+                    Arc::make_mut(&mut crate_source).rlib = Some((PathBuf::new(), PathKind::All));
+                }
                 crate_source
             };
         });

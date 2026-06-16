@@ -44,7 +44,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
                 continue;
             }
             if get_cleaned_def_path_name(self.tcx, def_id) == "std::boxed::Box::<T>::from_raw" {
-                let body = self.tcx.mir_built(local_def_id).steal();
+                let body = self.tcx.mir_built(*local_def_id).steal();
                 display_mir(def_id, &body);
             }
             let chains = get_all_std_unsafe_chains(self.tcx, def_id);

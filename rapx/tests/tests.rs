@@ -455,12 +455,22 @@ fn heap_collections() {
         "Vec\": True, <0,1>",
         "String\": True, <>",
         "LinkedList\": True, <1,1>",
-        "HashMap\": True, <0,0,1>",
-        "BTreeMap\": True, <0,0,1>",
-        "HashSet\": True, <0,1>",
-        "BTreeSet\": True, <0,1>",
     ] {
         assert_contain(&output, pattern);
+    }
+    #[cfg(rapx_rustc_ge_196)]
+    {
+        assert_contain(&output, "HashMap\": True, <0,0,1,1>");
+        assert_contain(&output, "HashSet\": True, <0,1,1>");
+        assert_contain(&output, "BTreeMap\": True, <0,0,1>");
+        assert_contain(&output, "BTreeSet\": True, <0,1>");
+    }
+    #[cfg(not(rapx_rustc_ge_196))]
+    {
+        assert_contain(&output, "HashMap\": True, <0,0,1>");
+        assert_contain(&output, "HashSet\": True, <0,1>");
+        assert_contain(&output, "BTreeMap\": True, <0,0,1>");
+        assert_contain(&output, "BTreeSet\": True, <0,1>");
     }
 }
 

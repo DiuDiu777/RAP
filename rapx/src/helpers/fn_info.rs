@@ -330,9 +330,9 @@ pub fn get_cons(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DefId> {
                 let adt_def_id = adt_def.did();
                 let impls = tcx.inherent_impls(adt_def_id);
                 for impl_def_id in impls {
-                    for item in tcx.associated_item_def_ids(impl_def_id) {
-                        if (tcx.def_kind(item) == DefKind::Fn
-                            || tcx.def_kind(item) == DefKind::AssocFn)
+                    for item in tcx.associated_item_def_ids(*impl_def_id) {
+                        if (tcx.def_kind(*item) == DefKind::Fn
+                            || tcx.def_kind(*item) == DefKind::AssocFn)
                             && get_type(tcx, *item) == FnKind::Constructor
                         {
                             cons.push(*item);
