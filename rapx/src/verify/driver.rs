@@ -243,28 +243,24 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     block: return_block,
                 };
                 let mut paths = Vec::new();
-                let mut seen_prefixes = FxHashSet::default();
-                for (_idx, path) in all_paths.iter().enumerate() {
-                    if paths.len() >= PATH_LIMIT {
-                        break;
-                    }
-                    let Some(pos) = path.iter().position(|&b| b == return_block.as_usize()) else {
-                        continue;
-                    };
-                    let prefix: Vec<usize> = path[..=pos].to_vec();
-                    if !seen_prefixes.insert(prefix.clone()) {
-                        continue;
-                    }
-                    paths.push(Path {
-                        target: checkpoint,
-                        start: PathStart::FunctionEntry,
-                        steps: prefix
-                            .into_iter()
-                            .map(|b| PathStep::Block(BasicBlock::from(b)))
-                            .chain(std::iter::once(PathStep::Callsite(checkpoint)))
-                            .collect(),
-                    });
-                }
+                let _ = all_paths.walk_prefixes(
+                    return_block.as_usize(),
+                    &mut |prefix: &[usize]| -> bool {
+                        if paths.len() >= PATH_LIMIT {
+                            return false;
+                        }
+                        paths.push(Path {
+                            target: checkpoint,
+                            start: PathStart::FunctionEntry,
+                            steps: prefix
+                                .iter()
+                                .map(|&b| PathStep::Block(BasicBlock::from(b)))
+                                .chain(std::iter::once(PathStep::Callsite(checkpoint)))
+                                .collect(),
+                        });
+                        true
+                    },
+                );
                 if !paths.is_empty() {
                     paths_by_checkpoint.insert(checkpoint, paths);
                 }

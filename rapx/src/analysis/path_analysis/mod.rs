@@ -135,6 +135,46 @@ impl PathTree {
     pub fn to_vecs(&self) -> Vec<Vec<usize>> {
         self.iter().collect()
     }
+
+    /// Walk the tree and call `f` with each unique prefix that ends at
+    /// `target_block`. The walk stops at `target_block` (does not recurse
+    /// into its children), so the callback receives the path from the root
+    /// up to and including `target_block`.
+    ///
+    /// Returns `Ok(())` if the walk completed, or `Err(())` if `f` returned
+    /// `false` to request early termination.
+    pub fn walk_prefixes<F>(&self, target_block: usize, f: &mut F) -> Result<(), ()>
+    where
+        F: FnMut(&[usize]) -> bool,
+    {
+        let Some(root) = self.root.as_ref() else {
+            return Ok(());
+        };
+        let mut path = Vec::new();
+        Self::walk_prefixes_impl(root, &mut path, target_block, f)
+    }
+
+    fn walk_prefixes_impl<F>(
+        node: &PathNode,
+        path: &mut Vec<usize>,
+        target_block: usize,
+        f: &mut F,
+    ) -> Result<(), ()>
+    where
+        F: FnMut(&[usize]) -> bool,
+    {
+        path.push(node.block);
+        if node.block == target_block {
+            let cont = f(path);
+            path.pop();
+            return if cont { Ok(()) } else { Err(()) };
+        }
+        for child in &node.children {
+            Self::walk_prefixes_impl(child, path, target_block, f)?;
+        }
+        path.pop();
+        Ok(())
+    }
 }
 
 impl Default for PathTree {

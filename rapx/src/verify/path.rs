@@ -16,7 +16,7 @@
 //! (currently 1024) per search. Searches stop producing new paths once the limit
 //! is reached.
 
-use crate::compat::{FxHashMap, FxHashSet};
+use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
@@ -96,11 +96,13 @@ impl<'tcx> PathExtractor<'tcx> {
         }
     }
 
-    /// Extract paths for one callsite by filtering pre-enumerated whole-function paths.
+    /// Extract paths for one callsite by walking the path tree forward and
+    /// truncating at the target block. The tree structure naturally shares
+    /// common prefixes and deduplicates by construction.
     ///
-    /// Uses `PathGraph::enumerate_paths_repeat()` to get all flattened CFG paths,
-    /// then filters to those containing the target callsite block and passing
-    /// reachability. Paths are truncated at the target block.
+    /// Uses `PathGraph::enumerate_paths_repeat()` to get all flattened CFG
+    /// paths (pre-filtered for reachability), then walks the tree to collect
+    /// unique prefixes ending at the callsite block.
     fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
         let target = callsite.location();
         let target_block = callsite.block.as_usize();
@@ -118,29 +120,24 @@ impl<'tcx> PathExtractor<'tcx> {
         );
 
         let mut results = Vec::new();
-        let mut seen_prefixes = FxHashSet::default();
-        for (idx, path) in all_paths.iter().enumerate() {
+        let mut idx = 0usize;
+        let _ = all_paths.walk_prefixes(target_block, &mut |prefix: &[usize]| -> bool {
             if results.len() >= PATH_LIMIT {
-                break;
-            }
-            let Some(pos) = path.iter().position(|&b| b == target_block) else {
-                continue;
-            };
-            let prefix: Vec<usize> = path[..=pos].to_vec();
-            if !seen_prefixes.insert(prefix.clone()) {
-                continue;
+                return false;
             }
             rap_debug!("  verify path {}: {:?}", idx, prefix);
+            idx += 1;
             results.push(Path {
                 target,
                 start: PathStart::FunctionEntry,
                 steps: prefix
-                    .into_iter()
-                    .map(|b| PathStep::Block(BasicBlock::from(b)))
+                    .iter()
+                    .map(|&b| PathStep::Block(BasicBlock::from(b)))
                     .chain(std::iter::once(PathStep::Callsite(target)))
                     .collect(),
             });
-        }
+            true
+        });
         results
     }
 }
