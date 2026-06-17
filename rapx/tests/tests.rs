@@ -979,65 +979,66 @@ fn struct_invariant_1() {
 }
 
 #[test]
-fn invariantless_skips_struct_invariant() {
+fn invless_skips_struct_invariant() {
     let output = run_with_args("verify/struct_invariant_1", VERIFY_INVLESS_CMD);
-    // Only functions with unsafe callees are verified in invariantless mode
-    assert_contain(&output, "sequence: unsound_new -> sound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> sound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> unsound_read");
-    // All sequences are UNSOUND (raw-ptr deref: ValidPtr/Typed unproved)
-    assert_contain(&output, "result: UNSOUND");
-    assert_not_contain(&output, "result: SOUND");
-    // Align proved in sound_read sequences via internal guard
-    assert_contain(&output, "Align | Proved");
-    // Struct constructors/setters without unsafe callees are skipped
-    assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
-    assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
-    // invariantless should not output struct-invariant checks
-    assert_not_contain(&output, "struct-invariant");
-}
-
-#[test]
-fn invariantless_no_annotations() {
-    let output = run_with_args("verify/struct_invariant_2", VERIFY_INVLESS_CMD);
-    assert_contain(&output, "sequence: unsound_new -> sound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> sound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> unsound_read");
-    // All sequences UNSOUND
-    assert_contain(&output, "result: UNSOUND");
-    assert_not_contain(&output, "result: SOUND");
-    // sound_read Align proved via guard, unsound_read Align Unknown (no annotations)
-    assert_contain(&output, "Align | Proved");
-    assert_contain(&output, "Align | Unknown");
-    assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
-    assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
-    assert_not_contain(&output, "struct-invariant");
-}
-
-#[test]
-fn invariantless_with_contracts() {
-    let output = run_with_args("verify/struct_invariant_3", VERIFY_INVLESS_CMD);
     // 4 sequences: 2 read methods × 2 options (direct, through set_len)
     assert_contain(&output, "sequence: unsound_new -> sound_read");
     assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> sound_read");
     assert_contain(&output, "sequence: unsound_new -> unsound_read");
     assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> unsound_read");
-    // sound_read: Align proved via internal guard; ValidPtr/Typed unproved
-    assert_contain(&output, "Align | Proved");
-    // unsound_read: Align Unknown — contract-based proof needs Rvalue::Use Deref Cast (tracked separately)
-    assert_contain(&output, "Align | Unknown");
-    assert_contain(&output, "ValidPtr | Unknown");
-    assert_contain(&output, "Typed | Unknown");
-    // All sequences UNSOUND
+    // All UNSOUND: ValidPtr/Typed unimplemented
     assert_contain(&output, "result: UNSOUND");
     assert_not_contain(&output, "result: SOUND");
+    // sound_read Align proved via guard; unsound_read Align Unknown
+    assert_contain(&output, "Align | Proved");
+    assert_contain(&output, "Align | Unknown");
+    assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
+    assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
     assert_not_contain(&output, "struct-invariant");
 }
 
 #[test]
-fn invariantless_sound_callee() {
+fn invless_1_no_annotations() {
+    let output = run_with_args("verify/invless_1", VERIFY_INVLESS_CMD);
+    // 4 sequences generated
+    assert_contain(&output, "sequence: unsound_new -> sound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> sound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> unsound_read");
+    // sound_read: Align Proved (internal guard), ValidPtr/Typed Unknown → UNSOUND(2)
+    // set_len→sound_read: same
+    // unsound_read: Align Unknown (no contracts), ValidPtr/Typed Unknown → UNSOUND(3)
+    // set_len→unsound_read: same
+    assert_contain(&output, "result: UNSOUND");
+    assert_not_contain(&output, "result: SOUND");
+    assert_contain(&output, "Align | Proved");
+    assert_contain(&output, "Align | Unknown");
+    assert_not_contain(&output, "struct-invariant");
+}
+
+#[test]
+fn invless_2_with_contracts() {
+    let output = run_with_args("verify/invless_2", VERIFY_INVLESS_CMD);
+    // 4 sequences generated
+    assert_contain(&output, "sequence: unsound_new -> sound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> sound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> unsound_read");
+    // sound_read: Align Proved (guard), ValidPtr/Typed Unknown → UNSOUND(2)
+    // set_len→sound_read: Align Proved (guard; set_len mutates len but Align depends only on ptr)
+    // unsound_read: Align Unknown (contract Align(self.ptr, u32) not connected to casted ptr via SMT)
+    // set_len→unsound_read: Align Unknown (same; set_len mutates len, Align not invalidated)
+    assert_contain(&output, "result: UNSOUND");
+    assert_not_contain(&output, "result: SOUND");
+    assert_contain(&output, "Align | Proved");
+    assert_contain(&output, "Align | Unknown");
+    assert_contain(&output, "ValidPtr | Unknown");
+    assert_contain(&output, "Typed | Unknown");
+    assert_not_contain(&output, "struct-invariant");
+}
+
+#[test]
+fn invless_sound_callee() {
     let output = run_with_args("verify/align_sound_01", VERIFY_INVLESS_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
     assert_contain(&output, "result: SOUND");

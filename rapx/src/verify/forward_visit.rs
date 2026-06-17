@@ -316,7 +316,31 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     });
                 }
             }
+            #[cfg(not(rapx_rustc_ge_198))]
             Rvalue::Use(operand) => {
+                let source_place = match operand {
+                    Operand::Copy(place) | Operand::Move(place) => Some(place),
+                    _ => None,
+                };
+                if let Some(source_place) = source_place {
+                    let has_deref = source_place
+                        .projection
+                        .iter()
+                        .any(|p| matches!(p, rustc_middle::mir::ProjectionElem::Deref));
+                    if !has_deref {
+                        return;
+                    }
+                    let source_key = PlaceKey::from_mir_place(source_place);
+                    let op_ty = operand.ty(&body.local_decls, self.tcx);
+                    result.facts.push(StateFact::Cast {
+                        target: target.clone(),
+                        source: AbstractValue::Place(source_key),
+                        ty: op_ty,
+                    });
+                }
+            }
+            #[cfg(rapx_rustc_ge_198)]
+            Rvalue::Use(operand, _retag) => {
                 let source_place = match operand {
                     Operand::Copy(place) | Operand::Move(place) => Some(place),
                     _ => None,
