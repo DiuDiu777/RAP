@@ -1118,7 +1118,7 @@ fn symbolic_interval() {
 #[test]
 fn nonnull_sound_01() {
     let output = run_with_args("verify/nonnull_sound_01", VERIFY_CMD);
-    assert_contain(&output, "function: sound_caller_contract_propagates_to_callee");
+    assert_contain(&output, "function: caller_with_contract");
     assert_contain(&output, "result: SOUND");
     assert_contain(&output, "function: sound_chained_propagation");
     assert_contain(&output, "result: SOUND");

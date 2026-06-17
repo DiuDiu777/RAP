@@ -1,4 +1,3 @@
-#![feature(fn_traits)]
 use std::ptr::drop_in_place;
 fn main() {
     let mut x = Box::from(0);

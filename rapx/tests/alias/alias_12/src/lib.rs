@@ -1,9 +1,11 @@
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Leaf {
     value: Box<i32>,
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Node {
     leaf1: Box<Leaf>,
     leaf2: Box<Leaf>,
@@ -11,6 +13,7 @@ struct Node {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Middle {
     node1: Box<Node>,
     node2: Box<Node>,
@@ -19,11 +22,13 @@ struct Middle {
 }
 
 #[derive(Debug)]
+#[allow(dead_code)]
 struct Root {
     middle: Box<Middle>,
     offset: i32,
 }
 
+#[allow(dead_code)]
 fn foo(c: usize, root: &Root) -> &Leaf {
     if c == 0 {
         &root.middle.leaf

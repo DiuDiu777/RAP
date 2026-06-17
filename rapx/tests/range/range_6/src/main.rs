@@ -8,9 +8,9 @@ pub fn main(){
         let len = slice.len();
 
     while i < 2*len {
-        let mut val = slice[i]; 
-        if val > 128 {
-            val+=1;
+        let mut _val = slice[i]; 
+        if _val > 128 {
+            _val+=1;
             // i *= 2;
         } else {
             i *= 21;

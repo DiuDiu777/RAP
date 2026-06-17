@@ -2,6 +2,7 @@
 pub fn starts_with_ascii_alpha(string: &str) -> bool {
     matches!(string.as_bytes()[0], b'a'..=b'z' | b'A'..=b'Z')
 }
+#[allow(dead_code)]
 fn is_url_code_point(c: char) -> bool {
     matches!(c,
         'a'..='z' |

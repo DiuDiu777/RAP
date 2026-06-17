@@ -9,6 +9,6 @@ fn countdown(n: i32) -> i32 {
 
 fn main() {
     let x = 5;
-    let result = countdown(x);
+    let _result = countdown(x);
 
 }

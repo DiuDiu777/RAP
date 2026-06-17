@@ -1,3 +1,4 @@
+#[allow(dead_code)]
 pub struct Item(u32);
 
 pub fn foo() -> Item {

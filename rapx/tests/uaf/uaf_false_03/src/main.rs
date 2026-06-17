@@ -7,6 +7,7 @@ fn no_alias_here(s: &str, v: &Vec<usize>) {
     // `print!` uses `format!` which will generate a tuple of (&s, &new_v)
 }
 
+#[allow(dropping_copy_types)]
 fn tuple_transitive<T, K> (arg1: T, arg2: K) {
     // test if there is transitive alias:
     // (t, arg1) + (t, arg2) => (arg1, arg2)

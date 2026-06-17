@@ -1,10 +1,10 @@
 use std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
+    alloc::Layout,
     num::NonZeroUsize,
 };
 
 fn main() {
-    let layout = Layout::new::<NonZeroUsize>();
+    let _layout = Layout::new::<NonZeroUsize>();
     /*
     let ptr = {
         let mut param = {

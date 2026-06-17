@@ -1,5 +1,3 @@
-#![feature(vec_into_raw_parts)]
-
 use std::slice;
 
 // 1. Dataflow: p => ret value.

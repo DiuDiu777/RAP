@@ -5,8 +5,6 @@
 //! 2. Keep all test points in one `lib.rs` for easier review and maintenance;
 //! 3. Use comments on each testcase to state exactly what is being tested.
 
-use std::slice;
-
 // ============================================================================
 // 1) Pure numeric computation / interval propagation
 // ============================================================================

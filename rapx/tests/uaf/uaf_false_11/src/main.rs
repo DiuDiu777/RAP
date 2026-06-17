@@ -5,6 +5,7 @@ fn main() {
 }
 
 struct S<'a> {
+    #[allow(dead_code)]
     a: &'a str,
 }
 

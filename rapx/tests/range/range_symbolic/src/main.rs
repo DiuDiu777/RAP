@@ -1,7 +1,7 @@
 fn foo1(x: i32) -> i32 {
     let a = x + 1;
     let y = x;
-    let mut result ;
+    let result ;
     let _b = a - y; // _11/_8. [1,1] can be inferred before range analysis
     if a >= y {    // always true
         result =  a;
@@ -15,6 +15,6 @@ fn foo1(x: i32) -> i32 {
 
 fn main(){
     let y = 2;
-    let x = y;
+    let _x = y;
     foo1(2);
 }

@@ -7,17 +7,11 @@ unsafe fn callee_require_nonnull(_ptr: *const u32) {}
 
 // An unsafe caller whose own contract declares ptr as NonNull.
 // Used as a callee for contract propagation test.
-#[rapx::requires(NonNull(ptr), kind = "precond")]
-unsafe fn caller_with_contract(ptr: *const u32) {}
-
-// SOUND: the caller's `#[rapx::requires(NonNull(ptr))]` is injected
-// as a ContractFact at function entry, establishing NonNull(ptr)
-// before the call, satisfying callee's NonNull requirement.
-#[rapx::requires(NonNull(ptr), kind = "precond")]
+#[rapx::requires(NonNull(_ptr), kind = "precond")]
 #[rapx::verify]
-pub unsafe fn sound_caller_contract_propagates_to_callee(ptr: *const u32) {
+unsafe fn caller_with_contract(_ptr: *const u32) {
     unsafe {
-        callee_require_nonnull(ptr);
+        callee_require_nonnull(_ptr);
     }
 }
 
