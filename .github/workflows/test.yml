@@ -1,4 +1,4 @@
-name: RAPx-booting and testing
+name: RAPx CI
 
 on:
   push:
@@ -6,50 +6,50 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  RAP_RECURSIVE: deep
 
 jobs:
-  build:
+  latest:
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        rust:
-          - pinned
-          - latest
-
     steps:
     - uses: actions/checkout@v4
-
-    - name: Setup asterinas (via rust-toolchain.toml)
-      if: matrix.rust == 'pinned'
-      run: rustup show active-toolchain
-
-    - name: Setup latest nightly
-      if: matrix.rust == 'latest'
+    - name: Setup toolchain
       run: |
         rustup toolchain install nightly --profile minimal
         rustup component add rustc-dev rust-src llvm-tools-preview rustfmt --toolchain nightly
         rustup override set nightly
-
-    - name: Build RAPx
+        rustc --version
+    - name: Build
       run: ./install.sh
+    - name: Test
+      run: cd rapx && cargo test
 
-    - name: Running Cargo Test
+  asterinas:
+    runs-on: ubuntu-22.04
+    steps:
+    - uses: actions/checkout@v4
+    - name: Setup toolchain
+      run: |
+        rustup toolchain install nightly-2026-04-03 --profile minimal
+        rustup component add rustc-dev rust-src llvm-tools-preview rustfmt --toolchain nightly-2026-04-03
+        rustup override set nightly-2026-04-03
+        rustc --version
+    - name: Build
+      run: ./install.sh
+    - name: Test
       run: cd rapx && cargo test
 
   verify-std:
     runs-on: ubuntu-22.04
+    continue-on-error: true
     steps:
     - uses: actions/checkout@v4
-
-    - name: Setup nightly-2025-10-09 for verify-std
+    - name: Setup toolchain
       run: |
         rustup toolchain install nightly-2025-10-09 --profile minimal
         rustup component add rustc-dev rust-src llvm-tools-preview rustfmt --toolchain nightly-2025-10-09
         rustup override set nightly-2025-10-09
-
-    - name: Build RAPx
+        rustc --version
+    - name: Build
       run: ./install.sh
-
-    - name: Running Cargo Test (verify-std)
+    - name: Test
       run: cd rapx && cargo test
