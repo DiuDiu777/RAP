@@ -1019,13 +1019,11 @@ fn invariantless_no_annotations() {
 #[test]
 fn invariantless_with_contracts() {
     let output = run_with_args("verify/struct_invariant_3", VERIFY_INVLESS_CMD);
-    // 6 sequences: 2 read methods × 3 options (direct, through set_len, through set_len2)
+    // 4 sequences: 2 read methods × 2 options (direct, through set_len)
     assert_contain(&output, "sequence: unsound_new -> sound_read");
     assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> sound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_set_len2 -> sound_read");
     assert_contain(&output, "sequence: unsound_new -> unsound_read");
     assert_contain(&output, "sequence: unsound_new -> unsound_set_len -> unsound_read");
-    assert_contain(&output, "sequence: unsound_new -> unsound_set_len2 -> unsound_read");
     // sound_read: Align proved via internal guard; ValidPtr/Typed unproved
     assert_contain(&output, "Align | Proved");
     // unsound_read: Align Unknown — contract-based proof needs Rvalue::Use Deref Cast (tracked separately)

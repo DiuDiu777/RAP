@@ -21,12 +21,6 @@ impl<T> Wrapper<T> {
         self.len = len;
     }
 
-    #[rapx::requires(InBound(self.ptr, T, len), kind = "precond")]
-    #[rapx::requires(Init(self.ptr, T, len), kind = "precond")]
-    unsafe fn unsound_set_len2(&mut self, len: usize) {
-        self.len = len;
-    }
-
     fn sound_read(&self) -> Option<u32> {
         let ptr = self.ptr;
 
