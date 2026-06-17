@@ -151,13 +151,13 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Size(T, c)                   | `Size`         |     —     |
 | !Padding(T)                  | `NoPadding`    |     —     |
 | !Null(p)                     | `NonNull`      |     ✅    |
-| Allocated(p, T, len, A)      | `Allocated`    |     —     |
+| Allocated(p, T, len, A)      | `Allocated`    |     ✅    |
 | InBound(p, T, len)           | `InBound`      |     ✅    |
 | !Overlap(dst, src, T, len)   | `NonOverlap`   |     —     |
-| ValidNum(exp, vrange)        | `ValidNum`     |     —     |
+| ValidNum(exp, vrange)        | `ValidNum`     |     ✅    |
 | ValidString(arange)          | `ValidString`  |     —     |
 | ValidCStr(p, len)            | `ValidCStr`    |     —     |
-| Init(p, T, len)              | `Init`         |     —     |
+| Init(p, T, len)              | `Init`         |     ✅    |
 | Unwrap(x, T)                 | `Unwrap`       |     —     |
 | Typed(p, T)                  | `Typed`        |     —     |
 | !Owned(p)                    | `Owning`       |     —     |
@@ -168,7 +168,7 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Opened(fd)                   | `Opened`       |     —     |
 | Trait(T, trait)              | `Trait`        |     —     |
 | !Reachable()                 | `Unreachable`  |     —     |
-| ValidPtr(p, T, len)           | `ValidPtr`     |     —     |
+| ValidPtr(p, T, len)          | `ValidPtr`     |     —     |
 | Deref(p, T, len)              | `Deref`        |     —     |
 | Ptr2Ref(p, T)                 | `Ptr2Ref`      |     —     |
 | Layout(p, layout)             | `Layout`       |     —     |
