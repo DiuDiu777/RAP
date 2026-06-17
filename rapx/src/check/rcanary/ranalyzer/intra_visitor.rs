@@ -639,6 +639,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
 
+        if llen == 0 {
+            rap_debug!(
+                "handle_copy: lvalue length is 0 for local {:?}, skipping\n",
+                lu
+            );
+            return;
+        }
+
         let mut is_ctor = true;
         if self.icx_slice().var()[lu].is_init() {
             // if the lvalue is not initialized for the first time (already initialized)
@@ -763,6 +771,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         // get the length of current variable to generate bit vector in the future
         let mut llen = self.icx_slice().len()[lu];
         let rlen = self.icx_slice().len()[ru];
+
+        if llen == 0 {
+            rap_debug!(
+                "handle_move: lvalue length is 0 for local {:?}, skipping\n",
+                lu
+            );
+            return;
+        }
 
         // extract the original z3 ast of the variable needed to prepare generating new
         let l_ori_bv: ast::BV;
@@ -911,6 +927,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
 
+        if llen == 0 {
+            rap_debug!(
+                "handle_copy_from_field: lvalue length is 0 for local {:?}, skipping\n",
+                lu
+            );
+            return;
+        }
+
         let mut is_ctor = true;
         if self.icx_slice().var()[lu].is_init() {
             // if the lvalue is not initialized for the first time
@@ -985,6 +1009,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         };
         let int_for_op_and = rustbv_to_int(&rust_bv_for_op_and);
         let z3_bv_for_op_and = ast::BV::from_u64(ctx, int_for_op_and, llen as u32);
+
+        if index_needed >= rlen {
+            rap_debug!(
+                "handle_copy_from_field: field index {} out of bounds (rlen={}), skipping\n",
+                index_needed, rlen
+            );
+            return;
+        }
         let extract_from_field = r_ori_bv.extract(index_needed as u32, index_needed as u32);
         let repeat_field = if llen > 1 {
             extract_from_field.sign_ext((llen - 1) as u32)
@@ -1082,6 +1114,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
             return;
         }
 
+        if llen == 0 {
+            rap_debug!(
+                "handle_move_from_field: lvalue length is 0 for local {:?}, skipping\n",
+                lu
+            );
+            return;
+        }
+
         // extract the original z3 ast of the variable needed to prepare generating new
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
@@ -1158,6 +1198,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         };
         let int_for_op_and = rustbv_to_int(&rust_bv_for_op_and);
         let z3_bv_for_op_and = ast::BV::from_u64(ctx, int_for_op_and, llen as u32);
+
+        if index_needed >= rlen {
+            rap_debug!(
+                "handle_move_from_field: field index {} out of bounds (rlen={}), skipping\n",
+                index_needed, rlen
+            );
+            return;
+        }
         let extract_from_field = r_ori_bv.extract(index_needed as u32, index_needed as u32);
         let repeat_field = if llen > 1 {
             extract_from_field.sign_ext((llen - 1) as u32)
@@ -2291,6 +2339,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
                 };
 
                 let mut llen = self.icx_slice().len()[lu];
+
+                if llen == 0 {
+                    rap_debug!(
+                        "handle_call: lvalue length is 0 for local {:?}, skipping\n",
+                        lu
+                    );
+                    return;
+                }
 
                 if self.icx_slice().var()[lu].is_init() {
                     l_ori_bv = self.icx_slice_mut().var_mut()[lu].extract();
