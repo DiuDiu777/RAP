@@ -1116,6 +1116,13 @@ fn symbolic_interval() {
 }
 
 #[test]
+fn align_contract_propagation() {
+    let output = run_with_args("verify/align/contract_propagation", VERIFY_CMD);
+    assert_contain(&output, "function: caller_propagates_nonnull");
+    assert_contain(&output, "result: SOUND");
+}
+
+#[test]
 fn adg_bug() {
     // This test pass if don't panic (e.g., stack overflow) during ADG construction and resolution.
     let _ = run_with_args("adg/bug-regression", ANALYZE_ADG_CMD);

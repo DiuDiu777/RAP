@@ -88,7 +88,12 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             for (path_index, path) in view.paths.iter().enumerate() {
                 for (property_index, property) in view.properties.iter().enumerate() {
                     let (forward, smt_check) =
-                        self.engine.check_callsite(view.callsite, path, property);
+                        self.engine.check_callsite(
+                            view.callsite,
+                            path,
+                            property,
+                            &self.target.caller_requires,
+                        );
                     let check_diagnostics =
                         format!("{}\n{}", forward.describe(), smt_check.describe());
                     report.push(PropertyCheckResult {

@@ -43,6 +43,8 @@ pub struct FunctionTarget<'tcx> {
     pub callsites: Vec<Callsite<'tcx>>,
     /// Parsed `requires` contracts for each unsafe callee reachable from this target.
     pub callee_requires: HashMap<DefId, FnContracts<'tcx>>,
+    /// Parsed `requires` contracts for this function (the caller) itself.
+    pub caller_requires: FnContracts<'tcx>,
     /// Parsed struct invariants that methods of the owning struct must maintain.
     pub struct_invariants: Vec<Property<'tcx>>,
     /// Raw pointer dereference sites with their required safety properties.
@@ -182,6 +184,8 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             .map(|callee_def_id| (*callee_def_id, self.get_fn_contracts(*callee_def_id)))
             .collect();
 
+        let caller_requires = self.get_fn_contracts(def_id);
+
         let raw_ptr_deref_checks = build_raw_ptr_deref_checks(self.tcx, def_id);
 
         let owner_struct_def_id = self.get_owner_struct_def_id(def_id);
@@ -196,6 +200,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             owner_struct_def_id,
             callsites,
             callee_requires,
+            caller_requires,
             struct_invariants,
             raw_ptr_deref_checks,
         }

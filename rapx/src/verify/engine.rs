@@ -37,13 +37,31 @@ impl<'tcx> VerifyEngine<'tcx> {
     }
 
     /// Run the full pipeline for one unsafe-callsite check.
+    ///
+    /// When `caller_contracts` is non-empty, those contracts are prepended as
+    /// entry `ContractFact` assumptions so the SMT model can assume the caller's
+    /// own `requires` hold at function entry.
     pub fn check_callsite(
         &self,
         callsite: &Callsite<'tcx>,
         path: &Path,
         property: &Property<'tcx>,
+        caller_contracts: &[Property<'tcx>],
     ) -> (ForwardVisitResult<'tcx>, SmtCheckResult) {
-        let backward = self.backward.visit(callsite, path, property);
+        let mut backward = self.backward.visit(callsite, path, property);
+
+        if !caller_contracts.is_empty() {
+            let mut items: Vec<BackwardItem<'tcx>> = caller_contracts
+                .iter()
+                .filter(|c| !matches!(c.kind, super::contract::PropertyKind::Unknown))
+                .map(|c| BackwardItem::ContractFact {
+                    property: c.clone(),
+                })
+                .collect();
+            items.extend(backward.items.clone());
+            backward.items = items;
+        }
+
         let forward = self.forward.visit(&backward);
         let smt = self.smt.check(callsite, property, &forward);
         (forward, smt)

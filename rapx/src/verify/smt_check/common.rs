@@ -1230,6 +1230,26 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             );
                         }
                     }
+                    PropertyKind::NonNull => {
+                        let Some(target) = (|| {
+                            let arg = property.args.first()?;
+                            let PropertyArg::Place(place) = arg else {
+                                return None;
+                            };
+                            let mut key = PlaceKey::from_contract_place(place);
+                            if let PlaceBaseKey::Arg(index) = key.base {
+                                key.base = PlaceBaseKey::Local(index + 1);
+                            }
+                            Some(key)
+                        })() else {
+                            continue;
+                        };
+                        self.assert_place_non_zero(
+                            solver,
+                            &target,
+                            "caller-contract",
+                        );
+                    }
                     _ => {}
                 },
                 StateFact::PathCondition(_)
