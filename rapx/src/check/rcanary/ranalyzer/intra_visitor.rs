@@ -639,16 +639,15 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
 
-        if llen == 0 {
-            rap_debug!(
-                "handle_copy: lvalue length is 0 for local {:?}, skipping\n",
-                lu
-            );
-            return;
-        }
-
         let mut is_ctor = true;
         if self.icx_slice().var()[lu].is_init() {
+            if llen == 0 {
+                rap_debug!(
+                    "handle_copy: lvalue length is 0 for local {:?}, skipping\n",
+                    lu
+                );
+                return;
+            }
             // if the lvalue is not initialized for the first time (already initialized)
             // the constraint that promise the original value of lvalue that does not hold the heap
             // e.g., y=x ,that y is non-owning => l=0
@@ -772,20 +771,19 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         let mut llen = self.icx_slice().len()[lu];
         let rlen = self.icx_slice().len()[ru];
 
-        if llen == 0 {
-            rap_debug!(
-                "handle_move: lvalue length is 0 for local {:?}, skipping\n",
-                lu
-            );
-            return;
-        }
-
         // extract the original z3 ast of the variable needed to prepare generating new
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
 
         let mut is_ctor = true;
         if self.icx_slice().var()[lu].is_init() {
+            if llen == 0 {
+                rap_debug!(
+                    "handle_move: lvalue length is 0 for local {:?}, skipping\n",
+                    lu
+                );
+                return;
+            }
             // if the lvalue is not initialized for the first time
             // the constraint that promise the original value of lvalue that does not hold the heap
             // e.g., y=move x ,that y (l) is non-owning
@@ -927,16 +925,15 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
 
-        if llen == 0 {
-            rap_debug!(
-                "handle_copy_from_field: lvalue length is 0 for local {:?}, skipping\n",
-                lu
-            );
-            return;
-        }
-
         let mut is_ctor = true;
         if self.icx_slice().var()[lu].is_init() {
+            if llen == 0 {
+                rap_debug!(
+                    "handle_copy_from_field: lvalue length is 0 for local {:?}, skipping\n",
+                    lu
+                );
+                return;
+            }
             // if the lvalue is not initialized for the first time
             // the constraint that promise the original value of lvalue that does not hold the heap
             // e.g., y=move x.f ,that y (l) is non-owning
@@ -1114,20 +1111,19 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
             return;
         }
 
-        if llen == 0 {
-            rap_debug!(
-                "handle_move_from_field: lvalue length is 0 for local {:?}, skipping\n",
-                lu
-            );
-            return;
-        }
-
         // extract the original z3 ast of the variable needed to prepare generating new
         let l_ori_bv: ast::BV;
         let r_ori_bv = self.icx_slice_mut().var_mut()[ru].extract();
 
         let mut is_ctor = true;
         if self.icx_slice().var()[lu].is_init() {
+            if llen == 0 {
+                rap_debug!(
+                    "handle_move_from_field: lvalue length is 0 for local {:?}, skipping\n",
+                    lu
+                );
+                return;
+            }
             // if the lvalue is not initialized for the first time
             // the constraint that promise the original value of lvalue that does not hold the heap
             // e.g., y=move x.f ,that y (l) is non-owning
@@ -2340,15 +2336,14 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
 
                 let mut llen = self.icx_slice().len()[lu];
 
-                if llen == 0 {
-                    rap_debug!(
-                        "handle_call: lvalue length is 0 for local {:?}, skipping\n",
-                        lu
-                    );
-                    return;
-                }
-
                 if self.icx_slice().var()[lu].is_init() {
+                    if llen == 0 {
+                        rap_debug!(
+                            "handle_call: lvalue length is 0 for local {:?}, skipping\n",
+                            lu
+                        );
+                        return;
+                    }
                     l_ori_bv = self.icx_slice_mut().var_mut()[lu].extract();
                     let l_zero_const = ast::BV::from_u64(ctx, 0, llen as u32);
                     let constraint_l_ori_zero = l_ori_bv._safe_eq(&l_zero_const).unwrap();
