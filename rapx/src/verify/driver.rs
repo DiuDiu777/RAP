@@ -163,6 +163,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
 
         let is_constructor =
             get_type(self.tcx, self.target.def_id) == FnKind::Constructor;
+        let caller_contracts = &self.target.caller_requires;
 
         for (checkpoint, paths) in self.build_invariant_paths(is_constructor) {
             rap_debug!(
@@ -186,6 +187,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         property,
                         invariants,
                         is_constructor,
+                        caller_contracts,
                     );
                     let check_diagnostics =
                         format!("{}\n{}", forward.describe(), smt_check.describe());

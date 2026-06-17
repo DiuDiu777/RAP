@@ -72,6 +72,10 @@ impl<'tcx> VerifyEngine<'tcx> {
     /// For non-constructor methods, all struct invariants are prepended as
     /// entry `ContractFact` assumptions so the SMT model can assume the
     /// invariant holds at function entry.
+    ///
+    /// For constructors, `caller_contracts` (from `#[rapx::requires]`
+    /// annotations) are used as entry assumptions instead, since the
+    /// constructor must establish the invariants from scratch.
     pub fn check_invariant(
         &self,
         def_id: rustc_hir::def_id::DefId,
@@ -80,6 +84,7 @@ impl<'tcx> VerifyEngine<'tcx> {
         property: &Property<'tcx>,
         invariants: &[Property<'tcx>],
         is_constructor: bool,
+        caller_contracts: &[Property<'tcx>],
     ) -> (
         RelevantMirItems<'tcx>,
         ForwardVisitResult<'tcx>,
@@ -89,7 +94,17 @@ impl<'tcx> VerifyEngine<'tcx> {
             .backward
             .visit_for_checkpoint(def_id, checkpoint, path, property);
 
-        if !is_constructor {
+        if is_constructor {
+            let mut items: Vec<BackwardItem<'tcx>> = caller_contracts
+                .iter()
+                .filter(|c| !matches!(c.kind, super::contract::PropertyKind::Unknown))
+                .map(|c| BackwardItem::ContractFact {
+                    property: c.clone(),
+                })
+                .collect();
+            items.extend(backward.items.clone());
+            backward.items = items;
+        } else {
             let mut items: Vec<BackwardItem<'tcx>> = invariants
                 .iter()
                 .map(|inv| BackwardItem::ContractFact {

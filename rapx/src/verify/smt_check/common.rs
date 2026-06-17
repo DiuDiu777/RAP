@@ -94,12 +94,8 @@ impl<'tcx> SmtChecker<'tcx> {
             PropertyKind::NonNull => {
                 SmtCheckResult::unknown("NonNull struct invariant not implemented yet")
             }
-            PropertyKind::InBound => {
-                SmtCheckResult::unknown("InBound struct invariant not implemented yet")
-            }
-            PropertyKind::Init => {
-                SmtCheckResult::unknown("Init struct invariant not implemented yet")
-            }
+            PropertyKind::InBound => in_bound::check_for_checkpoint(self, caller, property, forward),
+            PropertyKind::Init => init::check_for_checkpoint(self, caller, property, forward),
             PropertyKind::ValidPtr => {
                 SmtCheckResult::unknown("ValidPtr struct invariant not implemented yet")
             }
@@ -548,6 +544,22 @@ impl<'tcx> SmtChecker<'tcx> {
                 return None;
             };
             u64::try_from(*value).ok()
+        })
+    }
+
+    /// Resolve the trailing length expression directly (without callsite binding).
+    ///
+    /// For checkpoint checks this extracts the last argument as an expression
+    /// using the function's own parameter space.
+    pub(crate) fn property_len_expr_direct(
+        &self,
+        property: &Property<'tcx>,
+    ) -> Option<ContractExpr<'tcx>> {
+        property.args.iter().rev().find_map(|arg| {
+            let PropertyArg::Expr(expr) = arg else {
+                return None;
+            };
+            Some(expr.clone())
         })
     }
 
@@ -1249,6 +1261,90 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             &target,
                             "caller-contract",
                         );
+                    }
+                    PropertyKind::InBound => {
+                        let Some(target) = (|| {
+                            let arg = property.args.first()?;
+                            let PropertyArg::Place(place) = arg else {
+                                return None;
+                            };
+                            let mut key = PlaceKey::from_contract_place(place);
+                            if let PlaceBaseKey::Arg(index) = key.base {
+                                key.base = PlaceBaseKey::Local(index + 1);
+                            }
+                            Some(key)
+                        })() else {
+                            continue;
+                        };
+                        let Some(required_ty) = property.args.iter().find_map(|arg| {
+                            if let PropertyArg::Ty(ty) = arg {
+                                Some(*ty)
+                            } else {
+                                None
+                            }
+                        }) else {
+                            continue;
+                        };
+                        let Some((_, elem_size)) = self.type_layout(required_ty) else {
+                            continue;
+                        };
+                        let access_count = property.args.iter().rev().find_map(|arg| {
+                            let PropertyArg::Expr(ContractExpr::Const(value)) = arg else {
+                                return None;
+                            };
+                            u64::try_from(*value).ok()
+                        }).unwrap_or(0);
+                        self.assumptions.push(SmtPredicate::InBounds {
+                            index: SmtTerm::Const(0),
+                            access_count: SmtTerm::Const(access_count),
+                            len: SmtTerm::Value(format!("precond_len_{}", place_label(&target))),
+                        });
+                        if elem_size > 0 && access_count > 0 {
+                            self.assumptions.push(SmtPredicate::Custom(format!(
+                                "InBound({}, T, {access_count}) holds (caller-contract, elem_size={elem_size})",
+                                place_label(&target)
+                            )));
+                        } else {
+                            self.assumptions.push(SmtPredicate::Custom(format!(
+                                "InBound({}, T, {access_count}) holds (caller-contract, symbolic)",
+                                place_label(&target)
+                            )));
+                        }
+                    }
+                    PropertyKind::Init => {
+                        let Some(target) = (|| {
+                            let arg = property.args.first()?;
+                            let PropertyArg::Place(place) = arg else {
+                                return None;
+                            };
+                            let mut key = PlaceKey::from_contract_place(place);
+                            if let PlaceBaseKey::Arg(index) = key.base {
+                                key.base = PlaceBaseKey::Local(index + 1);
+                            }
+                            Some(key)
+                        })() else {
+                            continue;
+                        };
+                        let Some(required_ty) = property.args.iter().find_map(|arg| {
+                            if let PropertyArg::Ty(ty) = arg {
+                                Some(*ty)
+                            } else {
+                                None
+                            }
+                        }) else {
+                            continue;
+                        };
+                        let elements = property.args.iter().rev().find_map(|arg| {
+                            let PropertyArg::Expr(ContractExpr::Const(value)) = arg else {
+                                return None;
+                            };
+                            u64::try_from(*value).ok()
+                        }).unwrap_or(0);
+                        self.assumptions.push(SmtPredicate::Custom(format!(
+                            "{} initialized for {:?}, {elements} element(s) (caller-contract)",
+                            place_label(&target),
+                            required_ty
+                        )));
                     }
                     _ => {}
                 },

@@ -11,8 +11,8 @@ use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
-        AggregateKind, BasicBlock, BinOp, Local, Operand, Place, Rvalue, Statement, StatementKind,
-        Terminator, TerminatorKind, UnOp,
+        AggregateKind, BasicBlock, BinOp, Body, Local, Operand, Place, Rvalue, Statement,
+        StatementKind, Terminator, TerminatorKind, UnOp,
     },
     ty::{Ty, TyCtxt, TyKind},
 };
@@ -52,7 +52,14 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     kind,
                 } => {
                     let statement = &body.basic_blocks[*block].statements[*statement_index];
-                    self.visit_statement(*block, *statement_index, *kind, statement, &mut result);
+                    self.visit_statement(
+                        *block,
+                        *statement_index,
+                        *kind,
+                        statement,
+                        body,
+                        &mut result,
+                    );
                 }
                 BackwardItem::Terminator { block, kind } => {
                     let terminator = body.basic_blocks[*block].terminator();
@@ -83,6 +90,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
         statement_index: usize,
         reason: KeepReason,
         statement: &Statement<'tcx>,
+        body: &Body<'tcx>,
         result: &mut ForwardVisitResult<'tcx>,
     ) {
         result.steps.push(ForwardStep::Statement {
@@ -96,7 +104,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 let (place, rvalue) = &**assign;
                 let value = self.value_from_rvalue(rvalue);
                 result.values.insert(place.local, value);
-                self.record_rvalue_facts(place, rvalue, result);
+                self.record_rvalue_facts(place, rvalue, body, result);
             }
             StatementKind::FakeRead(..)
             | StatementKind::SetDiscriminant { .. }
@@ -260,6 +268,7 @@ impl<'tcx> ForwardVisitor<'tcx> {
         &self,
         place: &Place<'tcx>,
         rvalue: &Rvalue<'tcx>,
+        body: &Body<'tcx>,
         result: &mut ForwardVisitResult<'tcx>,
     ) {
         let target = PlaceKey::from_mir_place(place);
@@ -270,6 +279,26 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     pointer: target,
                     source,
                 });
+            }
+            Rvalue::Aggregate(kind, operands) => {
+                let is_decomposable = matches!(
+                    kind.as_ref(),
+                    AggregateKind::Adt(..) | AggregateKind::Tuple
+                );
+                if !is_decomposable {
+                    return;
+                }
+                for (field_index, operand) in operands.iter().enumerate() {
+                    let mut field_place = target.clone();
+                    field_place.fields.push(field_index);
+                    let source_val = value_from_operand(operand);
+                    let op_ty = operand.ty(&body.local_decls, self.tcx);
+                    result.facts.push(StateFact::Cast {
+                        target: field_place,
+                        source: source_val,
+                        ty: op_ty,
+                    });
+                }
             }
             Rvalue::Cast(_, operand, ty) => {
                 let source_val = value_from_operand(operand);

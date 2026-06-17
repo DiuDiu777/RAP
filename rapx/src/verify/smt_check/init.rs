@@ -44,3 +44,33 @@ pub(crate) fn check<'tcx>(
         },
     )
 }
+
+/// Check `Init` at a return checkpoint for struct invariant verification.
+pub(crate) fn check_for_checkpoint<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    caller: rustc_hir::def_id::DefId,
+    property: &Property<'tcx>,
+    forward: &ForwardVisitResult<'tcx>,
+) -> SmtCheckResult {
+    let Some(target) = checker.property_target_direct(property) else {
+        return SmtCheckResult::unknown("Init target could not be resolved");
+    };
+    let Some(required_ty) = checker.property_required_ty_direct(property) else {
+        return SmtCheckResult::unknown("Init type could not be resolved");
+    };
+    let Some(elements) = checker.property_len_const(property) else {
+        return SmtCheckResult::unknown(
+            "Init currently requires a constant element-count argument",
+        );
+    };
+
+    checker.prove_obligation_for_checkpoint(
+        caller,
+        forward,
+        SmtObligation::Initialized {
+            place: target,
+            ty_name: format!("{required_ty:?}"),
+            elements,
+        },
+    )
+}
