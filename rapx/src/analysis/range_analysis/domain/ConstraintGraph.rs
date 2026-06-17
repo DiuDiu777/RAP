@@ -17,6 +17,7 @@ use num_traits::Bounded;
 use once_cell::sync::{Lazy, OnceCell};
 // use rand::Rng;
 use rustc_abi::FieldIdx;
+use crate::analysis::path_analysis::PathTree;
 use crate::compat::FxHashMap;
 use rustc_hir::def_id::LOCAL_CRATE;
 use rustc_hir::{def, def_id::DefId};
@@ -2324,22 +2325,22 @@ where
     pub fn start_analyze_path_constraints(
         &mut self,
         body: &'tcx Body<'tcx>,
-        all_paths_indices: &[Vec<usize>],
+        tree: &PathTree,
     ) -> HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> {
         self.build_value_maps(body);
-        let result = self.analyze_path_constraints(body, all_paths_indices);
+        let result = self.analyze_path_constraints(body, tree);
         result
     }
 
     pub fn analyze_path_constraints(
         &self,
         body: &'tcx Body<'tcx>,
-        all_paths_indices: &[Vec<usize>],
+        tree: &PathTree,
     ) -> HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> {
         let mut all_path_results: HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> =
-            HashMap::with_capacity(all_paths_indices.len());
+            HashMap::with_capacity(tree.len());
 
-        for path_indices in all_paths_indices {
+        for path_indices in tree.iter() {
             let mut current_path_constraints: Vec<(Place<'tcx>, Place<'tcx>, BinOp)> = Vec::new();
 
             let path_bbs: Vec<BasicBlock> = path_indices
@@ -2387,7 +2388,7 @@ where
                 }
             }
 
-            all_path_results.insert(path_indices.clone(), (current_path_constraints));
+            all_path_results.insert(path_indices, current_path_constraints);
         }
 
         all_path_results

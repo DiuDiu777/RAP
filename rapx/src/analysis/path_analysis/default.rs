@@ -22,7 +22,11 @@ impl<'tcx> PathAnalyzer<'tcx> {
         }
     }
 
-    fn compute_paths_for_defid(&self, def_id: DefId) -> Option<PathSet> {
+    pub fn start_path_analysis_for_defid(&mut self, def_id: DefId) -> Option<PathSet> {
+        if let Some(paths) = self.paths.get(&def_id) {
+            return Some(paths.clone());
+        }
+
         if !self.tcx.is_mir_available(def_id) {
             return None;
         }
@@ -34,19 +38,9 @@ impl<'tcx> PathAnalyzer<'tcx> {
 
         rap_info!("Function: {}", fn_name);
         for (idx, path) in paths.iter().enumerate() {
-            let reachable = graph.is_path_reachable(path);
-            rap_info!("  path {}: {:?} | reachable: {}", idx, path, reachable);
+            rap_info!("  path {}: {:?}", idx, path);
         }
 
-        Some(paths)
-    }
-
-    pub fn start_path_analysis_for_defid(&mut self, def_id: DefId) -> Option<PathSet> {
-        if let Some(paths) = self.paths.get(&def_id) {
-            return Some(paths.clone());
-        }
-
-        let paths = self.compute_paths_for_defid(def_id)?;
         self.paths.insert(def_id, paths.clone());
         Some(paths)
     }

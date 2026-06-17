@@ -3,6 +3,7 @@ use crate::graphs::{
     scc::{Scc, SccInfo},
 };
 use crate::compat::{FxHashMap, FxHashSet};
+use super::PathTree;
 use rustc_middle::{
     mir::{
         BasicBlock, Local, Operand, Rvalue, StatementKind, SwitchTargets, Terminator,
@@ -263,32 +264,23 @@ impl<'tcx> PathGraph<'tcx> {
     /// SCC regions are flattened into a bounded set of acyclic paths. No
     /// constraint-based filtering is performed here — reachability checking
     /// is done separately via `is_path_reachable`.
-    pub fn enumerate_paths(&mut self) -> Vec<Vec<usize>> {
+    pub fn enumerate_paths(&mut self) -> PathTree {
         self.enumerate_paths_repeat(0)
     }
 
     /// Enumerate whole-CFG paths allowing each SCC postfix segment to repeat
     /// up to `postfix_repeat` additional times. `postfix_repeat = 0` gives
     /// the same result as `enumerate_paths`.
-    pub fn enumerate_paths_repeat(&mut self, postfix_repeat: usize) -> Vec<Vec<usize>> {
-        let mut all_paths = Vec::new();
-        let mut seen_paths = FxHashSet::default();
+    pub fn enumerate_paths_repeat(&mut self, postfix_repeat: usize) -> PathTree {
+        let mut tree = PathTree::new();
 
         if self.cfg.blocks.is_empty() {
-            return all_paths;
+            return tree;
         }
 
-        self.collect_whole_cfg_paths(
-            0,
-            &mut vec![0],
-            &mut all_paths,
-            &mut seen_paths,
-            0,
-            postfix_repeat,
-        );
+        self.collect_whole_cfg_paths(0, &mut vec![0], &mut tree, 0, postfix_repeat);
 
-        all_paths.sort_unstable();
-        all_paths
+        tree
     }
 
     /// Verify whether a given path (sequence of block indices) is reachable.
@@ -741,17 +733,14 @@ impl<'tcx> PathGraph<'tcx> {
         &mut self,
         current: usize,
         path: &mut Vec<usize>,
-        all_paths: &mut Vec<Vec<usize>>,
-        seen_paths: &mut FxHashSet<Vec<usize>>,
+        tree: &mut PathTree,
         depth: usize,
         postfix_repeat: usize,
     ) {
         if current >= self.cfg.blocks.len() {
             return;
         }
-        if depth > WHOLE_CFG_PATH_DEPTH_LIMIT
-            || all_paths.len() >= WHOLE_CFG_PATH_LIMIT
-        {
+        if depth > WHOLE_CFG_PATH_DEPTH_LIMIT || tree.len() >= WHOLE_CFG_PATH_LIMIT {
             return;
         }
 
@@ -762,14 +751,14 @@ impl<'tcx> PathGraph<'tcx> {
             let segments = self.find_scc_paths_repeat(current, &scc, postfix_repeat);
 
             if segments.is_empty() {
-                if seen_paths.insert(path.clone()) {
-                    all_paths.push(path.clone());
+                if self.is_path_reachable(path) {
+                    tree.insert(path);
                 }
                 return;
             }
 
             for seg in segments {
-                if all_paths.len() >= WHOLE_CFG_PATH_LIMIT {
+                if tree.len() >= WHOLE_CFG_PATH_LIMIT {
                     break;
                 }
 
@@ -779,19 +768,14 @@ impl<'tcx> PathGraph<'tcx> {
                 }
 
                 if seg.exit_successors.is_empty() {
-                    if seen_paths.insert(path.clone()) {
-                        all_paths.push(path.clone());
+                    if self.is_path_reachable(path) {
+                        tree.insert(path);
                     }
                 } else {
                     for &next in &seg.exit_successors {
                         path.push(next);
                         self.collect_whole_cfg_paths(
-                            next,
-                            path,
-                            all_paths,
-                            seen_paths,
-                            depth + 1,
-                            postfix_repeat,
+                            next, path, tree, depth + 1, postfix_repeat,
                         );
                         path.pop();
                     }
@@ -805,8 +789,8 @@ impl<'tcx> PathGraph<'tcx> {
         // Non-SCC block: follow CFG successors.
         let successors: Vec<usize> = self.cfg.block(current).next.iter().copied().collect();
         if successors.is_empty() {
-            if seen_paths.insert(path.clone()) {
-                all_paths.push(path.clone());
+            if self.is_path_reachable(path) {
+                tree.insert(path);
             }
             return;
         }
@@ -814,12 +798,7 @@ impl<'tcx> PathGraph<'tcx> {
         for next in successors {
             path.push(next);
             self.collect_whole_cfg_paths(
-                next,
-                path,
-                all_paths,
-                seen_paths,
-                depth + 1,
-                postfix_repeat,
+                next, path, tree, depth + 1, postfix_repeat,
             );
             path.pop();
         }

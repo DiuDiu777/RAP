@@ -779,8 +779,8 @@ fn local_must_write_args(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
         let paths = graph.enumerate_paths_repeat(0);
 
         let mut must_write: Option<HashSet<usize>> = None;
-        for path in paths {
-            if !graph.is_path_reachable(&path) || !path_ends_in_return(body, &path) {
+        for path in paths.iter() {
+            if !path_ends_in_return(body, &path) {
                 continue;
             }
             let writes = write_args_on_path(tcx, body, &path);

@@ -1,6 +1,7 @@
 use super::{bug_records::*, corner_case::*, drop::*, graph::*};
 use crate::{
     analysis::alias_analysis::default::{MopFnAliasMap, types::ValueKind},
+    analysis::path_analysis::PathNode,
     def_id::is_drop_fn,
     utils::source::{get_filename, get_name},
 };
@@ -95,35 +96,40 @@ impl<'tcx> SafeDropGraph<'tcx> {
         }
     }
 
-    /// Process pre-enumerated whole-function paths for SafeDrop.
+    /// Process pre-enumerated whole-function paths for SafeDrop via DFS on
+    /// the path tree. All paths have already passed `is_path_reachable`
+    /// during enumeration, so no per-path filtering is needed. State is
+    /// saved at branch points and restored before each sibling subtree.
     pub fn process_function_paths(&mut self, fn_map: &MopFnAliasMap) {
         let paths = self.alias_graph.path_graph.enumerate_paths();
 
-        let backup_values = self.alias_graph.values.clone();
-        let backup_constant = self.alias_graph.constants.clone();
-        let backup_alias_sets = self.alias_graph.alias_sets.clone();
-        let backup_drop_record = self.drop_record.clone();
+        let Some(root) = paths.root() else { return; };
+        let mut path = Vec::new();
+        let _ = self.dfs_safedrop(root, &mut path, fn_map);
+    }
 
-        for path in &paths {
-            if !self.alias_graph.path_graph.is_path_reachable(path) {
-                continue;
-            }
+    fn dfs_safedrop(
+        &mut self,
+        node: &PathNode,
+        path: &mut Vec<usize>,
+        fn_map: &MopFnAliasMap,
+    ) -> Result<(), ()> {
+        path.push(node.block);
+        self.alias_bb(node.block);
+        self.alias_bbcall(node.block, fn_map);
+        self.drop_check(node.block);
+
+        let saved_values = self.alias_graph.values.clone();
+        let saved_constants = self.alias_graph.constants.clone();
+        let saved_alias_sets = self.alias_graph.alias_sets.clone();
+        let saved_drop_record = self.drop_record.clone();
+
+        if node.is_path_end {
             self.alias_graph.increment_visit_times();
             if self.alias_graph.visit_times() > VISIT_LIMIT {
-                return;
+                path.pop();
+                return Err(());
             }
-
-            self.alias_graph.values = backup_values.clone();
-            self.alias_graph.constants = backup_constant.clone();
-            self.alias_graph.alias_sets = backup_alias_sets.clone();
-            self.drop_record = backup_drop_record.clone();
-
-            for &block in path {
-                self.alias_bb(block);
-                self.alias_bbcall(block, fn_map);
-                self.drop_check(block);
-            }
-
             if should_check(self.alias_graph.def_id()) {
                 if let Some(&last) = path.last() {
                     let cfg_block = self.alias_graph.cfg_block(last).clone();
@@ -131,6 +137,17 @@ impl<'tcx> SafeDropGraph<'tcx> {
                 }
             }
         }
+
+        for child in &node.children {
+            self.alias_graph.values = saved_values.clone();
+            self.alias_graph.constants = saved_constants.clone();
+            self.alias_graph.alias_sets = saved_alias_sets.clone();
+            self.drop_record = saved_drop_record.clone();
+            self.dfs_safedrop(child, path, fn_map)?;
+        }
+
+        path.pop();
+        Ok(())
     }
     pub fn report_bugs(&self) {
         rap_debug!(

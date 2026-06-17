@@ -2,6 +2,7 @@ use rustc_hir::def_id::DefId;
 
 use std::collections::HashSet;
 
+use crate::analysis::path_analysis::PathNode;
 use crate::compat::{FxHashMap, FxHashSet};
 
 use super::value::Value;
@@ -29,12 +30,11 @@ impl<'tcx> AliasGraph<'tcx> {
         self.alias_sets = snapshot.alias_sets.clone();
     }
 
-    /// Process pre-enumerated whole-function paths.
+    /// Process pre-enumerated whole-function paths via DFS on the path tree.
     ///
-    /// Each reachable path is traversed linearly from its starting block
-    /// to its terminator.  State is restored from the initial snapshot
-    /// before each path.  No recursive SCC handling is needed — the
-    /// paths already contain every block in order.
+    /// Shared prefixes are processed once. State is saved at branch points
+    /// and restored before processing sibling subtrees, avoiding redundant
+    /// re-analysis of common path prefixes.
     pub fn process_function_paths(
         &mut self,
         fn_map: &mut MopFnAliasMap,
@@ -51,27 +51,42 @@ impl<'tcx> AliasGraph<'tcx> {
             self.def_id(),
             paths.len()
         );
-        let initial_snapshot = self.snapshot_state();
-        let initial_recursion = recursion_set.clone();
 
-        for path in &paths {
-            if !self.path_graph.is_path_reachable(path) {
-                continue;
-            }
+        let Some(root) = paths.root() else { return; };
+        let mut path = Vec::new();
+        let _ = self.dfs_mop(root, &mut path, fn_map, recursion_set);
+    }
+
+    fn dfs_mop(
+        &mut self,
+        node: &PathNode,
+        path: &mut Vec<usize>,
+        fn_map: &mut MopFnAliasMap,
+        recursion_set: &mut HashSet<DefId>,
+    ) -> Result<(), ()> {
+        path.push(node.block);
+        self.alias_bb(node.block);
+        self.alias_bbcall(node.block, fn_map, recursion_set);
+
+        let saved_state = self.snapshot_state();
+        let saved_recursion = recursion_set.clone();
+
+        if node.is_path_end {
             self.increment_visit_times();
             if self.visit_times() > VISIT_LIMIT {
-                return;
+                path.pop();
+                return Err(());
             }
-
-            self.restore_state(&initial_snapshot);
-            *recursion_set = initial_recursion.clone();
-
-            for &block in path {
-                self.alias_bb(block);
-                self.alias_bbcall(block, fn_map, recursion_set);
-            }
-
             self.merge_results();
         }
+
+        for child in &node.children {
+            self.restore_state(&saved_state);
+            *recursion_set = saved_recursion.clone();
+            self.dfs_mop(child, path, fn_map, recursion_set)?;
+        }
+
+        path.pop();
+        Ok(())
     }
 }

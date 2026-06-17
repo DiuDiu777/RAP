@@ -274,7 +274,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             }
         } else {
             for path in all_paths.iter() {
-                if path.is_empty() || !pg.is_path_reachable(path) {
+                if path.is_empty() || !pg.is_path_reachable(&path) {
                     continue;
                 }
                 if !seen_paths.insert(path.clone()) {
