@@ -1116,9 +1116,16 @@ fn symbolic_interval() {
 }
 
 #[test]
-fn align_contract_propagation() {
-    let output = run_with_args("verify/align/contract_propagation", VERIFY_CMD);
+fn nonnull_contract_propagation() {
+    let output = run_with_args("verify/nonnull", VERIFY_CMD);
     assert_contain(&output, "function: caller_propagates_nonnull");
+    assert_contain(&output, "result: SOUND");
+}
+
+#[test]
+fn nonnull_call_non_null_loop() {
+    let output = run_with_args("verify/nonnull", VERIFY_CMD);
+    assert_contain(&output, "function: call_non_null_loop");
     assert_contain(&output, "result: SOUND");
 }
 
