@@ -84,17 +84,19 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     /// Run unsafe-callsite verification for the managed function target.
     pub fn verify_function(&self) -> VerificationReport<'tcx> {
         let mut report = VerificationReport::new(self.target.def_id);
+        let tree = self.path_info.path_tree();
 
         for view in self.iter_callsite_checks() {
-            for (path_index, path) in view.paths.iter().enumerate() {
-                for (property_index, property) in view.properties.iter().enumerate() {
-                    let (forward, smt_check) =
-                        self.engine.check_callsite(
-                            view.callsite,
-                            path,
-                            property,
-                            &self.target.caller_requires,
-                        );
+            let target_block = view.callsite.block.as_usize();
+            for (property_index, property) in view.properties.iter().enumerate() {
+                let bulk = self.engine.check_callsite_from_tree(
+                    tree,
+                    target_block,
+                    view.callsite,
+                    property,
+                    &self.target.caller_requires,
+                );
+                for (path_index, (forward, smt_check)) in bulk.iter().enumerate() {
                     let check_diagnostics =
                         format!("{}\n{}", forward.describe(), smt_check.describe());
                     report.push(PropertyCheckResult {
@@ -103,9 +105,9 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         path_index,
                         property_index,
                         property: property.clone(),
-                        result: smt_check.result,
+                        result: smt_check.result.clone(),
                         diagnostics: Some(VisitDiagnostics::new(String::new(), check_diagnostics)),
-                        path_description: path.describe_indices(),
+                        path_description: forward.path.describe_indices(),
                         callee_name: view.callsite.callee_name(self.tcx),
                     });
                 }

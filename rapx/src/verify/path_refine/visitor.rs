@@ -43,41 +43,12 @@ impl<'tcx> BackwardVisitor<'tcx> {
         self.tcx
     }
 
-    /// Build the initial relevant-MIR item set for a path and property.
-    pub fn start_visit(
-        &self,
-        callsite: CallsiteLocation,
-        path: &Path,
-        property: &contract::Property<'tcx>,
-    ) -> RelevantMirItems<'tcx> {
-        RelevantMirItems {
-            callsite,
-            property: property.clone(),
-            path: path.clone(),
-            items: Vec::new(),
-            roots: RelevantPlaces::from_property(property),
-        }
-    }
-
-    /// Visit one `(callsite, path, property)` item backward.
-    pub fn visit(
-        &self,
-        callsite: &Callsite<'tcx>,
-        path: &Path,
-        property: &contract::Property<'tcx>,
-    ) -> RelevantMirItems<'tcx> {
-        let mut visit = self.start_visit(callsite.location(), path, property);
-        bind_callsite_roots(self.tcx, &mut visit.roots, callsite);
-        self.visit_path(callsite.caller, &callsite.location(), path, &mut visit);
-        visit
-    }
-
     /// Visit one `(checkpoint, path, property)` item backward for struct
     /// invariant checks.
     ///
-    /// Unlike [`visit`], this does not bind callee parameter roots because the
-    /// property places are already resolved in the caller's local namespace
-    /// (e.g., struct field accesses on `self`).
+    /// Unlike callsite checks, this does not bind callee parameter roots
+    /// because the property places are already resolved in the caller's
+    /// local namespace.
     pub fn visit_for_checkpoint(
         &self,
         caller: DefId,
@@ -85,7 +56,13 @@ impl<'tcx> BackwardVisitor<'tcx> {
         path: &Path,
         property: &contract::Property<'tcx>,
     ) -> RelevantMirItems<'tcx> {
-        let mut visit = self.start_visit(checkpoint, path, property);
+        let mut visit = RelevantMirItems {
+            callsite: checkpoint,
+            property: property.clone(),
+            path: path.clone(),
+            items: Vec::new(),
+            roots: RelevantPlaces::from_property(property),
+        };
         self.visit_path(caller, &checkpoint, path, &mut visit);
         visit
     }
@@ -122,7 +99,8 @@ impl<'tcx> BackwardVisitor<'tcx> {
         self.visit_path_tree_impl(tree, target_block, caller, callsite_loc.block, None, property)
     }
 
-    /// Internal implementation shared by both public tree-visit methods.
+    /// Internal: post-order recursion returning per-leaf
+    /// `(block_path, backward_items)`.
     fn visit_path_tree_impl(
         &self,
         tree: &PathTree,
@@ -135,10 +113,7 @@ impl<'tcx> BackwardVisitor<'tcx> {
         let Some(root) = tree.root() else {
             return Vec::new();
         };
-        let callsite_loc = CallsiteLocation {
-            caller,
-            block: callsite_block,
-        };
+        let callsite_loc = CallsiteLocation { caller, block: callsite_block };
         let body = self.tcx.optimized_mir(caller);
         let flow = build_dataflow_graph(self.tcx, caller);
         let keep_alloc = matches!(
@@ -146,49 +121,39 @@ impl<'tcx> BackwardVisitor<'tcx> {
             contract::PropertyKind::Allocated | contract::PropertyKind::ValidPtr
         );
 
-        // Pass 1: post-order — compute items per node (merged).
-        let mut node_items: std::collections::HashMap<
-            usize,
-            Vec<BackwardItem<'tcx>>,
-        > = std::collections::HashMap::new();
-        let mut leaf_nodes: Vec<usize> = Vec::new();
-
-        Self::build_node_items(
-            self,
-            root,
-            target_block,
-            callsite_loc.block,
-            bind_callsite,
-            property,
-            &body,
-            &flow,
-            keep_alloc,
-            &mut node_items,
-            &mut leaf_nodes,
+        let leaf_results = Self::build_leaf_items(
+            self, root, target_block, callsite_block, bind_callsite,
+            property, &body, &flow, keep_alloc,
         );
 
-        // Pass 2: pre-order — collect per-path items and build results.
         let mut results = Vec::new();
-        let mut prefix = Vec::new();
-        let mut accumulated_items: Vec<BackwardItem<'tcx>> = Vec::new();
-
-        Self::collect_path_results(
-            self,
-            root,
-            target_block,
-            &callsite_loc,
-            property,
-            &mut prefix,
-            &mut accumulated_items,
-            &node_items,
-            &mut results,
-        );
-
+        for (block_path, backward_items, _relevant) in leaf_results {
+            let mut items = backward_items;
+            items.reverse();
+            let steps: Vec<PathStep> = block_path
+                .iter()
+                .map(|&b| PathStep::Block(BasicBlock::from(b)))
+                .chain(std::iter::once(PathStep::Callsite(callsite_loc)))
+                .collect();
+            results.push(RelevantMirItems {
+                callsite: callsite_loc,
+                property: property.clone(),
+                path: Path {
+                    target: callsite_loc,
+                    start: super::super::path::PathStart::FunctionEntry,
+                    steps,
+                },
+                items,
+                roots: RelevantPlaces::from_property(property),
+            });
+        }
         results
     }
 
-    /// Post-order: compute items for each node and record callsite leaves.
-    fn build_node_items(
+    /// Post-order recursion: returns one `(block_path, backward_items,
+    /// relevant_before_block)` per callsite leaf. Each leaf is independent
+    /// — no merging, no HashMap collision.
+    fn build_leaf_items(
         visitor: &Self,
         node: &PathNode,
         target_block: usize,
@@ -198,23 +163,17 @@ impl<'tcx> BackwardVisitor<'tcx> {
         body: &'tcx rustc_middle::mir::Body<'tcx>,
         flow: &DataflowGraph,
         keep_alloc: bool,
-        node_items: &mut std::collections::HashMap<usize, Vec<BackwardItem<'tcx>>>,
-        leaf_nodes: &mut Vec<usize>,
-    ) -> RelevantPlaces {
-        let node_key = node as *const PathNode as usize;
-
+    ) -> Vec<(Vec<usize>, Vec<BackwardItem<'tcx>>, RelevantPlaces)> {
         if node.block == target_block {
             let mut relevant = RelevantPlaces::from_property(property);
             if let Some(cs) = bind_callsite {
                 bind_callsite_roots(visitor.tcx, &mut relevant, cs);
             }
             let mut items = Vec::new();
-            // callsite terminator
             items.push(BackwardItem::Terminator {
                 block: callsite_block,
                 kind: KeepReason::Callsite,
             });
-            // statements in reverse
             let block_data = &body.basic_blocks[callsite_block];
             for (si, stmt) in block_data.statements.iter().enumerate().rev() {
                 visitor.visit_statement(
@@ -222,98 +181,36 @@ impl<'tcx> BackwardVisitor<'tcx> {
                     &mut relevant, &mut items, keep_alloc,
                 );
             }
-            node_items.insert(node_key, items);
-            leaf_nodes.push(node_key);
-            return relevant;
+            return vec![(vec![node.block], items, relevant)];
         }
 
-        let mut merged_relevant = RelevantPlaces::new();
-        let mut items = Vec::new();
-
-        for child in &node.children {
-            let child_relevant = Self::build_node_items(
-                visitor, child, target_block, callsite_block,
-                bind_callsite, property, body, flow, keep_alloc,
-                node_items, leaf_nodes,
-            );
-            merged_relevant.extend(child_relevant);
-        }
-
+        let mut results = Vec::new();
         let block = BasicBlock::from(node.block);
         let block_data = &body.basic_blocks[block];
-        visitor.visit_terminator(
-            block, block_data.terminator(), flow, body,
-            &mut merged_relevant, &mut items, keep_alloc,
-        );
-        for (si, stmt) in block_data.statements.iter().enumerate().rev() {
-            visitor.visit_statement(
-                block, si, stmt, flow,
-                &mut merged_relevant, &mut items, keep_alloc,
+
+        for child in &node.children {
+            let child_results = Self::build_leaf_items(
+                visitor, child, target_block, callsite_block,
+                bind_callsite, property, body, flow, keep_alloc,
             );
-        }
-
-        node_items.insert(node_key, items);
-        merged_relevant
-    }
-
-    /// Pre-order: walk from root toward callsite leaves, accumulating items
-    /// along the path. At each callsite leaf, emit a `RelevantMirItems`.
-    fn collect_path_results(
-        visitor: &Self,
-        node: &PathNode,
-        target_block: usize,
-        callsite_loc: &super::super::helpers::CallsiteLocation,
-        property: &contract::Property<'tcx>,
-        prefix: &mut Vec<usize>,
-        accumulated_items: &mut Vec<BackwardItem<'tcx>>,
-        node_items: &std::collections::HashMap<usize, Vec<BackwardItem<'tcx>>>,
-        results: &mut Vec<RelevantMirItems<'tcx>>,
-    ) {
-        let node_key = node as *const PathNode as usize;
-
-        // Push this node's items (collected backward: terminator then
-        // last→first statements). Accumulate in backward order; reversed
-        // at callsite leaves to produce forward order.
-        if let Some(items) = node_items.get(&node_key) {
-            accumulated_items.extend(items.iter().cloned());
-        }
-
-        prefix.push(node.block);
-        if node.block == target_block {
-            let mut items = accumulated_items.clone();
-            items.reverse(); // backward → forward order
-            let steps: Vec<PathStep> = prefix
-                .iter()
-                .map(|&b| PathStep::Block(BasicBlock::from(b)))
-                .chain(std::iter::once(PathStep::Callsite(*callsite_loc)))
-                .collect();
-            let path = Path {
-                target: *callsite_loc,
-                start: super::super::path::PathStart::FunctionEntry,
-                steps,
-            };
-            let visit = RelevantMirItems {
-                callsite: *callsite_loc,
-                property: property.clone(),
-                path,
-                items,
-                roots: RelevantPlaces::from_property(property),
-            };
-            results.push(visit);
-        } else {
-            for child in &node.children {
-                Self::collect_path_results(
-                    visitor, child, target_block, callsite_loc, property,
-                    prefix, accumulated_items, node_items, results,
+            for (mut child_path, child_items, child_relevant) in child_results {
+                let mut relevant = child_relevant;
+                let mut items = child_items;
+                visitor.visit_terminator(
+                    block, block_data.terminator(), flow, body,
+                    &mut relevant, &mut items, keep_alloc,
                 );
+                for (si, stmt) in block_data.statements.iter().enumerate().rev() {
+                    visitor.visit_statement(
+                        block, si, stmt, flow,
+                        &mut relevant, &mut items, keep_alloc,
+                    );
+                }
+                child_path.insert(0, node.block);
+                results.push((child_path, items, relevant));
             }
         }
-
-        // Pop this node's items
-        if let Some(items) = node_items.get(&node_key) {
-            accumulated_items.truncate(accumulated_items.len() - items.len());
-        }
-        prefix.pop();
+        results
     }
 
     fn visit_path(

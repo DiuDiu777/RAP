@@ -38,37 +38,6 @@ impl<'tcx> VerifyEngine<'tcx> {
         }
     }
 
-    /// Run the full pipeline for one unsafe-callsite check.
-    ///
-    /// When `caller_contracts` is non-empty, those contracts are prepended as
-    /// entry `ContractFact` assumptions so the SMT model can assume the caller's
-    /// own `requires` hold at function entry.
-    pub fn check_callsite(
-        &self,
-        callsite: &Callsite<'tcx>,
-        path: &Path,
-        property: &Property<'tcx>,
-        caller_contracts: &[Property<'tcx>],
-    ) -> (ForwardVisitResult<'tcx>, SmtCheckResult) {
-        let mut backward = self.backward.visit(callsite, path, property);
-
-        if !caller_contracts.is_empty() {
-            let mut items: Vec<BackwardItem<'tcx>> = caller_contracts
-                .iter()
-                .filter(|c| !matches!(c.kind, super::contract::PropertyKind::Unknown))
-                .map(|c| BackwardItem::ContractFact {
-                    property: c.clone(),
-                })
-                .collect();
-            items.extend(backward.items.clone());
-            backward.items = items;
-        }
-
-        let forward = self.forward.visit(&backward);
-        let smt = self.smt.check(callsite, property, &forward);
-        (forward, smt)
-    }
-
     /// Run the full pipeline for one struct-invariant checkpoint check.
     ///
     /// For non-constructor methods, all struct invariants are prepended as
@@ -158,53 +127,4 @@ impl<'tcx> VerifyEngine<'tcx> {
         results
     }
 
-    /// Run the invariant-check pipeline in bulk using a shared path tree.
-    pub fn check_invariant_from_tree(
-        &self,
-        tree: &PathTree,
-        target_block: usize,
-        def_id: rustc_hir::def_id::DefId,
-        checkpoint: CallsiteLocation,
-        property: &Property<'tcx>,
-        invariants: &[Property<'tcx>],
-        is_constructor: bool,
-        caller_contracts: &[Property<'tcx>],
-    ) -> Vec<(
-        RelevantMirItems<'tcx>,
-        ForwardVisitResult<'tcx>,
-        SmtCheckResult,
-    )> {
-        let mut results = Vec::new();
-        let backward_items = self.backward.visit_path_tree_for_checkpoint(
-            tree, target_block, def_id, checkpoint, property,
-        );
-
-        for mut backward in backward_items {
-            if is_constructor {
-                let mut items: Vec<BackwardItem<'tcx>> = caller_contracts
-                    .iter()
-                    .filter(|c| !matches!(c.kind, super::contract::PropertyKind::Unknown))
-                    .map(|c| BackwardItem::ContractFact {
-                        property: c.clone(),
-                    })
-                    .collect();
-                items.extend(backward.items.clone());
-                backward.items = items;
-            } else {
-                let mut items: Vec<BackwardItem<'tcx>> = invariants
-                    .iter()
-                    .map(|inv| BackwardItem::ContractFact {
-                        property: inv.clone(),
-                    })
-                    .collect();
-                items.extend(backward.items.clone());
-                backward.items = items;
-            }
-            let forward = self.forward.visit(&backward);
-            let smt = self.smt.check_for_checkpoint(def_id, property, &forward);
-            results.push((backward, forward, smt));
-        }
-
-        results
-    }
 }
