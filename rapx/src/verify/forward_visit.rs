@@ -118,7 +118,6 @@ impl<'tcx> ForwardVisitor<'tcx> {
             #[cfg(not(rapx_rustc_ge_198))]
             StatementKind::Retag(..) => {}
             StatementKind::StorageDead(local) => {
-                result.values.remove(local);
                 result.facts.push(StateFact::LocalDead(*local));
             }
             _ => result.notes.push(format!(
@@ -273,12 +272,59 @@ impl<'tcx> ForwardVisitor<'tcx> {
     ) {
         let target = PlaceKey::from_mir_place(place);
         match rvalue {
-            Rvalue::Ref(_, _, source) | Rvalue::RawPtr(_, source) => {
+            Rvalue::Ref(_, _, source) => {
                 let source = PlaceKey::from_mir_place(source);
+                let object = allocation_object_for_source(&source, result);
                 result.facts.push(StateFact::PointsTo {
-                    pointer: target,
-                    source,
+                    pointer: target.clone(),
+                    source: source.clone(),
                 });
+                if let Some((ty_name, elements)) =
+                    self.allocated_element_summary(result.callsite.caller, object.local())
+                {
+                    result.facts.push(StateFact::KnownAllocated {
+                        place: target,
+                        object,
+                        ty_name,
+                        elements,
+                        reason: "derived from live local/reference".to_string(),
+                    });
+                }
+            }
+            Rvalue::RawPtr(_, source) => {
+                let source_key = PlaceKey::from_mir_place(source);
+                if let Some(alias) =
+                    self.deref_pointer_value_for_place(result.callsite.caller, source)
+                {
+                    result
+                        .values
+                        .insert(place.local, AbstractValue::Place(alias.clone()));
+                    let ty =
+                        self.tcx.optimized_mir(result.callsite.caller).local_decls[place.local].ty;
+                    result.facts.push(StateFact::Cast {
+                        target: target.clone(),
+                        source: AbstractValue::Place(alias),
+                        ty,
+                    });
+                }
+                let object = self
+                    .referenced_object_for_place(result.callsite.caller, source)
+                    .unwrap_or_else(|| allocation_object_for_source(&source_key, result));
+                result.facts.push(StateFact::PointsTo {
+                    pointer: target.clone(),
+                    source: source_key,
+                });
+                if let Some((ty_name, elements)) =
+                    self.allocated_element_summary(result.callsite.caller, object.local())
+                {
+                    result.facts.push(StateFact::KnownAllocated {
+                        place: target,
+                        object,
+                        ty_name,
+                        elements,
+                        reason: "derived from live local/reference".to_string(),
+                    });
+                }
             }
             Rvalue::Aggregate(kind, operands) => {
                 let is_decomposable = matches!(
@@ -309,10 +355,22 @@ impl<'tcx> ForwardVisitor<'tcx> {
                 });
                 if let Some(align) = known_alignment_of(&source_val, result) {
                     result.facts.push(StateFact::KnownAligned {
-                        place: target,
+                        place: target.clone(),
                         align,
                         ty_name: format!("cast-{align}"),
                         reason: format!("cast preserves {align}-byte alignment"),
+                    });
+                }
+                if let AbstractValue::Place(source_place) = &source_val
+                    && let Some((ty_name, elements)) =
+                        self.box_projection_allocation(result.callsite.caller, source_place, *ty)
+                {
+                    result.facts.push(StateFact::KnownAllocated {
+                        place: target,
+                        object: source_place.clone(),
+                        ty_name,
+                        elements,
+                        reason: "cast from Box-owned pointer field".to_string(),
                     });
                 }
             }
@@ -452,10 +510,22 @@ impl<'tcx> ForwardVisitor<'tcx> {
             match effect {
                 CallEffect::ReturnAliasArg { arg } | CallEffect::ReturnPointerFromArg { arg } => {
                     if let Some(source) = args.get(*arg).and_then(|arg| operand_place(&arg.node)) {
+                        let object = allocation_object_for_source(&source, result);
                         result.facts.push(StateFact::PointsTo {
                             pointer: destination_place.clone(),
-                            source,
+                            source: source.clone(),
                         });
+                        if let Some((ty_name, elements)) =
+                            self.allocated_element_summary(result.callsite.caller, object.local())
+                        {
+                            result.facts.push(StateFact::KnownAllocated {
+                                place: destination_place.clone(),
+                                object,
+                                ty_name,
+                                elements,
+                                reason: format!("returned by {}", summary.name),
+                            });
+                        }
                     }
                 }
                 CallEffect::ReturnPointerAdd { base_arg, .. }
@@ -497,15 +567,21 @@ impl<'tcx> ForwardVisitor<'tcx> {
                         .get(*pointer_arg)
                         .and_then(|arg| operand_place(&arg.node))
                     {
-                        let ty_name = self
-                            .pointee_ty_name(result.callsite.caller, &pointer)
-                            .unwrap_or_else(|| "?".to_string());
-                        result.facts.push(StateFact::KnownInit {
-                            place: pointer,
-                            ty_name,
-                            elements: 1,
-                            reason: format!("written by {}", summary.name),
-                        });
+                        let mut init_places = copy_chain_places(&pointer, result);
+                        if init_places.is_empty() {
+                            init_places.push(pointer);
+                        }
+
+                        for place in init_places {
+                            let ty_name =
+                                self.init_write_ty_name(summary, result.callsite.caller, &place);
+                            result.facts.push(StateFact::KnownInit {
+                                place,
+                                ty_name,
+                                elements: 1,
+                                reason: format!("written by {}", summary.name),
+                            });
+                        }
                     }
                 }
                 CallEffect::ReturnLengthOfArg { .. } => {}
@@ -539,6 +615,129 @@ impl<'tcx> ForwardVisitor<'tcx> {
             TyKind::RawPtr(ty, _) | TyKind::Ref(_, ty, _) => Some(format!("{ty:?}")),
             _ => Some(format!("{ty:?}")),
         }
+    }
+
+    fn init_write_ty_name(
+        &self,
+        summary: &CallEffectSummary,
+        caller: DefId,
+        place: &PlaceKey,
+    ) -> String {
+        let ty_name = self
+            .pointee_ty_name(caller, place)
+            .unwrap_or_else(|| "?".to_string());
+        if summary.name.contains("MaybeUninit") && summary.name.contains("write") {
+            maybe_uninit_inner_ty_name(&ty_name).unwrap_or(ty_name)
+        } else {
+            ty_name
+        }
+    }
+
+    fn allocated_element_summary(
+        &self,
+        caller: DefId,
+        local: Option<Local>,
+    ) -> Option<(String, u64)> {
+        let local = local?;
+        let ty = self.tcx.optimized_mir(caller).local_decls[local].ty;
+        fixed_allocation_elements(self.tcx, caller, ty)
+    }
+
+    fn referenced_object_for_place(&self, caller: DefId, place: &Place<'tcx>) -> Option<PlaceKey> {
+        if !place
+            .projection
+            .iter()
+            .any(|projection| matches!(projection, rustc_middle::mir::ProjectionElem::Deref))
+        {
+            return None;
+        }
+        let body = self.tcx.optimized_mir(caller);
+        for block in body.basic_blocks.iter() {
+            for statement in &block.statements {
+                let StatementKind::Assign(assign) = &statement.kind else {
+                    continue;
+                };
+                let (dest, rvalue) = assign.as_ref();
+                if dest.local != place.local {
+                    continue;
+                }
+                match rvalue {
+                    Rvalue::Ref(_, _, source) | Rvalue::RawPtr(_, source) => {
+                        return Some(PlaceKey::from_mir_place(source));
+                    }
+                    Rvalue::Use(Operand::Copy(source), ..)
+                    | Rvalue::Use(Operand::Move(source), ..) => {
+                        return Some(PlaceKey::from_mir_place(source));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        None
+    }
+
+    fn deref_pointer_value_for_place(
+        &self,
+        caller: DefId,
+        place: &Place<'tcx>,
+    ) -> Option<PlaceKey> {
+        if !place
+            .projection
+            .iter()
+            .any(|projection| matches!(projection, rustc_middle::mir::ProjectionElem::Deref))
+        {
+            return None;
+        }
+
+        let body = self.tcx.optimized_mir(caller);
+        for block in body.basic_blocks.iter() {
+            for statement in &block.statements {
+                let StatementKind::Assign(assign) = &statement.kind else {
+                    continue;
+                };
+                let (dest, rvalue) = assign.as_ref();
+                if dest.local != place.local {
+                    continue;
+                }
+
+                let source = match rvalue {
+                    Rvalue::Ref(_, _, source) | Rvalue::RawPtr(_, source) => source,
+                    Rvalue::Use(Operand::Copy(source), ..)
+                    | Rvalue::Use(Operand::Move(source), ..) => {
+                        source
+                    }
+                    _ => continue,
+                };
+                if source.projection.iter().any(|projection| {
+                    matches!(projection, rustc_middle::mir::ProjectionElem::Deref)
+                }) {
+                    return Some(PlaceKey::from_mir_place(source));
+                }
+            }
+        }
+
+        None
+    }
+
+    fn box_projection_allocation(
+        &self,
+        caller: DefId,
+        source_place: &PlaceKey,
+        cast_ty: Ty<'tcx>,
+    ) -> Option<(String, u64)> {
+        if source_place.fields.is_empty() {
+            return None;
+        }
+        let base = source_place.local()?;
+        let body = self.tcx.optimized_mir(caller);
+        let base_ty = body.local_decls[base].ty;
+        if !format!("{base_ty:?}").contains("Box<") {
+            return None;
+        }
+        let TyKind::RawPtr(pointee, _) = cast_ty.kind() else {
+            return None;
+        };
+        Some((format!("{pointee:?}"), 1))
     }
 }
 
@@ -684,6 +883,13 @@ pub enum StateFact<'tcx> {
     },
     KnownInit {
         place: PlaceKey,
+        ty_name: String,
+        elements: u64,
+        reason: String,
+    },
+    KnownAllocated {
+        place: PlaceKey,
+        object: PlaceKey,
         ty_name: String,
         elements: u64,
         reason: String,
@@ -918,6 +1124,111 @@ fn resolve_value_chain<'tcx>(
             _ => return cur,
         };
     }
+}
+
+fn copy_chain_places<'tcx>(place: &PlaceKey, result: &ForwardVisitResult<'tcx>) -> Vec<PlaceKey> {
+    let mut places = Vec::new();
+    let mut cur = place.clone();
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(cur.clone()) {
+            break;
+        }
+        if !places.contains(&cur) {
+            places.push(cur.clone());
+        }
+
+        let Some(local) = cur.local() else {
+            break;
+        };
+        let Some(value) = result.values.get(&local) else {
+            break;
+        };
+        match value {
+            AbstractValue::Place(next) => cur = next.clone(),
+            AbstractValue::Cast(inner, _) => match inner.as_ref() {
+                AbstractValue::Place(next) => cur = next.clone(),
+                _ => break,
+            },
+            _ => break,
+        }
+    }
+    places
+}
+
+fn allocation_object_for_source<'tcx>(
+    source: &PlaceKey,
+    result: &ForwardVisitResult<'tcx>,
+) -> PlaceKey {
+    let mut cur = source.clone();
+    let mut seen = HashSet::new();
+    loop {
+        if !seen.insert(cur.clone()) {
+            return cur;
+        }
+        if let Some(local) = cur.local()
+            && let Some(value) = result.values.get(&local)
+        {
+            match value {
+                AbstractValue::Place(next)
+                | AbstractValue::Ref(next)
+                | AbstractValue::RawPtr(next) => {
+                    cur = next.clone();
+                    continue;
+                }
+                AbstractValue::Cast(inner, _) => {
+                    if let AbstractValue::Place(next)
+                    | AbstractValue::Ref(next)
+                    | AbstractValue::RawPtr(next) = inner.as_ref()
+                    {
+                        cur = next.clone();
+                        continue;
+                    }
+                }
+                _ => {}
+            }
+        }
+        let Some(next) = result.facts.iter().find_map(|fact| match fact {
+            StateFact::PointsTo { pointer, source } if pointer == &cur => Some(source.clone()),
+            _ => None,
+        }) else {
+            return cur;
+        };
+        cur = next;
+    }
+}
+
+fn fixed_allocation_elements<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    ty: Ty<'tcx>,
+) -> Option<(String, u64)> {
+    match ty.kind() {
+        TyKind::Array(elem, len) => {
+            let value = len.try_to_target_usize(tcx)?;
+            Some((format!("{elem:?}"), value))
+        }
+        TyKind::Ref(_, inner, _) => fixed_allocation_elements(tcx, caller, *inner),
+        TyKind::Slice(_) | TyKind::RawPtr(_, _) => None,
+        _ => Some((format!("{ty:?}"), 1)),
+    }
+}
+
+fn maybe_uninit_inner_ty_name(ty_name: &str) -> Option<String> {
+    let ty_name = ty_name.trim();
+    for prefix in [
+        "std::mem::MaybeUninit<",
+        "core::mem::MaybeUninit<",
+        "MaybeUninit<",
+    ] {
+        if let Some(inner) = ty_name
+            .strip_prefix(prefix)
+            .and_then(|s| s.strip_suffix('>'))
+        {
+            return Some(inner.trim().to_string());
+        }
+    }
+    None
 }
 
 fn known_alignment_of<'tcx>(

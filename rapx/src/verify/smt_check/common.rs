@@ -35,12 +35,12 @@ use z3::{
     ast::{Ast, Bool, Int},
 };
 
-use super::{align, in_bound, init, non_null, valid_ptr};
+use super::{align, allocated, in_bound, init, non_null, valid_num, valid_ptr};
 
 use crate::verify::{
     contract::{
-        ContractExpr, ContractPlace, ContractProjection, NumericOp, PlaceBase, Property,
-        PropertyArg, PropertyKind,
+        ContractExpr, ContractPlace, ContractProjection, NumericOp, NumericPredicate, PlaceBase,
+        Property, PropertyArg, PropertyKind, RelOp,
     },
     def_use::{PlaceBaseKey, PlaceKey},
     forward_visit::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
@@ -70,9 +70,11 @@ impl<'tcx> SmtChecker<'tcx> {
     ) -> SmtCheckResult {
         match property.kind {
             PropertyKind::Align => align::check(self, callsite, property, forward),
+            PropertyKind::Allocated => allocated::check(self, callsite, property, forward),
             PropertyKind::NonNull => non_null::check(self, callsite, property, forward),
             PropertyKind::InBound => in_bound::check(self, callsite, property, forward),
             PropertyKind::Init => init::check(self, callsite, property, forward),
+            PropertyKind::ValidNum => valid_num::check(self, callsite, property, forward),
             PropertyKind::ValidPtr => valid_ptr::check(self, callsite, property, forward),
             _ => SmtCheckResult::unknown("no SMT lowering for this property yet"),
         }
@@ -91,6 +93,9 @@ impl<'tcx> SmtChecker<'tcx> {
     ) -> SmtCheckResult {
         match property.kind {
             PropertyKind::Align => align::check_for_checkpoint(self, caller, property, forward),
+            PropertyKind::Allocated => {
+                SmtCheckResult::unknown("Allocated struct invariant not implemented yet")
+            }
             PropertyKind::NonNull => {
                 SmtCheckResult::unknown("NonNull struct invariant not implemented yet")
             }
@@ -135,6 +140,16 @@ impl<'tcx> SmtChecker<'tcx> {
         let solver = Solver::new(&ctx);
         let mut model = SmtModel::new(self.tcx, callsite, forward, &ctx);
         model.assert_forward_facts(&solver);
+        if matches!(solver.check(), SatResult::Unsat) {
+            return SmtCheckResult::proved(
+                "path facts are infeasible; the obligation holds vacuously on this path",
+            )
+            .with_query(SmtQuery::new(
+                obligation,
+                model.assumptions().to_vec(),
+                SmtPredicate::Custom(String::from("path constraints are unsat")),
+            ));
+        }
 
         match &obligation {
             SmtObligation::Aligned {
@@ -370,7 +385,8 @@ impl<'tcx> SmtChecker<'tcx> {
                 elements,
             } => {
                 let target_label = place_label(place);
-                let Some(target_term) = model.term_for_place(place) else {
+                let target_terms = model.init_target_terms(place);
+                if target_terms.is_empty() {
                     return SmtCheckResult::unknown(format!(
                         "could not build an address term for {target_label}"
                     ))
@@ -382,7 +398,7 @@ impl<'tcx> SmtChecker<'tcx> {
                             target_label
                         )),
                     ));
-                };
+                }
 
                 if model.has_equivalent_contract_fact(place, PropertyKind::Init) {
                     return SmtCheckResult::proved(
@@ -414,34 +430,72 @@ impl<'tcx> SmtChecker<'tcx> {
                     .collect();
 
                 let mut checked_any_init_fact = false;
-                for (init_place, init_ty_name, init_elements, init_reason) in init_facts {
-                    if init_elements < *elements {
-                        continue;
-                    }
-                    let Some(init_term) = model.term_for_place(&init_place) else {
-                        continue;
-                    };
-                    checked_any_init_fact = true;
-                    let query = SmtQuery::new(
-                        obligation.clone(),
-                        model.assumptions().to_vec(),
-                        SmtPredicate::Custom(format!(
-                            "not same_addr({}, {}) for Init({}, {ty_name}, {elements})",
-                            target_label,
-                            place_label(&init_place),
-                            target_label
-                        )),
-                    );
-                    solver.push();
-                    solver.assert(&target_term._eq(&init_term).not());
-                    let check = solver.check();
-                    solver.pop(1);
-                    if matches!(check, SatResult::Unsat) {
-                        return SmtCheckResult::proved(format!(
-                            "initialization proved; {target_label} aliases a {init_elements}-element write ({init_reason})"
-                        ))
-                        .with_query(query)
-                        .with_note(format!("matched initialized type summary: {init_ty_name}"));
+                for target_term in &target_terms {
+                    let mut matched_elements = 0_u64;
+                    let mut matched_places = HashSet::new();
+                    let mut matched_notes = Vec::new();
+                    let mut last_query = None;
+
+                    for (init_place, init_ty_name, init_elements, init_reason) in &init_facts {
+                        if !init_type_compatible(init_ty_name, ty_name) {
+                            continue;
+                        }
+                        if !matched_places.insert(init_place.clone()) {
+                            continue;
+                        }
+                        let init_terms = model.init_source_terms(init_place);
+                        if init_terms.is_empty() {
+                            continue;
+                        }
+
+                        for init_term in &init_terms {
+                            let query = SmtQuery::new(
+                                obligation.clone(),
+                                model.assumptions().to_vec(),
+                                SmtPredicate::Custom(format!(
+                                    "not same_addr({}, {}) for Init({}, {ty_name}, {elements})",
+                                    target_label,
+                                    place_label(init_place),
+                                    target_label
+                                )),
+                            );
+                            solver.push();
+                            solver.assert(&target_term._eq(init_term).not());
+                            let check = solver.check();
+                            solver.pop(1);
+                            if matches!(check, SatResult::Unsat) {
+                                checked_any_init_fact = true;
+                                matched_elements = matched_elements.saturating_add(*init_elements);
+                                matched_notes.push(format!(
+                                    "{} element(s) from {} ({init_reason})",
+                                    init_elements,
+                                    place_label(init_place)
+                                ));
+                                last_query = Some(query);
+                                break;
+                            }
+                        }
+
+                        if matched_elements >= *elements {
+                            let query = last_query.unwrap_or_else(|| {
+                                SmtQuery::new(
+                                    obligation.clone(),
+                                    model.assumptions().to_vec(),
+                                    SmtPredicate::Custom(format!(
+                                        "not Init({}, {ty_name}, {elements})",
+                                        target_label
+                                    )),
+                                )
+                            });
+                            return SmtCheckResult::proved(format!(
+                                "initialization proved; {target_label} aliases {matched_elements} initialized element(s)"
+                            ))
+                            .with_query(query)
+                            .with_note(format!(
+                                "matched initialized writes: {}",
+                                matched_notes.join("; ")
+                            ));
+                        }
                     }
                 }
 
@@ -466,6 +520,240 @@ impl<'tcx> SmtChecker<'tcx> {
                     );
                 }
                 result
+            }
+            SmtObligation::Allocated {
+                place,
+                ty_name,
+                elements,
+            } => {
+                let target_label = place_label(place);
+
+                if let Some(bounds) = model.pointer_bounds_for_place(place) {
+                    let zero = Int::from_u64(&ctx, 0);
+                    let Some(access) = model.term_for_smt_term(elements) else {
+                        return SmtCheckResult::unknown(format!(
+                            "could not build an allocation element-count term for {}",
+                            elements.describe()
+                        ))
+                        .with_query(SmtQuery::new(
+                            obligation.clone(),
+                            model.assumptions().to_vec(),
+                            SmtPredicate::Custom(format!(
+                                "not Allocated({}, {ty_name}, {})",
+                                target_label,
+                                elements.describe()
+                            )),
+                        ));
+                    };
+                    let index_non_negative = bounds.index.ge(&zero);
+                    let access_non_negative = access.ge(&zero);
+                    let covered_end = Int::add(&ctx, &[bounds.index.clone(), access]);
+                    let within_len = covered_end.le(&bounds.len);
+                    solver.assert(&index_non_negative);
+                    solver.assert(&access_non_negative);
+                    model.assumptions.push(SmtPredicate::Ge(
+                        bounds.index_term.clone(),
+                        SmtTerm::Const(0),
+                    ));
+                    model
+                        .assumptions
+                        .push(SmtPredicate::Ge(elements.clone(), SmtTerm::Const(0)));
+                    let goal = Bool::and(
+                        &ctx,
+                        &[&index_non_negative, &access_non_negative, &within_len],
+                    );
+                    let query = SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Custom(format!(
+                            "not same_object_bounds({}, {}, {})",
+                            target_label,
+                            bounds.index_term.describe(),
+                            elements.describe()
+                        )),
+                    );
+
+                    solver.assert(&goal.not());
+                    return match solver.check() {
+                        SatResult::Unsat => SmtCheckResult::proved(format!(
+                            "allocation proved for {target_label}; requested range stays inside the matched object"
+                        ))
+                        .with_query(query),
+                        SatResult::Sat => SmtCheckResult::unknown(
+                            "current path facts do not prove the requested range stays inside one allocation",
+                        )
+                        .with_query(query)
+                        .with_note(
+                            "hint: add an object-length guard or provide a richer allocation summary",
+                        ),
+                        SatResult::Unknown => {
+                            SmtCheckResult::unknown("solver returned unknown").with_query(query)
+                        }
+                    };
+                }
+
+                let Some(target_term) = model.term_for_place(place) else {
+                    return SmtCheckResult::unknown(format!(
+                        "could not build an address term for {target_label}"
+                    ))
+                    .with_query(SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Custom(format!(
+                            "not Allocated({}, {ty_name}, {})",
+                            target_label,
+                            elements.describe()
+                        )),
+                    ));
+                };
+                let Some(required_elements) = model.term_for_smt_term(elements) else {
+                    return SmtCheckResult::unknown(format!(
+                        "could not build an allocation element-count term for {}",
+                        elements.describe()
+                    ))
+                    .with_query(SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Custom(format!(
+                            "not Allocated({}, {ty_name}, {})",
+                            target_label,
+                            elements.describe()
+                        )),
+                    ));
+                };
+
+                let allocated_facts = forward
+                    .facts
+                    .iter()
+                    .filter_map(|fact| match fact {
+                        StateFact::KnownAllocated {
+                            place,
+                            object,
+                            ty_name,
+                            elements,
+                            reason,
+                        } => Some((
+                            place.clone(),
+                            object.clone(),
+                            ty_name.clone(),
+                            *elements,
+                            reason.clone(),
+                        )),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>();
+
+                for (alloc_place, object, alloc_ty_name, alloc_elements, reason) in allocated_facts
+                {
+                    if !allocated_type_compatible(&alloc_ty_name, ty_name) {
+                        continue;
+                    }
+                    if allocation_object_invalidated(forward, &object) {
+                        continue;
+                    }
+                    let Some(alloc_term) = model.term_for_place(&alloc_place) else {
+                        continue;
+                    };
+                    let query = SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Custom(format!(
+                            "not same_allocated_object({}, {}) or {} > {}",
+                            target_label,
+                            place_label(&alloc_place),
+                            elements.describe(),
+                            alloc_elements
+                        )),
+                    );
+
+                    solver.push();
+                    solver.assert(&target_term._eq(&alloc_term).not());
+                    let same_address = matches!(solver.check(), SatResult::Unsat);
+                    solver.pop(1);
+                    if !same_address {
+                        continue;
+                    }
+
+                    solver.push();
+                    solver.assert(&required_elements.gt(&Int::from_u64(&ctx, alloc_elements)));
+                    let enough_elements = matches!(solver.check(), SatResult::Unsat);
+                    solver.pop(1);
+                    if enough_elements {
+                        return SmtCheckResult::proved(format!(
+                            "allocation proved; {target_label} aliases {} element(s) of {} ({reason})",
+                            alloc_elements, alloc_ty_name
+                        ))
+                        .with_query(query);
+                    }
+                }
+
+                SmtCheckResult::unknown(
+                    "current path facts do not prove the target range is backed by one live allocation",
+                )
+                .with_query(SmtQuery::new(
+                    obligation.clone(),
+                    model.assumptions().to_vec(),
+                    SmtPredicate::Custom(format!(
+                        "not Allocated({}, {ty_name}, {})",
+                        target_label,
+                        elements.describe()
+                    )),
+                ))
+                .with_note(
+                    "hint: keep pointer provenance, object length, and lifetime facts for the target object",
+                )
+            }
+            SmtObligation::Predicate { predicates } => {
+                if predicates.is_empty() {
+                    return SmtCheckResult::unknown("ValidNum predicate set is empty").with_query(
+                        SmtQuery::new(
+                            obligation.clone(),
+                            model.assumptions().to_vec(),
+                            SmtPredicate::Custom(String::from("empty ValidNum predicate")),
+                        ),
+                    );
+                }
+                model.assert_unsigned_bounds_for_predicates(&solver, predicates);
+
+                let Some(goal) = model.bool_for_predicates(predicates) else {
+                    return SmtCheckResult::unknown(
+                        "ValidNum predicate could not be lowered to SMT",
+                    )
+                    .with_query(SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Not(Box::new(if predicates.len() == 1 {
+                            predicates[0].clone()
+                        } else {
+                            SmtPredicate::And(predicates.clone())
+                        })),
+                    ));
+                };
+                let query = SmtQuery::new(
+                    obligation.clone(),
+                    model.assumptions().to_vec(),
+                    SmtPredicate::Not(Box::new(if predicates.len() == 1 {
+                        predicates[0].clone()
+                    } else {
+                        SmtPredicate::And(predicates.clone())
+                    })),
+                );
+
+                solver.assert(&goal.not());
+                match solver.check() {
+                    SatResult::Unsat => SmtCheckResult::proved(
+                        "numeric precondition proved; no counterexample satisfies the path facts",
+                    )
+                    .with_query(query),
+                    SatResult::Sat => SmtCheckResult::unknown(
+                        "current path facts do not prove the numeric precondition",
+                    )
+                    .with_query(query)
+                    .with_note("hint: add a matching numeric guard or expose a stronger summary"),
+                    SatResult::Unknown => {
+                        SmtCheckResult::unknown("solver returned unknown").with_query(query)
+                    }
+                }
             }
             SmtObligation::Range { .. } => SmtCheckResult::unknown(
                 "range obligations are not implemented yet",
@@ -624,11 +912,11 @@ impl<'tcx> SmtChecker<'tcx> {
             }
             ContractExpr::Const(value) => u64::try_from(*value).ok().map(SmtTerm::Const),
             ContractExpr::SizeOf(ty) => {
-                let (_, size) = self.type_layout(caller, *ty)?;
+                let size = self.required_size(caller, *ty)?;
                 Some(SmtTerm::Const(size))
             }
             ContractExpr::AlignOf(ty) => {
-                let (align, _) = self.type_layout(caller, *ty)?;
+                let align = self.required_alignment(caller, *ty)?;
                 Some(SmtTerm::Const(align))
             }
             ContractExpr::Binary { op, lhs, rhs } => {
@@ -638,14 +926,54 @@ impl<'tcx> SmtChecker<'tcx> {
                     NumericOp::Add => Some(SmtTerm::Add(lhs, rhs)),
                     NumericOp::Sub => Some(SmtTerm::Sub(lhs, rhs)),
                     NumericOp::Mul => Some(SmtTerm::Mul(lhs, rhs)),
+                    NumericOp::Div => Some(SmtTerm::Div(lhs, rhs)),
                     NumericOp::Rem => Some(SmtTerm::Rem(lhs, rhs)),
-                    NumericOp::Div | NumericOp::BitAnd | NumericOp::BitOr | NumericOp::BitXor => {
-                        None
-                    }
+                    NumericOp::BitAnd | NumericOp::BitOr | NumericOp::BitXor => None,
                 }
             }
             ContractExpr::Unary { .. } | ContractExpr::Unknown => None,
         }
+    }
+
+    /// Resolve a `ValidNum` predicate list at a concrete callsite.
+    pub(crate) fn property_numeric_predicates(
+        &self,
+        callsite: &Callsite<'tcx>,
+        property: &Property<'tcx>,
+    ) -> Option<Vec<NumericPredicate<'tcx>>> {
+        property.args.iter().find_map(|arg| {
+            let PropertyArg::Predicates(predicates) = arg else {
+                return None;
+            };
+            predicates
+                .iter()
+                .map(|predicate| {
+                    Some(NumericPredicate {
+                        lhs: self.bind_contract_expr_to_callsite(callsite, &predicate.lhs)?,
+                        op: predicate.op,
+                        rhs: self.bind_contract_expr_to_callsite(callsite, &predicate.rhs)?,
+                    })
+                })
+                .collect()
+        })
+    }
+
+    /// Convert a rebound contract predicate into the shared SMT predicate model.
+    pub(crate) fn numeric_predicate_to_smt_predicate(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        predicate: &NumericPredicate<'tcx>,
+    ) -> Option<SmtPredicate> {
+        let lhs = self.contract_expr_to_smt_term(caller, &predicate.lhs)?;
+        let rhs = self.contract_expr_to_smt_term(caller, &predicate.rhs)?;
+        Some(match predicate.op {
+            RelOp::Eq => SmtPredicate::Eq(lhs, rhs),
+            RelOp::Ne => SmtPredicate::Ne(lhs, rhs),
+            RelOp::Lt => SmtPredicate::Lt(lhs, rhs),
+            RelOp::Le => SmtPredicate::Le(lhs, rhs),
+            RelOp::Gt => SmtPredicate::Gt(lhs, rhs),
+            RelOp::Ge => SmtPredicate::Ge(lhs, rhs),
+        })
     }
 
     fn bind_contract_expr_to_callsite(
@@ -654,9 +982,7 @@ impl<'tcx> SmtChecker<'tcx> {
         expr: &ContractExpr<'tcx>,
     ) -> Option<ContractExpr<'tcx>> {
         match expr {
-            ContractExpr::Place(place) => self
-                .contract_place_to_callsite_place(callsite, place)
-                .map(contract_expr_from_place_key),
+            ContractExpr::Place(place) => self.contract_place_to_callsite_expr(callsite, place),
             ContractExpr::Const(value) => Some(ContractExpr::Const(*value)),
             ContractExpr::SizeOf(ty) => Some(ContractExpr::SizeOf(
                 self.instantiate_callsite_ty(callsite, *ty),
@@ -675,6 +1001,43 @@ impl<'tcx> SmtChecker<'tcx> {
             }),
             ContractExpr::Unknown => Some(ContractExpr::Unknown),
         }
+    }
+
+    fn contract_place_to_callsite_expr(
+        &self,
+        callsite: &Callsite<'tcx>,
+        place: &ContractPlace<'tcx>,
+    ) -> Option<ContractExpr<'tcx>> {
+        let key = PlaceKey::from_contract_place(place);
+        match place.base {
+            PlaceBase::Arg(index) => self.callsite_arg_expr(callsite, index, &key.fields),
+            PlaceBase::Local(local) => {
+                if let Some(index) = callee_param_index_for_local(self.tcx, callsite.callee, local)
+                {
+                    self.callsite_arg_expr(callsite, index, &key.fields)
+                } else {
+                    Some(ContractExpr::Place(place.clone()))
+                }
+            }
+            PlaceBase::Return => Some(ContractExpr::Place(place.clone())),
+        }
+    }
+
+    fn callsite_arg_expr(
+        &self,
+        callsite: &Callsite<'tcx>,
+        index: usize,
+        fields: &[usize],
+    ) -> Option<ContractExpr<'tcx>> {
+        let operand = callsite.args.get(index)?;
+        if fields.is_empty()
+            && let Operand::Constant(constant) = operand
+            && let Some(value) = const_int_from_debug(&format!("{:?}", constant.const_))
+        {
+            return Some(ContractExpr::Const(value));
+        }
+        self.callsite_arg_place_with_fields(callsite, index, fields)
+            .map(contract_expr_from_place_key)
     }
 
     /// Convert a contract place into a concrete MIR place when possible.
@@ -793,6 +1156,23 @@ impl<'tcx> SmtChecker<'tcx> {
             .max()
     }
 
+    /// Return a conservative byte size for a concrete or bounded generic type.
+    ///
+    /// For a generic parameter with representative candidates, every candidate
+    /// must satisfy a numeric precondition.  We therefore use the maximum
+    /// candidate size for upper-bound formulas such as
+    /// `size_of(T) * len <= isize::MAX`.
+    pub(crate) fn required_size(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        ty: Ty<'tcx>,
+    ) -> Option<u64> {
+        if !matches!(ty.kind(), TyKind::Param(_)) {
+            return self.type_layout(caller, ty).map(|(_, size)| size);
+        }
+        self.generic_candidate_sizes(caller, ty)?.into_iter().max()
+    }
+
     fn generic_candidate_alignments(
         &self,
         caller: rustc_hir::def_id::DefId,
@@ -810,6 +1190,20 @@ impl<'tcx> SmtChecker<'tcx> {
         } else {
             Some(alignments)
         }
+    }
+
+    fn generic_candidate_sizes(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        ty: Ty<'tcx>,
+    ) -> Option<Vec<u64>> {
+        let candidates = GenericTypeCandidates::for_def(self.tcx, caller);
+        let sizes = candidates
+            .candidates_for_ty(ty)?
+            .iter()
+            .filter_map(|candidate| self.type_layout(caller, *candidate).map(|(_, size)| size))
+            .collect::<Vec<_>>();
+        if sizes.is_empty() { None } else { Some(sizes) }
     }
 }
 
@@ -843,6 +1237,14 @@ pub enum SmtObligation {
         ty_name: String,
         elements: u64,
     },
+    /// Prove that `place` points to `elements` elements in one live allocation.
+    Allocated {
+        place: PlaceKey,
+        ty_name: String,
+        elements: SmtTerm,
+    },
+    /// Prove one or more numeric predicates.
+    Predicate { predicates: Vec<SmtPredicate> },
 }
 
 impl SmtObligation {
@@ -892,6 +1294,24 @@ impl SmtObligation {
                 ty_name,
                 elements
             ),
+            SmtObligation::Allocated {
+                place,
+                ty_name,
+                elements,
+            } => format!(
+                "Allocated({}, {}, {} element(s))",
+                place_label(place),
+                ty_name,
+                elements.describe()
+            ),
+            SmtObligation::Predicate { predicates } => {
+                let rendered = predicates
+                    .iter()
+                    .map(SmtPredicate::describe)
+                    .collect::<Vec<_>>()
+                    .join(" && ");
+                format!("ValidNum({rendered})")
+            }
         }
     }
 }
@@ -905,6 +1325,7 @@ pub enum SmtTerm {
     Add(Box<SmtTerm>, Box<SmtTerm>),
     Sub(Box<SmtTerm>, Box<SmtTerm>),
     Mul(Box<SmtTerm>, Box<SmtTerm>),
+    Div(Box<SmtTerm>, Box<SmtTerm>),
     Rem(Box<SmtTerm>, Box<SmtTerm>),
 }
 
@@ -918,6 +1339,7 @@ impl SmtTerm {
             SmtTerm::Add(lhs, rhs) => format!("({} + {})", lhs.describe(), rhs.describe()),
             SmtTerm::Sub(lhs, rhs) => format!("({} - {})", lhs.describe(), rhs.describe()),
             SmtTerm::Mul(lhs, rhs) => format!("({} * {})", lhs.describe(), rhs.describe()),
+            SmtTerm::Div(lhs, rhs) => format!("({} / {})", lhs.describe(), rhs.describe()),
             SmtTerm::Rem(lhs, rhs) => format!("({} % {})", lhs.describe(), rhs.describe()),
         }
     }
@@ -1215,6 +1637,19 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     self.assumptions.push(SmtPredicate::Custom(format!(
                         "{} initialized for {ty_name}, {elements} element(s) ({reason})",
                         place_label(place)
+                    )));
+                }
+                StateFact::KnownAllocated {
+                    place,
+                    object,
+                    ty_name,
+                    elements,
+                    reason,
+                } => {
+                    self.assumptions.push(SmtPredicate::Custom(format!(
+                        "{} allocated in {} for {ty_name}, {elements} element(s) ({reason})",
+                        place_label(place),
+                        place_label(object)
                     )));
                 }
                 StateFact::KnownConst {
@@ -1642,6 +2077,9 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         .get(*arg)
                         .map(value_label)
                         .unwrap_or_else(|| format!("arg{arg}"));
+                    let len_term =
+                        Int::new_const(self.ctx, sanitize_smt_name(&format!("len({source})")));
+                    self.place_terms.insert(destination.clone(), len_term);
                     self.assumptions.push(SmtPredicate::Eq(
                         SmtTerm::Place(destination.clone()),
                         SmtTerm::Value(format!("len({source})")),
@@ -1649,9 +2087,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 }
                 crate::verify::call_summary::CallEffect::ReturnPointerFromArg { arg }
                 | crate::verify::call_summary::CallEffect::ReturnAliasArg { arg } => {
-                    let source = call
-                        .args
-                        .get(*arg)
+                    let source_value = call.args.get(*arg);
+                    if let Some(term) = source_value
+                        .and_then(|value| self.term_for_value(value, &mut HashSet::new()))
+                    {
+                        self.place_terms.insert(destination.clone(), term);
+                    }
+                    let source = source_value
                         .map(value_label)
                         .unwrap_or_else(|| format!("arg{arg}"));
                     self.assumptions.push(SmtPredicate::Eq(
@@ -1687,6 +2129,16 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             return None;
         }
 
+        if !place.fields.is_empty() {
+            if let Some(term) = self.projected_term_for_place(place, seen) {
+                self.place_terms.insert(place.clone(), term.clone());
+                return Some(term);
+            }
+            let term = Int::new_const(self.ctx, place_name(place));
+            self.place_terms.insert(place.clone(), term.clone());
+            return Some(term);
+        }
+
         if let Some(value) = value_for_place(self.forward, place) {
             if let Some(term) = self.term_for_value(value, seen) {
                 self.place_terms.insert(place.clone(), term.clone());
@@ -1697,6 +2149,37 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         let term = Int::new_const(self.ctx, place_name(place));
         self.place_terms.insert(place.clone(), term.clone());
         Some(term)
+    }
+
+    /// Build terms for well-known aggregate projections.
+    ///
+    /// Checked integer arithmetic is represented as `(value, overflow)` in MIR.
+    /// For numeric reasoning we can use field `0` as the mathematical result.
+    /// Field `1` remains a fresh value, so overflow assertions do not become
+    /// accidental constraints on the result itself.
+    fn projected_term_for_place(
+        &mut self,
+        place: &PlaceKey,
+        seen: &mut HashSet<PlaceKey>,
+    ) -> Option<Int<'ctx>> {
+        if place.fields.as_slice() != [0] {
+            return None;
+        }
+        let mut base = place.clone();
+        base.fields.clear();
+        let value = value_for_place(self.forward, &base)?;
+        let AbstractValue::Binary(op, lhs, rhs) = value else {
+            return None;
+        };
+        if !matches!(
+            op,
+            BinOp::AddWithOverflow | BinOp::SubWithOverflow | BinOp::MulWithOverflow
+        ) {
+            return None;
+        }
+        let lhs = self.term_for_value(lhs, seen)?;
+        let rhs = self.term_for_value(rhs, seen)?;
+        self.term_for_binary(*op, &lhs, &rhs)
     }
 
     /// Build an SMT term for an abstract value.
@@ -1785,6 +2268,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 let rhs = self.term_for_smt_term(rhs)?;
                 Some(Int::mul(self.ctx, &[lhs, rhs]))
             }
+            SmtTerm::Div(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs.div(&rhs))
+            }
             SmtTerm::Rem(lhs, rhs) => {
                 let lhs = self.term_for_smt_term(lhs)?;
                 let rhs = self.term_for_smt_term(rhs)?;
@@ -1793,13 +2281,181 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
+    /// Build a boolean term for a conjunction of shared predicates.
+    fn bool_for_predicates(&mut self, predicates: &[SmtPredicate]) -> Option<Bool<'ctx>> {
+        match predicates {
+            [] => None,
+            [predicate] => self.bool_for_predicate(predicate),
+            predicates => {
+                let bools = predicates
+                    .iter()
+                    .map(|predicate| self.bool_for_predicate(predicate))
+                    .collect::<Option<Vec<_>>>()?;
+                let refs = bools.iter().collect::<Vec<_>>();
+                Some(Bool::and(self.ctx, &refs))
+            }
+        }
+    }
+
+    /// Build a boolean term from a shared diagnostic/query predicate.
+    fn bool_for_predicate(&mut self, predicate: &SmtPredicate) -> Option<Bool<'ctx>> {
+        match predicate {
+            SmtPredicate::Eq(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs._eq(&rhs))
+            }
+            SmtPredicate::Ne(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs._eq(&rhs).not())
+            }
+            SmtPredicate::Le(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs.le(&rhs))
+            }
+            SmtPredicate::Lt(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs.lt(&rhs))
+            }
+            SmtPredicate::Ge(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs.ge(&rhs))
+            }
+            SmtPredicate::Gt(lhs, rhs) => {
+                let lhs = self.term_for_smt_term(lhs)?;
+                let rhs = self.term_for_smt_term(rhs)?;
+                Some(lhs.gt(&rhs))
+            }
+            SmtPredicate::And(predicates) => self.bool_for_predicates(predicates),
+            SmtPredicate::Divisible { term, modulus } => {
+                let term = self.term_for_smt_term(term)?;
+                let modulus = Int::from_u64(self.ctx, *modulus);
+                let zero = Int::from_u64(self.ctx, 0);
+                Some(term.modulo(&modulus)._eq(&zero))
+            }
+            SmtPredicate::InBounds {
+                index,
+                access_count,
+                len,
+            } => {
+                let index = self.term_for_smt_term(index)?;
+                let access_count = self.term_for_smt_term(access_count)?;
+                let len = self.term_for_smt_term(len)?;
+                let zero = Int::from_u64(self.ctx, 0);
+                let covered_end = Int::add(self.ctx, &[index.clone(), access_count]);
+                Some(Bool::and(
+                    self.ctx,
+                    &[&index.ge(&zero), &covered_end.le(&len)],
+                ))
+            }
+            SmtPredicate::Not(predicate) => Some(self.bool_for_predicate(predicate)?.not()),
+            SmtPredicate::Custom(_) => None,
+        }
+    }
+
+    /// Assert Rust unsigned integer lower bounds for terms that appear in a
+    /// numeric obligation.
+    fn assert_unsigned_bounds_for_predicates(
+        &mut self,
+        solver: &Solver<'ctx>,
+        predicates: &[SmtPredicate],
+    ) {
+        let mut seen = HashSet::new();
+        for predicate in predicates {
+            self.assert_unsigned_bounds_for_predicate(solver, predicate, &mut seen);
+        }
+    }
+
+    fn assert_unsigned_bounds_for_predicate(
+        &mut self,
+        solver: &Solver<'ctx>,
+        predicate: &SmtPredicate,
+        seen: &mut HashSet<PlaceKey>,
+    ) {
+        match predicate {
+            SmtPredicate::Eq(lhs, rhs)
+            | SmtPredicate::Ne(lhs, rhs)
+            | SmtPredicate::Le(lhs, rhs)
+            | SmtPredicate::Lt(lhs, rhs)
+            | SmtPredicate::Ge(lhs, rhs)
+            | SmtPredicate::Gt(lhs, rhs) => {
+                self.assert_unsigned_bounds_for_term(solver, lhs, seen);
+                self.assert_unsigned_bounds_for_term(solver, rhs, seen);
+            }
+            SmtPredicate::And(predicates) => {
+                for predicate in predicates {
+                    self.assert_unsigned_bounds_for_predicate(solver, predicate, seen);
+                }
+            }
+            SmtPredicate::Divisible { term, .. } => {
+                self.assert_unsigned_bounds_for_term(solver, term, seen);
+            }
+            SmtPredicate::InBounds {
+                index,
+                access_count,
+                len,
+            } => {
+                self.assert_unsigned_bounds_for_term(solver, index, seen);
+                self.assert_unsigned_bounds_for_term(solver, access_count, seen);
+                self.assert_unsigned_bounds_for_term(solver, len, seen);
+            }
+            SmtPredicate::Not(predicate) => {
+                self.assert_unsigned_bounds_for_predicate(solver, predicate, seen);
+            }
+            SmtPredicate::Custom(_) => {}
+        }
+    }
+
+    fn assert_unsigned_bounds_for_term(
+        &mut self,
+        solver: &Solver<'ctx>,
+        term: &SmtTerm,
+        seen: &mut HashSet<PlaceKey>,
+    ) {
+        match term {
+            SmtTerm::Place(place) => {
+                if !seen.insert(place.clone()) {
+                    return;
+                }
+                let Some(ty) = self.place_ty(place) else {
+                    return;
+                };
+                if !is_unsigned_integral_ty(ty) {
+                    return;
+                }
+                let Some(int_term) = self.term_for_place(place) else {
+                    return;
+                };
+                let zero = Int::from_u64(self.ctx, 0);
+                solver.assert(&int_term.ge(&zero));
+                self.assumptions.push(SmtPredicate::Ge(
+                    SmtTerm::Place(place.clone()),
+                    SmtTerm::Const(0),
+                ));
+            }
+            SmtTerm::Add(lhs, rhs)
+            | SmtTerm::Sub(lhs, rhs)
+            | SmtTerm::Mul(lhs, rhs)
+            | SmtTerm::Div(lhs, rhs)
+            | SmtTerm::Rem(lhs, rhs) => {
+                self.assert_unsigned_bounds_for_term(solver, lhs, seen);
+                self.assert_unsigned_bounds_for_term(solver, rhs, seen);
+            }
+            SmtTerm::Value(_) | SmtTerm::Const(_) => {}
+        }
+    }
+
     /// Lower a binary MIR operation to an integer term.
     fn term_for_binary(&self, op: BinOp, lhs: &Int<'ctx>, rhs: &Int<'ctx>) -> Option<Int<'ctx>> {
         let one = Int::from_u64(self.ctx, 1);
         let zero = Int::from_u64(self.ctx, 0);
         Some(match op {
-            BinOp::Add => Int::add(self.ctx, &[lhs.clone(), rhs.clone()]),
-            BinOp::Sub => Int::sub(self.ctx, &[lhs.clone(), rhs.clone()]),
+            BinOp::Add | BinOp::AddWithOverflow => Int::add(self.ctx, &[lhs.clone(), rhs.clone()]),
+            BinOp::Sub | BinOp::SubWithOverflow => Int::sub(self.ctx, &[lhs.clone(), rhs.clone()]),
             BinOp::Mul | BinOp::MulWithOverflow => Int::mul(self.ctx, &[lhs.clone(), rhs.clone()]),
             BinOp::Div => lhs.div(rhs),
             BinOp::Rem => lhs.modulo(rhs),
@@ -1934,6 +2590,14 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 })?;
                 self.origin_key_for_value(call.args.get(source_arg)?, seen)
             }
+            AbstractValue::CallResult(call) => {
+                let source_arg = call.effects.iter().find_map(|effect| match effect {
+                    crate::verify::call_summary::CallEffect::ReturnPointerFromArg { arg }
+                    | crate::verify::call_summary::CallEffect::ReturnAliasArg { arg } => Some(*arg),
+                    _ => None,
+                })?;
+                self.origin_key_for_value(call.args.get(source_arg)?, seen)
+            }
             _ => Some(value_label(&resolved)),
         }
     }
@@ -2036,6 +2700,60 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         })
     }
 
+    /// Candidate address/value terms for an `Init` target.
+    ///
+    /// Pointer targets use their value term.  By-value `MaybeUninit<T>` targets
+    /// may be moved into a temporary before `assume_init`; in that case the
+    /// relevant initialized storage is the address of the original place.
+    fn init_target_terms(&mut self, place: &PlaceKey) -> Vec<Int<'ctx>> {
+        let mut terms = Vec::new();
+        if let Some(term) = self.term_for_place(place) {
+            terms.push(term);
+        }
+        if let Some(term) = self.storage_addr_for_place(place, &mut HashSet::new()) {
+            if !terms.iter().any(|existing| existing == &term) {
+                terms.push(term);
+            }
+        }
+        terms
+    }
+
+    /// Candidate address/value terms for a known initialized write.
+    fn init_source_terms(&mut self, place: &PlaceKey) -> Vec<Int<'ctx>> {
+        let mut terms = Vec::new();
+        if let Some(term) = self.term_for_place(place) {
+            terms.push(term);
+        }
+        if let Some(source) = self.source_from_points_to(place)
+            && let Some(term) = self.storage_addr_for_place(&source, &mut HashSet::new())
+            && !terms.iter().any(|existing| existing == &term)
+        {
+            terms.push(term);
+        }
+        terms
+    }
+
+    /// Return the address of the storage represented by `place`.
+    fn storage_addr_for_place(
+        &mut self,
+        place: &PlaceKey,
+        seen: &mut HashSet<PlaceKey>,
+    ) -> Option<Int<'ctx>> {
+        if !seen.insert(place.clone()) {
+            return None;
+        }
+        if let Some(AbstractValue::Place(inner)) = value_for_place(self.forward, place) {
+            return self.storage_addr_for_place(inner, seen);
+        }
+        if let Some(source) = self.source_from_points_to(place) {
+            return self.storage_addr_for_place(&source, seen);
+        }
+        Some(Int::new_const(
+            self.ctx,
+            format!("addr_{}", place_name(place)),
+        ))
+    }
+
     /// Find a retained `len(source)` call whose source matches `origin_key`.
     fn len_place_for_origin(&self, origin_key: &str) -> Option<PlaceKey> {
         for fact in &self.forward.facts {
@@ -2123,6 +2841,10 @@ fn pointee_ty_str<'tcx>(ty: Ty<'tcx>) -> Option<String> {
         TyKind::RawPtr(inner, _) | TyKind::Ref(_, inner, _) => Some(format!("{inner:?}")),
         _ => None,
     }
+}
+
+fn is_unsigned_integral_ty(ty: Ty<'_>) -> bool {
+    matches!(ty.kind(), TyKind::Uint(_))
 }
 
 /// Return true when a call summary is a typed pointer addition.
@@ -2310,6 +3032,42 @@ fn const_int_from_debug(text: &str) -> Option<u128> {
     } else {
         u128::from_str_radix(&digits, 16).ok()
     }
+}
+
+fn init_type_compatible(init_ty_name: &str, required_ty_name: &str) -> bool {
+    normalize_init_ty_name(init_ty_name) == normalize_init_ty_name(required_ty_name)
+}
+
+fn allocated_type_compatible(allocated_ty_name: &str, required_ty_name: &str) -> bool {
+    normalize_init_ty_name(allocated_ty_name) == normalize_init_ty_name(required_ty_name)
+}
+
+fn allocation_object_invalidated<'tcx>(
+    forward: &ForwardVisitResult<'tcx>,
+    object: &PlaceKey,
+) -> bool {
+    forward.facts.iter().any(|fact| match fact {
+        StateFact::LocalDead(local) => object.local() == Some(*local),
+        StateFact::Drop(place) => place.overlaps(object) || object.overlaps(place),
+        _ => false,
+    })
+}
+
+fn normalize_init_ty_name(ty_name: &str) -> String {
+    let ty_name = ty_name.trim();
+    for prefix in [
+        "std::mem::MaybeUninit<",
+        "core::mem::MaybeUninit<",
+        "MaybeUninit<",
+    ] {
+        if let Some(inner) = ty_name
+            .strip_prefix(prefix)
+            .and_then(|s| s.strip_suffix('>'))
+        {
+            return normalize_init_ty_name(inner);
+        }
+    }
+    ty_name.to_string()
 }
 
 /// Stable SMT identifier for diagnostic-only symbolic terms.

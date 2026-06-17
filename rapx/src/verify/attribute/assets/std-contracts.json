@@ -17,7 +17,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(u8) * arg:1 <= isize::MAX"
+      ]
     },
     {
       "tag": "ValidString",
@@ -52,7 +54,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:2 <= isize::MAX"
+      ]
     },
     {
       "tag": "Layout",
@@ -87,7 +91,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:2 <= isize::MAX"
+      ]
     },
     {
       "tag": "Layout",
@@ -122,7 +128,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:1 <= isize::MAX"
+      ]
     },
     {
       "tag": "Layout",
@@ -157,7 +165,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:2 <= isize::MAX"
+      ]
     },
     {
       "tag": "Layout",
@@ -251,6 +261,12 @@
         "dst",
         "src"
       ]
+    },
+    {
+      "tag": "ValidNum",
+      "args": [
+        "size_of(T) * arg:2 <= isize::MAX"
+      ]
     }
   ],
   "core::ptr::mut_ptr::read": [
@@ -311,6 +327,36 @@
       ]
     }
   ],
+  "core::mem::maybe_uninit::assume_init": [
+    {
+      "tag": "Init",
+      "args": [
+        "arg:0",
+        "ty:T",
+        "const:1"
+      ]
+    }
+  ],
+  "core::mem::maybe_uninit::assume_init_read": [
+    {
+      "tag": "Init",
+      "args": [
+        "arg:0",
+        "ty:T",
+        "const:1"
+      ]
+    }
+  ],
+  "core::mem::maybe_uninit::array_assume_init": [
+    {
+      "tag": "Init",
+      "args": [
+        "arg:0",
+        "ty:T",
+        "N"
+      ]
+    }
+  ],
   "core::slice::raw::from_mut_ptr_range": [
     {
       "tag": "NonNull",
@@ -348,7 +394,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:2 <= isize::MAX"
+      ]
     },
     {
       "tag": "Align",
@@ -457,7 +505,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:1 <= isize::MAX"
+      ]
     }
   ],
   "core::slice::raw::from_raw_parts_mut": [
@@ -504,19 +554,21 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(T) * arg:1 <= isize::MAX"
+      ]
     }
   ],
   "core::slice::get_unchecked": [
     {
       "tag": "InBound",
-      "args": ["arg:0", "ty:T", "Arg_1 + 1"]
+      "args": ["arg:0", "ty:T", "arg:1 + const:1"]
     }
   ],
   "core::slice::get_unchecked_mut": [
     {
       "tag": "InBound",
-      "args": ["arg:0", "ty:T", "Arg_1 + 1"]
+      "args": ["arg:0", "ty:T", "arg:1 + const:1"]
     }
   ],
   "core::str::converts::from_raw_parts": [
@@ -538,7 +590,7 @@
       "tag": "Init",
       "args": [
         "ptr",
-        "T",
+        "u8",
         "len"
       ]
     },
@@ -556,21 +608,15 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(u8) * arg:1 <= isize::MAX"
+      ]
     },
     {
       "tag": "Align",
       "args": [
         "ptr",
         "T"
-      ]
-    }
-  ],
-  "core::mem::maybe_uninit::assume_init": [
-    {
-      "tag": "NonNull",
-      "args": [
-        "self"
       ]
     }
   ],
@@ -682,7 +728,7 @@
       "tag": "Init",
       "args": [
         "ptr",
-        "T",
+        "u8",
         "len"
       ]
     },
@@ -700,7 +746,9 @@
     },
     {
       "tag": "ValidNum",
-      "args": []
+      "args": [
+        "size_of(u8) * arg:1 <= isize::MAX"
+      ]
     },
     {
       "tag": "Align",

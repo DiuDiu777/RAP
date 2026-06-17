@@ -9,10 +9,12 @@
 //! obligations. They should not construct independent solver APIs.
 
 mod align;
+mod allocated;
 mod common;
 mod in_bound;
 mod init;
 mod non_null;
+mod valid_num;
 mod valid_ptr;
 
 pub use common::{SmtCheckResult, SmtChecker, SmtObligation, SmtQuery};
