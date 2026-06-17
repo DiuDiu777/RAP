@@ -316,6 +316,36 @@ impl<'tcx> ForwardVisitor<'tcx> {
                     });
                 }
             }
+            Rvalue::Use(operand) => {
+                let source_place = match operand {
+                    Operand::Copy(place) | Operand::Move(place) => Some(place),
+                    _ => None,
+                };
+                if let Some(source_place) = source_place {
+                    let has_deref = source_place
+                        .projection
+                        .iter()
+                        .any(|p| matches!(p, rustc_middle::mir::ProjectionElem::Deref));
+                    if !has_deref {
+                        return;
+                    }
+                    let source_key = PlaceKey::from_mir_place(source_place);
+                    let op_ty = operand.ty(&body.local_decls, self.tcx);
+                    result.facts.push(StateFact::Cast {
+                        target: target.clone(),
+                        source: AbstractValue::Place(source_key),
+                        ty: op_ty,
+                    });
+                }
+            }
+            Rvalue::CopyForDeref(place) => {
+                let source_place = PlaceKey::from_mir_place(place);
+                result.facts.push(StateFact::Cast {
+                    target: target.clone(),
+                    source: AbstractValue::Place(source_place),
+                    ty: self.tcx.types.usize,
+                });
+            }
             Rvalue::BinaryOp(op, pair) => {
                 let (lhs, rhs) = &**pair;
                 let lhs_val = value_from_operand(lhs);
