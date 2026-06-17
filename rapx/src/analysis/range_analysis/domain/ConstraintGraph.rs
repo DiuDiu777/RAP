@@ -873,10 +873,36 @@ where
 
                         self.add_varnode(&p2);
                         rap_trace!("add_vbm_varnode{:?}\n", p2.clone());
-                        let flipped_cmp_op = Self::flipped_binop(cmp_op).unwrap();
-                        let reversed_cmp_op = Self::reverse_binop(cmp_op).unwrap();
-                        let reversed_flippedd_cmp_op =
-                            Self::flipped_binop(reversed_cmp_op).unwrap();
+                        let flipped_cmp_op = match Self::flipped_binop(cmp_op) {
+                            Some(op) => op,
+                            None => {
+                                rap_debug!(
+                                    "build_value_branch_map: unsupported binop {:?}, skipping\n",
+                                    cmp_op
+                                );
+                                return;
+                            }
+                        };
+                        let reversed_cmp_op = match Self::reverse_binop(cmp_op) {
+                            Some(op) => op,
+                            None => {
+                                rap_debug!(
+                                    "build_value_branch_map: unsupported binop {:?}, skipping\n",
+                                    cmp_op
+                                );
+                                return;
+                            }
+                        };
+                        let reversed_flippedd_cmp_op = match Self::flipped_binop(reversed_cmp_op) {
+                            Some(op) => op,
+                            None => {
+                                rap_debug!(
+                                    "build_value_branch_map: unsupported binop {:?}, skipping\n",
+                                    reversed_cmp_op
+                                );
+                                return;
+                            }
+                        };
                         let STOp1 = IntervalType::Symb(SymbInterval::new(CR.clone(), p2, cmp_op));
                         let SFOp1 =
                             IntervalType::Symb(SymbInterval::new(CR.clone(), p2, flipped_cmp_op));
