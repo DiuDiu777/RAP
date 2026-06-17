@@ -108,22 +108,3 @@ pub fn call_non_null_loop(limit: usize) {
         i += 1;
     }
 }
-
-// An unsafe caller whose own contract declares ptr as NonNull.
-//
-// The caller's NonNull contract should propagate to the callee call site,
-// satisfying the callee's NonNull requirement.
-#[rapx::requires(NonNull(ptr), kind = "precond")]
-unsafe fn caller_with_nonnull_contract(ptr: *const u32) {}
-
-// Contract propagation: caller NonNull → callee NonNull.
-//
-// SOUND: the caller's `#[rapx::requires(NonNull(ptr))]` is injected as a
-// ContractFact at function entry, establishing NonNull(ptr) before the call.
-#[rapx::requires(NonNull(ptr), kind = "precond")]
-#[rapx::verify]
-unsafe fn caller_propagates_nonnull(ptr: *const u32) {
-    unsafe {
-        caller_with_nonnull_contract(ptr);
-    }
-}
