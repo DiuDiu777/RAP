@@ -618,7 +618,7 @@ fn collect_properties_from_named_attrs<'tcx>(
 }
 
 /// Parses `requires` contracts from source-level RAPx annotations attached to a definition.
-fn get_contract_from_annotation<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> FnContracts<'tcx> {
+pub(crate) fn get_contract_from_annotation<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> FnContracts<'tcx> {
     #[allow(deprecated)]
     let attrs = tcx.get_all_attrs(def_id);
     collect_properties_from_requires_attrs(tcx, attrs, def_id, "requires")

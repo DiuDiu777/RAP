@@ -982,8 +982,8 @@ fn struct_invariant_1() {
 fn invariantless_skips_struct_invariant() {
     let output = run_with_args("verify/struct_invariant_1", VERIFY_INVLESS_CMD);
     // Only functions with unsafe callees are verified in invariantless mode
-    assert_contain(&output, "function: Wrapper::<T>::sound_read");
-    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
+    assert_contain(&output, "sequence: unsound_new -> sound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_read");
     // Struct constructors/setters without unsafe callees are skipped
     assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
     assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
@@ -994,8 +994,8 @@ fn invariantless_skips_struct_invariant() {
 #[test]
 fn invariantless_no_annotations() {
     let output = run_with_args("verify/struct_invariant_2", VERIFY_INVLESS_CMD);
-    assert_contain(&output, "function: Wrapper::<T>::sound_read");
-    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
+    assert_contain(&output, "sequence: unsound_new -> sound_read");
+    assert_contain(&output, "sequence: unsound_new -> unsound_read");
     assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
     assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
     assert_not_contain(&output, "struct-invariant");

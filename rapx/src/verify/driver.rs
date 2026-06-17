@@ -9,7 +9,9 @@
 use crate::analysis::Analysis;
 use crate::analysis::path_analysis::graph::PathGraph;
 use crate::cli::VerifyMode;
-use crate::helpers::fn_info::{FnKind, get_cons, get_type};
+use crate::helpers::fn_info::{FnKind, get_cons, get_mutated_fields, get_muts, get_type};
+use crate::verify::contract::PropertyKind;
+use crate::verify::target::get_contract_from_annotation;
 
 use indexmap::IndexMap;
 use crate::compat::{FxHashMap, FxHashSet};
@@ -367,6 +369,175 @@ impl<'tcx> VerifyRun<'tcx> {
             mode,
         }
     }
+
+    /// In invless mode, generate verification sequences for each read method
+    /// that chain through constructors and mutators.
+    ///
+    /// Produces sequences like:
+    /// - `constructor → method`
+    /// - `constructor → mutator → method`
+    ///
+    /// Each sequence propagates the constructor's `#[rapx::requires]` through
+    /// the mutator chain to serve as entry assumptions for the read method.
+    fn run_invless_sequences(&self, targets: &[FunctionTarget<'tcx>]) {
+        for target in targets {
+            let read_def_id = target.def_id;
+            let cons = get_cons(self.tcx, read_def_id);
+            if cons.is_empty() {
+                continue;
+            }
+            let muts = get_muts(self.tcx, read_def_id);
+
+            for &con_id in &cons {
+                let con_target =
+                    self.build_virtual_target(target, read_def_id, con_id, &[]);
+                self.verify_and_emit_sequence(
+                    target,
+                    read_def_id,
+                    &con_target,
+                    con_id,
+                    &[],
+                    0,
+                );
+
+                for (mut_idx, &mut_id) in muts.iter().enumerate() {
+                    let con_target =
+                        self.build_virtual_target(target, read_def_id, con_id, &[mut_id]);
+                    self.verify_and_emit_sequence(
+                        target,
+                        read_def_id,
+                        &con_target,
+                        con_id,
+                        &[mut_id],
+                        1 + mut_idx,
+                    );
+                }
+            }
+        }
+    }
+
+    fn build_virtual_target(
+        &self,
+        read_target: &FunctionTarget<'tcx>,
+        read_def_id: rustc_hir::def_id::DefId,
+        con_id: rustc_hir::def_id::DefId,
+        mut_ids: &[rustc_hir::def_id::DefId],
+    ) -> FunctionTarget<'tcx> {
+        let mut accumulated_requires: Vec<Property<'tcx>> = Vec::new();
+
+        // Start with the constructor's requires
+        let con_contracts = get_contract_from_annotation(self.tcx, con_id);
+        accumulated_requires.extend(con_contracts);
+
+        // Remove contracts that are invalidated by mutators
+        if !mut_ids.is_empty() {
+            let mut mutated_fields: Vec<usize> = Vec::new();
+            for &mut_id in mut_ids {
+                for field_idx in get_mutated_fields(self.tcx, mut_id) {
+                    if !mutated_fields.contains(&field_idx) {
+                        mutated_fields.push(field_idx);
+                    }
+                }
+            }
+            if !mutated_fields.is_empty() {
+                accumulated_requires.retain(|prop| {
+                    let prop_fields = property_field_indices(prop);
+                    !prop_fields.iter().any(|f| mutated_fields.contains(f))
+                });
+            }
+        }
+
+        // Also include the read method's own requires
+        let own_requires = get_contract_from_annotation(self.tcx, read_def_id);
+        for req in own_requires {
+            if !accumulated_requires
+                .iter()
+                .any(|p| same_property(p, &req))
+            {
+                accumulated_requires.push(req);
+            }
+        }
+
+        FunctionTarget {
+            def_id: read_def_id,
+            owner_struct_def_id: read_target.owner_struct_def_id,
+            callsites: read_target.callsites.clone(),
+            callee_requires: read_target.callee_requires.clone(),
+            caller_requires: accumulated_requires,
+            struct_invariants: Vec::new(),
+            raw_ptr_deref_checks: read_target.raw_ptr_deref_checks.clone(),
+        }
+    }
+
+    fn verify_and_emit_sequence(
+        &self,
+        _read_target: &FunctionTarget<'tcx>,
+        read_def_id: rustc_hir::def_id::DefId,
+        con_target: &FunctionTarget<'tcx>,
+        con_id: rustc_hir::def_id::DefId,
+        mut_ids: &[rustc_hir::def_id::DefId],
+        _seq_index: usize,
+    ) {
+        let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
+
+        for repeat in 0..=self.allow_pathseg_repeat {
+            let driver =
+                VerifyDriver::new_with_repeat(self.tcx, con_target, repeat);
+            let report = driver.verify_function();
+            rap_debug!("{}", report.describe());
+            all_results.extend(report.results);
+        }
+
+        let read_name = short_fn_name(self.tcx, read_def_id);
+        let con_name = short_fn_name(self.tcx, con_id);
+        let mut chain_parts: Vec<String> = vec![con_name];
+        for &mut_id in mut_ids {
+            chain_parts.push(short_fn_name(self.tcx, mut_id));
+        }
+        chain_parts.push(read_name);
+        let chain_label = chain_parts.join(" -> ");
+
+        rap_info!("============================================================");
+        rap_info!("[rapx::verify] sequence: {chain_label}");
+        rap_info!("============================================================");
+
+        let unproved = all_results
+            .iter()
+            .filter(|r| !matches!(r.result, super::report::CheckResult::Proved))
+            .count();
+
+        let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> =
+            IndexMap::new();
+        for r in &all_results {
+            groups
+                .entry((r.callsite, r.callee_name.clone()))
+                .or_default()
+                .push(r);
+        }
+
+        let callsite_groups: Vec<_> = groups
+            .iter()
+            .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
+            .collect();
+
+        if !callsite_groups.is_empty() {
+            rap_info!("  --- unsafe callsites ---");
+            for ((callsite, callee_name), results) in &callsite_groups {
+                rap_info!(
+                    "      unsafe callsite: bb{} -> {callee_name}",
+                    callsite.block.as_usize(),
+                );
+                emit_property_rows(results);
+            }
+        }
+
+        if unproved == 0 && !all_results.is_empty() {
+            rap_info!("  result: SOUND");
+        } else {
+            rap_warn!("  result: UNSOUND ({unproved} unproved)");
+        }
+        rap_info!("");
+    }
 }
 
 impl<'tcx> Analysis for VerifyRun<'tcx> {
@@ -430,7 +601,20 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 continue;
             }
 
+            // In invless mode, skip standalone emission for methods that
+            // have constructors — sequences will generate dedicated entries.
+            if matches!(self.mode, VerifyMode::Invless)
+                && !get_cons(self.tcx, target.def_id).is_empty()
+            {
+                continue;
+            }
+
             emit_verify_summary(self.tcx, &target_path, target.def_id, &all_results, self.mode);
+        }
+
+        // Invless mode: generate constructor-mutator-method sequences
+        if matches!(self.mode, VerifyMode::Invless) {
+            self.run_invless_sequences(&collector.function_targets);
         }
     }
 
@@ -531,6 +715,52 @@ pub struct VerifyVisitDump<'tcx> {
     tcx: TyCtxt<'tcx>,
     allow_pathseg_repeat: usize,
     mode: VerifyMode,
+}
+
+/// Extract the last segment of a def-path (the bare function name).
+fn short_fn_name(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> String {
+    let path = tcx.def_path_str(def_id);
+    path.rsplit("::").next().unwrap_or(&path).to_string()
+}
+
+/// Return true when two properties have the same kind.
+fn same_property(
+    a: &crate::verify::contract::Property<'_>,
+    b: &crate::verify::contract::Property<'_>,
+) -> bool {
+    matches!((&a.kind, &b.kind),
+        (PropertyKind::Align, PropertyKind::Align) |
+        (PropertyKind::InBound, PropertyKind::InBound) |
+        (PropertyKind::Init, PropertyKind::Init) |
+        (PropertyKind::NonNull, PropertyKind::NonNull) |
+        (PropertyKind::ValidPtr, PropertyKind::ValidPtr)
+    )
+}
+
+/// Collect struct field indices referenced by a property's contract places.
+///
+/// Used to determine which invariants are invalidated when a mutator writes
+/// to specific struct fields.
+fn property_field_indices(property: &crate::verify::contract::Property<'_>) -> Vec<usize> {
+    use crate::verify::contract::{ContractExpr, PropertyArg};
+    let mut indices = Vec::new();
+    for arg in &property.args {
+        let place = match arg {
+            PropertyArg::Place(p) => Some(p),
+            PropertyArg::Expr(ContractExpr::Place(p)) => Some(p),
+            _ => None,
+        };
+        if let Some(place) = place {
+            for proj in &place.projections {
+                let crate::verify::contract::ContractProjection::Field { index, .. } = proj;
+                let idx = *index;
+                if !indices.contains(&idx) {
+                    indices.push(idx);
+                }
+            }
+        }
+    }
+    indices
 }
 
 impl<'tcx> VerifyVisitDump<'tcx> {

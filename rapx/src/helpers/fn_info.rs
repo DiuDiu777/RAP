@@ -345,6 +345,52 @@ pub fn get_cons(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DefId> {
     cons
 }
 
+/// Find `&mut self` methods (mutators) on the same struct as `def_id`.
+///
+/// A mutator is a method whose first parameter is a mutable reference to Self.
+/// These methods can change struct fields and affect subsequent invariant checks.
+pub fn get_muts(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DefId> {
+    let mut muts = Vec::new();
+    if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
+        if let Some(impl_id) = assoc_item.impl_container(tcx) {
+            let ty = tcx.type_of(impl_id).skip_binder();
+            if let Some(adt_def) = ty.ty_adt_def() {
+                let adt_def_id = adt_def.did();
+                let impls = tcx.inherent_impls(adt_def_id);
+                for impl_def_id in impls {
+                    for item in tcx.associated_item_def_ids(*impl_def_id) {
+                        if !matches!(
+                            tcx.def_kind(*item),
+                            DefKind::Fn | DefKind::AssocFn
+                        ) {
+                            continue;
+                        }
+                        if get_type(tcx, *item) != FnKind::Method {
+                            continue;
+                        }
+                        let Some(assoc) = tcx.opt_associated_item(*item) else {
+                            continue;
+                        };
+                        if !matches!(assoc.kind, AssocKind::Fn { has_self: true, .. }) {
+                            continue;
+                        }
+                        let fn_sig =
+                            tcx.fn_sig(*item).instantiate_identity().skip_binder();
+                        let all = fn_sig.inputs_and_output;
+                        let first_param = all.first().copied();
+                        if let Some(TyKind::Ref(_, _, Mutability::Mut)) =
+                            first_param.map(|ty| ty.kind())
+                        {
+                            muts.push(*item);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    muts
+}
+
 pub fn append_fn_with_types(tcx: TyCtxt, def_id: DefId) -> FnInfo {
     FnInfo::new(def_id, check_safety(tcx, def_id), get_type(tcx, def_id))
 }
@@ -356,4 +402,46 @@ pub fn get_ptr_deref_dummy_def_id(tcx: TyCtxt<'_>) -> Option<DefId> {
 
         (name.as_str() == "__raw_ptr_deref_dummy").then_some(def_id)
     })
+}
+
+/// Return field indices that a `&mut self` method writes to.
+///
+/// Scans the MIR body for assignments to `(*self).field_n` and returns the
+/// set of field indices that are modified.  Used by invless mode to know which
+/// constructor-inherited invariants are invalidated by a mutator.
+pub fn get_mutated_fields(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<usize> {
+    use rustc_middle::mir::{
+        ProjectionElem, StatementKind,
+    };
+
+    let body = tcx.optimized_mir(def_id);
+    let mut fields = Vec::new();
+
+    for (_, data) in body.basic_blocks.iter().enumerate() {
+        for statement in &data.statements {
+            if let StatementKind::Assign(assign) = &statement.kind {
+                let (place, _) = &**assign;
+                if place.local.as_usize() != 1 {
+                    continue;
+                }
+                let mut saw_deref = false;
+                for proj in place.projection.iter() {
+                    match proj {
+                        ProjectionElem::Deref => {
+                            saw_deref = true;
+                        }
+                        ProjectionElem::Field(index, _) if saw_deref => {
+                            let idx = index.as_usize();
+                            if !fields.contains(&idx) {
+                                fields.push(idx);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    fields
 }
