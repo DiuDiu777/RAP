@@ -130,20 +130,7 @@ impl<'tcx> PathExtractor<'tcx> {
             if !seen_prefixes.insert(prefix.clone()) {
                 continue;
             }
-            let reachable = pg.is_path_reachable(&prefix);
-            rap_debug!(
-                "  verify path {}: {:?} | {}",
-                idx,
-                prefix,
-                if reachable {
-                    "reachable"
-                } else {
-                    "unreachable"
-                }
-            );
-            if !reachable {
-                continue;
-            }
+            rap_debug!("  verify path {}: {:?}", idx, prefix);
             results.push(Path {
                 target,
                 start: PathStart::FunctionEntry,

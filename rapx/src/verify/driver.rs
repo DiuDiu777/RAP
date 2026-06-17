@@ -255,9 +255,6 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     if !seen_prefixes.insert(prefix.clone()) {
                         continue;
                     }
-                    if !pg.is_path_reachable(&prefix) {
-                        continue;
-                    }
                     paths.push(Path {
                         target: checkpoint,
                         start: PathStart::FunctionEntry,
@@ -274,7 +271,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             }
         } else {
             for path in all_paths.iter() {
-                if path.is_empty() || !pg.is_path_reachable(&path) {
+                if path.is_empty() {
                     continue;
                 }
                 if !seen_paths.insert(path.clone()) {
