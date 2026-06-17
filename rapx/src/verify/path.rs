@@ -20,7 +20,7 @@ use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
-use crate::analysis::path_analysis::graph::PathGraph;
+use crate::analysis::path_analysis::{PathTree, graph::PathGraph};
 
 use super::helpers::{Callsite, CallsiteLocation};
 
@@ -34,7 +34,6 @@ pub struct PathExtractor<'tcx> {
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     callsites: Vec<Callsite<'tcx>>,
-    paths: FxHashMap<CallsiteLocation, Vec<Path>>,
     path_graph: Option<PathGraph<'tcx>>,
     allow_repeat: usize,
 }
@@ -57,7 +56,6 @@ impl<'tcx> PathExtractor<'tcx> {
             tcx,
             def_id,
             callsites,
-            paths: FxHashMap::default(),
             path_graph: None,
             allow_repeat,
         }
@@ -74,54 +72,52 @@ impl<'tcx> PathExtractor<'tcx> {
 
     /// Run path extraction, consuming the extractor.
     ///
-    /// Returns a `FunctionPaths` value with per-callsite path vectors.
+    /// Returns a `FunctionPaths` value with per-callsite path vectors and
+    /// the shared full-CFG path tree.
     pub fn run(mut self) -> FunctionPaths<'tcx> {
         // Ensure PathGraph is initialized (also builds SCC info internally).
         self.path_graph();
-        self.find_paths();
+        let allow_repeat = self.allow_repeat;
+        let tree = self.path_graph().enumerate_paths_repeat(allow_repeat);
+        let paths = self.find_paths_in_tree(&tree);
         FunctionPaths {
-            callsite_paths: CallsitePaths::new(self.callsites, self.paths),
+            callsite_paths: CallsitePaths::new(self.callsites, paths),
+            path_tree: tree,
         }
     }
 
-    /// Extract paths for every callsite owned by this extractor.
-    ///
-    /// Iterates over all callsites and delegates to [`find_paths_for_callsite`]
-    /// for each one. Results are stored in `self.paths` keyed by callsite location.
-    fn find_paths(&mut self) {
+    /// Extract paths for every callsite from the given tree.
+    fn find_paths_in_tree(&mut self, tree: &PathTree) -> FxHashMap<CallsiteLocation, Vec<Path>> {
+        let mut paths = FxHashMap::default();
         for index in 0..self.callsites.len() {
             let callsite = self.callsites[index].clone();
-            let paths = self.find_paths_for_callsite(&callsite);
-            self.paths.insert(callsite.location(), paths);
+            let per_callsite = self.collect_prefixes_from_tree(tree, &callsite);
+            paths.insert(callsite.location(), per_callsite);
         }
+        paths
     }
 
-    /// Extract paths for one callsite by walking the path tree forward and
-    /// truncating at the target block. The tree structure naturally shares
-    /// common prefixes and deduplicates by construction.
-    ///
-    /// Uses `PathGraph::enumerate_paths_repeat()` to get all flattened CFG
-    /// paths (pre-filtered for reachability), then walks the tree to collect
-    /// unique prefixes ending at the callsite block.
-    fn find_paths_for_callsite(&mut self, callsite: &Callsite<'tcx>) -> Vec<Path> {
+    /// Walk the given full-CFG tree and collect prefixes ending at the
+    /// callsite block into `Vec<Path>`.
+    fn collect_prefixes_from_tree(
+        &self,
+        tree: &PathTree,
+        callsite: &Callsite<'tcx>,
+    ) -> Vec<Path> {
         let target = callsite.location();
         let target_block = callsite.block.as_usize();
         let callee_name = callsite.callee_name(self.tcx);
-        let allow_repeat = self.allow_repeat;
-        let pg = self.path_graph();
-
-        let all_paths = pg.enumerate_paths_repeat(allow_repeat);
 
         rap_debug!(
             "Callsite at bb{} -> {}: {} whole-cfg paths",
             target_block,
             callee_name,
-            all_paths.len()
+            tree.len()
         );
 
         let mut results = Vec::new();
         let mut idx = 0usize;
-        let _ = all_paths.walk_prefixes(target_block, &mut |prefix: &[usize]| -> bool {
+        let _ = tree.walk_prefixes(target_block, &mut |prefix: &[usize]| -> bool {
             if results.len() >= PATH_LIMIT {
                 return false;
             }
@@ -145,6 +141,7 @@ impl<'tcx> PathExtractor<'tcx> {
 /// Result of path extraction for one function.
 pub struct FunctionPaths<'tcx> {
     callsite_paths: CallsitePaths<'tcx>,
+    path_tree: PathTree,
 }
 
 impl<'tcx> FunctionPaths<'tcx> {
@@ -154,6 +151,11 @@ impl<'tcx> FunctionPaths<'tcx> {
 
     pub fn callsites(&self) -> &[Callsite<'tcx>] {
         self.callsite_paths.callsites()
+    }
+
+    /// Access the shared full-CFG path tree for tree-based analysis.
+    pub fn path_tree(&self) -> &PathTree {
+        &self.path_tree
     }
 }
 
