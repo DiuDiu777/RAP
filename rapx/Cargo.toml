@@ -9,6 +9,7 @@ description = "A static analysis platform for Rust program analysis and verifica
 documentation = "https://safer-rust.github.io/RAPx-Book/"
 repository = "https://github.com/safer-rust/RAPx"
 readme = "../README.md"
+exclude = ["target*/**"]
 
 [[bin]]
 name = "rapx"

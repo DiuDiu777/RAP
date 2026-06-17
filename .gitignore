@@ -1,6 +1,7 @@
 .idea/
 .vscode/
 target/
+target-1.92/
 UPG/
 **/*.txt
 tests/**/Cargo.lock
