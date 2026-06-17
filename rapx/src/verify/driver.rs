@@ -415,9 +415,11 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                     rap_info!("============================================================");
                     rap_info!("[rapx::verify] function: {target_path}");
                     rap_info!("============================================================");
-                    let cons = get_cons(self.tcx, target.def_id);
-                    for con in &cons {
-                        rap_info!("  + constructor: {}", self.tcx.def_path_str(*con));
+                    if matches!(self.mode, VerifyMode::Invless) {
+                        let cons = get_cons(self.tcx, target.def_id);
+                        for con in &cons {
+                            rap_info!("  + constructor: {}", self.tcx.def_path_str(*con));
+                        }
                     }
                     rap_info!("  --- unsafe callsites ---");
                     rap_info!("      <none>");
@@ -428,7 +430,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 continue;
             }
 
-            emit_verify_summary(self.tcx, &target_path, target.def_id, &all_results);
+            emit_verify_summary(self.tcx, &target_path, target.def_id, &all_results, self.mode);
         }
     }
 
@@ -440,6 +442,7 @@ fn emit_verify_summary<'tcx>(
     target_path: &str,
     def_id: rustc_hir::def_id::DefId,
     all_results: &[PropertyCheckResult<'tcx>],
+    mode: VerifyMode,
 ) {
     let unproved = all_results
         .iter()
@@ -450,9 +453,11 @@ fn emit_verify_summary<'tcx>(
     rap_info!("[rapx::verify] function: {target_path}");
     rap_info!("============================================================");
 
-    let cons = get_cons(tcx, def_id);
-    for con in &cons {
-        rap_info!("  + constructor: {}", tcx.def_path_str(*con));
+    if matches!(mode, VerifyMode::Invless) {
+        let cons = get_cons(tcx, def_id);
+        for con in &cons {
+            rap_info!("  + constructor: {}", tcx.def_path_str(*con));
+        }
     }
 
     // Group results by (callsite, callee_name)

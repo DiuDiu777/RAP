@@ -58,11 +58,7 @@ pub(crate) fn check_for_checkpoint<'tcx>(
     let Some(required_ty) = checker.property_required_ty_direct(property) else {
         return SmtCheckResult::unknown("Init type could not be resolved");
     };
-    let Some(elements) = checker.property_len_const(property) else {
-        return SmtCheckResult::unknown(
-            "Init currently requires a constant element-count argument",
-        );
-    };
+    let elements = checker.property_len_const(property).unwrap_or(0);
 
     checker.prove_obligation_for_checkpoint(
         caller,

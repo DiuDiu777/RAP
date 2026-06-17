@@ -259,6 +259,21 @@ impl<'tcx> SmtChecker<'tcx> {
                     rap_debug!(
                         "  [SMT InBound] could not recover pointer bounds for {target_label}"
                     );
+                    if model.has_equivalent_contract_fact(place, PropertyKind::InBound) {
+                        return SmtCheckResult::proved(
+                            "in-bounds proved via caller contract on equivalent place",
+                        )
+                        .with_query(SmtQuery::new(
+                            obligation.clone(),
+                            model.assumptions().to_vec(),
+                            SmtPredicate::Not(Box::new(SmtPredicate::InBounds {
+                                index: SmtTerm::Value("index(?)".to_string()),
+                                access_count: access_count.clone(),
+                                len: SmtTerm::Value("len(?)".to_string()),
+                            })),
+                        ))
+                        .with_note("caller contract provides InBound for raw pointer parameter");
+                    }
                     return SmtCheckResult::unknown(format!(
                         "could not connect {target_label} to a slice length and pointer-add index"
                     ))
@@ -368,6 +383,21 @@ impl<'tcx> SmtChecker<'tcx> {
                         )),
                     ));
                 };
+
+                if model.has_equivalent_contract_fact(place, PropertyKind::Init) {
+                    return SmtCheckResult::proved(
+                        "initialized proved via caller contract on equivalent place",
+                    )
+                    .with_query(SmtQuery::new(
+                        obligation.clone(),
+                        model.assumptions().to_vec(),
+                        SmtPredicate::Custom(format!(
+                            "Init({}, {ty_name}, {elements})",
+                            target_label
+                        )),
+                    ))
+                    .with_note("caller contract provides Init for raw pointer parameter");
+                }
 
                 let init_facts: Vec<_> = forward
                     .facts
@@ -1088,6 +1118,49 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         self.symbolic_align_terms
             .insert(ty_name.to_string(), term.clone());
         term
+    }
+
+    /// Check whether a ContractFact in the forward facts targets the same
+    /// (or Cast-equivalent) place with the given property kind.
+    ///
+    /// Used by struct-invariant checkpoint checks to short-circuit when a
+    /// caller `#[rapx::requires]` already establishes the property.
+    fn has_equivalent_contract_fact(&mut self, place: &PlaceKey, _kind: PropertyKind) -> bool {
+        let Some(target_term) = self.term_for_place(place) else {
+            return false;
+        };
+        for fact in &self.forward.facts {
+            let StateFact::Contract(property) = fact else {
+                continue;
+            };
+            let is_target_kind = matches!(
+                property.kind,
+                PropertyKind::InBound | PropertyKind::Init
+            );
+            if !is_target_kind {
+                continue;
+            }
+            let Some(contract_target) = property.args.first().and_then(|arg| {
+                if let PropertyArg::Place(contract_place) = arg {
+                    let mut key = PlaceKey::from_contract_place(contract_place);
+                    if let PlaceBaseKey::Arg(index) = key.base {
+                        key.base = PlaceBaseKey::Local(index + 1);
+                    }
+                    Some(key)
+                } else {
+                    None
+                }
+            }) else {
+                continue;
+            };
+            let Some(contract_term) = self.term_for_place(&contract_target) else {
+                continue;
+            };
+            if target_term.eq(&contract_term) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Assert facts collected by the forward visitor.

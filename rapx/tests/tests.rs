@@ -965,13 +965,17 @@ fn inbound_std_unsound_02() {
 #[test]
 fn struct_invariant_1() {
     let output = run_with_args("verify/struct_invariant_1", VERIFY_CMD);
+    // unsound_new: constructor with requires, all struct invariants proved
     assert_contain(&output, "function: Wrapper::<T>::unsound_new");
-    assert_contain(&output, "result: UNSOUND");
-    assert_contain(&output, "function: Wrapper::<T>::unsound_set_len");
-    assert_contain(&output, "function: Wrapper::<T>::sound_read");
-    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
-    // Alignment is proved in sound_read via the guard
     assert_contain(&output, "Align | Proved");
+    assert_contain(&output, "InBound | Proved");
+    assert_contain(&output, "Init | Proved");
+    // unsound_set_len: mutator with requires, struct invariants proved via self
+    assert_contain(&output, "function: Wrapper::<T>::unsound_set_len");
+    // sound_read: alignment proved via guard, but raw-ptr deref still unproved
+    assert_contain(&output, "function: Wrapper::<T>::sound_read");
+    // unsound_read: raw-ptr deref unproved, struct invariants hold via precond
+    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
 }
 
 #[test]
@@ -984,6 +988,16 @@ fn invariantless_skips_struct_invariant() {
     assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
     assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
     // invariantless should not output struct-invariant checks
+    assert_not_contain(&output, "struct-invariant");
+}
+
+#[test]
+fn invariantless_no_annotations() {
+    let output = run_with_args("verify/struct_invariant_2", VERIFY_INVLESS_CMD);
+    assert_contain(&output, "function: Wrapper::<T>::sound_read");
+    assert_contain(&output, "function: Wrapper::<T>::unsound_read");
+    assert_not_contain(&output, "function: Wrapper::<T>::unsound_new");
+    assert_not_contain(&output, "function: Wrapper::<T>::unsound_set_len");
     assert_not_contain(&output, "struct-invariant");
 }
 
