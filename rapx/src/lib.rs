@@ -250,7 +250,7 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 let mut analyzer = PathAnalyzer::new(tcx, false);
                 analyzer.run_with_repeat(allow_pathseg_repeat);
                 let result = analyzer.get_all_paths();
-                rap_info!("{}", PathMapWrapper(result));
+                rap_info!("{}", PathMapWrapper(result, &analyzer.graphs));
             }
             AnalysisKind::Pathcond => {
                 let mut analyzer = RangeAnalyzer::<i64>::new(tcx, false);

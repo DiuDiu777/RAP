@@ -234,6 +234,10 @@ impl<'tcx> PathGraph<'tcx> {
         self.assigned_locals.get(index)
     }
 
+    pub fn is_cleanup_block(&self, index: usize) -> bool {
+        self.cfg.blocks.get(index).map(|b| b.is_cleanup).unwrap_or(false)
+    }
+
     /// Verify whether a given path (sequence of block indices) is reachable.
     ///
     /// The path can contain arbitrary loops. The verification uses

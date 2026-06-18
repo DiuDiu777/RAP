@@ -577,7 +577,7 @@ fn if_else() {
     // read2: 3 paths — direct + ManuallyDrop branch
     assert_contain(&output, "Path [0, 1, 2, 3, 10, 11]");
     assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11]");
-    assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 12]");
+    assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 12*]"); // 12 is cleanup
     assert_eq!(path_count_for(&output, "read1"), 6);
     assert_eq!(path_count_for(&output, "read2"), 3);
 }

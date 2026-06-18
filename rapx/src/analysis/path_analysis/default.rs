@@ -6,7 +6,7 @@ use crate::compat::FxHashMap;
 use rustc_hir::{def::DefKind, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 
-use super::PathTree;
+use super::{PathTree, format_path_annotated};
 
 /// PathAnalyzer is responsible only for extracting path-sensitive CFG paths.
 /// Downstream analyses can reuse these paths without depending on alias logic.
@@ -52,7 +52,13 @@ impl<'tcx> PathAnalyzer<'tcx> {
 
         rap_info!("Function: {}", fn_name);
         for (idx, path) in paths.iter().enumerate() {
-            rap_info!("  path {}: {:?}", idx, path);
+            let reachable = graph.is_path_reachable(&path);
+            rap_info!(
+                "  path {}: {} | reachable: {}",
+                idx,
+                format_path_annotated(&path, &graph),
+                reachable
+            );
         }
 
         self.graphs.insert(def_id, graph);

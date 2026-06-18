@@ -6,6 +6,25 @@ use rustc_hir::def_id::DefId;
 use std::fmt::{self, Display};
 
 use crate::compat::FxHashMap;
+use graph::PathGraph;
+
+/// Format a path slice with cleanup-block annotations.
+///
+/// Cleanup blocks (MIR unwind/drop paths) are marked with a `*` suffix.
+/// Example: `[0, 1, 2*, 3]` where block 2 is a cleanup block.
+pub fn format_path_annotated(path: &[usize], graph: &PathGraph<'_>) -> String {
+    let blocks: Vec<String> = path
+        .iter()
+        .map(|&b| {
+            if graph.is_cleanup_block(b) {
+                format!("{}*", b)
+            } else {
+                b.to_string()
+            }
+        })
+        .collect();
+    format!("[{}]", blocks.join(", "))
+}
 
 /// A prefix-tree (trie) representation of whole-CFG paths.
 ///
@@ -205,16 +224,24 @@ impl<'a> Iterator for PathTreeIter<'a> {
     }
 }
 
-pub struct PathMapWrapper(pub FxHashMap<DefId, PathTree>);
+pub struct PathMapWrapper<'a, 'tcx>(
+    pub FxHashMap<DefId, PathTree>,
+    pub &'a FxHashMap<DefId, PathGraph<'tcx>>,
+);
 
-impl Display for PathMapWrapper {
+impl Display for PathMapWrapper<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "=== Print path analysis results ===")?;
         for (def_id, paths) in &self.0 {
             let fn_name = get_fn_name_byid(def_id);
             writeln!(f, "Function: {:?}:", fn_name)?;
+            let graph = self.1.get(def_id);
             for path in paths.iter() {
-                writeln!(f, "  Path {:?}", path)?;
+                if let Some(g) = graph {
+                    writeln!(f, "  Path {}", format_path_annotated(&path, g))?;
+                } else {
+                    writeln!(f, "  Path {:?}", path)?;
+                }
             }
         }
         Ok(())
