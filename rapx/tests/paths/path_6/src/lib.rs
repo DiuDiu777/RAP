@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // SCC with conditional branch inside the loop body.
 fn classify(x: i32) -> i32 {
     let mut i = 0;

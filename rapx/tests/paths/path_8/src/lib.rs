@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // Nested SCC: outer row loop + inner column loop (grid walk).
 fn walk(rows: i32, cols: i32) -> i32 {
     let mut total = 0;
