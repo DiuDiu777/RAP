@@ -69,7 +69,11 @@ pub enum AnalysisKind {
     #[clap(name = "ownedheap")]
     OwnedHeap,
     /// extract path-sensitive CFG paths
-    Paths,
+    Paths {
+        /// allow repeated SCC postfix segments (default 0)
+        #[arg(long, default_value_t = 0)]
+        allow_pathseg_repeat: usize,
+    },
     /// extract path constraints
     Pathcond,
     /// perform range analysis

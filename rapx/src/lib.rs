@@ -244,9 +244,9 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 let result = analyzer.get_all_items();
                 rap_info!("{}", OHAResultMapWrapper(result));
             }
-            AnalysisKind::Paths => {
+            &AnalysisKind::Paths { allow_pathseg_repeat } => {
                 let mut analyzer = PathAnalyzer::new(tcx, false);
-                analyzer.run();
+                analyzer.run_with_repeat(allow_pathseg_repeat);
                 let result = analyzer.get_all_paths();
                 rap_info!("{}", PathMapWrapper(result));
             }

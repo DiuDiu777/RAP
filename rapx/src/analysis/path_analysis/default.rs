@@ -25,6 +25,14 @@ impl<'tcx> PathAnalyzer<'tcx> {
     }
 
     pub fn start_path_analysis_for_defid(&mut self, def_id: DefId) -> Option<PathTree> {
+        self.start_path_analysis_for_defid_with_repeat(def_id, 0)
+    }
+
+    pub fn start_path_analysis_for_defid_with_repeat(
+        &mut self,
+        def_id: DefId,
+        postfix_repeat: usize,
+    ) -> Option<PathTree> {
         if let Some(paths) = self.paths.get(&def_id) {
             return Some(paths.clone());
         }
@@ -36,7 +44,7 @@ impl<'tcx> PathAnalyzer<'tcx> {
         let mut graph = PathGraph::new(self.tcx, def_id);
         graph.find_scc();
         let mut enumerator = PathEnumerator::new(&graph);
-        let paths = enumerator.enumerate_paths();
+        let paths = enumerator.enumerate_paths_repeat(postfix_repeat);
         let fn_name = self.tcx.def_path_str(def_id);
 
         rap_info!("Function: {}", fn_name);
@@ -58,12 +66,20 @@ impl<'tcx> PathAnalyzer<'tcx> {
     }
 
     pub fn start_path_analysis(&mut self) {
+        self.start_path_analysis_with_repeat(0);
+    }
+
+    pub fn start_path_analysis_with_repeat(&mut self, postfix_repeat: usize) {
         for local_def_id in self.tcx.iter_local_def_id() {
             if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
                 let def_id = local_def_id.to_def_id();
-                let _ = self.start_path_analysis_for_defid(def_id);
+                let _ = self.start_path_analysis_for_defid_with_repeat(def_id, postfix_repeat);
             }
         }
+    }
+
+    pub fn run_with_repeat(&mut self, postfix_repeat: usize) {
+        self.start_path_analysis_with_repeat(postfix_repeat);
     }
 
     /// Verify whether a given path is reachable for the specified function.

@@ -27,6 +27,28 @@ fn project_path(dir: &str) -> PathBuf {
     Path::new("tests").join(dir)
 }
 
+/// Count `  Path [` lines inside a function's output block.
+fn path_count_for(output: &str, fn_name: &str) -> usize {
+    let header = format!("Function: \"{}\":", fn_name);
+    let mut in_block = false;
+    let mut count = 0;
+    for line in output.lines() {
+        if line.contains(&header) {
+            in_block = true;
+            continue;
+        }
+        if in_block {
+            if line.contains("Function:") {
+                break;
+            }
+            if line.trim().starts_with("Path [") {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
 #[inline(always)]
 fn run_with_args(dir: &str, args: &[&str]) -> String {
     // let raw_path = "./tests/".to_owned() + dir;
@@ -104,6 +126,8 @@ const ANALYZE_ALIAS_CMD: &[&str] = &["analyze", "alias"];
 const ANALYZE_ALIAS_MFP_CMD: &[&str] = &["analyze", "alias", "--strategy", "mfp"];
 const ANALYZE_OWNED_HEAP_CMD: &[&str] = &["analyze", "ownedheap"];
 const ANALYZE_PATHS_CMD: &[&str] = &["analyze", "paths"];
+const ANALYZE_PATHS_REPEAT1_CMD: &[&str] = &["analyze", "paths", "--allow-pathseg-repeat", "1"];
+const ANALYZE_PATHS_REPEAT2_CMD: &[&str] = &["analyze", "paths", "--allow-pathseg-repeat", "2"];
 const ANALYZE_SAFETYFLOW_CMD: &[&str] = &["analyze", "safetyflow"];
 const ANALYZE_SSA_CMD: &[&str] = &["analyze", "ssa"];
 const ANALYZE_RANGE_CMD: &[&str] = &["analyze", "range"];
@@ -502,10 +526,93 @@ fn heap_proxy() {
 
 #[test]
 fn if_else() {
-    let output = run_with_args("verify/path/if-else", ANALYZE_PATHS_CMD);
+    let output = run_with_args("paths/if-else", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read1\":");
     assert_contain(&output, "Function: \"read2\":");
-    assert_contain(&output, "Path [");
+    // read1: 6 paths — both alignment branches
+    assert_contain(&output, "Path [0, 1, 2, 3, 5, 6]");
+    assert_contain(&output, "Path [0, 1, 2, 4, 5, 7, 10]");
+    assert_contain(&output, "Path [0, 1, 2, 3, 5, 8, 9, 10]");
+    // read2: 3 paths — direct + ManuallyDrop branch
+    assert_contain(&output, "Path [0, 1, 2, 3, 10, 11]");
+    assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11]");
+    assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 12]");
+    assert_eq!(path_count_for(&output, "read1"), 6);
+    assert_eq!(path_count_for(&output, "read2"), 3);
+}
+
+#[test]
+fn scc1() {
+    let output = run_with_args("paths/scc1", ANALYZE_PATHS_CMD);
+    assert_contain(&output, "Function: \"read1\":");
+    assert_contain(&output, "Function: \"read2\":");
+    // read1: 4 SCC paths — direct success, retry→success, retry→fail, retry→retry→fail
+    assert_contain(&output, "Path [0, 1, 2, 3, 4, 8, 9]");
+    assert_contain(&output, "Path [0, 1, 2, 3, 5, 6, 1, 2, 3, 4, 8, 9]");
+    assert_contain(&output, "Path [0, 1, 2, 3, 5, 6, 1, 2, 3, 5, 7, 9]");
+    assert_contain(&output, "Path [0, 1, 2, 3, 5, 7, 9]");
+    // read2: 10 paths — nested SCC inner+outer loop combos
+    assert_contain(&output, "Path [0, 1, 2, 3, 4, 6, 7, 2, 3, 4, 6, 8, 11, 12]");
+    assert_contain(&output, "Path [0, 1, 2, 3, 4, 6, 8, 11, 12]");
+    assert_eq!(path_count_for(&output, "read1"), 4);
+    assert_eq!(path_count_for(&output, "read2"), 10);
+}
+
+#[test]
+fn scc_simple() {
+    let output = run_with_args("paths/scc_simple", ANALYZE_PATHS_CMD);
+    assert_contain(&output, "Function: \"classify\":");
+    assert_contain(&output, "Function: \"early_exit\":");
+    // classify: 11 paths — single SCC with if-else combos
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 5, 6, 7, 10, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 5, 8, 9, 10, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 5, 6, 7, 10, 1, 3, 4, 5, 8, 9, 10, 1, 2]");
+    // early_exit: 3 paths — loop with return
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 1, 3, 4, 1, 2]");
+    assert_eq!(path_count_for(&output, "classify"), 11);
+    assert_eq!(path_count_for(&output, "early_exit"), 3);
+}
+
+#[test]
+fn scc_nested() {
+    let output = run_with_args("paths/scc_nested", ANALYZE_PATHS_CMD);
+    assert_contain(&output, "Function: \"walk\":");
+    assert_contain(&output, "Function: \"double_loop\":");
+    // walk: 11 paths — nested SCC (outer row + inner col loops)
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 8, 4, 5, 9, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 8, 4, 6, 7, 8, 4, 5, 9, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 8, 4, 5, 9, 1, 3, 4, 6, 7, 8, 4, 5, 9, 1, 2]");
+    // double_loop: 11 paths — nested SCC (outer + inner loops)
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 4, 5, 8, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 4, 6, 7, 4, 5, 8, 1, 2]");
+    assert_eq!(path_count_for(&output, "walk"), 11);
+    assert_eq!(path_count_for(&output, "double_loop"), 11);
+}
+
+#[test]
+fn scc_repeat1() {
+    let output = run_with_args("paths/scc_simple", ANALYZE_PATHS_REPEAT1_CMD);
+    // With postfix_repeat=1, each SCC segment may repeat once more (39/4 vs 11/3 at repeat=0)
+    assert_eq!(path_count_for(&output, "classify"), 39);
+    assert_eq!(path_count_for(&output, "early_exit"), 4);
+    // Structural paths still present in expanded enumeration
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 1, 2]");
+}
+
+#[test]
+fn scc_repeat2() {
+    let output = run_with_args("paths/scc_simple", ANALYZE_PATHS_REPEAT2_CMD);
+    // With postfix_repeat=2, even more segment repeats (128/5 vs 11/3 at repeat=0)
+    assert_eq!(path_count_for(&output, "classify"), 128);
+    assert_eq!(path_count_for(&output, "early_exit"), 5);
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 1, 3, 4, 1, 2]");
 }
 
 #[test]
