@@ -597,10 +597,9 @@ fn path_3() {
 fn path_4() {
     let output = run_with_args("paths/path_4", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read1\":");
-    assert_contain(&output, "Path [0, 1, 2, 3, 4, 8, 9]");
-    assert_contain(&output, "Path [0, 1, 2, 3, 5, 6, 1, 2, 3, 4, 8, 9]");
-    assert_contain(&output, "Path [0, 1, 2, 3, 5, 6, 1, 2, 3, 5, 7, 9]");
-    assert_eq!(path_count_for(&output, "read1"), 3);
+    assert_contain(&output, "Path [0, 1, 2, 6]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 1, 3, 5, 6]");
+    assert_eq!(path_count_for(&output, "read1"), 2);
 }
 
 #[test]

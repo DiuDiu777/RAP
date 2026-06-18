@@ -351,6 +351,12 @@ impl<'tcx> PathGraph<'tcx> {
                             constraints.insert(*local, src_val);
                             continue;
                         }
+                        // backward propagation: if dest has a known value, propagate to src
+                        if let Some(&dst_val) = constraints.get(local) {
+                            constraints.insert(src, dst_val);
+                            constraints.insert(*local, dst_val);
+                            continue;
+                        }
                     }
                     // constant assignment propagation
                     if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
@@ -433,6 +439,12 @@ impl<'tcx> PathGraph<'tcx> {
                     if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
                         if let Some(&src_val) = constraints.get(&src) {
                             constraints.insert(*local, src_val);
+                            continue;
+                        }
+                        // backward propagation: if dest has a known value, propagate to src
+                        if let Some(&dst_val) = constraints.get(local) {
+                            constraints.insert(src, dst_val);
+                            constraints.insert(*local, dst_val);
                             continue;
                         }
                     }
@@ -541,19 +553,54 @@ impl<'tcx> PathGraph<'tcx> {
                     }
                 }
 
-                if let Some(local) = constraint_local {
-                    if let Some((val, _)) = targets.iter().find(|(_, bb)| bb.as_usize() == next) {
-                        constraints.insert(local, val as usize);
-                    } else {
-                        if let Some(inferred) = self.infer_otherwise_value(targets, local) {
-                            constraints.insert(local, inferred);
-                        }
-                    }
-                }
+                self.learn_constraint_with_backprop(cur, constraint_local, &targets, next, constraints);
 
                 true
             }
             _ => true,
+        }
+    }
+
+    /// After learning a constraint for a discriminant local, propagate the
+    /// constraint backward through the copy chain so that source locals also
+    /// receive the value. This prevents losing track of the constraint when
+    /// the destination temporary is reassigned on loop back-edges.
+    fn learn_constraint_with_backprop(
+        &self,
+        cur: usize,
+        constraint_local: Option<usize>,
+        targets: &SwitchTargets,
+        next: usize,
+        constraints: &mut FxHashMap<usize, usize>,
+    ) {
+        let Some(local) = constraint_local else { return };
+        let Some((val, _)) = targets.iter().find(|(_, bb)| bb.as_usize() == next) else {
+            if let Some(inferred) = self.infer_otherwise_value(targets, local) {
+                constraints.insert(local, inferred);
+                self.backprop_constraint(cur, local, inferred, constraints);
+            }
+            return;
+        };
+        let val = val as usize;
+        constraints.insert(local, val);
+        self.backprop_constraint(cur, local, val, constraints);
+    }
+
+    fn backprop_constraint(
+        &self,
+        cur: usize,
+        local: usize,
+        val: usize,
+        constraints: &mut FxHashMap<usize, usize>,
+    ) {
+        let Some(copies) = self.constraint_copies.get(cur) else { return };
+        let mut current = local;
+        while let Some(&src) = copies.get(&current) {
+            if current == src {
+                break;
+            }
+            constraints.insert(src, val);
+            current = src;
         }
     }
 
