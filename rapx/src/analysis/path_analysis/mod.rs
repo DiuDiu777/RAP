@@ -236,6 +236,9 @@ impl Display for PathMapWrapper<'_, '_> {
         writeln!(f, "=== Print path analysis results ===")?;
         for (def_id, paths) in &self.0 {
             let fn_name = get_fn_name_byid(def_id);
+            if fn_name.contains("__raw_ptr_deref_dummy") {
+                continue;
+            }
             writeln!(f, "Function: {:?}:", fn_name)?;
             let graph = self.1.get(def_id);
             for path in paths.iter() {
