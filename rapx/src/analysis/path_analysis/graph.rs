@@ -12,6 +12,8 @@ use rustc_middle::{
     ty::{TyCtxt, TyKind, TypingEnv},
 };
 use rustc_span::def_id::DefId;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 
 /// Maximum number of whole-CFG paths collected before stopping enumeration.
 const WHOLE_CFG_PATH_LIMIT: usize = 4000;
@@ -699,6 +701,7 @@ impl<'tcx> PathGraph<'tcx> {
 pub struct PathEnumerator<'g, 'tcx> {
     graph: &'g PathGraph<'tcx>,
     scc_path_cache: FxHashMap<(DefId, usize, usize), Vec<SccEnumeratedPath>>,
+    child_context_cache: FxHashSet<(usize, u64)>,
 }
 
 impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
@@ -706,6 +709,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         PathEnumerator {
             graph,
             scc_path_cache: FxHashMap::default(),
+            child_context_cache: FxHashSet::default(),
         }
     }
 
@@ -840,6 +844,11 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         let is_child = scc.child_sccs.contains(&cur);
 
         if is_child {
+            let ctx = self.constraint_context(path);
+            if !self.child_context_cache.insert((cur, ctx)) {
+                return;
+            }
+
             let child_scc = self.graph.cfg_block(cur).scc.clone();
             let child_paths = self.find_scc_paths_repeat(cur, &child_scc, postfix_repeat);
 
@@ -849,13 +858,14 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
                     path.extend(&child_path.blocks[1..]);
                 }
 
+                let mut branch_counts = segment_counts.clone();
                 for &next in &child_path.exit_successors {
                     path.push(next);
                     self.dfs_scc_tree(
                         scc,
                         next,
                         path,
-                        segment_counts,
+                        &mut branch_counts,
                         postfix_repeat,
                         out,
                         seen_paths,
@@ -889,6 +899,46 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             );
             path.pop();
         }
+    }
+
+    /// Build a fingerprint of the constraint state along `path`.
+    ///
+    /// Walks `path` collecting assigned constants and copy chains, producing
+    /// a hash that distinguishes truly different constraint contexts at child
+    /// SCC entries (e.g. `outer_retry` changed from `true` to `false`).
+    fn constraint_context(&self, path: &[usize]) -> u64 {
+        let mut hasher = DefaultHasher::new();
+        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
+
+        for &block in path.iter() {
+            if let Some(assigned) = self.graph.assigned_locals.get(block) {
+                let consts = self.graph.constants.get(block);
+                let copies = self.graph.constraint_copies.get(block);
+                for local in assigned.iter() {
+                    if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
+                        if let Some(&src_val) = constraints.get(&src) {
+                            constraints.insert(*local, src_val);
+                            continue;
+                        }
+                        if let Some(&dst_val) = constraints.get(local) {
+                            constraints.insert(src, dst_val);
+                            constraints.insert(*local, dst_val);
+                            continue;
+                        }
+                    }
+                    if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
+                        constraints.insert(*local, val);
+                        continue;
+                    }
+                    constraints.remove(local);
+                }
+            }
+        }
+
+        let mut entries: Vec<(usize, usize)> = constraints.into_iter().collect();
+        entries.sort();
+        entries.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Return all CFG successors of `cur` as traversal actions.
