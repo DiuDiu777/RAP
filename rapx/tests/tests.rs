@@ -569,11 +569,9 @@ fn heap_proxy() {
 fn path_1() {
     let output = run_with_args("paths/path_1", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read1\":");
-    // 6 paths — 2 alignment branches × 3 match exits
-    assert_contain(&output, "Path [0, 1, 2, 3, 5, 6]");
-    assert_contain(&output, "Path [0, 1, 2, 4, 5, 7, 10]");
-    assert_contain(&output, "Path [0, 1, 2, 3, 5, 8, 9, 10]");
-    assert_eq!(path_count_for(&output, "read1"), 6);
+    assert_contain(&output, "Path [0, 1, 3, 6, 7, 8]");
+    assert_contain(&output, "Path [0, 2, 3, 5, 8]");
+    assert_eq!(path_count_for(&output, "read1"), 2);
 }
 
 #[test]

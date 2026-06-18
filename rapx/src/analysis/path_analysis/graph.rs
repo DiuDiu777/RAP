@@ -6,8 +6,8 @@ use crate::graphs::{
 };
 use rustc_middle::{
     mir::{
-        BasicBlock, Local, Operand, Rvalue, StatementKind, SwitchTargets, Terminator,
-        TerminatorKind, UnwindAction,
+        AggregateKind, BasicBlock, Local, Operand, Rvalue, StatementKind, SwitchTargets,
+        Terminator, TerminatorKind, UnwindAction,
     },
     ty::{TyCtxt, TyKind, TypingEnv},
 };
@@ -73,6 +73,8 @@ pub struct PathGraph<'tcx> {
     pub constants: Vec<FxHashMap<usize, usize>>,
     /// Path-analysis-specific metadata: block -> (dest_local -> source_local) for copy/move.
     pub constraint_copies: Vec<FxHashMap<usize, usize>>,
+    /// Path-analysis-specific metadata: source ADT local -> discriminant variant count.
+    pub discriminant_ranges: FxHashMap<usize, usize>,
 }
 
 impl<'tcx> PathGraph<'tcx> {
@@ -83,6 +85,7 @@ impl<'tcx> PathGraph<'tcx> {
         let mut assigned_locals = Vec::new();
         let mut constants: Vec<FxHashMap<usize, usize>> = Vec::new();
         let mut constraint_copies: Vec<FxHashMap<usize, usize>> = Vec::new();
+        let mut discriminant_ranges: FxHashMap<usize, usize> = FxHashMap::default();
         let mut discriminants = FxHashMap::default();
 
         for i in 0..basicblocks.len() {
@@ -120,6 +123,31 @@ impl<'tcx> PathGraph<'tcx> {
                         }
                         Rvalue::Discriminant(rv_place) => {
                             discriminants.insert(dest, rv_place.local.as_usize());
+                            let src_local = rv_place.local.as_usize();
+                            if !discriminant_ranges.contains_key(&src_local) {
+                                let src_ty = body.local_decls[rv_place.local].ty;
+                                if let TyKind::Adt(adt_def, _) = src_ty.kind() {
+                                    let num = adt_def.variants().len();
+                                    if num > 0 {
+                                        discriminant_ranges.insert(src_local, num);
+                                    }
+                                }
+                            }
+                        }
+                        Rvalue::Aggregate(kind, _) => {
+                            if let AggregateKind::Adt(_, variant_idx, _, _, _) = kind.as_ref() {
+                                let discr = variant_idx.as_usize();
+                                block_constants.insert(dest, discr);
+                                if !discriminant_ranges.contains_key(&dest) {
+                                    let dest_ty = body.local_decls[place.local].ty;
+                                    if let TyKind::Adt(adt_def, _) = dest_ty.kind() {
+                                        let num = adt_def.variants().len();
+                                        if num > 0 {
+                                            discriminant_ranges.insert(dest, num);
+                                        }
+                                    }
+                                }
+                            }
                         }
                         _ => {}
                     }
@@ -237,6 +265,7 @@ impl<'tcx> PathGraph<'tcx> {
             discriminants,
             constants,
             constraint_copies,
+            discriminant_ranges,
         }
     }
 
@@ -499,6 +528,19 @@ impl<'tcx> PathGraph<'tcx> {
 
                 // No prior constraint — conservatively allow any valid target
                 // and record the newly learned constraint from the taken branch.
+                if next == targets.otherwise().as_usize() {
+                    if let Some(local) = constraint_local {
+                        if let Some(&num_variants) = self.discriminant_ranges.get(&local) {
+                            let all_covered = (0..num_variants).all(|v| {
+                                targets.iter().any(|(tv, _)| tv == v as u128)
+                            });
+                            if all_covered {
+                                return false;
+                            }
+                        }
+                    }
+                }
+
                 if let Some(local) = constraint_local {
                     if let Some((val, _)) = targets.iter().find(|(_, bb)| bb.as_usize() == next) {
                         constraints.insert(local, val as usize);

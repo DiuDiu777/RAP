@@ -3,17 +3,11 @@
 #![allow(dead_code)]
 #![allow(unused)]
 
-// Branch-based paths: if-else alignment check + match return.
 #[rapx::verify]
-fn read1<T>(ptr: *const T) -> Option<u32> {
-    let p: Option<*const u32> = if (ptr as usize) % std::mem::align_of::<u32>() == 0 {
-        Some(ptr as *const u32)
-    } else {
-        None
-    };
-    let p = match p {
-        Some(p) => p,
-        None => return None,
-    };
-    unsafe { Some(p.read()) }
+fn read1(x: i32) -> Option<i32> {
+    let p: Option<i32> = if x > 0 { Some(x) } else { None };
+    match p {
+        Some(v) => Some(v * 2),
+        None => None,
+    }
 }
