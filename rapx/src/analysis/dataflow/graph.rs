@@ -8,7 +8,7 @@ use rustc_middle::{
 };
 use rustc_span::Span;
 
-use crate::graphs::dataflow::*;
+use super::types::*;
 
 /// Build a `DataflowGraph` for a single function identified by `def_id`.
 pub fn build_dataflow_graph(tcx: TyCtxt<'_>, def_id: DefId) -> DataflowGraph {

@@ -11,7 +11,7 @@ use rustc_middle::mir::{BasicBlock, StatementKind, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
 
 use crate::analysis::dataflow::graph::build_dataflow_graph;
-use crate::graphs::dataflow::DataflowGraph;
+use crate::analysis::dataflow::types::DataflowGraph;
 
 use super::super::{
     contract,

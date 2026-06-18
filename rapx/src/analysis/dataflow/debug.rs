@@ -2,7 +2,7 @@ use std::fmt::Write;
 
 use rustc_middle::{mir::Local, ty::TyCtxt};
 
-use crate::graphs::dataflow::*;
+use super::types::*;
 
 fn escaped_string(s: String) -> String {
     s.replace("{", "\\{")

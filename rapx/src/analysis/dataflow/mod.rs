@@ -7,7 +7,8 @@ use std::{
     fmt::{self, Debug, Display},
 };
 
-pub use crate::graphs::dataflow::*;
+pub mod types;
+pub use types::*;
 use crate::{analysis::Analysis, utils::source::get_fn_name_byid};
 
 impl From<DataflowGraph> for DataFlowGraph {

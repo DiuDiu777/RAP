@@ -9,7 +9,7 @@ use rustc_middle::mir::{BasicBlock, Body, Operand, Place};
 use rustc_middle::ty::TyCtxt;
 use crate::compat::Spanned;
 
-use crate::graphs::dataflow::DataflowGraph;
+use crate::analysis::dataflow::types::DataflowGraph;
 
 use super::super::{
     call_summary,
