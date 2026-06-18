@@ -634,20 +634,11 @@ fn path_6() {
 fn path_7() {
     let output = run_with_args("analyze/path_7", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"walk\":");
-    // 2 paths — nested SCC (outer row + inner col loops)
+    // 9 paths — nested SCC (outer row + inner col loops), single-block child paths no longer skipped
     assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 5, 9, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 8, 4, 5, 9, 1, 2]");
-    assert_eq!(path_count_for(&output, "walk"), 2);
-}
-
-#[test]
-fn path_8() {
-    let output = run_with_args("analyze/path_8", ANALYZE_PATHS_CMD);
-    assert_contain(&output, "Function: \"double_loop\":");
-    // 2 paths — nested SCC (outer + inner loops)
-    assert_contain(&output, "Path [0, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 4, 5, 8, 1, 2]");
-    assert_eq!(path_count_for(&output, "double_loop"), 2);
+    assert_eq!(path_count_for(&output, "walk"), 9);
 }
 
 #[test]

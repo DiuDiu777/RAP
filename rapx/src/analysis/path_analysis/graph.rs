@@ -844,11 +844,10 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             let child_paths = self.find_scc_paths_repeat(cur, &child_scc, postfix_repeat);
 
             for child_path in &child_paths {
-                if child_path.blocks.len() <= 1 {
-                    continue;
-                }
                 let orig_len = path.len();
-                path.extend(&child_path.blocks[1..]);
+                if child_path.blocks.len() > 1 {
+                    path.extend(&child_path.blocks[1..]);
+                }
 
                 for &next in &child_path.exit_successors {
                     path.push(next);
