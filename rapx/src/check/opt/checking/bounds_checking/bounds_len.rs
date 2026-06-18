@@ -307,5 +307,5 @@ fn report_upperbound_bug(graph: &Graph, upperbound_node_idx: Local, index_record
         .snippet(snippet)
         .footer(Level::Help.title("Use unsafe APIs instead."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

@@ -145,7 +145,7 @@ fn report_hash_key_cloning(graph: &Graph, clone_span: Span, insert_span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use borrowings as keys."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }
 
 pub struct HashKeyCloningCheck {

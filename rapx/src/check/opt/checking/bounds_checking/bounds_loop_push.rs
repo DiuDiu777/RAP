@@ -146,5 +146,5 @@ fn report_loop_push_bug(loop_span: Span, push_record: &Vec<Span>) {
         .title("Unnecessary bounds checkings detected")
         .snippet(snippet);
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

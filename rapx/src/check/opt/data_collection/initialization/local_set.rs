@@ -99,5 +99,5 @@ fn report_local_set(graph: &Graph, span: Span) {
             Level::Help.title("Move it into parameter list and use hash table to save allocation."),
         );
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

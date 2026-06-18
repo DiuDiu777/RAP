@@ -1,4 +1,5 @@
 use super::graph::*;
+use crate::analysis::alias_analysis::default::types::ValueKind;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub struct LocalSpot {
@@ -113,6 +114,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
         rap_debug!("push_drop_top_down: value_idx = {}", value_idx);
         let mut prop_chain = vec![value_idx];
         for (_field_id, field_value_id) in self.alias_graph.values[value_idx].fields.clone() {
+            if self.alias_graph.values[field_value_id].kind == ValueKind::Ref {
+                continue;
+            }
             self.drop_record[field_value_id] = DropRecord::new(field_value_id, true, drop_spot);
             prop_chain.push(field_value_id);
             self.drop_record[field_value_id].prop_chain = prop_chain.clone();

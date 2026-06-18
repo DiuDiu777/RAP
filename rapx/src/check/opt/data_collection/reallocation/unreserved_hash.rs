@@ -132,5 +132,5 @@ fn report_unreserved_hash_bug(graph: &Graph, hash_span: Span, insert_span: Span)
         .snippet(snippet)
         .footer(Level::Help.title("Reserve enough space."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

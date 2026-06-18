@@ -177,5 +177,5 @@ fn report_used_as_immutable(graph: &Graph, clone_span: Span, use_span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use borrowings instead."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

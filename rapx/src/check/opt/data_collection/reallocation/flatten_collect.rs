@@ -108,5 +108,5 @@ fn report_flatten_collect(graph: &Graph, span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use extend manually."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

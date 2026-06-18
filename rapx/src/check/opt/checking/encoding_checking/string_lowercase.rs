@@ -100,5 +100,5 @@ fn report_string_ascii_bug(graph: &Graph, contains_span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use to_ascii_lowercase instead."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

@@ -2559,7 +2559,7 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
                 .title("Memory Leak detected.")
                 .snippet(snippet);
             let renderer = Renderer::styled();
-            println!("{}", renderer.render(message));
+            rap_warn!("{}", renderer.render(message));
         }
     }
 

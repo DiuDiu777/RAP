@@ -76,7 +76,7 @@ fn report_encoding_bug(graph: &Graph, span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use unsafe APIs."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }
 
 // Warning: WE APPROXIMATELY VIEW CONST U8s AS SAFE INPUT

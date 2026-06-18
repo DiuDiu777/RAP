@@ -97,5 +97,5 @@ fn report_slice_contains_bug(graph: &Graph, contains_span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use Set instead of Slice."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

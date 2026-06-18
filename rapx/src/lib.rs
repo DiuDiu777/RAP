@@ -38,7 +38,7 @@ extern crate thin_vec;
 use crate::{
     analysis::{alias_analysis::mfp::MfpAliasAnalyzer, api_dependency, scan::ScanAnalysis},
     check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop},
-    cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptTarget, RapxArgs, VerifyArgs},
+    cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, RapxArgs, VerifyArgs},
     verify::{driver::VerifyRun, target::PrepareTargets},
 };
 use analysis::{
@@ -171,12 +171,8 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
         }
 
-        Commands::Opt { target } => {
-            let level = match target {
-                OptTarget::All => 1,
-                _ => 1,
-            };
-            Opt::new(tcx, level).start();
+        Commands::Opt => {
+            Opt::new(tcx, 1).start();
         }
 
         Commands::Analyze { kind } => match kind {

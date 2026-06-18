@@ -61,7 +61,7 @@ Examples:
   1. detect use-after-free and memory leak:
      cargo rapx check -f -m
   2. detect optimization opportunities:
-     cargo rapx opt [bounds|encoding|cloning|suboptimal|initialization|reallocation|all]
+     cargo rapx opt
   3. perform alias analysis:
      cargo rapx analyze alias
   4. verify annotated functions:
@@ -104,11 +104,7 @@ Options:
 ### `opt` command
 
 ```
-Usage: cargo rapx opt [TARGET]
-
-Arguments:
-  [TARGET]  optimization target [possible values: bounds, encoding, cloning,
-            suboptimal, initialization, reallocation, all]
+Usage: cargo rapx opt
 ```
 
 ### `verify` command

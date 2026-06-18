@@ -3,7 +3,7 @@ mod check;
 mod verify;
 pub use analyze::*;
 pub use check::*;
-use clap::{Args, Subcommand, ValueEnum};
+use clap::{Args, Subcommand};
 pub use verify::*;
 
 #[derive(Args, Debug, Clone)]
@@ -30,24 +30,9 @@ pub enum Commands {
     /// e.g., use-after-free, memory leak
     Check(CheckArgs),
     /// detect code optimization opportunities
-    Opt {
-        /// optimization target (default: all)
-        #[arg(default_value = "all")]
-        target: OptTarget,
-    },
+    Opt,
     /// verify annotated functions in the crate, e.g., identify #[rapx::verify] targets
     Verify(VerifyArgs),
-}
-
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum OptTarget {
-    Bounds,
-    Encoding,
-    Cloning,
-    Suboptimal,
-    Initialization,
-    Reallocation,
-    All,
 }
 
 impl RapxArgs {

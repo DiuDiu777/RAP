@@ -125,5 +125,5 @@ fn report_string_push_bug(graph: &Graph, spans: &Vec<Span>) {
         .snippet(snippet)
         .footer(Level::Help.title("Use unsafe APIs instead."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

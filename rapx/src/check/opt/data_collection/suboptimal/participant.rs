@@ -94,5 +94,5 @@ fn report_participant(graph: &Graph, span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use faster data collection or hash operators instead. Static container is also a choice"));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

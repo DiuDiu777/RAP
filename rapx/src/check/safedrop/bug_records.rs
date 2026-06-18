@@ -248,7 +248,7 @@ impl BugRecords {
 
                 let message = Level::Warning.title(title).snippet(snippet);
 
-                println!("{}", renderer.render(message));
+                rap_warn!("{}", renderer.render(message));
             }
         }
     }

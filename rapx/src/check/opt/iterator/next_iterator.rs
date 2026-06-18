@@ -117,5 +117,5 @@ fn report_next_iterator_bug(next_record: &Vec<Span>, chain_record: &Vec<Span>, g
         .snippet(snippet)
         .footer(Level::Help.title("Use chunk iterators."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

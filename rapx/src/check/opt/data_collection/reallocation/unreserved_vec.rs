@@ -207,5 +207,5 @@ fn report_unreserved_vec_bug(graph: &Graph, span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Reserve enough space."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }

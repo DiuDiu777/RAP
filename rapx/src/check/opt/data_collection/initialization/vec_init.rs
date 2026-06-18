@@ -81,5 +81,5 @@ fn report_vec_init(graph: &Graph, span: Span) {
         .snippet(snippet)
         .footer(Level::Help.title("Use unsafe APIs to skip initialization."));
     let renderer = Renderer::styled();
-    println!("{}", renderer.render(message));
+    rap_warn!("{}", renderer.render(message));
 }
