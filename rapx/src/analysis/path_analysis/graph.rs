@@ -824,7 +824,9 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
 
         if cur == scc.enter && path.len() > 1 {
             if !check_postfix_segment(path, scc.enter, segment_counts, postfix_repeat) {
-                if scc.exits.iter().any(|e| e.exit == cur) {
+                if (postfix_repeat > 0 || segment_counts.len() > 1)
+                    && scc.exits.iter().any(|e| e.exit == cur)
+                {
                     self.record_unique_path(path, scc, out, seen_paths);
                 }
                 return;

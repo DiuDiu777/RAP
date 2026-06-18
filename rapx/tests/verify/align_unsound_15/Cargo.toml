@@ -1,5 +1,5 @@
 [package]
-name = "unsound_align_15"
+name = "align_unsound_15"
 version = "0.1.0"
 edition = "2024"
 

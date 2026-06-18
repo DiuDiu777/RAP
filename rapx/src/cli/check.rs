@@ -1,4 +1,3 @@
-use super::OptLevel;
 use clap::Args;
 
 /// Arguments for the `check` command.
@@ -16,8 +15,4 @@ pub struct CheckArgs {
     /// detect memory leakage
     #[arg(short = 'm', long)]
     pub mleak: bool,
-
-    /// automatically detect code optimization chances
-    #[arg(short = 'o', long, default_missing_value = "default")]
-    pub opt: Option<OptLevel>,
 }

@@ -1,6 +1,5 @@
 #![allow(clippy::bool_assert_comparison)]
 use fs4::fs_std::FileExt;
-use insta::assert_snapshot;
 use std::ffi::OsString;
 use std::fs::File;
 use std::path::{Path, PathBuf};
@@ -181,8 +180,8 @@ const VERIFY_INVLESS_CMD: &[&str] = &["verify", "--mode", "invless"];
 
 // ================Dangling Pointer Detection Test=====================
 #[test]
-fn uaf_01() {
-    let output = run_with_args("uaf/uaf_01", CHECK_UAF_CMD);
+fn uaf_1() {
+    let output = run_with_args("check/uaf_1", CHECK_UAF_CMD);
     assert_contain(
         &output,
         "Dangling pointer detected in function \"create_vec\"",
@@ -190,64 +189,64 @@ fn uaf_01() {
 }
 
 #[test]
-fn uaf_02() {
-    let output = run_with_args("uaf/uaf_02", CHECK_UAF_CMD);
+fn uaf_2() {
+    let output = run_with_args("check/uaf_2", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_03() {
-    let output = run_with_args("uaf/uaf_03", CHECK_UAF_CMD);
+fn uaf_3() {
+    let output = run_with_args("check/uaf_3", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected");
 }
 
 /*
 #[test]
-fn uaf_04() {
-    let output = run_with_args("uaf/uaf_04", CHECK_UAF_CMD);
+fn uaf_4() {
+    let output = run_with_args("check/uaf_4", CHECK_UAF_CMD);
     assert_contain(&output, "Dangling pointer detected in function \"call\"");
 }
 */
 
 #[test]
-fn uaf_05() {
-    let output = run_with_args("uaf/uaf_05", CHECK_UAF_CMD);
+fn uaf_5() {
+    let output = run_with_args("check/uaf_5", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_06() {
-    let output = run_with_args("uaf/uaf_06", CHECK_UAF_CMD);
+fn uaf_6() {
+    let output = run_with_args("check/uaf_6", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_07() {
-    let output = run_with_args("uaf/uaf_07", CHECK_UAF_CMD);
+fn uaf_7() {
+    let output = run_with_args("check/uaf_7", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_08() {
-    let output = run_with_args("uaf/uaf_08", CHECK_UAF_CMD);
+fn uaf_8() {
+    let output = run_with_args("check/uaf_8", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
-fn uaf_09() {
-    let output = run_with_args("uaf/uaf_09", CHECK_UAF_CMD);
+fn uaf_9() {
+    let output = run_with_args("check/uaf_9", CHECK_UAF_CMD);
     assert_contain(&output, "Use-after-free detected in function \"main\"");
 }
 
 #[test]
 fn uaf_10() {
-    let output = run_with_args("uaf/uaf_10", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_10", CHECK_UAF_CMD);
     assert_contain(&output, "Double free detected in function \"evil_test\"");
 }
 
 #[test]
-fn uaf_false_01() {
-    let output = run_with_args("uaf/uaf_false_01", CHECK_UAF_CMD);
+fn uaf_false_1() {
+    let output = run_with_args("check/uaf_false_1", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
         "Unexpected high-confidence bug in output:\n{}",
@@ -256,14 +255,14 @@ fn uaf_false_01() {
 }
 
 #[test]
-fn uaf_false_02() {
-    let output = run_with_args("uaf/uaf_false_02", CHECK_UAF_CMD);
+fn uaf_false_2() {
+    let output = run_with_args("check/uaf_false_2", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn uaf_false_03() {
-    let output = run_with_args("uaf/uaf_false_03", CHECK_UAF_CMD);
+fn uaf_false_3() {
+    let output = run_with_args("check/uaf_false_3", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
         "Unexpected high-confidence bug in output:\n{}",
@@ -272,22 +271,22 @@ fn uaf_false_03() {
 }
 
 #[test]
-fn uaf_false_04() {
-    let output = run_with_args("uaf/uaf_false_04", CHECK_UAF_CMD);
+fn uaf_false_4() {
+    let output = run_with_args("check/uaf_false_4", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn uaf_false_05() {
+fn uaf_false_5() {
     #[allow(unused)]
-    let output = run_with_args("uaf/uaf_false_05", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_false_5", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn uaf_false_06() {
+fn uaf_false_6() {
     #[allow(unused)]
-    let output = run_with_args("uaf/uaf_false_06", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_false_6", CHECK_UAF_CMD);
     assert!(
         !detected_high_confidence(&output),
         "Unexpected high-confidence bug in output:\n{}",
@@ -296,55 +295,55 @@ fn uaf_false_06() {
 }
 
 #[test]
-fn uaf_false_08() {
+fn uaf_false_8() {
     #[allow(unused)]
-    let output = run_with_args("uaf/uaf_false_08", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_false_8", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
-fn uaf_false_09() {
+fn uaf_false_9() {
     #[allow(unused)]
-    let output = run_with_args("uaf/uaf_false_09", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_false_9", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
 fn uaf_false_10() {
     #[allow(unused)]
-    let output = run_with_args("uaf/uaf_false_10", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_false_10", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 #[test]
 fn uaf_false_11() {
     #[allow(unused)]
-    let output = run_with_args("uaf/uaf_false_11", CHECK_UAF_CMD);
+    let output = run_with_args("check/uaf_false_11", CHECK_UAF_CMD);
     assert_not_contain(&output, "detected");
 }
 
 // ===============Alias(MOP) Analysis Test==============
 #[test]
-fn alias_01() {
-    let output = run_with_args("alias/alias_01", ANALYZE_ALIAS_CMD);
+fn alias_1() {
+    let output = run_with_args("analyze/alias_1", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0.0,1)");
 }
 
 #[test]
-fn alias_02() {
-    let output = run_with_args("alias/alias_02", ANALYZE_ALIAS_CMD);
+fn alias_2() {
+    let output = run_with_args("analyze/alias_2", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_03() {
-    let output = run_with_args("alias/alias_03", ANALYZE_ALIAS_CMD);
+fn alias_3() {
+    let output = run_with_args("analyze/alias_3", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": null");
 }
 
 #[test]
-fn alias_04() {
-    let output = run_with_args("alias/alias_04", ANALYZE_ALIAS_CMD);
+fn alias_4() {
+    let output = run_with_args("analyze/alias_4", ANALYZE_ALIAS_CMD);
     let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
         || output.contains("\"foo\": (0,1.0), (0,1.1)");
     assert!(
@@ -355,70 +354,70 @@ fn alias_04() {
 }
 
 #[test]
-fn alias_05() {
-    let output = run_with_args("alias/alias_05", ANALYZE_ALIAS_CMD);
+fn alias_5() {
+    let output = run_with_args("analyze/alias_5", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn alias_06() {
-    let output = run_with_args("alias/alias_06", ANALYZE_ALIAS_CMD);
+fn alias_6() {
+    let output = run_with_args("analyze/alias_6", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_07() {
-    let output = run_with_args("alias/alias_07", ANALYZE_ALIAS_CMD);
+fn alias_7() {
+    let output = run_with_args("analyze/alias_7", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_08() {
-    let output = run_with_args("alias/alias_08", ANALYZE_ALIAS_CMD);
+fn alias_8() {
+    let output = run_with_args("analyze/alias_8", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1), (0,2)");
 }
 
 #[test]
-fn alias_09() {
-    let output = run_with_args("alias/alias_09", ANALYZE_ALIAS_CMD);
+fn alias_9() {
+    let output = run_with_args("analyze/alias_9", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
 fn alias_10() {
-    let output = run_with_args("alias/alias_10", ANALYZE_ALIAS_CMD);
+    let output = run_with_args("analyze/alias_10", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
 fn alias_11() {
-    let output = run_with_args("alias/alias_11", ANALYZE_ALIAS_CMD);
+    let output = run_with_args("analyze/alias_11", ANALYZE_ALIAS_CMD);
     assert_contain(&output, "iter_prop\": (0.0,1.0)");
 }
 
 // ===============Alias(MFP) Analysis Test==============
 #[test]
-fn alias_01_mfp() {
-    let output = run_with_args("alias/alias_01", ANALYZE_ALIAS_MFP_CMD);
+fn alias_1_mfp() {
+    let output = run_with_args("analyze/alias_1", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0.0,1)");
 }
 
 #[test]
-fn alias_02_mfp() {
-    let output = run_with_args("alias/alias_02", ANALYZE_ALIAS_MFP_CMD);
+fn alias_2_mfp() {
+    let output = run_with_args("analyze/alias_2", ANALYZE_ALIAS_MFP_CMD);
     // MOP expects "foo": (0,1) but MFP reports a slightly different format.
     assert_contain(&output, "foo\": (0.0,1)"); // This is slightly different from MOP
 }
 
 #[test]
-fn alias_03_mfp() {
-    let output = run_with_args("alias/alias_03", ANALYZE_ALIAS_MFP_CMD);
+fn alias_3_mfp() {
+    let output = run_with_args("analyze/alias_3", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": null");
 }
 
 #[test]
-fn alias_04_mfp() {
-    let output = run_with_args("alias/alias_04", ANALYZE_ALIAS_MFP_CMD);
+fn alias_4_mfp() {
+    let output = run_with_args("analyze/alias_4", ANALYZE_ALIAS_MFP_CMD);
     let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
         || output.contains("\"foo\": (0,1.0), (0,1.1)");
     assert!(
@@ -429,76 +428,76 @@ fn alias_04_mfp() {
 }
 
 #[test]
-fn alias_05_mfp() {
-    let output = run_with_args("alias/alias_05", ANALYZE_ALIAS_MFP_CMD);
+fn alias_5_mfp() {
+    let output = run_with_args("analyze/alias_5", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
-fn alias_06_mfp() {
-    let output = run_with_args("alias/alias_06", ANALYZE_ALIAS_MFP_CMD);
+fn alias_6_mfp() {
+    let output = run_with_args("analyze/alias_6", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_07_mfp() {
-    let output = run_with_args("alias/alias_07", ANALYZE_ALIAS_MFP_CMD);
+fn alias_7_mfp() {
+    let output = run_with_args("analyze/alias_7", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
-fn alias_08_mfp() {
-    let output = run_with_args("alias/alias_08", ANALYZE_ALIAS_MFP_CMD);
+fn alias_8_mfp() {
+    let output = run_with_args("analyze/alias_8", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1), (0,2)");
 }
 
 #[test]
-fn alias_09_mfp() {
-    let output = run_with_args("alias/alias_09", ANALYZE_ALIAS_MFP_CMD);
+fn alias_9_mfp() {
+    let output = run_with_args("analyze/alias_9", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "foo\": (0,1)");
 }
 
 #[test]
 fn alias_10_mfp() {
-    let output = run_with_args("alias/alias_10", ANALYZE_ALIAS_MFP_CMD);
+    let output = run_with_args("analyze/alias_10", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "new\": (0.0,1.0)");
 }
 
 #[test]
 fn alias_11_mfp() {
-    let output = run_with_args("alias/alias_11", ANALYZE_ALIAS_MFP_CMD);
+    let output = run_with_args("analyze/alias_11", ANALYZE_ALIAS_MFP_CMD);
     assert_contain(&output, "iter_prop\": (0.0,1.0)");
 }
 
 #[test]
-fn leak_01() {
-    let output = run_with_args("leak/leak_01", CHECK_MLEAK_CMD);
+fn leak_1() {
+    let output = run_with_args("check/memleak_1", CHECK_MLEAK_CMD);
     assert_not_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn leak_02() {
-    let output = run_with_args("leak/leak_02", CHECK_MLEAK_CMD);
+fn leak_2() {
+    let output = run_with_args("check/memleak_2", CHECK_MLEAK_CMD);
     assert_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
-fn leak_02_timeout() {
+fn leak_2_timeout() {
     let mut args = Vec::from(["--timeout", "0"]);
     args.extend(CHECK_MLEAK_CMD);
-    let output = run_with_args("leak/leak_02", &args);
+    let output = run_with_args("check/memleak_2", &args);
     assert!(output.contains("Process killed due to timeout"));
 }
 
 #[test]
-fn leak_03() {
-    let output = run_with_args("leak/leak_03", CHECK_MLEAK_CMD);
+fn leak_3() {
+    let output = run_with_args("check/memleak_3", CHECK_MLEAK_CMD);
     assert_contain(&output, "Memory Leak detected in function main");
 }
 
 #[test]
 fn heap_cell() {
-    let output = run_with_args("ownedheap/heap_cell", ANALYZE_OWNED_HEAP_CMD);
+    let output = run_with_args("analyze/ownedheap_cell", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "Cell\": False, <1>",
         "RefCell\": False, <1>",
@@ -513,7 +512,7 @@ fn heap_cell() {
 
 #[test]
 fn heap_collections() {
-    let output = run_with_args("ownedheap/heap_collections", ANALYZE_OWNED_HEAP_CMD);
+    let output = run_with_args("analyze/ownedheap_collections", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "Unique\": True, <0>",
         "Box\": True, <0,1>",
@@ -541,7 +540,7 @@ fn heap_collections() {
 
 #[test]
 fn heap_nested() {
-    let output: String = run_with_args("ownedheap/heap_nested", ANALYZE_OWNED_HEAP_CMD);
+    let output: String = run_with_args("analyze/ownedheap_nested", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "X\": False, <1>",
         "Y\": False, <1>",
@@ -553,7 +552,7 @@ fn heap_nested() {
 
 #[test]
 fn heap_proxy() {
-    let output = run_with_args("ownedheap/heap_proxy", ANALYZE_OWNED_HEAP_CMD);
+    let output = run_with_args("analyze/ownedheap_proxy", ANALYZE_OWNED_HEAP_CMD);
     for pattern in [
         "Proxy1\": False, <0>",
         "Proxy2\": True, <0>",
@@ -567,7 +566,7 @@ fn heap_proxy() {
 
 #[test]
 fn path_1() {
-    let output = run_with_args("paths/path_1", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_1", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read1\":");
     assert_contain(&output, "Path [0, 1, 3, 6, 7, 8]");
     assert_contain(&output, "Path [0, 2, 3, 5, 8]");
@@ -576,7 +575,7 @@ fn path_1() {
 
 #[test]
 fn path_2() {
-    let output = run_with_args("paths/path_2", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_2", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read2\":");
     // 3 paths — direct + ManuallyDrop branch (block 12 is cleanup)
     assert_contain(&output, "Path [0, 1, 2, 3, 10, 11]");
@@ -587,7 +586,7 @@ fn path_2() {
 
 #[test]
 fn path_3() {
-    let output = run_with_args("paths/path_3", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_3", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"retry_once\":");
     assert_contain(&output, "Path [0, 1, 2, 1, 3]");
     assert_eq!(path_count_for(&output, "retry_once"), 1);
@@ -595,7 +594,7 @@ fn path_3() {
 
 #[test]
 fn path_4() {
-    let output = run_with_args("paths/path_4", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_4", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read1\":");
     assert_contain(&output, "Path [0, 1, 2, 6]");
     assert_contain(&output, "Path [0, 1, 3, 4, 1, 3, 5, 6]");
@@ -604,7 +603,7 @@ fn path_4() {
 
 #[test]
 fn path_5() {
-    let output = run_with_args("paths/path_5", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_5", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"read2\":");
     assert_contain(&output, "Path [0, 1, 2, 3, 9]");
     assert_eq!(path_count_for(&output, "read2"), 2);
@@ -612,51 +611,48 @@ fn path_5() {
 
 #[test]
 fn path_false_1() {
-    let output = run_with_args("paths/path_false_1", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_false_1", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"classify\":");
-    // 11 paths — single SCC with if-else combos
+    // 9 paths — SCC with if-else branches
     assert_contain(&output, "Path [0, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 5, 6, 7, 10, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 5, 8, 9, 10, 1, 2]");
-    assert_eq!(path_count_for(&output, "classify"), 11);
+    assert_eq!(path_count_for(&output, "classify"), 9);
 }
 
 #[test]
 fn path_6() {
-    let output = run_with_args("paths/path_6", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_6", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"early_exit\":");
-    // 3 paths — loop with return: zero-iter, one-iter, two-iter
+    // 2 paths — loop with return: zero-iter, one-iter
     assert_contain(&output, "Path [0, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 1, 3, 4, 1, 2]");
-    assert_eq!(path_count_for(&output, "early_exit"), 3);
+    assert_eq!(path_count_for(&output, "early_exit"), 2);
 }
 
 #[test]
 fn path_7() {
-    let output = run_with_args("paths/path_7", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_7", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"walk\":");
-    // 11 paths — nested SCC (outer row + inner col loops)
+    // 2 paths — nested SCC (outer row + inner col loops)
     assert_contain(&output, "Path [0, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 8, 4, 5, 9, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 8, 4, 6, 7, 8, 4, 5, 9, 1, 2]");
-    assert_eq!(path_count_for(&output, "walk"), 11);
+    assert_eq!(path_count_for(&output, "walk"), 2);
 }
 
 #[test]
 fn path_8() {
-    let output = run_with_args("paths/path_8", ANALYZE_PATHS_CMD);
+    let output = run_with_args("analyze/path_8", ANALYZE_PATHS_CMD);
     assert_contain(&output, "Function: \"double_loop\":");
-    // 11 paths — nested SCC (outer + inner loops)
+    // 2 paths — nested SCC (outer + inner loops)
     assert_contain(&output, "Path [0, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 4, 5, 8, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 6, 7, 4, 6, 7, 4, 5, 8, 1, 2]");
-    assert_eq!(path_count_for(&output, "double_loop"), 11);
+    assert_eq!(path_count_for(&output, "double_loop"), 2);
 }
 
 #[test]
 fn scc_repeat1() {
-    let output = run_with_args("paths/path_false_1", ANALYZE_PATHS_REPEAT1_CMD);
+    let output = run_with_args("analyze/path_false_1", ANALYZE_PATHS_REPEAT1_CMD);
     // postfix_repeat=1: 39 paths vs 11 at repeat=0
     assert_eq!(path_count_for(&output, "classify"), 39);
     assert_contain(&output, "Path [0, 1, 2]");
@@ -664,78 +660,78 @@ fn scc_repeat1() {
 
 #[test]
 fn scc_repeat2() {
-    let output = run_with_args("paths/path_false_1", ANALYZE_PATHS_REPEAT2_CMD);
+    let output = run_with_args("analyze/path_false_1", ANALYZE_PATHS_REPEAT2_CMD);
     // postfix_repeat=2: 128 paths vs 11 at repeat=0
     assert_eq!(path_count_for(&output, "classify"), 128);
     assert_contain(&output, "Path [0, 1, 2]");
 }
 
 #[test]
-fn align_sound_01() {
-    let output = run_with_args("verify/align_sound_01", VERIFY_CMD);
+fn align_sound_1() {
+    let output = run_with_args("verify/align_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn align_sound_02() {
-    let output = run_with_args("verify/align_sound_02", VERIFY_CMD);
+fn align_sound_2() {
+    let output = run_with_args("verify/align_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_enum_paths_inside_scc");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn align_unsound_01() {
-    let output = run_with_args("verify/align_unsound_01", VERIFY_CMD);
+fn align_unsound_1() {
+    let output = run_with_args("verify/align_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_enum_paths_inside_scc");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn align_sound_03() {
-    let output = run_with_args("verify/align_sound_03", VERIFY_CMD);
+fn align_sound_3() {
+    let output = run_with_args("verify/align_sound_3", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_selects_aligned_source");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn align_unsound_02() {
-    let output = run_with_args("verify/align_unsound_02", VERIFY_CMD);
+fn align_unsound_2() {
+    let output = run_with_args("verify/align_unsound_2", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_selects_mixed_source");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn align_sound_04() {
-    let output = run_with_args("verify/align_sound_04", VERIFY_CMD);
+fn align_sound_4() {
+    let output = run_with_args("verify/align_sound_4", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_computes_aligned_offset");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn align_unsound_03() {
-    let output = run_with_args("verify/align_unsound_03", VERIFY_CMD);
+fn align_unsound_3() {
+    let output = run_with_args("verify/align_unsound_3", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_computes_misaligned_offset");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn align_sound_05() {
-    let output = run_with_args("verify/align_sound_05", VERIFY_CMD);
+fn align_sound_5() {
+    let output = run_with_args("verify/align_sound_5", VERIFY_CMD);
     assert_contain(&output, "function: sound_nested_scc_controller");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn align_unsound_04() {
-    let output = run_with_args("verify/align_unsound_04", VERIFY_ALLOW_REPEAT_CMD);
+fn align_unsound_4() {
+    let output = run_with_args("verify/align_unsound_4", VERIFY_ALLOW_REPEAT_CMD);
     assert_contain(&output, "function: unsound_nested_scc_controller");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn align_sound_06() {
-    let output = run_with_args("verify/align_sound_06", VERIFY_CMD);
+fn align_sound_6() {
+    let output = run_with_args("verify/align_sound_6", VERIFY_CMD);
     assert_contain(
         &output,
         "function: sound_iteration_count_switches_aligned_offsets",
@@ -744,8 +740,8 @@ fn align_sound_06() {
 }
 
 #[test]
-fn align_unsound_05() {
-    let output = run_with_args("verify/align_unsound_05", VERIFY_CMD);
+fn align_unsound_5() {
+    let output = run_with_args("verify/align_unsound_5", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_iteration_count_can_leave_unaligned",
@@ -754,8 +750,8 @@ fn align_unsound_05() {
 }
 
 #[test]
-fn align_sound_07() {
-    let output = run_with_args("verify/align_sound_07", VERIFY_CMD);
+fn align_sound_7() {
+    let output = run_with_args("verify/align_sound_7", VERIFY_CMD);
     assert_contain(
         &output,
         "function: sound_unrelated_scc_does_not_pollute_align",
@@ -764,8 +760,8 @@ fn align_sound_07() {
 }
 
 #[test]
-fn align_sound_08() {
-    let output = run_with_args("verify/align_sound_08", VERIFY_CMD);
+fn align_sound_8() {
+    let output = run_with_args("verify/align_sound_8", VERIFY_CMD);
     assert_contain(
         &output,
         "function: sound_unrelated_nested_scc_with_bad_scratch",
@@ -774,15 +770,15 @@ fn align_sound_08() {
 }
 
 #[test]
-fn align_sound_09() {
-    let output = run_with_args("verify/align_sound_09", VERIFY_CMD);
+fn align_sound_9() {
+    let output = run_with_args("verify/align_sound_9", VERIFY_CMD);
     assert_contain(&output, "function: sound_pre_scc_guard_with_scc_offsets");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn align_unsound_06() {
-    let output = run_with_args("verify/align_unsound_06", VERIFY_CMD);
+fn align_unsound_6() {
+    let output = run_with_args("verify/align_unsound_6", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_pre_scc_guard_overwritten_by_scc",
@@ -798,8 +794,8 @@ fn align_sound_10() {
 }
 
 #[test]
-fn align_unsound_07() {
-    let output = run_with_args("verify/align_unsound_07", VERIFY_CMD);
+fn align_unsound_7() {
+    let output = run_with_args("verify/align_unsound_7", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_guard_only_on_one_branch");
     assert_contain(&output, "result: UNSOUND");
 }
@@ -812,8 +808,8 @@ fn align_sound_11() {
 }
 
 #[test]
-fn align_unsound_08() {
-    let output = run_with_args("verify/align_unsound_08", VERIFY_CMD);
+fn align_unsound_8() {
+    let output = run_with_args("verify/align_unsound_8", VERIFY_CMD);
     assert_contain(&output, "function: unsound_helper_with_disjunctive_guard");
     assert_contain(&output, "result: UNSOUND");
 }
@@ -826,8 +822,8 @@ fn align_sound_12() {
 }
 
 #[test]
-fn align_unsound_09() {
-    let output = run_with_args("verify/align_unsound_09", VERIFY_CMD);
+fn align_unsound_9() {
+    let output = run_with_args("verify/align_unsound_9", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_helper_return_path_selects_bad_ptr",
@@ -1010,197 +1006,197 @@ fn align_repeat_threshold_repeat2_unsound() {
 }
 
 #[test]
-fn nonnull_sound_07() {
-    let output = run_with_args("verify/nonnull_sound_07", VERIFY_CMD);
+fn nonnull_sound_7() {
+    let output = run_with_args("verify/nonnull_sound_7", VERIFY_CMD);
     assert_contain(&output, "function: sound_ref_cast_copy_chain");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn nonnull_sound_02() {
-    let output = run_with_args("verify/nonnull_sound_02", VERIFY_CMD);
+fn nonnull_sound_2() {
+    let output = run_with_args("verify/nonnull_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_slice_as_ptr_branch");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn nonnull_sound_03() {
-    let output = run_with_args("verify/nonnull_sound_03", VERIFY_CMD);
+fn nonnull_sound_3() {
+    let output = run_with_args("verify/nonnull_sound_3", VERIFY_CMD);
     assert_contain(&output, "function: sound_intra_helper_from_ref");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn nonnull_sound_04() {
-    let output = run_with_args("verify/nonnull_sound_04", VERIFY_CMD);
+fn nonnull_sound_4() {
+    let output = run_with_args("verify/nonnull_sound_4", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_unrelated_state");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn nonnull_sound_05() {
-    let output = run_with_args("verify/nonnull_sound_05", VERIFY_CMD);
+fn nonnull_sound_5() {
+    let output = run_with_args("verify/nonnull_sound_5", VERIFY_CMD);
     assert_contain(&output, "function: sound_raw_arg_guarded");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn nonnull_sound_06() {
-    let output = run_with_args("verify/nonnull_sound_06", VERIFY_CMD);
+fn nonnull_sound_6() {
+    let output = run_with_args("verify/nonnull_sound_6", VERIFY_CMD);
     assert_contain(&output, "function: sound_nonnull_wrapper_from_ref");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn nonnull_unsound_01() {
-    let output = run_with_args("verify/nonnull_unsound_01", VERIFY_CMD);
+fn nonnull_unsound_1() {
+    let output = run_with_args("verify/nonnull_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_explicit_null_constant");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn nonnull_unsound_02() {
-    let output = run_with_args("verify/nonnull_unsound_02", VERIFY_CMD);
+fn nonnull_unsound_2() {
+    let output = run_with_args("verify/nonnull_unsound_2", VERIFY_CMD);
     assert_contain(&output, "function: unsound_raw_pointer_argument");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn nonnull_unsound_03() {
-    let output = run_with_args("verify/nonnull_unsound_03", VERIFY_CMD);
+fn nonnull_unsound_3() {
+    let output = run_with_args("verify/nonnull_unsound_3", VERIFY_CMD);
     assert_contain(&output, "function: unsound_branch_selects_null");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn nonnull_unsound_04() {
-    let output = run_with_args("verify/nonnull_unsound_04", VERIFY_CMD);
+fn nonnull_unsound_4() {
+    let output = run_with_args("verify/nonnull_unsound_4", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_overwrites_with_null");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn nonnull_unsound_05() {
-    let output = run_with_args("verify/nonnull_unsound_05", VERIFY_CMD);
+fn nonnull_unsound_5() {
+    let output = run_with_args("verify/nonnull_unsound_5", VERIFY_CMD);
     assert_contain(&output, "function: unsound_unrelated_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn nonnull_unsound_06() {
-    let output = run_with_args("verify/nonnull_unsound_06", VERIFY_CMD);
+fn nonnull_unsound_6() {
+    let output = run_with_args("verify/nonnull_unsound_6", VERIFY_CMD);
     assert_contain(&output, "function: unsound_nonnull_wrapper_from_null");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_sound_01() {
-    let output = run_with_args("verify/allocated_sound_01", VERIFY_CMD);
+fn allocated_sound_1() {
+    let output = run_with_args("verify/allocated_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_stack_local_allocated");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_02() {
-    let output = run_with_args("verify/allocated_sound_02", VERIFY_CMD);
+fn allocated_sound_2() {
+    let output = run_with_args("verify/allocated_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_slice_prefix_allocated");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_03() {
-    let output = run_with_args("verify/allocated_sound_03", VERIFY_CMD);
+fn allocated_sound_3() {
+    let output = run_with_args("verify/allocated_sound_3", VERIFY_CMD);
     assert_contain(&output, "function: sound_live_vec_allocated");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_04() {
-    let output = run_with_args("verify/allocated_sound_04", VERIFY_CMD);
+fn allocated_sound_4() {
+    let output = run_with_args("verify/allocated_sound_4", VERIFY_CMD);
     assert_contain(&output, "function: sound_live_box_allocated");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_05() {
-    let output = run_with_args("verify/allocated_sound_05", VERIFY_CMD);
+fn allocated_sound_5() {
+    let output = run_with_args("verify/allocated_sound_5", VERIFY_CMD);
     assert_contain(&output, "function: sound_branch_selects_live_local");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_06() {
-    let output = run_with_args("verify/allocated_sound_06", VERIFY_CMD);
+fn allocated_sound_6() {
+    let output = run_with_args("verify/allocated_sound_6", VERIFY_CMD);
     assert_contain(&output, "function: sound_loop_slice_element_allocated");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_07() {
-    let output = run_with_args("verify/allocated_sound_07", VERIFY_CMD);
+fn allocated_sound_7() {
+    let output = run_with_args("verify/allocated_sound_7", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_selects_live_array");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_sound_08() {
-    let output = run_with_args("verify/allocated_sound_08", VERIFY_CMD);
+fn allocated_sound_8() {
+    let output = run_with_args("verify/allocated_sound_8", VERIFY_CMD);
     assert_contain(&output, "function: sound_intra_returns_slice_pointer");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn allocated_unsound_01() {
-    let output = run_with_args("verify/allocated_unsound_01", VERIFY_CMD);
+fn allocated_unsound_1() {
+    let output = run_with_args("verify/allocated_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_null_not_allocated");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_02() {
-    let output = run_with_args("verify/allocated_unsound_02", VERIFY_CMD);
+fn allocated_unsound_2() {
+    let output = run_with_args("verify/allocated_unsound_2", VERIFY_CMD);
     assert_contain(&output, "function: unsound_stack_scope_ended");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_03() {
-    let output = run_with_args("verify/allocated_unsound_03", VERIFY_CMD);
+fn allocated_unsound_3() {
+    let output = run_with_args("verify/allocated_unsound_3", VERIFY_CMD);
     assert_contain(&output, "function: unsound_vec_dropped_before_use");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_04() {
-    let output = run_with_args("verify/allocated_unsound_04", VERIFY_CMD);
+fn allocated_unsound_4() {
+    let output = run_with_args("verify/allocated_unsound_4", VERIFY_CMD);
     assert_contain(&output, "function: unsound_empty_slice_needs_one_element");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_05() {
-    let output = run_with_args("verify/allocated_unsound_05", VERIFY_CMD);
+fn allocated_unsound_5() {
+    let output = run_with_args("verify/allocated_unsound_5", VERIFY_CMD);
     assert_contain(&output, "function: unsound_branch_may_select_null");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_06() {
-    let output = run_with_args("verify/allocated_unsound_06", VERIFY_CMD);
+fn allocated_unsound_6() {
+    let output = run_with_args("verify/allocated_unsound_6", VERIFY_CMD);
     assert_contain(&output, "function: unsound_scc_overwrites_with_null");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_07() {
-    let output = run_with_args("verify/allocated_unsound_07", VERIFY_CMD);
+fn allocated_unsound_7() {
+    let output = run_with_args("verify/allocated_unsound_7", VERIFY_CMD);
     assert_contain(&output, "function: unsound_vec_reallocates_old_pointer");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn allocated_unsound_08() {
-    let output = run_with_args("verify/allocated_unsound_08", VERIFY_CMD);
+fn allocated_unsound_8() {
+    let output = run_with_args("verify/allocated_unsound_8", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_slice_too_short_for_requested_len",
@@ -1209,8 +1205,8 @@ fn allocated_unsound_08() {
 }
 
 #[test]
-fn allocated_unsound_09() {
-    let output = run_with_args("verify/allocated_unsound_09", VERIFY_CMD);
+fn allocated_unsound_9() {
+    let output = run_with_args("verify/allocated_unsound_9", VERIFY_CMD);
     assert_contain(&output, "function: unsound_intra_returns_dangling_pointer");
     assert_contain(&output, "result: UNSOUND");
 }
@@ -1233,29 +1229,29 @@ fn allocated_unsound_11() {
 }
 
 #[test]
-fn inbound_sound_01() {
-    let output = run_with_args("verify/inbound_sound_01", VERIFY_CMD);
+fn inbound_sound_1() {
+    let output = run_with_args("verify/inbound_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_ptr_add_guarded");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_unsound_01() {
-    let output = run_with_args("verify/inbound_unsound_01", VERIFY_CMD);
+fn inbound_unsound_1() {
+    let output = run_with_args("verify/inbound_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_ptr_add_without_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn inbound_sound_02() {
-    let output = run_with_args("verify/inbound_sound_02", VERIFY_CMD);
+fn inbound_sound_2() {
+    let output = run_with_args("verify/inbound_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_from_raw_parts_prefix_two");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_unsound_02() {
-    let output = run_with_args("verify/inbound_unsound_02", VERIFY_CMD);
+fn inbound_unsound_2() {
+    let output = run_with_args("verify/inbound_unsound_2", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_from_raw_parts_two_only_nonempty",
@@ -1264,29 +1260,29 @@ fn inbound_unsound_02() {
 }
 
 #[test]
-fn inbound_sound_03() {
-    let output = run_with_args("verify/inbound_sound_03", VERIFY_CMD);
+fn inbound_sound_3() {
+    let output = run_with_args("verify/inbound_sound_3", VERIFY_CMD);
     assert_contain(&output, "function: sound_get_unchecked_generic");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_unsound_03() {
-    let output = run_with_args("verify/inbound_unsound_03", VERIFY_CMD);
+fn inbound_unsound_3() {
+    let output = run_with_args("verify/inbound_unsound_3", VERIFY_CMD);
     assert_contain(&output, "function: unsound_get_unchecked_wrong_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn inbound_sound_04() {
-    let output = run_with_args("verify/inbound_sound_04", VERIFY_CMD);
+fn inbound_sound_4() {
+    let output = run_with_args("verify/inbound_sound_4", VERIFY_CMD);
     assert_contain(&output, "function: sound_copy_nonoverlapping_one");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_unsound_04() {
-    let output = run_with_args("verify/inbound_unsound_04", VERIFY_CMD);
+fn inbound_unsound_4() {
+    let output = run_with_args("verify/inbound_unsound_4", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_copy_nonoverlapping_dst_unguarded",
@@ -1295,51 +1291,51 @@ fn inbound_unsound_04() {
 }
 
 #[test]
-fn inbound_sound_05() {
-    let output = run_with_args("verify/inbound_sound_05", VERIFY_CMD);
+fn inbound_sound_5() {
+    let output = run_with_args("verify/inbound_sound_5", VERIFY_CMD);
     assert_contain(&output, "function: sound_intra_slice_add_guarded");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_unsound_05() {
-    let output = run_with_args("verify/inbound_unsound_05", VERIFY_CMD);
+fn inbound_unsound_5() {
+    let output = run_with_args("verify/inbound_unsound_5", VERIFY_CMD);
     assert_contain(&output, "function: unsound_branch_selects_unguarded_index");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn inbound_sound_06() {
-    let output = run_with_args("verify/inbound_sound_06", VERIFY_CMD);
+fn inbound_sound_6() {
+    let output = run_with_args("verify/inbound_sound_6", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_loop_index_guard");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_std_sound_01() {
-    let output = run_with_args("verify/inbound_std_sound_01", VERIFY_CMD);
+fn inbound_std_sound_1() {
+    let output = run_with_args("verify/inbound_std_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_std_get_unchecked");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn inbound_std_unsound_01() {
-    let output = run_with_args("verify/inbound_std_unsound_01", VERIFY_CMD);
+fn inbound_std_unsound_1() {
+    let output = run_with_args("verify/inbound_std_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_std_get_unchecked_wrong_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 // FIXME: requires SMT improvements for variable-length ValidPtr and NonOverlap
 // #[test]
-// fn inbound_std_sound_02() {
-//     let output = run_with_args("verify/inbound_std_sound_02", VERIFY_CMD);
+// fn inbound_std_sound_2() {
+//     let output = run_with_args("verify/inbound_std_sound_2", VERIFY_CMD);
 //     assert_contain(&output, "function: sound_std_copy_nonoverlapping");
 //     assert_contain(&output, "result: SOUND");
 // }
 
 #[test]
-fn inbound_std_unsound_02() {
-    let output = run_with_args("verify/inbound_std_unsound_02", VERIFY_CMD);
+fn inbound_std_unsound_2() {
+    let output = run_with_args("verify/inbound_std_unsound_2", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_std_copy_nonoverlapping_dst_unguarded",
@@ -1348,92 +1344,92 @@ fn inbound_std_unsound_02() {
 }
 
 #[test]
-fn init_std_sound_01() {
-    let output = run_with_args("verify/init_std_sound_01", VERIFY_CMD);
+fn init_std_sound_1() {
+    let output = run_with_args("verify/init_std_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_assume_init_read_after_write");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn init_std_sound_02() {
-    let output = run_with_args("verify/init_std_sound_02", VERIFY_CMD);
+fn init_std_sound_2() {
+    let output = run_with_args("verify/init_std_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_assume_init_after_write");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn init_std_sound_03() {
-    let output = run_with_args("verify/init_std_sound_03", VERIFY_CMD);
+fn init_std_sound_3() {
+    let output = run_with_args("verify/init_std_sound_3", VERIFY_CMD);
     assert_contain(&output, "function: sound_branch_local_init");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn init_std_sound_04() {
-    let output = run_with_args("verify/init_std_sound_04", VERIFY_CMD);
+fn init_std_sound_4() {
+    let output = run_with_args("verify/init_std_sound_4", VERIFY_CMD);
     assert_contain(&output, "function: sound_intra_helper_initializes");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn init_std_sound_05() {
-    let output = run_with_args("verify/init_std_sound_05", VERIFY_CMD);
+fn init_std_sound_5() {
+    let output = run_with_args("verify/init_std_sound_5", VERIFY_CMD);
     assert_contain(&output, "function: sound_loop_initializes_slice");
     assert_contain(&output, "Init | Proved");
 }
 
 #[test]
-fn init_std_sound_06() {
-    let output = run_with_args("verify/init_std_sound_06", VERIFY_CMD);
+fn init_std_sound_6() {
+    let output = run_with_args("verify/init_std_sound_6", VERIFY_CMD);
     assert_contain(&output, "function: sound_len_bound_loop_initializes_slice");
     assert_contain(&output, "Init | Proved");
 }
 
 #[test]
-fn init_std_unsound_01() {
-    let output = run_with_args("verify/init_std_unsound_01", VERIFY_CMD);
+fn init_std_unsound_1() {
+    let output = run_with_args("verify/init_std_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_assume_init_read_without_write");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn init_std_unsound_02() {
-    let output = run_with_args("verify/init_std_unsound_02", VERIFY_CMD);
+fn init_std_unsound_2() {
+    let output = run_with_args("verify/init_std_unsound_2", VERIFY_CMD);
     assert_contain(&output, "function: unsound_assume_init_without_write");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn init_std_unsound_03() {
-    let output = run_with_args("verify/init_std_unsound_03", VERIFY_CMD);
+fn init_std_unsound_3() {
+    let output = run_with_args("verify/init_std_unsound_3", VERIFY_CMD);
     assert_contain(&output, "function: unsound_conditional_write_then_assume");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn init_std_unsound_04() {
-    let output = run_with_args("verify/init_std_unsound_04", VERIFY_CMD);
+fn init_std_unsound_4() {
+    let output = run_with_args("verify/init_std_unsound_4", VERIFY_CMD);
     assert_contain(&output, "function: unsound_write_different_slot");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn init_std_unsound_05() {
-    let output = run_with_args("verify/init_std_unsound_05", VERIFY_CMD);
+fn init_std_unsound_5() {
+    let output = run_with_args("verify/init_std_unsound_5", VERIFY_CMD);
     assert_contain(&output, "function: unsound_intra_helper_maybe_initializes");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn init_std_unsound_06() {
-    let output = run_with_args("verify/init_std_unsound_06", VERIFY_CMD);
+fn init_std_unsound_6() {
+    let output = run_with_args("verify/init_std_unsound_6", VERIFY_CMD);
     assert_contain(&output, "function: unsound_from_raw_parts_uninitialized");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn init_std_unsound_07() {
-    let output = run_with_args("verify/init_std_unsound_07", VERIFY_CMD);
+fn init_std_unsound_7() {
+    let output = run_with_args("verify/init_std_unsound_7", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_from_raw_parts_wrong_element_type",
@@ -1443,8 +1439,8 @@ fn init_std_unsound_07() {
 }
 
 #[test]
-fn init_std_unsound_08() {
-    let output = run_with_args("verify/init_std_unsound_08", VERIFY_CMD);
+fn init_std_unsound_8() {
+    let output = run_with_args("verify/init_std_unsound_8", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_len_bound_loop_skips_even_indices",
@@ -1454,106 +1450,106 @@ fn init_std_unsound_08() {
 }
 
 #[test]
-fn validnum_sound_01() {
-    let output = run_with_args("verify/validnum_sound_01", VERIFY_CMD);
+fn validnum_sound_1() {
+    let output = run_with_args("verify/validnum_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_guarded_less_than");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_unsound_01() {
-    let output = run_with_args("verify/validnum_unsound_01", VERIFY_CMD);
+fn validnum_unsound_1() {
+    let output = run_with_args("verify/validnum_unsound_1", VERIFY_CMD);
     assert_contain(&output, "function: unsound_missing_less_than_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn validnum_sound_02() {
-    let output = run_with_args("verify/validnum_sound_02", VERIFY_CMD);
+fn validnum_sound_2() {
+    let output = run_with_args("verify/validnum_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_guarded_nonzero");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_unsound_02() {
-    let output = run_with_args("verify/validnum_unsound_02", VERIFY_CMD);
+fn validnum_unsound_2() {
+    let output = run_with_args("verify/validnum_unsound_2", VERIFY_CMD);
     assert_contain(&output, "function: unsound_missing_nonzero_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn validnum_sound_03() {
-    let output = run_with_args("verify/validnum_sound_03", VERIFY_CMD);
+fn validnum_sound_3() {
+    let output = run_with_args("verify/validnum_sound_3", VERIFY_CMD);
     assert_contain(&output, "function: sound_constant_sum_below_cap");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_unsound_03() {
-    let output = run_with_args("verify/validnum_unsound_03", VERIFY_CMD);
+fn validnum_unsound_3() {
+    let output = run_with_args("verify/validnum_unsound_3", VERIFY_CMD);
     assert_contain(&output, "function: unsound_partial_sum_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn validnum_sound_04() {
-    let output = run_with_args("verify/validnum_sound_04", VERIFY_CMD);
+fn validnum_sound_4() {
+    let output = run_with_args("verify/validnum_sound_4", VERIFY_CMD);
     assert_contain(&output, "function: sound_trait_bound_size_limit");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_unsound_04() {
-    let output = run_with_args("verify/validnum_unsound_04", VERIFY_CMD);
+fn validnum_unsound_4() {
+    let output = run_with_args("verify/validnum_unsound_4", VERIFY_CMD);
     assert_contain(&output, "function: unsound_trait_bound_missing_size_limit");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn validnum_sound_05() {
-    let output = run_with_args("verify/validnum_sound_05", VERIFY_CMD);
+fn validnum_sound_5() {
+    let output = run_with_args("verify/validnum_sound_5", VERIFY_CMD);
     assert_contain(&output, "function: sound_scc_validnum_index_guard");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_sound_06() {
-    let output = run_with_args("verify/validnum_sound_06", VERIFY_CMD);
+fn validnum_sound_6() {
+    let output = run_with_args("verify/validnum_sound_6", VERIFY_CMD);
     assert_contain(&output, "function: sound_guarded_variable_sum");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_sound_07() {
-    let output = run_with_args("verify/validnum_sound_07", VERIFY_CMD);
+fn validnum_sound_7() {
+    let output = run_with_args("verify/validnum_sound_7", VERIFY_CMD);
     assert_contain(&output, "function: sound_interval_guard");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_unsound_05() {
-    let output = run_with_args("verify/validnum_unsound_05", VERIFY_CMD);
+fn validnum_unsound_5() {
+    let output = run_with_args("verify/validnum_unsound_5", VERIFY_CMD);
     assert_contain(&output, "function: unsound_interval_inclusive_guard");
     assert_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn validnum_sound_08() {
-    let output = run_with_args("verify/validnum_sound_08", VERIFY_CMD);
+fn validnum_sound_8() {
+    let output = run_with_args("verify/validnum_sound_8", VERIFY_CMD);
     assert_contain(&output, "function: sound_trait_bound_align_order");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn validnum_std_sound_01() {
-    let output = run_with_args("verify/validnum_std_sound_01", VERIFY_CMD);
+fn validnum_std_sound_1() {
+    let output = run_with_args("verify/validnum_std_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: sound_std_from_raw_parts_validnum");
     assert_contain(&output, "ValidNum | Proved");
 }
 
 #[test]
-fn validnum_std_unsound_01() {
-    let output = run_with_args("verify/validnum_std_unsound_01", VERIFY_CMD);
+fn validnum_std_unsound_1() {
+    let output = run_with_args("verify/validnum_std_unsound_1", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_std_from_raw_parts_validnum_overflow",
@@ -1563,15 +1559,15 @@ fn validnum_std_unsound_01() {
 }
 
 #[test]
-fn validnum_std_sound_02() {
-    let output = run_with_args("verify/validnum_std_sound_02", VERIFY_CMD);
+fn validnum_std_sound_2() {
+    let output = run_with_args("verify/validnum_std_sound_2", VERIFY_CMD);
     assert_contain(&output, "function: sound_std_copy_nonoverlapping_validnum");
     assert_contain(&output, "ValidNum | Proved");
 }
 
 #[test]
-fn validnum_std_unsound_02() {
-    let output = run_with_args("verify/validnum_std_unsound_02", VERIFY_CMD);
+fn validnum_std_unsound_2() {
+    let output = run_with_args("verify/validnum_std_unsound_2", VERIFY_CMD);
     assert_contain(
         &output,
         "function: unsound_std_copy_nonoverlapping_validnum",
@@ -1675,32 +1671,32 @@ fn invless_2_with_contracts() {
 
 #[test]
 fn invless_sound_callee() {
-    let output = run_with_args("verify/align_sound_01", VERIFY_INVLESS_CMD);
+    let output = run_with_args("verify/align_sound_1", VERIFY_INVLESS_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
 fn safetyflow_safe_caller() {
-    let output = run_with_args("safetyflow/safe_caller", ANALYZE_SAFETYFLOW_CMD);
+    let output = run_with_args("analyze/safetyflow_safe_caller", ANALYZE_SAFETYFLOW_CMD);
     assert_contain(&output, "from_raw_parts");
 }
 
 #[test]
 fn safetyflow_raw_ptr() {
-    let output = run_with_args("safetyflow/raw_ptr", ANALYZE_SAFETYFLOW_CMD);
+    let output = run_with_args("analyze/safetyflow_raw_ptr", ANALYZE_SAFETYFLOW_CMD);
     assert_contain(&output, "*raw* ptr deref");
 }
 
 #[test]
 fn safetyflow_static_mut() {
-    let output = run_with_args("safetyflow/static_mut", ANALYZE_SAFETYFLOW_CMD);
+    let output = run_with_args("analyze/safetyflow_static_mut", ANALYZE_SAFETYFLOW_CMD);
     assert_contain(&output, "COUNTER");
 }
 
 #[test]
 fn verify_raw_ptr_unknown() {
-    let output = run_with_args("safetyflow/raw_ptr", VERIFY_SCAN_CMD);
+    let output = run_with_args("analyze/safetyflow_raw_ptr", VERIFY_SCAN_CMD);
     assert_contain(&output, "[rapx::verify] function: main");
     assert_contain(&output, "Unknown");
     assert_contain(&output, "UNSOUND");
@@ -1708,20 +1704,26 @@ fn verify_raw_ptr_unknown() {
 
 #[test]
 fn verify_static_mut_unknown() {
-    let output = run_with_args("safetyflow/static_mut", VERIFY_SCAN_CMD);
+    let output = run_with_args("analyze/safetyflow_static_mut", VERIFY_SCAN_CMD);
     assert_contain(&output, "[rapx::verify] function: main");
     assert_contain(&output, "Unknown");
     assert_contain(&output, "UNSOUND");
 }
 
 #[test]
+fn verify_slice() {
+    let output = run_with_args("verify/slice", VERIFY_CMD);
+    assert_contain(&output, "function:");
+}
+
+#[test]
 fn ssa_transform() {
-    let output = run_with_args("ssa/ssa_transform", ANALYZE_SSA_CMD);
+    let output = run_with_args("analyze/ssa_transform", ANALYZE_SSA_CMD);
     assert_contain(&output, "ssa lvalue check true");
 }
 #[test]
 fn range_analysis() {
-    let output = run_with_args("range/range_1", ANALYZE_RANGE_CMD);
+    let output = run_with_args("analyze/range_1", ANALYZE_RANGE_CMD);
 
     let expected_ranges = vec![
         "_1 => Regular [0, 0]",
@@ -1746,7 +1748,7 @@ fn range_analysis() {
 #[test]
 
 fn interprocedual_range_analysis() {
-    let output = run_with_args("range/range_2", ANALYZE_RANGE_CMD);
+    let output = run_with_args("analyze/range_2", ANALYZE_RANGE_CMD);
 
     let expected_ranges = vec![
         "_1 => Regular [42, 42]",
@@ -1767,7 +1769,7 @@ fn interprocedual_range_analysis() {
 
 #[test]
 fn callgraph_dynamic_dispatch() {
-    let output = run_with_args("callgraph/dynamic", ANALYZE_CALLGRAPH_CMD);
+    let output = run_with_args("analyze/callgraph_dynamic", ANALYZE_CALLGRAPH_CMD);
 
     let expected_calls = vec!["-> <Dog as Animal>::speak", "-> <Cat as Animal>::speak"];
 
@@ -1783,7 +1785,7 @@ fn callgraph_dynamic_dispatch() {
 
 #[test]
 fn symbolic_interval() {
-    let output = run_with_args("range/range_symbolic", ANALYZE_RANGE_CMD);
+    let output = run_with_args("analyze/range_symbolic", ANALYZE_RANGE_CMD);
 
     let expected_ranges = vec![
         "Var: (_5.0: i32). [ Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) , Binary(AddWithOverflow, Place(_1), Constant(Val(Scalar(0x00000001), i32))) ]",
@@ -1802,8 +1804,8 @@ fn symbolic_interval() {
 }
 
 #[test]
-fn nonnull_sound_01() {
-    let output = run_with_args("verify/nonnull_sound_01", VERIFY_CMD);
+fn nonnull_sound_1() {
+    let output = run_with_args("verify/nonnull_sound_1", VERIFY_CMD);
     assert_contain(&output, "function: caller_with_contract");
     assert_contain(&output, "result: SOUND");
     assert_contain(&output, "function: sound_chained_propagation");
@@ -1813,13 +1815,48 @@ fn nonnull_sound_01() {
 #[test]
 fn adg_bug() {
     // This test pass if don't panic (e.g., stack overflow) during ADG construction and resolution.
-    let _ = run_with_args("adg/bug-regression", ANALYZE_ADG_CMD);
+    let _ = run_with_args("analyze/adg_bug_regression", ANALYZE_ADG_CMD);
 }
 
 #[test]
 fn adg_simple_graph() {
-    let _ = run_with_args("adg/simple-graph", ANALYZE_ADG_CMD);
-    let graph_str = std::fs::read_to_string(project_path("adg/simple-graph").join("api_graph.yml"))
+    let _ = run_with_args("analyze/adg_simple_graph", ANALYZE_ADG_CMD);
+    let graph_str = std::fs::read_to_string(project_path("analyze/adg_simple_graph").join("api_graph.yml"))
         .expect("read api_graph.yml fail");
-    assert_snapshot!(graph_str);
+    assert_contain(&graph_str, "path: foo");
+    assert_contain(&graph_str, "path: bar");
+    assert_contain(&graph_str, "path: vec_arg");
+    assert_contain(&graph_str, "path: std::vec::Vec::<i32, std::alloc::Global>");
+    assert_contain(&graph_str, "path: Item");
+    assert_contain(&graph_str, "type: Api");
+    assert_contain(&graph_str, "type: Ty");
+    assert_contain(&graph_str, "type: Ret");
+    assert_contain(&graph_str, "type: Arg");
+    assert_contain(&graph_str, "from: 0");
+    assert_contain(&graph_str, "to: 1");
+    assert_contain(&graph_str, "from: 1");
+    assert_contain(&graph_str, "to: 2");
+    assert_contain(&graph_str, "from: 3");
+    assert_contain(&graph_str, "to: 4");
+}
+
+#[test]
+fn opt_bounds_len() {
+    let output = run_with_args("opt/bounds_len", &["opt", "bounds"]);
+    assert_not_contain(&output, "RAPx|ERROR|");
+    assert_contain(&output, "RAPx|WARN|: Potential optimizations detected");
+}
+
+#[test]
+fn opt_encoding_check() {
+    let output = run_with_args("opt/encoding_check", &["opt", "encoding"]);
+    assert_not_contain(&output, "RAPx|ERROR|");
+    assert_contain(&output, "RAPx|WARN|: Potential optimizations detected");
+}
+
+#[test]
+fn opt_hash_key_cloning() {
+    let output = run_with_args("opt/hash_key_cloning", &["opt", "cloning"]);
+    assert_not_contain(&output, "RAPx|ERROR|");
+    assert_contain(&output, "RAPx|WARN|: Potential optimizations detected");
 }

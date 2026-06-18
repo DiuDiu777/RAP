@@ -29,14 +29,24 @@ pub enum Commands {
     /// check potential vulnerabilities in the crate,
     /// e.g., use-after-free, memory leak
     Check(CheckArgs),
+    /// detect code optimization opportunities
+    Opt {
+        /// optimization target (default: all)
+        #[arg(default_value = "all")]
+        target: OptTarget,
+    },
     /// verify annotated functions in the crate, e.g., identify #[rapx::verify] targets
     Verify(VerifyArgs),
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum OptLevel {
-    Report,
-    Default,
+pub enum OptTarget {
+    Bounds,
+    Encoding,
+    Cloning,
+    Suboptimal,
+    Initialization,
+    Reallocation,
     All,
 }
 

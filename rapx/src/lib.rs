@@ -38,7 +38,7 @@ extern crate thin_vec;
 use crate::{
     analysis::{alias_analysis::mfp::MfpAliasAnalyzer, api_dependency, scan::ScanAnalysis},
     check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop},
-    cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptLevel, RapxArgs, VerifyArgs},
+    cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptTarget, RapxArgs, VerifyArgs},
     verify::{driver::VerifyRun, target::PrepareTargets},
 };
 use analysis::{
@@ -159,7 +159,7 @@ impl Callbacks for RapCallback {
 /// Start the analysis with the features enabled.
 pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
     match &callback.args.command {
-        Commands::Check(CheckArgs { uaf, mleak, opt }) => {
+        Commands::Check(CheckArgs { uaf, mleak }) => {
             if uaf.is_some() {
                 SafeDrop::new(tcx).start();
             }
@@ -169,13 +169,14 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 let adt_owner = heap.get_all_items();
                 rCanary::new(tcx, adt_owner).start();
             }
-            if let Some(opt_level) = opt {
-                match opt_level {
-                    OptLevel::Report => Opt::new(tcx, 0).start(),
-                    OptLevel::Default => Opt::new(tcx, 1).start(),
-                    OptLevel::All => Opt::new(tcx, 2).start(),
-                }
-            }
+        }
+
+        Commands::Opt { target } => {
+            let level = match target {
+                OptTarget::All => 1,
+                _ => 1,
+            };
+            Opt::new(tcx, level).start();
         }
 
         Commands::Analyze { kind } => match kind {

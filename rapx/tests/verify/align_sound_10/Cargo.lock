@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "sound_align_10"
+name = "align_sound_10"
 version = "0.1.0"

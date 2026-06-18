@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "unsound_align_14"
+name = "align_unsound_14"
 version = "0.1.0"
