@@ -5,8 +5,6 @@ pub mod memory_cloning;
 
 use rustc_middle::ty::TyCtxt;
 
-use crate::utils::span::span_to_source_code;
-
 use crate::analysis::dataflow::{Graph, default::DataflowAnalyzer};
 use checking::bounds_checking::BoundsCheck;
 use checking::encoding_checking::EncodingCheck;
@@ -108,24 +106,12 @@ impl<'tcx> Opt<'tcx> {
         });
 
         let bug_cnt: usize = statistics.iter().sum();
-        let func_cnt: usize = dataflow.graphs.iter().count();
-        let line_cnt: usize = dataflow
-            .graphs
-            .iter()
-            .map(|(_, graph)| span_to_source_code(graph.span).lines().count())
-            .sum();
         if bug_cnt > 0 {
             rap_warn!("Potential optimizations detected.");
-            println!(
-                "RAPx detects {} code inefficiencies from {} functions ({} lines)",
-                bug_cnt, func_cnt, line_cnt,
+            rap_info!(
+                "  Bounds Checking: {}, Encoding Checking: {}, Suboptimal: {}, Initialization: {}, Reallocation: {}, Cloning: {}",
+                statistics[0], statistics[1], statistics[2], statistics[3], statistics[4], statistics[5],
             );
-            println!("  Bounds Checking: {}", statistics[0]);
-            println!("  Encoding Checking: {}", statistics[1]);
-            println!("  Suboptimal: {}", statistics[2]);
-            println!("  Initialization: {}", statistics[3]);
-            println!("  Reallocation: {}", statistics[4]);
-            println!("  Cloning: {}", statistics[5]);
         }
     }
 }
