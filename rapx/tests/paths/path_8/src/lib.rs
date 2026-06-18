@@ -1,22 +1,20 @@
 #![allow(dead_code)]
 
-// Nested SCC: outer row loop + inner column loop (grid walk).
-fn walk(rows: i32, cols: i32) -> i32 {
-    let mut total = 0;
-    let mut r = 0;
+// Nested SCC: double counting loop (outer + inner).
+fn double_loop(x: i32) -> i32 {
+    let mut i = 0;
     loop {
-        if r >= rows {
+        if i >= x {
             break;
         }
-        let mut c = 0;
+        let mut j = 0;
         loop {
-            if c >= cols {
+            if j >= x {
                 break;
             }
-            total += 1;
-            c += 1;
+            j += 1;
         }
-        r += 1;
+        i += 1;
     }
-    total
+    i
 }

@@ -1,12 +1,22 @@
 #![allow(dead_code)]
 
-// SCC with early return from inside the loop.
-fn early_exit(x: i32) -> i32 {
-    let mut i = 0;
+// Nested SCC: outer row loop + inner column loop (grid walk).
+fn walk(rows: i32, cols: i32) -> i32 {
+    let mut total = 0;
+    let mut r = 0;
     loop {
-        if i >= x {
-            return i;
+        if r >= rows {
+            break;
         }
-        i += 1;
+        let mut c = 0;
+        loop {
+            if c >= cols {
+                break;
+            }
+            total += 1;
+            c += 1;
+        }
+        r += 1;
     }
+    total
 }

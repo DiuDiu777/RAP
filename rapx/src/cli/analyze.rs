@@ -29,14 +29,6 @@ pub enum AliasStrategyKind {
     Mfp,
 }
 
-#[derive(Debug, Clone, Copy, ValueEnum)]
-pub enum PathShowMode {
-    /// only output reachable paths (default)
-    Reachable,
-    /// output all paths with reachability annotation
-    All,
-}
-
 // use command string to automatically generate help messages
 #[derive(Debug, Clone, Subcommand)]
 pub enum AnalysisKind {
@@ -81,9 +73,6 @@ pub enum AnalysisKind {
         /// allow repeated SCC postfix segments (default 0)
         #[arg(long, default_value_t = 0)]
         allow_pathseg_repeat: usize,
-        /// show only reachable paths or all paths
-        #[arg(long, default_value = "reachable")]
-        show: PathShowMode,
     },
     /// extract path constraints
     Pathcond,
