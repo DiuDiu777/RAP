@@ -69,6 +69,10 @@ pub struct PathGraph<'tcx> {
     pub assigned_locals: Vec<FxHashSet<usize>>,
     /// Path-analysis-specific metadata: discriminant local -> source local mapping.
     pub discriminants: FxHashMap<usize, usize>,
+    /// Path-analysis-specific metadata: block -> (local -> constant value).
+    pub constants: Vec<FxHashMap<usize, usize>>,
+    /// Path-analysis-specific metadata: block -> (dest_local -> source_local) for copy/move.
+    pub constraint_copies: Vec<FxHashMap<usize, usize>>,
 }
 
 impl<'tcx> PathGraph<'tcx> {
@@ -77,19 +81,47 @@ impl<'tcx> PathGraph<'tcx> {
         let basicblocks = &body.basic_blocks;
         let mut cfg_blocks = Vec::<CfgBlock>::new();
         let mut assigned_locals = Vec::new();
+        let mut constants: Vec<FxHashMap<usize, usize>> = Vec::new();
+        let mut constraint_copies: Vec<FxHashMap<usize, usize>> = Vec::new();
         let mut discriminants = FxHashMap::default();
 
         for i in 0..basicblocks.len() {
             let bb = &basicblocks[BasicBlock::from(i)];
             let mut cfg_block = CfgBlock::new(i, bb.is_cleanup);
             let mut block_assigned_locals = FxHashSet::default();
+            let mut block_constants = FxHashMap::default();
+            let mut block_constraint_copies = FxHashMap::default();
 
             for stmt in &bb.statements {
                 if let StatementKind::Assign(assign) = &stmt.kind {
                     let (place, rvalue) = &**assign;
-                    block_assigned_locals.insert(place.local.as_usize());
-                    if let Rvalue::Discriminant(rv_place) = rvalue {
-                        discriminants.insert(place.local.as_usize(), rv_place.local.as_usize());
+                    let dest = place.local.as_usize();
+                    block_assigned_locals.insert(dest);
+                    match rvalue {
+                        Rvalue::Use(Operand::Constant(c)) => {
+                            let typing_env = TypingEnv::post_analysis(tcx, def_id);
+                            let val = match c.const_.ty().kind() {
+                                TyKind::Bool => c
+                                    .const_
+                                    .try_eval_bool(tcx, typing_env)
+                                    .map(|b| if b { 1 } else { 0 }),
+                                TyKind::Int(_) | TyKind::Uint(_) => c
+                                    .const_
+                                    .try_eval_bits(tcx, typing_env)
+                                    .map(|v| v as usize),
+                                _ => None,
+                            };
+                            if let Some(val) = val {
+                                block_constants.insert(dest, val);
+                            }
+                        }
+                        Rvalue::Use(Operand::Copy(src) | Operand::Move(src)) => {
+                            block_constraint_copies.insert(dest, src.local.as_usize());
+                        }
+                        Rvalue::Discriminant(rv_place) => {
+                            discriminants.insert(dest, rv_place.local.as_usize());
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -193,6 +225,8 @@ impl<'tcx> PathGraph<'tcx> {
 
             cfg_blocks.push(cfg_block);
             assigned_locals.push(block_assigned_locals);
+            constants.push(block_constants);
+            constraint_copies.push(block_constraint_copies);
         }
 
         let cfg = ControlFlowGraph::new(def_id, tcx, cfg_blocks);
@@ -201,6 +235,8 @@ impl<'tcx> PathGraph<'tcx> {
             cfg,
             assigned_locals,
             discriminants,
+            constants,
+            constraint_copies,
         }
     }
 
@@ -276,9 +312,23 @@ impl<'tcx> PathGraph<'tcx> {
                 return false;
             }
 
-            // Invalidate constraints for locals assigned in the current block.
             if let Some(assigned) = self.assigned_locals.get(cur) {
+                let consts = self.constants.get(cur);
+                let copies = self.constraint_copies.get(cur);
                 for local in assigned {
+                    // copy propagation: transfer constraint from source local
+                    if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
+                        if let Some(&src_val) = constraints.get(&src) {
+                            constraints.insert(*local, src_val);
+                            continue;
+                        }
+                    }
+                    // constant assignment propagation
+                    if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
+                        constraints.insert(*local, val);
+                        continue;
+                    }
+                    // unknown value — invalidate
                     constraints.remove(local);
                 }
             }
@@ -348,7 +398,19 @@ impl<'tcx> PathGraph<'tcx> {
             }
 
             if let Some(assigned) = self.assigned_locals.get(cur) {
+                let consts = self.constants.get(cur);
+                let copies = self.constraint_copies.get(cur);
                 for local in assigned {
+                    if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
+                        if let Some(&src_val) = constraints.get(&src) {
+                            constraints.insert(*local, src_val);
+                            continue;
+                        }
+                    }
+                    if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
+                        constraints.insert(*local, val);
+                        continue;
+                    }
                     constraints.remove(local);
                 }
             }
