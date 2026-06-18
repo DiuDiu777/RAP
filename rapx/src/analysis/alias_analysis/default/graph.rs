@@ -1,5 +1,12 @@
 use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
-use crate::{analysis::path_analysis::graph::PathGraph, graphs::cfg::CfgBlock, utils::source::*};
+use crate::{
+    analysis::path_analysis::{
+        PathTree,
+        graph::{PathGraph, PathEnumerator},
+    },
+    graphs::cfg::CfgBlock,
+    utils::source::*,
+};
 use crate::compat::{FxHashMap, FxHashSet};
 use rustc_middle::{
     mir::{AggregateKind, BasicBlock, Const, Operand, Rvalue, StatementKind, Terminator},
@@ -422,6 +429,11 @@ impl<'tcx> AliasGraph<'tcx> {
 
     pub fn find_scc(&mut self) {
         self.path_graph.find_scc();
+    }
+
+    pub fn enumerate_paths(&self) -> PathTree {
+        let mut enumerator = PathEnumerator::new(&self.path_graph);
+        enumerator.enumerate_paths()
     }
 
     pub fn visit_times(&self) -> usize {

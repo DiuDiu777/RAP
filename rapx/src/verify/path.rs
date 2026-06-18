@@ -20,7 +20,7 @@ use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
-use crate::analysis::path_analysis::{PathTree, graph::PathGraph};
+use crate::analysis::path_analysis::{PathTree, graph::{PathGraph, PathEnumerator}};
 
 use super::helpers::{Callsite, CallsiteLocation};
 
@@ -62,7 +62,7 @@ impl<'tcx> PathExtractor<'tcx> {
     }
 
     /// Get (or create) the PathGraph for this function's path enumeration.
-    fn path_graph(&mut self) -> &mut PathGraph<'tcx> {
+    fn path_graph(&mut self) -> &PathGraph<'tcx> {
         self.path_graph.get_or_insert_with(|| {
             let mut pg = PathGraph::new(self.tcx, self.def_id);
             pg.find_scc();
@@ -78,7 +78,11 @@ impl<'tcx> PathExtractor<'tcx> {
         // Ensure PathGraph is initialized (also builds SCC info internally).
         self.path_graph();
         let allow_repeat = self.allow_repeat;
-        let tree = self.path_graph().enumerate_paths_repeat(allow_repeat);
+        let tree = {
+            let graph = self.path_graph();
+            let mut enumerator = PathEnumerator::new(graph);
+            enumerator.enumerate_paths_repeat(allow_repeat)
+        };
         let paths = self.find_paths_in_tree(&tree);
         FunctionPaths {
             callsite_paths: CallsitePaths::new(self.callsites, paths),

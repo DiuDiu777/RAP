@@ -101,7 +101,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     /// during enumeration, so no per-path filtering is needed. State is
     /// saved at branch points and restored before each sibling subtree.
     pub fn process_function_paths(&mut self, fn_map: &MopFnAliasMap) {
-        let paths = self.alias_graph.path_graph.enumerate_paths();
+        let paths = self.alias_graph.enumerate_paths();
 
         let Some(root) = paths.root() else { return; };
         let mut path = Vec::new();

@@ -7,7 +7,7 @@
 //! the shared `VerifyEngine`.
 
 use crate::analysis::Analysis;
-use crate::analysis::path_analysis::graph::PathGraph;
+use crate::analysis::path_analysis::graph::{PathGraph, PathEnumerator};
 use crate::cli::VerifyMode;
 use crate::helpers::fn_info::{FnKind, get_cons, get_mutated_fields, get_muts, get_type};
 use crate::verify::contract::PropertyKind;
@@ -221,7 +221,8 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     ) -> FxHashMap<CallsiteLocation, Vec<Path>> {
         let mut pg = PathGraph::new(self.tcx, self.target.def_id);
         pg.find_scc();
-        let all_paths = pg.enumerate_paths_repeat(self.allow_repeat);
+        let mut enumerator = PathEnumerator::new(&pg);
+        let all_paths = enumerator.enumerate_paths_repeat(self.allow_repeat);
 
         let kind_label = if is_constructor {
             "constructor"

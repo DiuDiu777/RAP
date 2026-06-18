@@ -205,9 +205,7 @@ impl<'a> Iterator for PathTreeIter<'a> {
     }
 }
 
-pub type PathSet = PathTree;
-pub type PathMap = FxHashMap<DefId, PathSet>;
-pub struct PathMapWrapper(pub PathMap);
+pub struct PathMapWrapper(pub FxHashMap<DefId, PathTree>);
 
 impl Display for PathMapWrapper {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

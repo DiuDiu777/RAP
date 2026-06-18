@@ -19,7 +19,7 @@ use rustc_middle::{
 };
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
-use crate::analysis::path_analysis::graph::PathGraph;
+use crate::analysis::path_analysis::graph::{PathGraph, PathEnumerator};
 
 use super::{path_refine::ForgetReason, primitive::PrimitiveCall};
 
@@ -776,7 +776,8 @@ fn local_must_write_args(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
         let body = tcx.optimized_mir(callee);
         let mut graph = PathGraph::new(tcx, callee);
         graph.find_scc();
-        let paths = graph.enumerate_paths_repeat(0);
+        let mut enumerator = PathEnumerator::new(&graph);
+        let paths = enumerator.enumerate_paths_repeat(0);
 
         let mut must_write: Option<HashSet<usize>> = None;
         for path in paths.iter() {

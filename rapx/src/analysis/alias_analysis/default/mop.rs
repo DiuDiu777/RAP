@@ -45,7 +45,7 @@ impl<'tcx> AliasGraph<'tcx> {
             self.def_id(),
             self.path_graph.cfg.blocks.len()
         );
-        let paths = self.path_graph.enumerate_paths();
+        let paths = self.enumerate_paths();
         rap_debug!(
             "process_function_paths: def_id={:?} paths_enumerated={}",
             self.def_id(),

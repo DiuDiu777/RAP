@@ -1,16 +1,17 @@
-use crate::analysis::{Analysis, path_analysis::graph::PathGraph};
+use crate::analysis::{Analysis, path_analysis::graph::{PathGraph, PathEnumerator}};
 use crate::compat::FxHashMap;
 use rustc_hir::{def::DefKind, def_id::DefId};
 use rustc_middle::ty::TyCtxt;
 
-use super::{PathMap, PathSet};
+use super::PathTree;
 
 /// PathAnalyzer is responsible only for extracting path-sensitive CFG paths.
 /// Downstream analyses can reuse these paths without depending on alias logic.
 pub struct PathAnalyzer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub debug: bool,
-    pub paths: PathMap,
+    pub paths: FxHashMap<DefId, PathTree>,
+    pub graphs: FxHashMap<DefId, PathGraph<'tcx>>,
 }
 
 impl<'tcx> PathAnalyzer<'tcx> {
@@ -19,10 +20,11 @@ impl<'tcx> PathAnalyzer<'tcx> {
             tcx,
             debug,
             paths: FxHashMap::default(),
+            graphs: FxHashMap::default(),
         }
     }
 
-    pub fn start_path_analysis_for_defid(&mut self, def_id: DefId) -> Option<PathSet> {
+    pub fn start_path_analysis_for_defid(&mut self, def_id: DefId) -> Option<PathTree> {
         if let Some(paths) = self.paths.get(&def_id) {
             return Some(paths.clone());
         }
@@ -33,7 +35,8 @@ impl<'tcx> PathAnalyzer<'tcx> {
 
         let mut graph = PathGraph::new(self.tcx, def_id);
         graph.find_scc();
-        let paths = graph.enumerate_paths();
+        let mut enumerator = PathEnumerator::new(&graph);
+        let paths = enumerator.enumerate_paths();
         let fn_name = self.tcx.def_path_str(def_id);
 
         rap_info!("Function: {}", fn_name);
@@ -41,15 +44,16 @@ impl<'tcx> PathAnalyzer<'tcx> {
             rap_info!("  path {}: {:?}", idx, path);
         }
 
+        self.graphs.insert(def_id, graph);
         self.paths.insert(def_id, paths.clone());
         Some(paths)
     }
 
-    pub fn get_fn_paths(&self, def_id: DefId) -> Option<PathSet> {
+    pub fn get_fn_paths(&self, def_id: DefId) -> Option<PathTree> {
         self.paths.get(&def_id).cloned()
     }
 
-    pub fn get_all_paths(&self) -> PathMap {
+    pub fn get_all_paths(&self) -> FxHashMap<DefId, PathTree> {
         self.paths.clone()
     }
 
@@ -67,6 +71,9 @@ impl<'tcx> PathAnalyzer<'tcx> {
     /// The path is a sequence of MIR block indices (can include loops).
     /// Uses discriminant/constant-based filtering to reject infeasible paths.
     pub fn check_path_reachability(&self, def_id: DefId, path: &[usize]) -> bool {
+        if let Some(graph) = self.graphs.get(&def_id) {
+            return graph.is_path_reachable(path);
+        }
         let graph = PathGraph::new(self.tcx, def_id);
         graph.is_path_reachable(path)
     }
@@ -83,5 +90,6 @@ impl<'tcx> Analysis for PathAnalyzer<'tcx> {
 
     fn reset(&mut self) {
         self.paths.clear();
+        self.graphs.clear();
     }
 }
