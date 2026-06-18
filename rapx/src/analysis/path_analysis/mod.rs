@@ -227,10 +227,12 @@ impl<'a> Iterator for PathTreeIter<'a> {
 pub struct PathMapWrapper<'a, 'tcx>(
     pub FxHashMap<DefId, PathTree>,
     pub &'a FxHashMap<DefId, PathGraph<'tcx>>,
+    pub bool,
 );
 
 impl Display for PathMapWrapper<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let show_all = self.2;
         writeln!(f, "=== Print path analysis results ===")?;
         for (def_id, paths) in &self.0 {
             let fn_name = get_fn_name_byid(def_id);
@@ -238,7 +240,16 @@ impl Display for PathMapWrapper<'_, '_> {
             let graph = self.1.get(def_id);
             for path in paths.iter() {
                 if let Some(g) = graph {
-                    writeln!(f, "  Path {}", format_path_annotated(&path, g))?;
+                    let reachable = g.is_path_reachable(&path);
+                    if !show_all && !reachable {
+                        continue;
+                    }
+                    let annotation = if show_all {
+                        format!(" | reachable: {}", reachable)
+                    } else {
+                        String::new()
+                    };
+                    writeln!(f, "  Path {}{}", format_path_annotated(&path, g), annotation)?;
                 } else {
                     writeln!(f, "  Path {:?}", path)?;
                 }

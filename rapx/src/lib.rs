@@ -38,7 +38,7 @@ extern crate thin_vec;
 use crate::{
     analysis::{alias_analysis::mfp::MfpAliasAnalyzer, api_dependency, scan::ScanAnalysis},
     check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop},
-    cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptLevel, RapxArgs, VerifyArgs},
+    cli::{AliasStrategyKind, AnalysisKind, CheckArgs, Commands, OptLevel, PathShowMode, RapxArgs, VerifyArgs},
     verify::{driver::VerifyRun, target::PrepareTargets},
 };
 use analysis::{
@@ -246,11 +246,13 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             }
             &AnalysisKind::Paths {
                 allow_pathseg_repeat,
+                ref show,
             } => {
                 let mut analyzer = PathAnalyzer::new(tcx, false);
                 analyzer.run_with_repeat(allow_pathseg_repeat);
                 let result = analyzer.get_all_paths();
-                rap_info!("{}", PathMapWrapper(result, &analyzer.graphs));
+                let show_all = matches!(show, PathShowMode::All);
+                rap_info!("{}", PathMapWrapper(result, &analyzer.graphs, show_all));
             }
             AnalysisKind::Pathcond => {
                 let mut analyzer = RangeAnalyzer::<i64>::new(tcx, false);
