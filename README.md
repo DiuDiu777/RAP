@@ -150,6 +150,8 @@ Safety properties include: `Align`, `NonNull`, `Allocated`, `InBound`, `Init`, `
 
 This checklist maps RAPx's contract verification to the [Primitive Safety Properties](https://github.com/safer-rust/safety-tags/blob/main/primitive-sp.md) defined in `safer-rust/safety-tags`.
 
+> **Legend**: ✅ = full Z3-based SMT verification (produces SOUND/UNSOUND verdicts)　— = not yet verified (parsed but no SMT lowering)
+
 | Primitive SP                 | RAPx tag       | Supported |
 |------------------------------|----------------|:---------:|
 | Align(p, T)                  | `Align`        |     ✅    |
@@ -173,10 +175,14 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Opened(fd)                   | `Opened`       |     —     |
 | Trait(T, trait)              | `Trait`        |     —     |
 | !Reachable()                 | `Unreachable`  |     —     |
-| ValidPtr(p, T, len)          | `ValidPtr`     |     —     |
+| ValidPtr(p, T, len)          | `ValidPtr`     |    ⚠️¹   |
 | Deref(p, T, len)              | `Deref`        |     —     |
 | Ptr2Ref(p, T)                 | `Ptr2Ref`      |     —     |
 | Layout(p, layout)             | `Layout`       |     —     |
+
+> ¹ **ValidPtr** is decomposed into primitive SMT obligations (`NonNull`, `Align`, `Allocated`, `InBound`, `Init`). Each primitive is checked individually; however the composite verdict remains `Unknown` until all sub-properties (including `Typed`) are fully lowered. The decomposition results are reported as diagnostic notes.
+
+RAPx ships with a curated set of `std` library safety contracts (`std-contracts.json`) that annotate standard library functions with property tags. This enables contract-based verification for common `std`/`core` APIs without requiring user annotations.
 
 ### Environment Variables (values are case insensitive)
 
