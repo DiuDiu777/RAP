@@ -103,7 +103,7 @@ impl<'tcx> PathGraph<'tcx> {
                     let dest = place.local.as_usize();
                     block_assigned_locals.insert(dest);
                     match rvalue {
-                        Rvalue::Use(Operand::Constant(c)) => {
+                        Rvalue::Use(Operand::Constant(c), ..) => {
                             let typing_env = TypingEnv::post_analysis(tcx, def_id);
                             let val = match c.const_.ty().kind() {
                                 TyKind::Bool => c
@@ -120,7 +120,7 @@ impl<'tcx> PathGraph<'tcx> {
                                 block_constants.insert(dest, val);
                             }
                         }
-                        Rvalue::Use(Operand::Copy(src) | Operand::Move(src)) => {
+                        Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) => {
                             block_constraint_copies.insert(dest, src.local.as_usize());
                         }
                         Rvalue::Discriminant(rv_place) => {
