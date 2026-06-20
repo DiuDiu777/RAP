@@ -65,8 +65,8 @@ fn make_dummy_fn(ident_name: &str, build_std: bool) -> Box<Item> {
 
 pub(crate) fn create_dummy_fns(krate: &mut Crate, build_std: bool) {
     let raw_ptr_fn = make_dummy_fn("__raw_ptr_deref_dummy", build_std);
-    //let static_mut_fn = make_dummy_fn("__static_mut_deref_dummy");
+    let static_mut_fn = make_dummy_fn("__static_mut_deref_dummy", build_std);
 
     krate.items.push(raw_ptr_fn);
-    //krate.items.push(static_mut_fn);
+    krate.items.push(static_mut_fn);
 }

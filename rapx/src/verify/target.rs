@@ -3,8 +3,10 @@ use crate::analysis::safetyflow_analysis::root::{
     function_has_struct_invariant, hir_contains_unsafe,
 };
 use crate::cli::VerifyMode;
-use crate::helpers::fn_info::{get_cons, get_ptr_deref_dummy_def_id};
-use crate::helpers::mir_scan::collect_raw_ptr_deref_info;
+use crate::helpers::fn_info::{get_cons, get_ptr_deref_dummy_def_id, get_static_mut_dummy_def_id};
+use crate::helpers::mir_scan::{
+    collect_raw_ptr_deref_info, collect_static_mut_access_info,
+};
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind,
     def_id::{DefId, LocalDefId},
@@ -32,23 +34,93 @@ pub type FnContracts<'tcx> = Vec<Property<'tcx>>;
 /// A list of parsed struct invariants.
 pub type StructInvariants<'tcx> = Vec<Property<'tcx>>;
 
-/// Collected verification data for a function annotated with `#[rapx::verify]`.
+/// Collected verification data for a single function under analysis.
+///
+/// `FunctionTarget` is the complete **problem statement** for one function: it
+/// records every unsafe operation found in the function's MIR body, the safety
+/// contracts that each operation demands, and any contracts or invariants that
+/// serves as entry assumptions or structural guarantees.
+///
+/// # How it is built
+///
+/// [`VerifyTargetCollector::build_function_target`] assembles a `FunctionTarget`
+/// in one pass over the MIR body:
+///
+/// 1. Unsafe callsites are collected via [`collect_unsafe_callsites`].
+/// 2. Each unique callee `DefId` gets its `#[rapx::requires]` contracts parsed
+///    (with fallback to bundled JSON contracts for standard-library callees).
+/// 3. Raw pointer dereferences are detected and converted into synthetic
+///    (pseudo-callsite, `[ValidPtr, Align, (Typed)]`) pairs.
+/// 4. The caller's own `#[rapx::requires]` contracts become entry assumptions.
+/// 5. If the function is a method on a struct, struct-level `#[rapx::invariant]`
+///    and `#[rapx::requires]` annotations are collected.
+///
+/// # Role in the pipeline
+///
+/// The [`VerifyDriver`](super::driver::VerifyDriver) consumes a `FunctionTarget`
+/// to route each unsafe operation to the verifier engine along reachability paths
+/// extracted from the MIR CFG.  The target is the primary data carrier between
+/// the *target collection* stage and the *path extraction / verification* stage.
 #[derive(Clone)]
 pub struct FunctionTarget<'tcx> {
-    /// Function marked with `#[rapx::verify]` and selected as a target to verify.
+    /// The function being verified.
     pub def_id: DefId,
-    /// Owning struct definition when this target to verify is an associated method.
+
+    /// Owning struct when this function is an associated method (e.g.
+    /// `impl MyStruct { fn foo(...) }`).  `None` for free functions.
+    ///
+    /// Used to associate struct invariants and to group method-level
+    /// verification results under the owning struct in diagnostic output.
     pub owner_struct_def_id: Option<DefId>,
-    /// Concrete unsafe callsites collected from the target MIR body.
+
+    /// All call-terminator-based unsafe callsites found in this function's MIR.
+    ///
+    /// Each [`Callsite`] records the callee `DefId`, the source-span of the
+    /// call, the basic-block location, and the MIR operands passed as arguments.
     pub callsites: Vec<Callsite<'tcx>>,
-    /// Parsed `requires` contracts for each unsafe callee reachable from this target.
+
+    /// Safety contracts demanded by each unique unsafe callee reachable from
+    /// this function, keyed by callee `DefId`.
+    ///
+    /// Contracts are sourced from `#[rapx::requires(...)]` annotations on the
+    /// callee (inline mode) or from a bundled JSON contract database for
+    /// standard-library functions.  Each value is a `Vec<Property>` — the
+    /// concrete safety requirements the callee expects its caller to satisfy.
     pub callee_requires: HashMap<DefId, FnContracts<'tcx>>,
-    /// Parsed `requires` contracts for this function (the caller) itself.
+
+    /// Safety contracts that the **caller itself** requires as entry
+    /// assumptions, parsed from `#[rapx::requires(...)]` on this function.
+    ///
+    /// During verification the engine prepends these properties as *facts* that
+    /// are assumed to hold at function entry, constraining the backward
+    /// data-dependency analysis and forward simulation.
     pub caller_requires: FnContracts<'tcx>,
-    /// Parsed struct invariants that methods of the owning struct must maintain.
+
+    /// Struct invariants that methods of the owning struct must maintain.
+    ///
+    /// Collected from `#[rapx::invariant(...)]` / `#[rapx::requires(...)]`
+    /// annotations on the struct definition.  Checked at constructor return
+    /// blocks and at all path endpoints for non-constructor methods.
     pub struct_invariants: Vec<Property<'tcx>>,
-    /// Raw pointer dereference sites with their required safety properties.
+
+    /// Raw pointer dereference checks with their required safety properties.
+    ///
+    /// Each entry is a `(Callsite, Vec<Property>)` pair where the `Callsite`
+    /// carries a synthetic dummy `DefId` (so the path extractor can treat
+    /// dereferences uniformly with callsites) and the properties encode the
+    /// pointer-validity requirements: always [`ValidPtr`](PropertyKind::ValidPtr)
+    /// and [`Align`](PropertyKind::Align); additionally [`Typed`](PropertyKind::Typed)
+    /// when the dereference is a read.
     pub raw_ptr_deref_checks: Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)>,
+
+    /// Static mut access checks with their required safety properties.
+    ///
+    /// Each entry is a `(Callsite, Vec<Property>)` pair following the same
+    /// pattern as [`raw_ptr_deref_checks`](Self::raw_ptr_deref_checks).  The
+    /// properties are [`ValidPtr`](PropertyKind::ValidPtr),
+    /// [`Align`](PropertyKind::Align), and [`Init`](PropertyKind::Init)
+    /// (conservatively checked for both reads and writes).
+    pub static_mut_checks: Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)>,
 }
 
 /// Collected verification data for a struct that owns methods marked with `#[rapx::verify]`.
@@ -187,6 +259,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         let caller_requires = self.get_fn_contracts(def_id);
 
         let raw_ptr_deref_checks = build_raw_ptr_deref_checks(self.tcx, def_id);
+        let static_mut_checks = build_static_mut_checks(self.tcx, def_id);
 
         let owner_struct_def_id = self.get_owner_struct_def_id(def_id);
         let struct_invariants = owner_struct_def_id
@@ -203,6 +276,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             caller_requires,
             struct_invariants,
             raw_ptr_deref_checks,
+            static_mut_checks,
         }
     }
 
@@ -284,6 +358,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             VerifyMode::Scan => {
                 if function_target.callsites.is_empty()
                     && function_target.raw_ptr_deref_checks.is_empty()
+                    && function_target.static_mut_checks.is_empty()
                     && function_target.struct_invariants.is_empty()
                 {
                     let root =
@@ -296,6 +371,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             VerifyMode::Invless => {
                 if function_target.callsites.is_empty()
                     && function_target.raw_ptr_deref_checks.is_empty()
+                    && function_target.static_mut_checks.is_empty()
                 {
                     return;
                 }
@@ -763,6 +839,56 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     args: vec![target, ty],
                 });
             }
+
+            (
+                Callsite {
+                    caller: def_id,
+                    callee: dummy_def_id,
+                    block: info.block,
+                    span: rustc_span::DUMMY_SP,
+                    args: vec![info.ptr_operand],
+                },
+                properties,
+            )
+        })
+        .collect()
+}
+
+/// Build (pseudo-callsite, properties) pairs for every static mut access
+/// in the target function.
+fn build_static_mut_checks<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+) -> Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)> {
+    let Some(dummy_def_id) = get_static_mut_dummy_def_id(tcx) else {
+        return Vec::new();
+    };
+
+    let infos = collect_static_mut_access_info(tcx, def_id);
+    infos
+        .into_iter()
+        .map(|info| {
+            let target = PropertyArg::Place(ContractPlace {
+                base: PlaceBase::Arg(0),
+                projections: vec![],
+            });
+            let ty = PropertyArg::Ty(info.ty);
+            let count = PropertyArg::Expr(ContractExpr::Const(1));
+
+            let properties = vec![
+                Property {
+                    kind: PropertyKind::ValidPtr,
+                    args: vec![target.clone(), ty.clone(), count.clone()],
+                },
+                Property {
+                    kind: PropertyKind::Align,
+                    args: vec![target.clone(), ty.clone()],
+                },
+                Property {
+                    kind: PropertyKind::Init,
+                    args: vec![target, ty, count],
+                },
+            ];
 
             (
                 Callsite {

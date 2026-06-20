@@ -110,6 +110,9 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         for (callsite, _) in &target.raw_ptr_deref_checks {
             all_callsites.push(callsite.clone());
         }
+        for (callsite, _) in &target.static_mut_checks {
+            all_callsites.push(callsite.clone());
+        }
         let path_info = PathExtractor::new(tcx, target.def_id, all_callsites, allow_repeat).run();
         let engine = VerifyEngine::new(tcx);
         Self {
@@ -174,12 +177,17 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
 
     /// Return the required properties for a concrete unsafe callsite.
     ///
-    /// Checks `target.raw_ptr_deref_checks` first (raw-pointer properties take
-    /// priority when a callsite overlaps with a deref at the same block), then
-    /// falls back to `target.callee_requires` keyed by the unsafe callee.
+    /// Checks synthetic check tables first (raw pointer dereferences, then
+    /// static mut accesses), and falls back to `target.callee_requires` keyed
+    /// by the unsafe callee.
     pub fn properties_for_callsite(&self, callsite: &Callsite<'tcx>) -> &'target [Property<'tcx>] {
         let loc = callsite.location();
         for (cs, props) in &self.target.raw_ptr_deref_checks {
+            if cs.location() == loc {
+                return props.as_slice();
+            }
+        }
+        for (cs, props) in &self.target.static_mut_checks {
             if cs.location() == loc {
                 return props.as_slice();
             }
@@ -482,6 +490,7 @@ impl<'tcx> VerifyRun<'tcx> {
             caller_requires: accumulated_requires,
             struct_invariants: Vec::new(),
             raw_ptr_deref_checks: read_target.raw_ptr_deref_checks.clone(),
+            static_mut_checks: read_target.static_mut_checks.clone(),
         }
     }
 
@@ -594,6 +603,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             if all_results.is_empty() {
                 if target.callsites.is_empty()
                     && target.raw_ptr_deref_checks.is_empty()
+                    && target.static_mut_checks.is_empty()
                     && target.struct_invariants.is_empty()
                 {
                     rap_info!("============================================================");

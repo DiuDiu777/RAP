@@ -313,3 +313,78 @@ fn ptr_operand_for_deref_place<'tcx>(place: &Place<'tcx>) -> Option<Operand<'tcx
         projection: List::empty(),
     }))
 }
+
+/// Metadata for a `static mut` access found in MIR.
+#[derive(Clone, Debug)]
+pub struct StaticMutAccessInfo<'tcx> {
+    /// Basic block containing the access.
+    pub block: BasicBlock,
+    /// The mutable static being accessed.
+    pub static_def_id: DefId,
+    /// The pointee type (i.e. the type of the static itself, `T` in `static mut X: T`).
+    pub ty: Ty<'tcx>,
+    /// The MIR operand holding the pointer to the static.
+    pub ptr_operand: Operand<'tcx>,
+}
+
+/// Collect all basic blocks that reference mutable statics in `def_id`.
+///
+/// Mutable statics appear as `Constant` operands whose `check_static_ptr` points
+/// to a `static mut` item.  Both reads and writes are detected here; the
+/// conservative `Init` property will be checked regardless of direction.
+pub fn collect_static_mut_access_info<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+) -> Vec<StaticMutAccessInfo<'tcx>> {
+    let mut infos = Vec::new();
+    if !tcx.is_mir_available(def_id) {
+        return infos;
+    }
+
+    let body = tcx.optimized_mir(def_id);
+    for (bb, data) in body.basic_blocks.iter_enumerated() {
+        for stmt in &data.statements {
+            if let StatementKind::Assign(assign) = &stmt.kind {
+                let (_lhs, rhs) = &**assign;
+                if let Rvalue::Use(op @ Operand::Constant(c), ..) = rhs {
+                    if let Some(static_id) = c.check_static_ptr(tcx) {
+                        if matches!(tcx.static_mutability(static_id), Some(m) if m.is_mut()) {
+                            let ty = tcx.type_of(static_id).skip_binder();
+                            infos.push(StaticMutAccessInfo {
+                                block: bb,
+                                static_def_id: static_id,
+                                ty,
+                                ptr_operand: op.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        if let Some(terminator) = &data.terminator {
+            if let TerminatorKind::Call { args, .. } = &terminator.kind {
+                for arg in args {
+                    match &arg.node {
+                        op @ Operand::Constant(c) => {
+                            if let Some(static_id) = c.check_static_ptr(tcx) {
+                                if matches!(tcx.static_mutability(static_id), Some(m) if m.is_mut()) {
+                                    let ty = tcx.type_of(static_id).skip_binder();
+                                    infos.push(StaticMutAccessInfo {
+                                        block: bb,
+                                        static_def_id: static_id,
+                                        ty,
+                                        ptr_operand: op.clone(),
+                                    });
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    infos
+}
