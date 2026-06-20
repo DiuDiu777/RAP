@@ -1,6 +1,6 @@
 use crate::analysis::Analysis;
 use crate::analysis::safetyflow_analysis::root::{
-    function_has_struct_invariant, hir_contains_unsafe,
+    function_has_struct_invariant, function_has_trait_ensurance, hir_contains_unsafe,
 };
 use crate::cli::VerifyMode;
 use crate::helpers::fn_info::get_cons;
@@ -133,6 +133,19 @@ pub struct StructTarget<'tcx> {
     pub function_targets: Vec<FunctionTarget<'tcx>>,
 }
 
+/// Collected verification data for an `impl unsafe Trait for Type` block.
+///
+/// The trait's `#[rapx::ensures(...)]` contracts define safety obligations the
+/// implementor must satisfy.  Full verification of trait impls is deferred.
+pub struct TraitEnsurance<'tcx> {
+    /// The unsafe trait definition.
+    pub def_id: DefId,
+    /// The concrete type that implements the trait (e.g. `SomeStruct`).
+    pub self_ty_def_id: Option<DefId>,
+    /// `ensures` contracts grouped by trait method name.
+    pub ensures: Vec<(String, FnContracts<'tcx>)>,
+}
+
 /// Visitor that collects targets annotated with `#[rapx::verify]`.
 pub struct VerifyTargetCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -141,6 +154,8 @@ pub struct VerifyTargetCollector<'tcx> {
     pub function_targets: Vec<FunctionTarget<'tcx>>,
     /// All struct targets to verify collected from the current crate.
     pub struct_targets: HashMap<DefId, StructTarget<'tcx>>,
+    /// All trait targets to verify collected from the current crate.
+    pub trait_targets: HashMap<DefId, TraitEnsurance<'tcx>>,
     /// Cached contracts for each callee function so repeated callees are parsed once.
     fn_contract_cache: HashMap<DefId, FnContracts<'tcx>>,
 }
@@ -153,6 +168,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             mode,
             function_targets: Vec::new(),
             struct_targets: HashMap::new(),
+            trait_targets: HashMap::new(),
             fn_contract_cache: HashMap::new(),
         }
     }
@@ -165,20 +181,67 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         )
     }
 
+    /// Returns true if the trait at `trait_def_id` is declared `unsafe trait`.
+    fn is_trait_unsafe(&self, trait_def_id: DefId) -> bool {
+        let Some(local_id) = trait_def_id.as_local() else {
+            return false;
+        };
+        let item = self.tcx.hir_expect_item(local_id);
+
+        #[cfg(not(rapx_rustc_ge_198))]
+        if let ItemKind::Trait(_, _, unsafety, _, _, _, _) = &item.kind {
+            return matches!(unsafety, rustc_hir::Safety::Unsafe);
+        }
+        #[cfg(rapx_rustc_ge_198)]
+        if let ItemKind::Trait { safety, .. } = &item.kind {
+            return matches!(safety, rustc_hir::Safety::Unsafe);
+        }
+
+        false
+    }
+
+    /// Extract the `DefId` of the concrete type from an `impl` block's `self_ty`.
+    fn resolve_impl_self_ty_def_id(item: &'tcx rustc_hir::Item<'tcx>) -> Option<DefId> {
+        let ItemKind::Impl(rustc_hir::Impl { self_ty, .. }) = &item.kind else {
+            return None;
+        };
+        match &self_ty.kind {
+            rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) => match path.res {
+                rustc_hir::def::Res::Def(
+                    rustc_hir::def::DefKind::Struct
+                    | rustc_hir::def::DefKind::Enum
+                    | rustc_hir::def::DefKind::Union,
+                    def_id,
+                ) => Some(def_id),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     /// Returns (and caches) the contracts for an unsafe callee.
     ///
     /// Contracts are resolved with the following priority:
     /// 1. Inline RAPx annotations attached to the callee.
-    /// 2. If no annotations are found and the callee belongs to the standard
+    /// 2. If the callee is a trait method impl without its own annotations,
+    ///    fall back to the trait method's `#[rapx::requires(...)]`.
+    /// 3. If no annotations are found and the callee belongs to the standard
     ///    library, fall back to the bundled JSON contract database.
     ///
     /// Results are memoized in `fn_contract_cache` to avoid recomputation.
     fn get_fn_contracts(&mut self, callee_def_id: DefId) -> FnContracts<'tcx> {
         let is_std = self.is_std_crate_def_id(callee_def_id);
+
+        let trait_requires = self.get_trait_method_requires(callee_def_id);
+
         self.fn_contract_cache
             .entry(callee_def_id)
             .or_insert_with(|| {
                 let mut requires = get_contract_from_annotation(self.tcx, callee_def_id);
+
+                if requires.is_empty() && !trait_requires.is_empty() {
+                    requires = trait_requires.clone();
+                }
 
                 if requires.is_empty() && is_std {
                     requires = get_contract_from_entry(
@@ -295,6 +358,18 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         }
     }
 
+    /// Look up `#[rapx::requires(...)]` from the trait method when the callee
+    /// is an impl method that doesn't have its own annotations.
+    fn get_trait_method_requires(&mut self, callee_def_id: DefId) -> FnContracts<'tcx> {
+        let Some(assoc_item) = self.tcx.opt_associated_item(callee_def_id) else {
+            return Vec::new();
+        };
+        let Some(trait_item_def_id) = assoc_item.trait_item_def_id() else {
+            return Vec::new();
+        };
+        get_contract_from_annotation(self.tcx, trait_item_def_id)
+    }
+
     /// Adds a function target and updates its owning struct target when applicable.
     fn push_function_target(&mut self, function_target: FunctionTarget<'tcx>) {
         self.function_targets.push(function_target.clone());
@@ -324,6 +399,58 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         self.tcx
     }
 
+    /// Detect `impl unsafe Trait for Type` blocks and record them as
+    /// [`TraitEnsurance`] placeholders.
+    ///
+    /// In `targeted` mode, only `impl` blocks annotated with `#[rapx::verify]`
+    /// are recorded.  In `scan` and `invless` modes, all `unsafe trait` impls
+    /// are recorded.
+    fn visit_item(&mut self, item: &'tcx rustc_hir::Item<'tcx>) {
+        if let ItemKind::Impl(rustc_hir::Impl { of_trait, .. }) = &item.kind
+            && of_trait.is_some()
+        {
+            if matches!(self.mode, VerifyMode::Targeted)
+                && !self.has_rapx_verify_attr(item.owner_id.def_id)
+            {
+                rustc_hir::intravisit::walk_item(self, item);
+                return;
+            }
+
+            let impl_def_id = item.owner_id.to_def_id();
+
+            let trait_ref = {
+                #[cfg(rapx_rustc_ge_193)]
+                {
+                    self.tcx.impl_opt_trait_ref(impl_def_id)
+                }
+                #[cfg(not(rapx_rustc_ge_193))]
+                {
+                    self.tcx.impl_trait_ref(impl_def_id)
+                }
+            };
+
+            if let Some(trait_ref) = trait_ref {
+                let trait_def_id = trait_ref.skip_binder().def_id;
+                if self.is_trait_unsafe(trait_def_id) {
+                    let ensures =
+                        get_trait_contracts_from_annotation(self.tcx, trait_def_id);
+
+                    let self_ty_def_id = Self::resolve_impl_self_ty_def_id(&item);
+
+                    self.trait_targets
+                        .entry(trait_def_id)
+                        .or_insert_with(|| TraitEnsurance {
+                            def_id: trait_def_id,
+                            self_ty_def_id,
+                            ensures,
+                        });
+                }
+            }
+        }
+
+        rustc_hir::intravisit::walk_item(self, item);
+    }
+
     /// Visits each function body and records verification targets.
     ///
     /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are collected.
@@ -344,11 +471,13 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 
         // HIR pre-filter: skip functions that have nothing to verify.
         // `contains_unsafe` catches functions with unsafe blocks/declarations;
-        // `function_has_struct_invariant` catches methods on structs with invariants.
+        // `function_has_struct_invariant` catches methods on structs with invariants;
+        // `function_has_trait_ensurance` catches methods on unsafe trait impls with contracts.
         let def_id = id.to_def_id();
         if !matches!(self.mode, VerifyMode::Targeted) {
             if !hir_contains_unsafe(self.tcx, body_id)
                 && !function_has_struct_invariant(self.tcx, def_id)
+                && !function_has_trait_ensurance(self.tcx, def_id)
             {
                 return;
             }
@@ -444,6 +573,25 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
             rap_info!("");
         }
 
+        // Traits with impl methods
+        let mut trait_ids: Vec<_> = collector.trait_targets.keys().copied().collect();
+        trait_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
+
+        for trait_def_id in trait_ids {
+            let Some(trait_target) = collector.trait_targets.get(&trait_def_id) else {
+                continue;
+            };
+            let trait_path = self.tcx.def_path_str(trait_target.def_id);
+
+            rap_info!("============================================================");
+            rap_info!("[rapx::verify] prepare targets for unsafe trait: {}", trait_path);
+            rap_info!("============================================================");
+
+            self.log_trait_ensurance(trait_target);
+
+            rap_info!("");
+        }
+
         let total_free = free_targets.len();
         let total_method = collector
             .function_targets
@@ -451,13 +599,15 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
             .filter(|target| target.owner_struct_def_id.is_some())
             .count();
         let total_struct = collector.struct_targets.len();
+        let total_trait = collector.trait_targets.len();
 
         rap_info!("============================================================");
         rap_info!(
-            "[rapx::verify] total: {} free function(s), {} method(s), {} struct(s)",
+            "[rapx::verify] total: {} free function(s), {} method(s), {} struct(s), {} trait(s)",
             total_free,
             total_method,
-            total_struct
+            total_struct,
+            total_trait
         );
         rap_info!("============================================================");
     }
@@ -477,6 +627,26 @@ impl<'tcx> PrepareTargets<'tcx> {
             rap_info!("  struct invariants:");
             for property in &struct_target.invariants {
                 rap_info!("    - {:?}, args={:?}", property.kind, property.args);
+            }
+        }
+    }
+
+    fn log_trait_ensurance(&self, trait_target: &TraitEnsurance<'tcx>) {
+        if let Some(self_ty) = trait_target.self_ty_def_id {
+            rap_info!(
+                "  impl for: {}",
+                self.tcx.def_path_str(self_ty)
+            );
+        }
+        if trait_target.ensures.is_empty() {
+            rap_info!("  ensures: <none>");
+        } else {
+            rap_info!("  ensures (implementor must satisfy):");
+            for (method_name, contracts) in &trait_target.ensures {
+                rap_info!("    fn {}:", method_name);
+                for property in contracts {
+                    rap_info!("      - {:?}, args={:?}", property.kind, property.args);
+                }
             }
         }
     }
@@ -718,6 +888,16 @@ fn collect_properties_from_invariant_attrs<'tcx>(
     collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "invariant")
 }
 
+/// Collects properties from `#[rapx::ensures(...)]` attributes.
+fn collect_properties_from_ensures_attrs<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    attrs: impl IntoIterator<Item = &'tcx Attribute>,
+    property_def_id: DefId,
+    parse_error_label: &str,
+) -> Vec<Property<'tcx>> {
+    collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "ensures")
+}
+
 fn collect_properties_from_named_attrs<'tcx>(
     tcx: TyCtxt<'tcx>,
     attrs: impl IntoIterator<Item = &'tcx Attribute>,
@@ -802,6 +982,56 @@ fn get_struct_invariants_from_annotation<'tcx>(
         "invariant",
     ));
     invariants
+}
+
+/// Parses trait safety contracts from `#[rapx::ensures(...)]` on unsafe trait
+/// methods, grouped by method name.
+fn get_trait_contracts_from_annotation<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    trait_def_id: DefId,
+) -> Vec<(String, FnContracts<'tcx>)> {
+    let Some(local_id) = trait_def_id.as_local() else {
+        return Vec::new();
+    };
+
+    let item = tcx.hir_expect_item(local_id);
+
+    let trait_items = {
+        #[cfg(not(rapx_rustc_ge_198))]
+        if let ItemKind::Trait(.., items) = &item.kind {
+            items
+        } else {
+            return Vec::new();
+        }
+        #[cfg(rapx_rustc_ge_198)]
+        if let ItemKind::Trait { items, .. } = &item.kind {
+            items
+        } else {
+            return Vec::new();
+        }
+    };
+
+    let mut ensures: Vec<(String, FnContracts<'tcx>)> = Vec::new();
+
+    for trait_item_id in trait_items.iter() {
+        let trait_item_def_id = trait_item_id.owner_id.to_def_id();
+        let method_name = tcx.def_path_str(trait_item_def_id);
+        #[allow(deprecated)]
+        let attrs = tcx.get_all_attrs(trait_item_def_id);
+
+        let method_ensures = collect_properties_from_ensures_attrs(
+            tcx,
+            attrs,
+            trait_item_def_id,
+            "trait ensures",
+        );
+
+        if !method_ensures.is_empty() {
+            ensures.push((method_name, method_ensures));
+        }
+    }
+
+    ensures
 }
 
 /// Build (pseudo-callsite, properties) pairs for every raw pointer dereference

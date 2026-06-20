@@ -173,6 +173,7 @@ const ANALYZE_RANGE_CMD: &[&str] = &["analyze", "range"];
 const ANALYZE_CALLGRAPH_CMD: &[&str] = &["analyze", "callgraph"];
 const ANALYZE_ADG_CMD: &[&str] = &["analyze", "adg", "--dump", "api_graph.yml"];
 const VERIFY_CMD: &[&str] = &["verify"];
+const VERIFY_PREPARE_CMD: &[&str] = &["verify", "--prepare-targets"];
 const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "1"];
 const VERIFY_ALLOW_REPEAT2_CMD: &[&str] = &["verify", "--allow-pathseg-repeat", "2"];
 const VERIFY_SCAN_CMD: &[&str] = &["verify", "--mode", "scan"];
@@ -1706,6 +1707,25 @@ fn verify_static_mut_unknown() {
 fn verify_slice() {
     let output = run_with_args("verify/slice", VERIFY_CMD);
     assert_contain(&output, "function:");
+}
+
+#[test]
+fn trait_unsound_1() {
+    let output = run_with_args("verify/trait_unsound_1", VERIFY_PREPARE_CMD);
+    assert_contain(&output, "prepare targets for unsafe trait: Buffer");
+    assert_contain(&output, "impl for: VecBuf");
+    assert_contain(&output, "ensures");
+    assert_contain(&output, "ValidSlice");
+}
+
+#[test]
+fn trait_unsound_1_verify() {
+    let output = run_with_args("verify/trait_unsound_1", VERIFY_CMD);
+    assert_contain(&output, "unsafe trait impl: Buffer");
+    assert_contain(&output, "impl for: VecBuf");
+    assert_contain(&output, "ensures");
+    assert_contain(&output, "ValidSlice");
+    assert_contain(&output, "verification: deferred");
 }
 
 #[test]

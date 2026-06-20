@@ -1,5 +1,5 @@
 use crate::helpers::mir_scan::{collect_global_local_pairs, get_rawptr_deref, get_unsafe_callees};
-use rustc_hir::{BodyId, def_id::DefId};
+use rustc_hir::{BodyId, ItemKind, def_id::DefId};
 use rustc_middle::{mir::Local, ty::TyCtxt};
 use rustc_span::Symbol;
 use std::collections::HashSet;
@@ -75,6 +75,50 @@ pub fn function_has_struct_invariant(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         rustc_middle::ty::TyKind::Adt(adt_def, _) => has_struct_invariant(tcx, adt_def.did()),
         _ => false,
     }
+}
+
+/// Quick check: does this function's containing impl implement an `unsafe trait`?
+///
+/// This is a fast HIR-level pre-filter similar to [`function_has_struct_invariant`].
+pub fn function_has_trait_ensurance(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    let Some(assoc_item) = tcx.opt_associated_item(def_id) else {
+        return false;
+    };
+    let Some(impl_id) = assoc_item.impl_container(tcx) else {
+        return false;
+    };
+
+    let trait_def_id = {
+        #[cfg(rapx_rustc_ge_193)]
+        {
+            tcx.impl_opt_trait_ref(impl_id)
+        }
+        #[cfg(not(rapx_rustc_ge_193))]
+        {
+            tcx.impl_trait_ref(impl_id)
+        }
+    };
+    let Some(trait_ref) = trait_def_id else {
+        return false;
+    };
+    let trait_def_id = trait_ref.skip_binder().def_id;
+
+    let Some(local_id) = trait_def_id.as_local() else {
+        return false;
+    };
+
+    // Check if the trait is declared `unsafe trait`
+    let item = tcx.hir_expect_item(local_id);
+    #[cfg(not(rapx_rustc_ge_198))]
+    if let ItemKind::Trait(_, _, unsafety, _, _, _, _) = &item.kind {
+        return matches!(unsafety, rustc_hir::Safety::Unsafe);
+    }
+    #[cfg(rapx_rustc_ge_198)]
+    if let ItemKind::Trait { safety, .. } = &item.kind {
+        return matches!(safety, rustc_hir::Safety::Unsafe);
+    }
+
+    false
 }
 
 /// Full MIR-level detection: scan the function body for all unsafe operations.

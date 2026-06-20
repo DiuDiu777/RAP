@@ -243,6 +243,7 @@ pub enum PropertyKind {
     Trait,
     Unreachable,
     ValidPtr,
+    ValidSlice,
     Deref,
     Ptr2Ref,
     Layout,
@@ -359,6 +360,15 @@ impl<'tcx> Property<'tcx> {
                 Self::new_with_args(
                     PropertyKind::ValidPtr,
                     vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(length)],
+                )
+            }
+            "ValidSlice" => {
+                Self::check_arg_length(exprs.len(), 2, "ValidSlice");
+                let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
+                let ty = Self::parse_type(tcx, def_id, &exprs[1], "ValidSlice");
+                Self::new_with_args(
+                    PropertyKind::ValidSlice,
+                    vec![target, PropertyArg::Ty(ty)],
                 )
             }
             "Deref" => Self::new_with_target(PropertyKind::Deref, tcx, def_id, exprs),
@@ -609,10 +619,10 @@ impl<'tcx> Property<'tcx> {
         if let Some((base, fields, _ty)) = parse_expr_into_local_and_ty(tcx, def_id, expr) {
             return Some(ContractPlace::local(base, fields));
         }
-        Self::parse_arg_place(expr)
+        Self::parse_named_place(expr)
     }
 
-    fn parse_arg_place(expr: &Expr) -> Option<ContractPlace<'tcx>> {
+    fn parse_named_place(expr: &Expr) -> Option<ContractPlace<'tcx>> {
         if let Expr::Path(expr_path) = expr {
             if let Some(ident) = expr_path.path.get_ident() {
                 let s = ident.to_string();
@@ -620,6 +630,12 @@ impl<'tcx> Property<'tcx> {
                     if let Ok(idx) = num_str.parse::<usize>() {
                         return Some(ContractPlace::arg(idx));
                     }
+                }
+                if s == "return" {
+                    return Some(ContractPlace {
+                        base: PlaceBase::Return,
+                        projections: Vec::new(),
+                    });
                 }
             }
         }

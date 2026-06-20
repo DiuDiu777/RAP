@@ -656,6 +656,39 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             );
         }
 
+        // Emit detected unsafe trait impls (verification deferred)
+        if !collector.trait_targets.is_empty() {
+            let mut trait_ids: Vec<_> = collector.trait_targets.keys().copied().collect();
+            trait_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
+            for trait_def_id in trait_ids {
+                let Some(trait_target) = collector.trait_targets.get(&trait_def_id) else {
+                    continue;
+                };
+                rap_info!("============================================================");
+                rap_info!(
+                    "[rapx::verify] unsafe trait impl: {}",
+                    self.tcx.def_path_str(trait_target.def_id)
+                );
+                rap_info!("============================================================");
+                if let Some(self_ty) = trait_target.self_ty_def_id {
+                    rap_info!("  impl for: {}", self.tcx.def_path_str(self_ty));
+                }
+                if trait_target.ensures.is_empty() {
+                    rap_info!("  ensures: <none>");
+                } else {
+                    rap_info!("  ensures (implementor must satisfy):");
+                    for (method_name, contracts) in &trait_target.ensures {
+                        rap_info!("    fn {}:", method_name);
+                        for property in contracts {
+                            rap_info!("      - {:?}, args={:?}", property.kind, property.args);
+                        }
+                    }
+                }
+                rap_info!("  verification: deferred");
+                rap_info!("");
+            }
+        }
+
         // Invless mode: generate constructor-mutator-method sequences
         if matches!(self.mode, VerifyMode::Invless) {
             self.run_invless_sequences(&collector.function_targets);

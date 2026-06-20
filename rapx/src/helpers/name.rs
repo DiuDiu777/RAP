@@ -168,8 +168,10 @@ pub fn parse_outside_signature<'tcx>(
 /// Dispatch argument-name/type parsing to either the local HIR path or the
 /// external type-based path.
 pub fn parse_signature<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> (Vec<String>, Vec<Ty<'tcx>>) {
-    if def_id.as_local().is_some() {
+    if def_id.as_local().is_some() && tcx.is_mir_available(def_id) {
         parse_local_signature(tcx, def_id)
+    } else if def_id.is_local() {
+        (vec!["0".to_string()], Vec::new())
     } else {
         parse_outside_signature(tcx, def_id)
     }
