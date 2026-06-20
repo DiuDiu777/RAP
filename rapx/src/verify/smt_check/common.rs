@@ -869,10 +869,11 @@ impl<'tcx> SmtChecker<'tcx> {
     ) -> SmtCheckResult {
         let dummy_callsite = Callsite {
             caller,
-            callee: caller,
+            callee: Some(caller),
             block: rustc_middle::mir::BasicBlock::from_usize(0),
             span: rustc_span::Span::default(),
             args: Vec::new(),
+            kind: crate::helpers::mir_scan::CallsiteKind::UnsafeCall,
         };
         self.prove_obligation(&dummy_callsite, forward, obligation)
     }
@@ -1103,7 +1104,10 @@ impl<'tcx> SmtChecker<'tcx> {
         match place.base {
             PlaceBase::Arg(index) => self.callsite_arg_expr(callsite, index, &key.fields),
             PlaceBase::Local(local) => {
-                if let Some(index) = callee_param_index_for_local(self.tcx, callsite.callee, local)
+                if let Some(index) =
+                    callsite
+                        .callee
+                        .and_then(|callee| callee_param_index_for_local(self.tcx, callee, local))
                 {
                     self.callsite_arg_expr(callsite, index, &key.fields)
                 } else {
@@ -1144,7 +1148,10 @@ impl<'tcx> SmtChecker<'tcx> {
                 &PlaceKey::from_contract_place(place).fields,
             ),
             PlaceBase::Local(local) => {
-                if let Some(index) = callee_param_index_for_local(self.tcx, callsite.callee, local)
+                if let Some(index) =
+                    callsite
+                        .callee
+                        .and_then(|callee| callee_param_index_for_local(self.tcx, callee, local))
                 {
                     self.callsite_arg_place_with_fields(
                         callsite,

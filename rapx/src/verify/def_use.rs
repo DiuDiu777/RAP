@@ -313,7 +313,9 @@ pub fn bind_callsite_roots(
         .iter()
         .filter_map(|place| match place.base {
             PlaceBaseKey::Arg(index) => Some((place.clone(), index)),
-            PlaceBaseKey::Local(local) => callee_param_index_for_local(tcx, callsite.callee, local)
+            PlaceBaseKey::Local(local) => callsite
+                .callee
+                .and_then(|callee| callee_param_index_for_local(tcx, callee, local))
                 .map(|index| (place.clone(), index)),
             _ => None,
         })

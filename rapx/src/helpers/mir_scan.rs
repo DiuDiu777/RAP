@@ -20,19 +20,39 @@ pub struct CallsiteLocation {
     pub block: BasicBlock,
 }
 
-/// A concrete unsafe callsite in one MIR body.
+/// Kind of an unsafe verification checkpoint inside a function body.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
+pub enum CallsiteKind {
+    /// A real unsafe function call.
+    UnsafeCall,
+    /// A raw pointer dereference.
+    RawPtrDeref,
+    /// A mutable static variable access.
+    StaticMutAccess,
+}
+
+/// A verification checkpoint in one MIR body.
+///
+/// Unifies unsafe calls, raw-pointer dereferences, and mutable static
+/// accesses under a single type so they all flow through the same path
+/// extraction and SMT verification pipeline.
 #[derive(Clone, Debug)]
 pub struct Callsite<'tcx> {
-    /// Function containing this call.
+    /// Function containing this checkpoint.
     pub caller: DefId,
-    /// Unsafe callee being invoked.
-    pub callee: DefId,
-    /// MIR block whose terminator is the call.
+    /// For [`UnsafeCall`](CallsiteKind::UnsafeCall): the unsafe callee.
+    /// For synthetic checkpoints ([`RawPtrDeref`](CallsiteKind::RawPtrDeref),
+    /// [`StaticMutAccess`](CallsiteKind::StaticMutAccess)): `None`.
+    pub callee: Option<DefId>,
+    /// MIR block where the checkpoint occurs.
     pub block: BasicBlock,
-    /// Source span attached to the MIR call terminator.
+    /// Source span for diagnostics.
     pub span: Span,
-    /// MIR operands passed to the callee.
+    /// MIR operands passed to the callee or the pointer operand for
+    /// dereference/static-mut checks.
     pub args: Vec<Operand<'tcx>>,
+    /// Discriminates between real calls and synthetic safety checks.
+    pub kind: CallsiteKind,
 }
 
 impl<'tcx> Callsite<'tcx> {
@@ -44,9 +64,16 @@ impl<'tcx> Callsite<'tcx> {
         }
     }
 
-    /// Return a stable human-readable callee path for diagnostics.
+    /// Return a human-readable label for diagnostics.
     pub fn callee_name(&self, tcx: TyCtxt<'tcx>) -> String {
-        get_cleaned_def_path_name(tcx, self.callee)
+        match self.callee {
+            Some(def_id) => get_cleaned_def_path_name(tcx, def_id),
+            None => match self.kind {
+                CallsiteKind::RawPtrDeref => "raw-ptr-deref".to_string(),
+                CallsiteKind::StaticMutAccess => "static-mut-access".to_string(),
+                CallsiteKind::UnsafeCall => "unknown-callee".to_string(),
+            },
+        }
     }
 }
 
@@ -207,10 +234,11 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
 
         callsites.push(Callsite {
             caller: def_id,
-            callee: *callee_def_id,
+            callee: Some(*callee_def_id),
             block: bb,
             span: *fn_span,
             args: args.iter().map(|arg| arg.node.clone()).collect(),
+            kind: CallsiteKind::UnsafeCall,
         });
     }
 

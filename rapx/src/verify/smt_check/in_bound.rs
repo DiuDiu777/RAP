@@ -78,7 +78,7 @@ fn pointer_arithmetic_obligation<'tcx>(
     required_ty: rustc_middle::ty::Ty<'tcx>,
     count: SmtTerm,
 ) -> Option<SmtObligation> {
-    let callee_name = checker.tcx.def_path_str(callsite.callee);
+    let callee_name = checker.tcx.def_path_str(callsite.callee?);
     let primitive = PrimitiveCall::classify(&callee_name)?;
     if !primitive.is_pointer_arithmetic() {
         return None;

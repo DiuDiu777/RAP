@@ -3,7 +3,7 @@ use crate::analysis::safetyflow_analysis::root::{
     function_has_struct_invariant, hir_contains_unsafe,
 };
 use crate::cli::VerifyMode;
-use crate::helpers::fn_info::{get_cons, get_ptr_deref_dummy_def_id, get_static_mut_dummy_def_id};
+use crate::helpers::fn_info::get_cons;
 use crate::helpers::mir_scan::{
     collect_raw_ptr_deref_info, collect_static_mut_access_info,
 };
@@ -250,7 +250,10 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
     /// Builds a function target to verify from a function definition.
     fn build_function_target(&mut self, def_id: DefId) -> FunctionTarget<'tcx> {
         let callsites = collect_unsafe_callsites(self.tcx, def_id);
-        let unsafe_callees: HashSet<_> = callsites.iter().map(|callsite| callsite.callee).collect();
+        let unsafe_callees: HashSet<_> = callsites
+            .iter()
+            .filter_map(|callsite| callsite.callee)
+            .collect();
         let callee_requires = unsafe_callees
             .iter()
             .map(|callee_def_id| (*callee_def_id, self.get_fn_contracts(*callee_def_id)))
@@ -807,11 +810,11 @@ fn build_raw_ptr_deref_checks<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)> {
-    let Some(dummy_def_id) = get_ptr_deref_dummy_def_id(tcx) else {
-        return Vec::new();
-    };
-
     let infos = collect_raw_ptr_deref_info(tcx, def_id);
+    if infos.is_empty() {
+        return Vec::new();
+    }
+
     infos
         .into_iter()
         .map(|info| {
@@ -843,10 +846,11 @@ fn build_raw_ptr_deref_checks<'tcx>(
             (
                 Callsite {
                     caller: def_id,
-                    callee: dummy_def_id,
+                    callee: None,
                     block: info.block,
                     span: rustc_span::DUMMY_SP,
                     args: vec![info.ptr_operand],
+                    kind: crate::helpers::mir_scan::CallsiteKind::RawPtrDeref,
                 },
                 properties,
             )
@@ -860,11 +864,11 @@ fn build_static_mut_checks<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)> {
-    let Some(dummy_def_id) = get_static_mut_dummy_def_id(tcx) else {
-        return Vec::new();
-    };
-
     let infos = collect_static_mut_access_info(tcx, def_id);
+    if infos.is_empty() {
+        return Vec::new();
+    }
+
     infos
         .into_iter()
         .map(|info| {
@@ -893,10 +897,11 @@ fn build_static_mut_checks<'tcx>(
             (
                 Callsite {
                     caller: def_id,
-                    callee: dummy_def_id,
+                    callee: None,
                     block: info.block,
                     span: rustc_span::DUMMY_SP,
                     args: vec![info.ptr_operand],
+                    kind: crate::helpers::mir_scan::CallsiteKind::StaticMutAccess,
                 },
                 properties,
             )

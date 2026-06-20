@@ -7,7 +7,9 @@ use rustc_middle::{
 use syn::Expr;
 
 pub use crate::helpers::fn_info::parse_expr_into_number;
-pub use crate::helpers::mir_scan::{Callsite, CallsiteLocation, collect_unsafe_callsites};
+pub use crate::helpers::mir_scan::{
+    Callsite, CallsiteKind, CallsiteLocation, collect_unsafe_callsites,
+};
 pub use crate::helpers::name::{
     access_ident_recursive, get_cleaned_def_path_name, get_struct_self_ty, match_ty_with_ident,
     parse_signature,

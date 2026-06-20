@@ -21,7 +21,7 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     contract::Property,
     engine::VerifyEngine,
-    helpers::{Callsite, CallsiteLocation, collect_return_block_indices},
+    helpers::{Callsite, CallsiteKind, CallsiteLocation, collect_return_block_indices},
     path::{FunctionPaths, PATH_LIMIT, Path, PathExtractor, PathStart, PathStep},
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     target::{FunctionTarget, VerifyTargetCollector},
@@ -177,26 +177,41 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
 
     /// Return the required properties for a concrete unsafe callsite.
     ///
-    /// Checks synthetic check tables first (raw pointer dereferences, then
-    /// static mut accesses), and falls back to `target.callee_requires` keyed
-    /// by the unsafe callee.
+    /// Dispatches on [`CallsiteKind`]: synthetic checkpoints (raw pointer
+    /// dereference, static mut access) carry their properties in
+    /// `target.raw_ptr_deref_checks` / `target.static_mut_checks`; real
+    /// unsafe calls look up `target.callee_requires` by callee `DefId`.
     pub fn properties_for_callsite(&self, callsite: &Callsite<'tcx>) -> &'target [Property<'tcx>] {
         let loc = callsite.location();
-        for (cs, props) in &self.target.raw_ptr_deref_checks {
-            if cs.location() == loc {
-                return props.as_slice();
+        match callsite.kind {
+            CallsiteKind::RawPtrDeref => {
+                for (cs, props) in &self.target.raw_ptr_deref_checks {
+                    if cs.location() == loc {
+                        return props.as_slice();
+                    }
+                }
+                &[]
+            }
+            CallsiteKind::StaticMutAccess => {
+                for (cs, props) in &self.target.static_mut_checks {
+                    if cs.location() == loc {
+                        return props.as_slice();
+                    }
+                }
+                &[]
+            }
+            CallsiteKind::UnsafeCall => {
+                if let Some(callee) = callsite.callee {
+                    self.target
+                        .callee_requires
+                        .get(&callee)
+                        .map(Vec::as_slice)
+                        .unwrap_or(&[])
+                } else {
+                    &[]
+                }
             }
         }
-        for (cs, props) in &self.target.static_mut_checks {
-            if cs.location() == loc {
-                return props.as_slice();
-            }
-        }
-        self.target
-            .callee_requires
-            .get(&callsite.callee)
-            .map(Vec::as_slice)
-            .unwrap_or(&[])
     }
 
     /// Iterate over callsites together with their paths and properties to verify.

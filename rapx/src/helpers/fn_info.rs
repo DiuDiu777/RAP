@@ -399,15 +399,6 @@ pub fn get_ptr_deref_dummy_def_id(tcx: TyCtxt<'_>) -> Option<DefId> {
     })
 }
 
-pub fn get_static_mut_dummy_def_id(tcx: TyCtxt<'_>) -> Option<DefId> {
-    tcx.hir_crate_items(()).free_items().find_map(|item_id| {
-        let def_id = item_id.owner_id.to_def_id();
-        let name = tcx.opt_item_name(def_id)?;
-
-        (name.as_str() == "__static_mut_deref_dummy").then_some(def_id)
-    })
-}
-
 /// Return field indices that a `&mut self` method writes to.
 ///
 /// Scans the MIR body for assignments to `(*self).field_n` and returns the
