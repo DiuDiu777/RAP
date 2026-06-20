@@ -27,13 +27,70 @@ use super::{
     target::{FunctionTarget, VerifyTargetCollector},
 };
 
-/// Orchestrates verification inputs for one function target.
+/// Orchestrates the three-stage verification pipeline (backward data-dependency
+/// analysis → forward state simulation → SMT checking) for a single function
+/// under analysis.
+///
+/// Each `VerifyDriver` instance bundles together:
+///
+/// 1. The **problem statement** (`target`) — which unsafe callsites and
+///    raw-pointer dereferences exist, what safety contracts they demand, and
+///    what entry assumptions (from `#[rapx::requires]`) and struct invariants
+///    apply.
+///
+/// 2. The **reachability model** (`path_info`) — SCC-aware acyclic paths
+///    from function entry to each callsite, produced by flattening the MIR
+///    control-flow graph with bounded loop unrolling.
+///
+/// 3. The **verification engine** (`engine`) — a stateless pipeline shared
+///    across all (callsite, path, property) triples.
+///
+/// 4. The **loop-unrolling budget** (`allow_repeat`) — caps how many extra
+///    iterations a loop body may appear beyond its first occurrence, trading
+///    completeness against path enumeration cost.
+///
+/// Verification proceeds in two phases per driver instance:
+/// - [`verify_function`](Self::verify_function): checks safety properties at
+///   each unsafe callsite (callee `#[rapx::requires]` contracts).
+/// - [`verify_struct_invariants`](Self::verify_struct_invariants): checks
+///   struct invariants at return-block checkpoints (constructors) or at all
+///   path endpoints (non-constructor methods).
 pub struct VerifyDriver<'target, 'tcx> {
+    /// Compiler type-context handle — gateway to MIR bodies, type definitions,
+    /// HIR attributes, and def-path strings used throughout the pipeline.
     tcx: TyCtxt<'tcx>,
+
+    /// The function being verified: its identity (`def_id`), the unsafe
+    /// operations inside it (`callsites`, `raw_ptr_deref_checks`), the
+    /// contracts those operations demand (`callee_requires`), the contracts
+    /// the function itself requires as entry assumptions
+    /// (`caller_requires`), and any struct invariants to be enforced
+    /// (`struct_invariants`).
     target: &'target FunctionTarget<'tcx>,
+
+    /// SCC-aware path metadata for this function.
+    ///
+    /// Contains the shared [`PathTree`] (a prefix-tree of all whole-CFG
+    /// paths, used for bulk backward-visit analysis) and per-callsite path
+    /// lists produced by the [`PathExtractor`].
     path_info: FunctionPaths<'tcx>,
-    properties_to_verify: FxHashMap<super::helpers::CallsiteLocation, &'target [Property<'tcx>]>,
+
+    /// Stateless three-stage verification pipeline: backward data-dependency
+    /// analysis → forward state simulation → SMT constraint checking.
+    /// Shared across all (callsite, path, property) triples for this target.
     engine: VerifyEngine<'tcx>,
+
+    /// Loop-unrolling depth for SCC-aware path enumeration.
+    ///
+    /// Controls how many **extra** times a repeated SCC postfix segment
+    /// (loop-body) is allowed to appear beyond its first occurrence.
+    /// - `0` = each distinct postfix segment at most once (no loop repeats).
+    /// - `1` = allow one repeat (loop body appears up to twice).
+    /// - `n` = allow n repeats (loop body appears up to n+1 times).
+    ///
+    /// Higher values increase path coverage but risk exponential blow-up in
+    /// path count.  The CLI driver iterates `repeat` from 0 to the configured
+    /// maximum, accumulating results incrementally.
     allow_repeat: usize,
 }
 
@@ -54,13 +111,11 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             all_callsites.push(callsite.clone());
         }
         let path_info = PathExtractor::new(tcx, target.def_id, all_callsites, allow_repeat).run();
-        let properties_to_verify = Self::build_properties_to_verify(target);
         let engine = VerifyEngine::new(tcx);
         Self {
             tcx,
             target,
             path_info,
-            properties_to_verify,
             engine,
             allow_repeat,
         }
@@ -118,10 +173,21 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     }
 
     /// Return the required properties for a concrete unsafe callsite.
+    ///
+    /// Checks `target.raw_ptr_deref_checks` first (raw-pointer properties take
+    /// priority when a callsite overlaps with a deref at the same block), then
+    /// falls back to `target.callee_requires` keyed by the unsafe callee.
     pub fn properties_for_callsite(&self, callsite: &Callsite<'tcx>) -> &'target [Property<'tcx>] {
-        self.properties_to_verify
-            .get(&callsite.location())
-            .copied()
+        let loc = callsite.location();
+        for (cs, props) in &self.target.raw_ptr_deref_checks {
+            if cs.location() == loc {
+                return props.as_slice();
+            }
+        }
+        self.target
+            .callee_requires
+            .get(&callsite.callee)
+            .map(Vec::as_slice)
             .unwrap_or(&[])
     }
 
@@ -299,39 +365,6 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         paths_by_checkpoint
     }
 
-    /// Build the per-callsite property view from the target's callee requirements.
-    fn build_properties_to_verify(
-        target: &'target FunctionTarget<'tcx>,
-    ) -> FxHashMap<super::helpers::CallsiteLocation, &'target [Property<'tcx>]> {
-        use super::helpers::CallsiteLocation;
-        let mut map: FxHashMap<CallsiteLocation, &'target [Property<'tcx>]> = target
-            .callsites
-            .iter()
-            .map(|callsite| {
-                let properties = target
-                    .callee_requires
-                    .get(&callsite.callee)
-                    .map(Vec::as_slice)
-                    .unwrap_or(&[]);
-                (callsite.location(), properties)
-            })
-            .collect();
-
-        for (callsite, properties) in &target.raw_ptr_deref_checks {
-            let props: &'target [Property<'tcx>] = properties;
-            map.entry(callsite.location())
-                .and_modify(|existing| {
-                    // If both raw ptr deref and regular callsite exist at same
-                    // location (different blocks won't collide), merge properties.
-                    // Since they're slices, we can't trivially merge; just replace
-                    // with the new one for now (raw ptr takes priority).
-                    *existing = props;
-                })
-                .or_insert(props);
-        }
-
-        map
-    }
 }
 
 /// Returns whether a function returns the owning struct type (i.e. is a constructor).
