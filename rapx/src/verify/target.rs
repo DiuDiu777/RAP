@@ -14,9 +14,9 @@ use rustc_hir::{
 };
 use rustc_middle::{
     hir::nested_filter,
-    ty::{TyCtxt, TyKind},
+    ty::TyCtxt,
 };
-use rustc_span::{Span, Symbol};
+use rustc_span::Span;
 use std::collections::{HashMap, HashSet};
 use syn::Expr;
 
@@ -24,7 +24,11 @@ use super::{
     attribute::assets_parser::*,
     attribute::attr_parser::parse_rapx_attr,
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
-    helpers::{Callsite, collect_return_block_indices, collect_unsafe_callsites},
+    helpers::{
+        Callsite, collect_return_block_indices, collect_unsafe_callsites,
+        get_owner_struct_def_id, has_rapx_verify_attr, is_std_crate_def_id, is_trait_unsafe,
+        resolve_impl_self_ty_def_id,
+    },
     path::PathExtractor,
 };
 
@@ -173,52 +177,6 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         }
     }
 
-    /// Returns whether the given definition belongs to a standard Rust crate.
-    fn is_std_crate_def_id(&self, def_id: DefId) -> bool {
-        matches!(
-            self.tcx.crate_name(def_id.krate).as_str(),
-            "core" | "std" | "alloc"
-        )
-    }
-
-    /// Returns true if the trait at `trait_def_id` is declared `unsafe trait`.
-    fn is_trait_unsafe(&self, trait_def_id: DefId) -> bool {
-        let Some(local_id) = trait_def_id.as_local() else {
-            return false;
-        };
-        let item = self.tcx.hir_expect_item(local_id);
-
-        #[cfg(not(rapx_rustc_ge_198))]
-        if let ItemKind::Trait(_, _, unsafety, _, _, _, _) = &item.kind {
-            return matches!(unsafety, rustc_hir::Safety::Unsafe);
-        }
-        #[cfg(rapx_rustc_ge_198)]
-        if let ItemKind::Trait { safety, .. } = &item.kind {
-            return matches!(safety, rustc_hir::Safety::Unsafe);
-        }
-
-        false
-    }
-
-    /// Extract the `DefId` of the concrete type from an `impl` block's `self_ty`.
-    fn resolve_impl_self_ty_def_id(item: &'tcx rustc_hir::Item<'tcx>) -> Option<DefId> {
-        let ItemKind::Impl(rustc_hir::Impl { self_ty, .. }) = &item.kind else {
-            return None;
-        };
-        match &self_ty.kind {
-            rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) => match path.res {
-                rustc_hir::def::Res::Def(
-                    rustc_hir::def::DefKind::Struct
-                    | rustc_hir::def::DefKind::Enum
-                    | rustc_hir::def::DefKind::Union,
-                    def_id,
-                ) => Some(def_id),
-                _ => None,
-            },
-            _ => None,
-        }
-    }
-
     /// Returns (and caches) the contracts for an unsafe callee.
     ///
     /// Contracts are resolved with the following priority:
@@ -230,9 +188,9 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
     ///
     /// Results are memoized in `fn_contract_cache` to avoid recomputation.
     fn get_fn_contracts(&mut self, callee_def_id: DefId) -> FnContracts<'tcx> {
-        let is_std = self.is_std_crate_def_id(callee_def_id);
+        let is_std = is_std_crate_def_id(self.tcx, callee_def_id);
 
-        let trait_requires = self.get_trait_method_requires(callee_def_id);
+        let trait_requires = get_trait_method_requires(self.tcx, callee_def_id);
 
         self.fn_contract_cache
             .entry(callee_def_id)
@@ -285,31 +243,6 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             .clone()
     }
 
-    /// Checks whether a local function has the exact tool attribute `#[rapx::verify]`.
-    fn has_rapx_verify_attr(&self, def_id: LocalDefId) -> bool {
-        let hir_id = self.tcx.local_def_id_to_hir_id(def_id);
-
-        let rapx = Symbol::intern("rapx");
-        let verify = Symbol::intern("verify");
-
-        let attrs = self.tcx.hir_attrs(hir_id);
-
-        attrs.iter().any(|attr| {
-            #[cfg(rapx_rustc_ge_193)]
-            if attr.is_doc_comment().is_some() {
-                return false;
-            }
-            #[cfg(not(rapx_rustc_ge_193))]
-            if attr.is_doc_comment() {
-                return false;
-            }
-
-            let path = attr.path();
-
-            path.len() == 2 && path[0] == rapx && path[1] == verify
-        })
-    }
-
     /// Builds a function target to verify from a function definition.
     fn build_function_target(&mut self, def_id: DefId) -> FunctionTarget<'tcx> {
         let callsites = collect_unsafe_callsites(self.tcx, def_id);
@@ -327,7 +260,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         let raw_ptr_deref_checks = build_raw_ptr_deref_checks(self.tcx, def_id);
         let static_mut_checks = build_static_mut_checks(self.tcx, def_id);
 
-        let owner_struct_def_id = self.get_owner_struct_def_id(def_id);
+        let owner_struct_def_id = get_owner_struct_def_id(self.tcx, def_id);
         let struct_invariants = owner_struct_def_id
             .map(|struct_def_id| {
                 get_struct_invariants_from_annotation(self.tcx, struct_def_id, def_id)
@@ -344,30 +277,6 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             raw_ptr_deref_checks,
             static_mut_checks,
         }
-    }
-
-    /// Returns the owning struct definition when the function is a method on a struct.
-    fn get_owner_struct_def_id(&self, def_id: DefId) -> Option<DefId> {
-        let assoc_item = self.tcx.opt_associated_item(def_id)?;
-        let impl_id = assoc_item.impl_container(self.tcx)?;
-        let self_ty = self.tcx.type_of(impl_id).skip_binder();
-
-        match self_ty.kind() {
-            TyKind::Adt(adt_def, _) => Some(adt_def.did()),
-            _ => None,
-        }
-    }
-
-    /// Look up `#[rapx::requires(...)]` from the trait method when the callee
-    /// is an impl method that doesn't have its own annotations.
-    fn get_trait_method_requires(&mut self, callee_def_id: DefId) -> FnContracts<'tcx> {
-        let Some(assoc_item) = self.tcx.opt_associated_item(callee_def_id) else {
-            return Vec::new();
-        };
-        let Some(trait_item_def_id) = assoc_item.trait_item_def_id() else {
-            return Vec::new();
-        };
-        get_contract_from_annotation(self.tcx, trait_item_def_id)
     }
 
     /// Adds a function target and updates its owning struct target when applicable.
@@ -392,6 +301,19 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
     }
 }
 
+fn get_trait_method_requires<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    callee_def_id: DefId,
+) -> FnContracts<'tcx> {
+    let Some(assoc_item) = tcx.opt_associated_item(callee_def_id) else {
+        return Vec::new();
+    };
+    let Some(trait_item_def_id) = assoc_item.trait_item_def_id() else {
+        return Vec::new();
+    };
+    get_contract_from_annotation(tcx, trait_item_def_id)
+}
+
 impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
     type NestedFilter = nested_filter::OnlyBodies;
 
@@ -410,7 +332,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             && of_trait.is_some()
         {
             if matches!(self.mode, VerifyMode::Targeted)
-                && !self.has_rapx_verify_attr(item.owner_id.def_id)
+                && !has_rapx_verify_attr(self.tcx, item.owner_id.def_id)
             {
                 rustc_hir::intravisit::walk_item(self, item);
                 return;
@@ -431,11 +353,11 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 
             if let Some(trait_ref) = trait_ref {
                 let trait_def_id = trait_ref.skip_binder().def_id;
-                if self.is_trait_unsafe(trait_def_id) {
+                if is_trait_unsafe(self.tcx, trait_def_id) {
                     let ensures =
                         get_trait_contracts_from_annotation(self.tcx, trait_def_id);
 
-                    let self_ty_def_id = Self::resolve_impl_self_ty_def_id(&item);
+                    let self_ty_def_id = resolve_impl_self_ty_def_id(&item);
 
                     self.trait_targets
                         .entry(trait_def_id)
@@ -465,7 +387,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         _span: Span,
         id: LocalDefId,
     ) -> Self::Result {
-        if matches!(self.mode, VerifyMode::Targeted) && !self.has_rapx_verify_attr(id) {
+        if matches!(self.mode, VerifyMode::Targeted) && !has_rapx_verify_attr(self.tcx, id) {
             return;
         }
 
