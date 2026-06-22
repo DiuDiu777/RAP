@@ -1,4 +1,4 @@
-//! Backward path visitor — walks a finite path backward from a callsite and
+//! Backward path visitor — walks a finite path backward from a checkpoint and
 //! keeps only MIR items that can affect the required property.
 //!
 //! The def-use layer lives in [`super::super::def_use`]; this module focuses on
@@ -16,8 +16,8 @@ use crate::analysis::dataflow::types::DataflowGraph;
 use super::super::{
     contract,
     def_use::{RelevantPlaces, bind_callsite_roots, operand_uses, terminator_use_def},
-    helpers::{Callsite, CallsiteLocation},
-    path::{Path, PathStep},
+    helpers::{Checkpoint, CheckpointLocation},
+    path_extractor::{Path, PathStep},
 };
 
 use crate::analysis::path_analysis::{PathNode, PathTree};
@@ -43,48 +43,24 @@ impl<'tcx> BackwardSlicer<'tcx> {
         self.tcx
     }
 
-    /// Visit one `(checkpoint, path, property)` item backward for struct
-    /// invariant checks.
-    ///
-    /// Unlike callsite checks, this does not bind callee parameter roots
-    /// because the property places are already resolved in the caller's
-    /// local namespace.
-    pub fn visit_for_checkpoint(
-        &self,
-        caller: DefId,
-        checkpoint: CallsiteLocation,
-        path: &Path,
-        property: &contract::Property<'tcx>,
-    ) -> RelevantMirItems<'tcx> {
-        let mut visit = RelevantMirItems {
-            callsite: checkpoint,
-            property: property.clone(),
-            path: path.clone(),
-            items: Vec::new(),
-            roots: RelevantPlaces::from_property(property),
-        };
-        self.visit_path(caller, &checkpoint, path, &mut visit);
-        visit
-    }
-
     /// Visit a path tree in post-order, sharing backward analysis across
     /// common prefixes. Merges child-relevance sets at branch nodes (the
     /// union is a sound over-approximation). Returns per-leaf results.
     ///
-    /// Callee parameter roots are bound at callsite nodes.
+    /// Callee parameter roots are bound at checkpoint nodes.
     pub fn visit_path_tree(
         &self,
         tree: &PathTree,
         target_block: usize,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &contract::Property<'tcx>,
     ) -> Vec<RelevantMirItems<'tcx>> {
         self.visit_path_tree_impl(
             tree,
             target_block,
-            callsite.caller,
-            callsite.block,
-            Some(callsite),
+            checkpoint.caller,
+            checkpoint.block,
+            Some(checkpoint),
             property,
         )
     }
@@ -96,15 +72,15 @@ impl<'tcx> BackwardSlicer<'tcx> {
         &self,
         tree: &PathTree,
         target_block: usize,
-        caller: rustc_hir::def_id::DefId,
-        callsite_loc: CallsiteLocation,
+        caller: DefId,
+        checkpoint_loc: CheckpointLocation,
         property: &contract::Property<'tcx>,
     ) -> Vec<RelevantMirItems<'tcx>> {
         self.visit_path_tree_impl(
             tree,
             target_block,
             caller,
-            callsite_loc.block,
+            checkpoint_loc.block,
             None,
             property,
         )
@@ -116,17 +92,17 @@ impl<'tcx> BackwardSlicer<'tcx> {
         &self,
         tree: &PathTree,
         target_block: usize,
-        caller: rustc_hir::def_id::DefId,
-        callsite_block: BasicBlock,
-        bind_callsite: Option<&Callsite<'tcx>>,
+        caller: DefId,
+        checkpoint_block: BasicBlock,
+        bind_checkpoint: Option<&Checkpoint<'tcx>>,
         property: &contract::Property<'tcx>,
     ) -> Vec<RelevantMirItems<'tcx>> {
         let Some(root) = tree.root() else {
             return Vec::new();
         };
-        let callsite_loc = CallsiteLocation {
+        let checkpoint_loc = CheckpointLocation {
             caller,
-            block: callsite_block,
+            block: checkpoint_block,
         };
         let body = self.tcx.optimized_mir(caller);
         let flow = build_dataflow_graph(self.tcx, caller);
@@ -141,8 +117,8 @@ impl<'tcx> BackwardSlicer<'tcx> {
             self,
             root,
             target_block,
-            callsite_block,
-            bind_callsite,
+            checkpoint_block,
+            bind_checkpoint,
             property,
             &body,
             &flow,
@@ -156,14 +132,13 @@ impl<'tcx> BackwardSlicer<'tcx> {
             let steps: Vec<PathStep> = block_path
                 .iter()
                 .map(|&b| PathStep::Block(BasicBlock::from(b)))
-                .chain(std::iter::once(PathStep::Callsite(callsite_loc)))
+                .chain(std::iter::once(PathStep::Checkpoint(checkpoint_loc)))
                 .collect();
             results.push(RelevantMirItems {
-                callsite: callsite_loc,
+                checkpoint: checkpoint_loc,
                 property: property.clone(),
                 path: Path {
-                    target: callsite_loc,
-                    start: super::super::path::PathStart::FunctionEntry,
+                    target: checkpoint_loc,
                     steps,
                 },
                 items,
@@ -174,14 +149,14 @@ impl<'tcx> BackwardSlicer<'tcx> {
     }
 
     /// Post-order recursion: returns one `(block_path, backward_items,
-    /// relevant_before_block)` per callsite leaf. Each leaf is independent
+    /// relevant_before_block)` per checkpoint leaf. Each leaf is independent
     /// — no merging, no HashMap collision.
     fn build_leaf_items(
         visitor: &Self,
         node: &PathNode,
         target_block: usize,
-        callsite_block: BasicBlock,
-        bind_callsite: Option<&Callsite<'tcx>>,
+        checkpoint_block: BasicBlock,
+        bind_checkpoint: Option<&Checkpoint<'tcx>>,
         property: &contract::Property<'tcx>,
         body: &'tcx rustc_middle::mir::Body<'tcx>,
         flow: &DataflowGraph,
@@ -189,18 +164,18 @@ impl<'tcx> BackwardSlicer<'tcx> {
     ) -> Vec<(Vec<usize>, Vec<BackwardItem<'tcx>>, RelevantPlaces)> {
         if node.block == target_block {
             let mut relevant = RelevantPlaces::from_property(property);
-            if let Some(cs) = bind_callsite {
+            if let Some(cs) = bind_checkpoint {
                 bind_callsite_roots(visitor.tcx, &mut relevant, cs);
             }
             let mut items = Vec::new();
             items.push(BackwardItem::Terminator {
-                block: callsite_block,
-                kind: KeepReason::Callsite,
+                block: checkpoint_block,
+                kind: KeepReason::Checkpoint,
             });
-            let block_data = &body.basic_blocks[callsite_block];
+            let block_data = &body.basic_blocks[checkpoint_block];
             for (si, stmt) in block_data.statements.iter().enumerate().rev() {
                 visitor.visit_statement(
-                    callsite_block,
+                    checkpoint_block,
                     si,
                     stmt,
                     flow,
@@ -221,8 +196,8 @@ impl<'tcx> BackwardSlicer<'tcx> {
                 visitor,
                 child,
                 target_block,
-                callsite_block,
-                bind_callsite,
+                checkpoint_block,
+                bind_checkpoint,
                 property,
                 body,
                 flow,
@@ -256,89 +231,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
             }
         }
         results
-    }
-
-    fn visit_path(
-        &self,
-        caller: DefId,
-        callsite_loc: &CallsiteLocation,
-        path: &Path,
-        visit: &mut RelevantMirItems<'tcx>,
-    ) {
-        let mut relevant = visit.roots.clone();
-        let mut items: Vec<BackwardItem<'tcx>> = Vec::new();
-        let body = self.tcx.optimized_mir(caller);
-        let flow = build_dataflow_graph(self.tcx, caller);
-
-        let keep_allocation_invalidations = matches!(
-            visit.property.kind,
-            contract::PropertyKind::Allocated
-                | contract::PropertyKind::Deref
-                | contract::PropertyKind::ValidPtr
-        );
-
-        for step in path.steps.iter().rev() {
-            self.visit_path_step_inner(
-                step,
-                &callsite_loc,
-                &body,
-                &flow,
-                &mut relevant,
-                &mut items,
-                keep_allocation_invalidations,
-            );
-        }
-
-        items.reverse();
-        visit.items = items;
-    }
-
-    fn visit_path_step_inner(
-        &self,
-        step: &PathStep,
-        callsite_loc: &CallsiteLocation,
-        body: &'tcx Body<'tcx>,
-        flow: &DataflowGraph,
-        relevant: &mut RelevantPlaces,
-        items: &mut Vec<BackwardItem<'tcx>>,
-        keep_allocation_invalidations: bool,
-    ) {
-        match step {
-            PathStep::Callsite(location) => {
-                if *location != *callsite_loc {
-                    return;
-                }
-                items.push(BackwardItem::Terminator {
-                    block: location.block,
-                    kind: KeepReason::Callsite,
-                });
-            }
-            PathStep::Block(block) => {
-                let block_data = &body.basic_blocks[*block];
-                if *block != callsite_loc.block {
-                    self.visit_terminator(
-                        *block,
-                        block_data.terminator(),
-                        flow,
-                        body,
-                        relevant,
-                        items,
-                        keep_allocation_invalidations,
-                    );
-                }
-                for (statement_index, statement) in block_data.statements.iter().enumerate().rev() {
-                    self.visit_statement(
-                        *block,
-                        statement_index,
-                        statement,
-                        flow,
-                        relevant,
-                        items,
-                        keep_allocation_invalidations,
-                    );
-                }
-            }
-        }
     }
 
     /// Visit one MIR statement against the current relevance frontier.

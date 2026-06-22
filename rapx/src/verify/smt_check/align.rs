@@ -16,22 +16,22 @@
 //! plus the negated alignment goal are satisfiable.
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
-use crate::verify::{contract::Property, forward_visit::ForwardVisitResult, helpers::Callsite};
+use crate::verify::{contract::Property, verifier::ForwardVisitResult, helpers::Checkpoint};
 
 /// Check `Align` by lowering it to `SmtObligation::Aligned`.
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(target) = checker.property_target(callsite, property) else {
+    let Some(target) = checker.property_target(checkpoint, property) else {
         return SmtCheckResult::unknown("SMT Align target could not be resolved");
     };
-    let Some(required_ty) = checker.property_required_ty(callsite, property) else {
+    let Some(required_ty) = checker.property_required_ty(checkpoint, property) else {
         return SmtCheckResult::unknown("SMT Align type could not be resolved");
     };
-    let Some(required_align) = checker.required_alignment(callsite.caller, required_ty) else {
+    let Some(required_align) = checker.required_alignment(checkpoint.caller, required_ty) else {
         return SmtCheckResult::unknown(format!(
             "SMT Align layout unavailable for {:?}",
             required_ty
@@ -43,7 +43,7 @@ pub(crate) fn check<'tcx>(
         align: required_align,
         ty_name: format!("{required_ty:?}"),
     };
-    checker.prove_obligation(callsite, forward, obligation)
+    checker.prove_obligation(checkpoint, forward, obligation)
 }
 
 /// Check `Align` at a return checkpoint for struct invariant verification.

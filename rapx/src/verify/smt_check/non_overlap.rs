@@ -7,41 +7,41 @@
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 use crate::verify::{
-    contract::Property, def_use::PlaceKey, forward_visit::ForwardVisitResult, helpers::Callsite,
+    contract::Property, def_use::PlaceKey, verifier::ForwardVisitResult, helpers::Checkpoint,
 };
 use rustc_middle::mir::{Operand, Rvalue, StatementKind};
 
 /// Check `NonOverlap` by lowering two pointer ranges to a common SMT obligation.
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(left) = checker.property_place_arg(callsite, property, 0) else {
+    let Some(left) = checker.property_place_arg(checkpoint, property, 0) else {
         return SmtCheckResult::unknown("NonOverlap left pointer could not be resolved");
     };
-    let Some(right) = checker.property_place_arg(callsite, property, 1) else {
+    let Some(right) = checker.property_place_arg(checkpoint, property, 1) else {
         return SmtCheckResult::unknown("NonOverlap right pointer could not be resolved");
     };
-    let left = resolve_callsite_copy(checker, callsite, left);
-    let right = resolve_callsite_copy(checker, callsite, right);
+    let left = resolve_callsite_copy(checker, checkpoint, left);
+    let right = resolve_callsite_copy(checker, checkpoint, right);
 
     let count = property
         .args
         .get(2)
-        .and_then(|_| checker.property_len_expr(callsite, property))
-        .and_then(|expr| checker.contract_expr_to_smt_term(callsite.caller, &expr))
-        .or_else(|| checker.callsite_arg_smt_term(callsite, 2))
+        .and_then(|_| checker.property_len_expr(checkpoint, property))
+        .and_then(|expr| checker.contract_expr_to_smt_term(checkpoint.caller, &expr))
+        .or_else(|| checker.callsite_arg_smt_term(checkpoint, 2))
         .unwrap_or(SmtTerm::Const(1));
 
     let elem_size = checker
-        .place_pointee_size(callsite.caller, &left)
-        .or_else(|| checker.place_pointee_size(callsite.caller, &right))
+        .place_pointee_size(checkpoint.caller, &left)
+        .or_else(|| checker.place_pointee_size(checkpoint.caller, &right))
         .unwrap_or(1);
 
     checker.prove_obligation(
-        callsite,
+        checkpoint,
         forward,
         SmtObligation::NonOverlapping {
             left,
@@ -55,7 +55,7 @@ pub(crate) fn check<'tcx>(
 
 fn resolve_callsite_copy<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     mut place: PlaceKey,
 ) -> PlaceKey {
     for _ in 0..8 {
@@ -65,8 +65,8 @@ fn resolve_callsite_copy<'tcx>(
         let Some(local) = place.local() else {
             return place;
         };
-        let body = checker.tcx.optimized_mir(callsite.caller);
-        let block = &body.basic_blocks[callsite.block];
+        let body = checker.tcx.optimized_mir(checkpoint.caller);
+        let block = &body.basic_blocks[checkpoint.block];
         let source = block
             .statements
             .iter()

@@ -2,7 +2,7 @@
 //!
 //! These types and helpers track which MIR places are relevant to a safety
 //! property and compute definitions/uses from MIR terminators.
-//! This is the data layer that `path_refine` drives block-by-block along a
+//! This is the data layer that `slicing` drives block-by-block along a
 //! finite verification path; keeping it separate lets the core visit logic stay
 //! focused on path-level decisions (calls, SCC exits, path conditions).
 
@@ -18,7 +18,7 @@ use super::{
         ContractExpr, ContractPlace, ContractProjection, NumericPredicate, PlaceBase, Property,
         PropertyArg, PropertyKind,
     },
-    helpers::{Callsite, callee_param_index_for_local},
+    helpers::{Checkpoint, callee_param_index_for_local},
 };
 
 /// Definitions and uses collected from one MIR item.
@@ -44,7 +44,7 @@ pub enum PlaceBaseKey {
     Return,
     /// MIR local by numeric index.
     Local(usize),
-    /// Callee argument by index before callsite binding.
+    /// Callee argument by index before checkpoint binding.
     Arg(usize),
 }
 
@@ -306,14 +306,14 @@ fn is_target_argument_index(kind: &PropertyKind, arg_index: usize) -> bool {
 pub fn bind_callsite_roots(
     tcx: TyCtxt<'_>,
     relevance: &mut RelevantPlaces,
-    callsite: &Callsite<'_>,
+    checkpoint: &Checkpoint<'_>,
 ) {
     let argument_roots: Vec<(PlaceKey, usize)> = relevance
         .places
         .iter()
         .filter_map(|place| match place.base {
             PlaceBaseKey::Arg(index) => Some((place.clone(), index)),
-            PlaceBaseKey::Local(local) => callsite
+            PlaceBaseKey::Local(local) => checkpoint
                 .callee
                 .and_then(|callee| callee_param_index_for_local(tcx, callee, local))
                 .map(|index| (place.clone(), index)),
@@ -324,7 +324,7 @@ pub fn bind_callsite_roots(
     let mut bound_roots = RelevantPlaces::new();
     let mut rebound_roots = Vec::new();
     for (root, index) in argument_roots {
-        if let Some(operand) = callsite.args.get(index) {
+        if let Some(operand) = checkpoint.args.get(index) {
             if let Some(place) = bind_operand_place(operand, &root.fields) {
                 bound_roots.insert_place_key(place);
             } else {

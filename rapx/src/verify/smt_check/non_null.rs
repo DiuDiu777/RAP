@@ -17,19 +17,19 @@
 //! still be zero.
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
-use crate::verify::{contract::Property, forward_visit::ForwardVisitResult, helpers::Callsite};
+use crate::verify::{contract::Property, verifier::ForwardVisitResult, helpers::Checkpoint};
 
 /// Check `NonNull` by lowering it to `SmtObligation::NonZero`.
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(target) = checker.property_target(callsite, property) else {
+    let Some(target) = checker.property_target(checkpoint, property) else {
         return SmtCheckResult::unknown("NonNull target could not be resolved");
     };
 
     let obligation = SmtObligation::NonZero { place: target };
-    checker.prove_obligation(callsite, forward, obligation)
+    checker.prove_obligation(checkpoint, forward, obligation)
 }

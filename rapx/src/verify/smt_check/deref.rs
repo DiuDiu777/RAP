@@ -12,18 +12,18 @@
 
 use super::{allocated, common::SmtCheckResult, in_bound};
 use crate::verify::{
-    contract::Property, forward_visit::ForwardVisitResult, helpers::Callsite, report::CheckResult,
+    contract::Property, verifier::ForwardVisitResult, helpers::Checkpoint, report::CheckResult,
 };
 
 /// Check `Deref` by proving both allocation and bounds obligations.
 pub(crate) fn check<'tcx>(
     checker: &super::common::SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let allocated = allocated::check(checker, callsite, property, forward);
-    let in_bound = in_bound::check(checker, callsite, property, forward);
+    let allocated = allocated::check(checker, checkpoint, property, forward);
+    let in_bound = in_bound::check(checker, checkpoint, property, forward);
 
     match (&allocated.result, &in_bound.result) {
         (CheckResult::Proved, CheckResult::Proved) => {

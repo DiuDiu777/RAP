@@ -15,37 +15,37 @@
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 use crate::verify::{
-    contract::Property, forward_visit::ForwardVisitResult, helpers::Callsite,
+    contract::Property, verifier::ForwardVisitResult, helpers::Checkpoint,
     primitive::PrimitiveCall,
 };
 
 /// Check `InBound` by lowering it to a common bounds obligation.
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(target) = checker.property_target(callsite, property) else {
+    let Some(target) = checker.property_target(checkpoint, property) else {
         rap_debug!("  [SMT InBound] target could not be resolved");
         return SmtCheckResult::unknown("InBound target could not be resolved");
     };
-    let Some(required_ty) = checker.property_required_ty(callsite, property) else {
+    let Some(required_ty) = checker.property_required_ty(checkpoint, property) else {
         rap_debug!("  [SMT InBound] type could not be resolved");
         return SmtCheckResult::unknown("InBound type could not be resolved");
     };
-    let Some((_, elem_size)) = checker.type_layout(callsite.caller, required_ty) else {
+    let Some((_, elem_size)) = checker.type_layout(checkpoint.caller, required_ty) else {
         rap_debug!("  [SMT InBound] layout unavailable for {:?}", required_ty);
         return SmtCheckResult::unknown(format!(
             "InBound layout unavailable for {:?}",
             required_ty
         ));
     };
-    let Some(access_count_expr) = checker.property_len_expr(callsite, property) else {
+    let Some(access_count_expr) = checker.property_len_expr(checkpoint, property) else {
         rap_debug!("  [SMT InBound] length argument could not be resolved");
         return SmtCheckResult::unknown("InBound length argument could not be resolved");
     };
-    let Some(access_count) = checker.contract_expr_to_smt_term(callsite.caller, &access_count_expr)
+    let Some(access_count) = checker.contract_expr_to_smt_term(checkpoint.caller, &access_count_expr)
     else {
         rap_debug!(
             "  [SMT InBound] length expression could not be lowered: {:?}",
@@ -55,13 +55,13 @@ pub(crate) fn check<'tcx>(
     };
 
     if let Some(obligation) =
-        pointer_arithmetic_obligation(checker, callsite, required_ty, access_count.clone())
+        pointer_arithmetic_obligation(checker, checkpoint, required_ty, access_count.clone())
     {
-        return checker.prove_obligation(callsite, forward, obligation);
+        return checker.prove_obligation(checkpoint, forward, obligation);
     }
 
     checker.prove_obligation(
-        callsite,
+        checkpoint,
         forward,
         SmtObligation::InBounds {
             place: target,
@@ -74,17 +74,17 @@ pub(crate) fn check<'tcx>(
 
 fn pointer_arithmetic_obligation<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     required_ty: rustc_middle::ty::Ty<'tcx>,
     count: SmtTerm,
 ) -> Option<SmtObligation> {
-    let callee_name = checker.tcx.def_path_str(callsite.callee?);
+    let callee_name = checker.tcx.def_path_str(checkpoint.callee?);
     let primitive = PrimitiveCall::classify(&callee_name)?;
     if !primitive.is_pointer_arithmetic() {
         return None;
     }
 
-    let base = checker.callsite_arg_place(callsite, 0)?;
+    let base = checker.callsite_arg_place(checkpoint, 0)?;
     let zero = SmtTerm::Const(0);
     let negative_count = SmtTerm::Sub(Box::new(zero.clone()), Box::new(count.clone()));
     let (lower_delta, upper_delta) = if primitive.is_pointer_sub_like() {

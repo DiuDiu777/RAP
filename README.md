@@ -168,7 +168,7 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | Unwrap(x, T)                 | `Unwrap`       |     —     |
 | Typed(p, T)                  | `Typed`        |     —     |
 | !Owned(p)                    | `Owning`       |     —     |
-| Alias(p1, p2)                | `Alias`        |     —     |
+| Alias(p1, p2)                | `Alias`        |     ✅    |
 | Alive(p, l)                  | `Alive`        |     —     |
 | Pinned(p, l)                 | `Pinned`       |     —     |
 | !Volatile(p, T, len)         | `NonVolatile`  |     —     |

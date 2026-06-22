@@ -13,7 +13,7 @@ use super::name::get_cleaned_def_path_name;
 
 /// Stable MIR location for a call terminator inside one function body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub struct CallsiteLocation {
+pub struct CheckpointLocation {
     /// Function containing the call terminator.
     pub caller: DefId,
     /// Basic block whose terminator is the call.
@@ -22,7 +22,7 @@ pub struct CallsiteLocation {
 
 /// Kind of an unsafe verification checkpoint inside a function body.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
-pub enum CallsiteKind {
+pub enum CheckpointKind {
     /// A real unsafe function call.
     UnsafeCall,
     /// A raw pointer dereference.
@@ -37,12 +37,12 @@ pub enum CallsiteKind {
 /// accesses under a single type so they all flow through the same path
 /// extraction and SMT verification pipeline.
 #[derive(Clone, Debug)]
-pub struct Callsite<'tcx> {
+pub struct Checkpoint<'tcx> {
     /// Function containing this checkpoint.
     pub caller: DefId,
-    /// For [`UnsafeCall`](CallsiteKind::UnsafeCall): the unsafe callee.
-    /// For synthetic checkpoints ([`RawPtrDeref`](CallsiteKind::RawPtrDeref),
-    /// [`StaticMutAccess`](CallsiteKind::StaticMutAccess)): `None`.
+    /// For [`UnsafeCall`](CheckpointKind::UnsafeCall): the unsafe callee.
+    /// For synthetic checkpoints ([`RawPtrDeref`](CheckpointKind::RawPtrDeref),
+    /// [`StaticMutAccess`](CheckpointKind::StaticMutAccess)): `None`.
     pub callee: Option<DefId>,
     /// MIR block where the checkpoint occurs.
     pub block: BasicBlock,
@@ -52,13 +52,13 @@ pub struct Callsite<'tcx> {
     /// dereference/static-mut checks.
     pub args: Vec<Operand<'tcx>>,
     /// Discriminates between real calls and synthetic safety checks.
-    pub kind: CallsiteKind,
+    pub kind: CheckpointKind,
 }
 
-impl<'tcx> Callsite<'tcx> {
-    /// Return the MIR location that identifies this callsite inside the verifier.
-    pub fn location(&self) -> CallsiteLocation {
-        CallsiteLocation {
+impl<'tcx> Checkpoint<'tcx> {
+    /// Return the MIR location that identifies this checkpoint inside the verifier.
+    pub fn location(&self) -> CheckpointLocation {
+        CheckpointLocation {
             caller: self.caller,
             block: self.block,
         }
@@ -69,9 +69,9 @@ impl<'tcx> Callsite<'tcx> {
         match self.callee {
             Some(def_id) => get_cleaned_def_path_name(tcx, def_id),
             None => match self.kind {
-                CallsiteKind::RawPtrDeref => "raw-ptr-deref".to_string(),
-                CallsiteKind::StaticMutAccess => "static-mut-access".to_string(),
-                CallsiteKind::UnsafeCall => "unknown-callee".to_string(),
+                CheckpointKind::RawPtrDeref => "raw-ptr-deref".to_string(),
+                CheckpointKind::StaticMutAccess => "static-mut-access".to_string(),
+                CheckpointKind::UnsafeCall => "unknown-callee".to_string(),
             },
         }
     }
@@ -201,11 +201,11 @@ pub fn get_unsafe_callees(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<DefId> {
     unsafe_callees
 }
 
-/// Collect all unsafe MIR callsites in `def_id` with full per-callsite metadata.
-pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<Callsite<'tcx>> {
-    let mut callsites = Vec::new();
+/// Collect all unsafe MIR checkpoints in `def_id` with full per-checkpoint metadata.
+pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<Checkpoint<'tcx>> {
+    let mut checkpoints = Vec::new();
     if !tcx.is_mir_available(def_id) {
-        return callsites;
+        return checkpoints;
     }
 
     let body = tcx.optimized_mir(def_id);
@@ -232,17 +232,17 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
             continue;
         }
 
-        callsites.push(Callsite {
+        checkpoints.push(Checkpoint {
             caller: def_id,
             callee: Some(*callee_def_id),
             block: bb,
             span: *fn_span,
             args: args.iter().map(|arg| arg.node.clone()).collect(),
-            kind: CallsiteKind::UnsafeCall,
+            kind: CheckpointKind::UnsafeCall,
         });
     }
 
-    callsites
+    checkpoints
 }
 
 /// Metadata for a single raw pointer dereference operation found in MIR.

@@ -20,10 +20,10 @@ use super::{
     attribute::attr_parser::parse_rapx_attr,
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
     helpers::{
-        Callsite, collect_return_block_indices, collect_unsafe_callsites, get_owner_struct_def_id,
+        Checkpoint, collect_return_block_indices, collect_unsafe_callsites, get_owner_struct_def_id,
         has_rapx_verify_attr, is_std_crate_def_id, is_trait_unsafe, resolve_impl_self_ty_def_id,
     },
-    path::PathExtractor,
+    path_extractor::PathExtractor,
 };
 
 /// A list of parsed `requires` contracts.
@@ -44,11 +44,11 @@ pub type StructInvariants<'tcx> = Vec<Property<'tcx>>;
 /// [`VerifyTargetCollector::build_function_target`] assembles a `FunctionTarget`
 /// in one pass over the MIR body:
 ///
-/// 1. Unsafe callsites are collected via [`collect_unsafe_callsites`].
+/// 1. Unsafe checkpoints are collected via [`collect_unsafe_callsites`].
 /// 2. Each unique callee `DefId` gets its `#[rapx::requires]` contracts parsed
 ///    (with fallback to bundled JSON contracts for standard-library callees).
 /// 3. Raw pointer dereferences are detected and converted into synthetic
-///    (pseudo-callsite, `[ValidPtr, Align, (Typed)]`) pairs.
+///    (pseudo-checkpoint, `[ValidPtr, Align, (Typed)]`) pairs.
 /// 4. The caller's own `#[rapx::requires]` contracts become entry assumptions.
 /// 5. If the function is a method on a struct, struct-level `#[rapx::invariant]`
 ///    and `#[rapx::requires]` annotations are collected.
@@ -71,11 +71,11 @@ pub struct FunctionTarget<'tcx> {
     /// verification results under the owning struct in diagnostic output.
     pub owner_struct_def_id: Option<DefId>,
 
-    /// All call-terminator-based unsafe callsites found in this function's MIR.
+    /// All call-terminator-based unsafe checkpoints found in this function's MIR.
     ///
-    /// Each [`Callsite`] records the callee `DefId`, the source-span of the
+    /// Each [`Checkpoint`] records the callee `DefId`, the source-span of the
     /// call, the basic-block location, and the MIR operands passed as arguments.
-    pub callsites: Vec<Callsite<'tcx>>,
+    pub checkpoints: Vec<Checkpoint<'tcx>>,
 
     /// Safety contracts demanded by each unique unsafe callee reachable from
     /// this function, keyed by callee `DefId`.
@@ -103,22 +103,22 @@ pub struct FunctionTarget<'tcx> {
 
     /// Raw pointer dereference checks with their required safety properties.
     ///
-    /// Each entry is a `(Callsite, Vec<Property>)` pair where the `Callsite`
+    /// Each entry is a `(Checkpoint, Vec<Property>)` pair where the `Checkpoint`
     /// carries a synthetic dummy `DefId` (so the path extractor can treat
-    /// dereferences uniformly with callsites) and the properties encode the
+    /// dereferences uniformly with checkpoints) and the properties encode the
     /// pointer-validity requirements: always [`ValidPtr`](PropertyKind::ValidPtr)
     /// and [`Align`](PropertyKind::Align); additionally [`Typed`](PropertyKind::Typed)
     /// when the dereference is a read.
-    pub raw_ptr_deref_checks: Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)>,
+    pub raw_ptr_deref_checks: Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)>,
 
     /// Static mut access checks with their required safety properties.
     ///
-    /// Each entry is a `(Callsite, Vec<Property>)` pair following the same
+    /// Each entry is a `(Checkpoint, Vec<Property>)` pair following the same
     /// pattern as [`raw_ptr_deref_checks`](Self::raw_ptr_deref_checks).  The
     /// properties are [`ValidPtr`](PropertyKind::ValidPtr),
     /// [`Align`](PropertyKind::Align), and [`Init`](PropertyKind::Init)
     /// (conservatively checked for both reads and writes).
-    pub static_mut_checks: Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)>,
+    pub static_mut_checks: Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)>,
 }
 
 /// Collected verification data for a struct that owns methods marked with `#[rapx::verify]`.
@@ -239,10 +239,10 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
 
     /// Builds a function target to verify from a function definition.
     fn build_function_target(&mut self, def_id: DefId) -> FunctionTarget<'tcx> {
-        let callsites = collect_unsafe_callsites(self.tcx, def_id);
-        let unsafe_callees: HashSet<_> = callsites
+        let checkpoints = collect_unsafe_callsites(self.tcx, def_id);
+        let unsafe_callees: HashSet<_> = checkpoints
             .iter()
-            .filter_map(|callsite| callsite.callee)
+            .filter_map(|checkpoint| checkpoint.callee)
             .collect();
         let callee_requires = unsafe_callees
             .iter()
@@ -264,7 +264,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         FunctionTarget {
             def_id,
             owner_struct_def_id,
-            callsites,
+            checkpoints,
             callee_requires,
             caller_requires,
             struct_invariants,
@@ -400,7 +400,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         match self.mode {
             VerifyMode::Targeted => {}
             VerifyMode::Scan => {
-                if function_target.callsites.is_empty()
+                if function_target.checkpoints.is_empty()
                     && function_target.raw_ptr_deref_checks.is_empty()
                     && function_target.static_mut_checks.is_empty()
                     && function_target.struct_invariants.is_empty()
@@ -413,7 +413,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                 }
             }
             VerifyMode::Invless => {
-                if function_target.callsites.is_empty()
+                if function_target.checkpoints.is_empty()
                     && function_target.raw_ptr_deref_checks.is_empty()
                     && function_target.static_mut_checks.is_empty()
                 {
@@ -585,17 +585,17 @@ impl<'tcx> PrepareTargets<'tcx> {
         }
 
         self.log_unsafe_callees_and_contracts(target);
-        self.log_callsite_paths(target);
+        self.log_checkpoint_paths(target);
     }
 
     fn log_free_function_unsafe_callees(&self, target: &FunctionTarget<'tcx>) {
         self.log_unsafe_callees_and_contracts(target);
-        self.log_callsite_paths(target);
+        self.log_checkpoint_paths(target);
     }
 
     fn log_unsafe_callees_and_contracts(&self, target: &FunctionTarget<'tcx>) {
         if target.callee_requires.is_empty() {
-            rap_info!("      unsafe callsites: <none>");
+            rap_info!("      unsafe checkpoints: <none>");
             return;
         }
 
@@ -619,32 +619,47 @@ impl<'tcx> PrepareTargets<'tcx> {
         }
     }
 
-    fn log_callsite_paths(&self, target: &FunctionTarget<'tcx>) {
-        if target.callsites.is_empty() {
+    fn log_checkpoint_paths(&self, target: &FunctionTarget<'tcx>) {
+        if target.checkpoints.is_empty() {
             return;
         }
 
-        let result = PathExtractor::new(self.tcx, target.def_id, target.callsites.clone(), 0).run();
-        rap_info!("      callsite paths:");
-        for (display_index, callsite) in result.callsites().iter().enumerate() {
-            rap_info!(
-                "        #{} {} at bb{} ({} arg(s))",
-                display_index,
-                callsite.callee_name(self.tcx),
-                callsite.block.as_usize(),
-                callsite.args.len()
-            );
+        let groups = PathExtractor::new(self.tcx, target.def_id, target.checkpoints.clone(), 0).run();
+        rap_info!("      checkpoint paths:");
+        let mut display_index = 0usize;
+        for group in &groups {
+            for checkpoint in &group.checkpoints {
+                rap_info!(
+                    "        #{} {} at bb{} ({} arg(s))",
+                    display_index,
+                    checkpoint.callee_name(self.tcx),
+                    checkpoint.block.as_usize(),
+                    checkpoint.args.len()
+                );
+                display_index += 1;
 
-            let mut callsite_paths: Vec<_> = result.paths_for(callsite.location()).iter().collect();
-            callsite_paths.sort_by_key(|path| path.describe());
+                let mut path_strings: Vec<String> = Vec::new();
+                let _ = group.tree.walk_prefixes(
+                    checkpoint.block.as_usize(),
+                    &mut |prefix: &[usize]| -> bool {
+                        let desc = prefix
+                            .iter()
+                            .map(usize::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" -> ");
+                        path_strings.push(desc);
+                        true
+                    },
+                );
 
-            if callsite_paths.is_empty() {
-                rap_info!("          paths: <none>");
-                continue;
-            }
+                if path_strings.is_empty() {
+                    rap_info!("          paths: <none>");
+                    continue;
+                }
 
-            for (path_idx, path) in callsite_paths.iter().enumerate() {
-                rap_info!("          path {}: {}", path_idx, path.describe());
+                for (path_idx, desc) in path_strings.iter().enumerate() {
+                    rap_info!("          path {}: {}", path_idx, desc);
+                }
             }
         }
     }
@@ -942,12 +957,12 @@ fn get_trait_contracts_from_annotation<'tcx>(
     ensures
 }
 
-/// Build (pseudo-callsite, properties) pairs for every raw pointer dereference
+/// Build (pseudo-checkpoint, properties) pairs for every raw pointer dereference
 /// in the target function.
 fn build_raw_ptr_deref_checks<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-) -> Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)> {
+) -> Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)> {
     let infos = collect_raw_ptr_deref_info(tcx, def_id);
     if infos.is_empty() {
         return Vec::new();
@@ -982,13 +997,13 @@ fn build_raw_ptr_deref_checks<'tcx>(
             }
 
             (
-                Callsite {
+                Checkpoint {
                     caller: def_id,
                     callee: None,
                     block: info.block,
                     span: rustc_span::DUMMY_SP,
                     args: vec![info.ptr_operand],
-                    kind: crate::helpers::mir_scan::CallsiteKind::RawPtrDeref,
+                    kind: crate::helpers::mir_scan::CheckpointKind::RawPtrDeref,
                 },
                 properties,
             )
@@ -996,12 +1011,12 @@ fn build_raw_ptr_deref_checks<'tcx>(
         .collect()
 }
 
-/// Build (pseudo-callsite, properties) pairs for every static mut access
+/// Build (pseudo-checkpoint, properties) pairs for every static mut access
 /// in the target function.
 fn build_static_mut_checks<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-) -> Vec<(Callsite<'tcx>, Vec<Property<'tcx>>)> {
+) -> Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)> {
     let infos = collect_static_mut_access_info(tcx, def_id);
     if infos.is_empty() {
         return Vec::new();
@@ -1033,13 +1048,13 @@ fn build_static_mut_checks<'tcx>(
             ];
 
             (
-                Callsite {
+                Checkpoint {
                     caller: def_id,
                     callee: None,
                     block: info.block,
                     span: rustc_span::DUMMY_SP,
                     args: vec![info.ptr_operand],
-                    kind: crate::helpers::mir_scan::CallsiteKind::StaticMutAccess,
+                    kind: crate::helpers::mir_scan::CheckpointKind::StaticMutAccess,
                 },
                 properties,
             )

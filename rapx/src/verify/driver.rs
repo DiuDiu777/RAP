@@ -2,12 +2,12 @@
 //!
 //! The target collector owns selected functions and their callee requirements.
 //! The path extractor upgrades a function CFG into SCC-aware path metadata.
-//! `VerifyDriver` prepares paths for two kinds of checks (unsafe callsites and
+//! `VerifyDriver` prepares paths for two kinds of checks (unsafe checkpoints and
 //! struct invariants) and delegates the actual backward/forward/SMT work to
 //! the shared `VerifyEngine`.
 
 use crate::analysis::Analysis;
-use crate::analysis::path_analysis::graph::{PathEnumerator, PathGraph};
+use crate::analysis::path_analysis::{PathTree, graph::{PathEnumerator, PathGraph}};
 use crate::cli::VerifyMode;
 use crate::helpers::fn_info::{FnKind, get_cons, get_mutated_fields, get_muts, get_type};
 use crate::verify::contract::PropertyKind;
@@ -21,9 +21,9 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     contract::Property,
     engine::VerifyEngine,
-    helpers::{Callsite, CallsiteKind, CallsiteLocation, collect_return_block_indices},
-    path::{FunctionPaths, PATH_LIMIT, Path, PathExtractor, PathStart, PathStep},
-    path_refine::BackwardItem,
+    helpers::{Checkpoint, CheckpointKind, CheckpointLocation, collect_return_block_indices},
+    path_extractor::{CallGroup, PATH_LIMIT, PathExtractor},
+    slicer::BackwardItem,
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     target::{FunctionTarget, VerifyTargetCollector},
 };
@@ -34,17 +34,17 @@ use super::{
 ///
 /// Each `VerifyDriver` instance bundles together:
 ///
-/// 1. The **problem statement** (`target`) — which unsafe callsites and
+/// 1. The **problem statement** (`target`) — which unsafe checkpoints and
 ///    raw-pointer dereferences exist, what safety contracts they demand, and
 ///    what entry assumptions (from `#[rapx::requires]`) and struct invariants
 ///    apply.
 ///
 /// 2. The **reachability model** (`path_info`) — SCC-aware acyclic paths
-///    from function entry to each callsite, produced by flattening the MIR
+///    from function entry to each checkpoint, produced by flattening the MIR
 ///    control-flow graph with bounded loop unrolling.
 ///
 /// 3. The **verification engine** (`engine`) — a stateless pipeline shared
-///    across all (callsite, path, property) triples.
+///    across all (checkpoint, path, property) triples.
 ///
 /// 4. The **loop-unrolling budget** (`allow_repeat`) — caps how many extra
 ///    iterations a loop body may appear beyond its first occurrence, trading
@@ -52,7 +52,7 @@ use super::{
 ///
 /// Verification proceeds in two phases per driver instance:
 /// - [`verify_function`](Self::verify_function): checks safety properties at
-///   each unsafe callsite (callee `#[rapx::requires]` contracts).
+///   each unsafe checkpoint (callee `#[rapx::requires]` contracts).
 /// - [`verify_struct_invariants`](Self::verify_struct_invariants): checks
 ///   struct invariants at return-block checkpoints (constructors) or at all
 ///   path endpoints (non-constructor methods).
@@ -62,7 +62,7 @@ pub struct VerifyDriver<'target, 'tcx> {
     tcx: TyCtxt<'tcx>,
 
     /// The function being verified: its identity (`def_id`), the unsafe
-    /// operations inside it (`callsites`, `raw_ptr_deref_checks`), the
+    /// operations inside it (`checkpoints`, `raw_ptr_deref_checks`), the
     /// contracts those operations demand (`callee_requires`), the contracts
     /// the function itself requires as entry assumptions
     /// (`caller_requires`), and any struct invariants to be enforced
@@ -71,14 +71,12 @@ pub struct VerifyDriver<'target, 'tcx> {
 
     /// SCC-aware path metadata for this function.
     ///
-    /// Contains the shared [`PathTree`] (a prefix-tree of all whole-CFG
-    /// paths, used for bulk backward-visit analysis) and per-callsite path
-    /// lists produced by the [`PathExtractor`].
-    path_info: FunctionPaths<'tcx>,
+    /// Per-callee call groups with shared path trees.
+    path_info: Vec<CallGroup<'tcx>>,
 
     /// Stateless three-stage verification pipeline: backward data-dependency
     /// analysis → forward state simulation → SMT constraint checking.
-    /// Shared across all (callsite, path, property) triples for this target.
+    /// Shared across all (checkpoint, path, property) triples for this target.
     engine: VerifyEngine<'tcx>,
 
     /// Loop-unrolling depth for SCC-aware path enumeration.
@@ -107,14 +105,14 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         target: &'target FunctionTarget<'tcx>,
         allow_repeat: usize,
     ) -> Self {
-        let mut all_callsites = target.callsites.clone();
-        for (callsite, _) in &target.raw_ptr_deref_checks {
-            all_callsites.push(callsite.clone());
+        let mut all_checkpoints = target.checkpoints.clone();
+        for (checkpoint, _) in &target.raw_ptr_deref_checks {
+            all_checkpoints.push(checkpoint.clone());
         }
-        for (callsite, _) in &target.static_mut_checks {
-            all_callsites.push(callsite.clone());
+        for (checkpoint, _) in &target.static_mut_checks {
+            all_checkpoints.push(checkpoint.clone());
         }
-        let path_info = PathExtractor::new(tcx, target.def_id, all_callsites, allow_repeat).run();
+        let path_info = PathExtractor::new(tcx, target.def_id, all_checkpoints, allow_repeat).run();
         let engine = VerifyEngine::new(tcx);
         Self {
             tcx,
@@ -135,23 +133,20 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         self.target
     }
 
-    /// Return the SCC-aware path metadata managed by this driver.
-    pub fn path_info(&self) -> &FunctionPaths<'tcx> {
+    /// Return the per-callee call groups managed by this driver.
+    pub fn path_info(&self) -> &[CallGroup<'tcx>] {
         &self.path_info
     }
 
-    /// Run unsafe-callsite verification for the managed function target.
+    /// Run unsafe-checkpoint verification for the managed function target.
     pub fn verify_function(&self) -> VerificationReport<'tcx> {
         let mut report = VerificationReport::new(self.target.def_id);
-        let tree = self.path_info.path_tree();
 
         for view in self.iter_callsite_checks() {
-            let target_block = view.callsite.block.as_usize();
             for (property_index, property) in view.properties.iter().enumerate() {
                 let bulk = self.engine.check_callsite_from_tree(
-                    tree,
-                    target_block,
-                    view.callsite,
+                    view.tree,
+                    view.checkpoint,
                     property,
                     &self.target.caller_requires,
                 );
@@ -159,15 +154,15 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     let check_diagnostics =
                         format!("{}\n{}", forward.describe(), smt_check.describe());
                     report.push(PropertyCheckResult {
-                        callsite: view.callsite.location(),
-                        callsite_index: view.callsite_index,
+                        checkpoint: view.checkpoint.location(),
+                        checkpoint_index: view.checkpoint_index,
                         path_index,
                         property_index,
                         property: property.clone(),
                         result: smt_check.result.clone(),
                         diagnostics: Some(VisitDiagnostics::new(String::new(), check_diagnostics)),
                         path_description: forward.path.describe_indices(),
-                        callee_name: view.callsite.callee_name(self.tcx),
+                        callee_name: view.checkpoint.callee_name(self.tcx),
                     });
                 }
             }
@@ -176,16 +171,16 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         report
     }
 
-    /// Return the required properties for a concrete unsafe callsite.
+    /// Return the required properties for a concrete unsafe checkpoint.
     ///
-    /// Dispatches on [`CallsiteKind`]: synthetic checkpoints (raw pointer
+    /// Dispatches on [`CheckpointKind`]: synthetic checkpoints (raw pointer
     /// dereference, static mut access) carry their properties in
     /// `target.raw_ptr_deref_checks` / `target.static_mut_checks`; real
     /// unsafe calls look up `target.callee_requires` by callee `DefId`.
-    pub fn properties_for_callsite(&self, callsite: &Callsite<'tcx>) -> &'target [Property<'tcx>] {
-        let loc = callsite.location();
-        match callsite.kind {
-            CallsiteKind::RawPtrDeref => {
+    pub fn properties_for_callsite(&self, checkpoint: &Checkpoint<'tcx>) -> &'target [Property<'tcx>] {
+        let loc = checkpoint.location();
+        match checkpoint.kind {
+            CheckpointKind::RawPtrDeref => {
                 for (cs, props) in &self.target.raw_ptr_deref_checks {
                     if cs.location() == loc {
                         return props.as_slice();
@@ -193,7 +188,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                 }
                 &[]
             }
-            CallsiteKind::StaticMutAccess => {
+            CheckpointKind::StaticMutAccess => {
                 for (cs, props) in &self.target.static_mut_checks {
                     if cs.location() == loc {
                         return props.as_slice();
@@ -201,8 +196,8 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                 }
                 &[]
             }
-            CallsiteKind::UnsafeCall => {
-                if let Some(callee) = callsite.callee {
+            CheckpointKind::UnsafeCall => {
+                if let Some(callee) = checkpoint.callee {
                     self.target
                         .callee_requires
                         .get(&callee)
@@ -215,30 +210,27 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         }
     }
 
-    /// Iterate over callsites together with their paths and properties to verify.
+    /// Iterate over checkpoints together with their shared path tree and properties.
     pub fn iter_callsite_checks(
         &self,
-    ) -> impl Iterator<Item = CallsiteCheckView<'_, 'target, 'tcx>> + '_ {
-        self.path_info
-            .callsites()
-            .iter()
-            .filter_map(move |callsite| {
-                let paths = self.path_info.paths_for(callsite.location());
-                let properties = self.properties_for_callsite(callsite);
+    ) -> impl Iterator<Item = CheckpointCheckView<'_, 'target, 'tcx>> + '_ {
+        let mut checkpoint_index = 0usize;
+        self.path_info.iter().flat_map(move |group| {
+            group.checkpoints.iter().filter_map(move |checkpoint| {
+                let properties = self.properties_for_callsite(checkpoint);
                 if properties.is_empty() {
                     return None;
                 }
-                Some((callsite, paths, properties))
-            })
-            .enumerate()
-            .map(
-                move |(callsite_index, (callsite, paths, properties))| CallsiteCheckView {
-                    callsite_index,
-                    callsite,
-                    paths,
+                let view = CheckpointCheckView {
+                    checkpoint_index,
+                    checkpoint,
+                    tree: &group.tree,
                     properties,
-                },
-            )
+                };
+                checkpoint_index += 1;
+                Some(view)
+            })
+        })
     }
 
     /// Run struct invariant verification for the managed function target.
@@ -274,40 +266,35 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                 .collect()
         };
 
-        for (checkpoint, paths) in self.build_invariant_paths(is_constructor) {
+        for (checkpoint, tree) in self.build_invariant_trees(is_constructor) {
             rap_debug!(
-                "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
+                "[rapx::verify] struct invariant checkpoint bb{}: {} tree node(s)",
                 checkpoint.block.as_usize(),
-                paths.len()
+                tree.len()
             );
 
-            for (path_index, path) in paths.iter().enumerate() {
-                for (property_index, invariant) in invariants.iter().enumerate() {
-                    rap_debug!(
-                        "[rapx::verify] struct invariant path {} check: kind={:?}",
-                        path_index,
-                        invariant.kind
-                    );
+            for (property_index, invariant) in invariants.iter().enumerate() {
+                let results = self.engine.check_invariant_from_tree(
+                    self.target.def_id,
+                    &tree,
+                    checkpoint,
+                    invariant,
+                    &entry_facts,
+                );
 
-                    let check = self.engine.check_invariant(
-                        self.target.def_id,
-                        path,
-                        invariant,
-                        &entry_facts,
-                    );
-
+                for (path_index, check) in results.iter().enumerate() {
                     report.push(PropertyCheckResult {
-                        callsite: checkpoint,
-                        callsite_index: checkpoint.block.as_usize(),
+                        checkpoint: checkpoint,
+                        checkpoint_index: checkpoint.block.as_usize(),
                         path_index,
                         property_index,
                         property: invariant.clone(),
-                        result: check.result,
+                        result: check.result.clone(),
                         diagnostics: Some(VisitDiagnostics::new(
-                            check.slicing_diag,
-                            check.verification_diag,
+                            check.slicing_diag.clone(),
+                            check.verification_diag.clone(),
                         )),
-                        path_description: path.describe_indices(),
+                        path_description: String::new(),
                         callee_name: format!("struct-invariant(bb{})", checkpoint.block.as_usize()),
                     });
                 }
@@ -317,10 +304,10 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         report
     }
 
-    fn build_invariant_paths(
+    fn build_invariant_trees(
         &self,
         is_constructor: bool,
-    ) -> FxHashMap<CallsiteLocation, Vec<Path>> {
+    ) -> FxHashMap<CheckpointLocation, PathTree> {
         let mut pg = PathGraph::new(self.tcx, self.target.def_id);
         pg.find_scc();
         let mut enumerator = PathEnumerator::new(&pg);
@@ -337,40 +324,32 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             self.tcx.def_path_str(self.target.def_id),
         );
 
-        let mut paths_by_checkpoint: FxHashMap<CallsiteLocation, Vec<Path>> = FxHashMap::default();
-        let mut seen_paths = FxHashSet::default();
+        let mut trees_by_checkpoint: FxHashMap<CheckpointLocation, PathTree> = FxHashMap::default();
 
         if is_constructor {
             let return_blocks = collect_return_block_indices(self.tcx, self.target.def_id);
             for &return_block in &return_blocks {
-                let checkpoint = CallsiteLocation {
+                let checkpoint = CheckpointLocation {
                     caller: self.target.def_id,
                     block: return_block,
                 };
-                let mut paths = Vec::new();
+                let mut tree = PathTree::new();
                 let _ = all_paths.walk_prefixes(
                     return_block.as_usize(),
                     &mut |prefix: &[usize]| -> bool {
-                        if paths.len() >= PATH_LIMIT {
+                        if tree.len() >= PATH_LIMIT {
                             return false;
                         }
-                        paths.push(Path {
-                            target: checkpoint,
-                            start: PathStart::FunctionEntry,
-                            steps: prefix
-                                .iter()
-                                .map(|&b| PathStep::Block(BasicBlock::from(b)))
-                                .chain(std::iter::once(PathStep::Callsite(checkpoint)))
-                                .collect(),
-                        });
+                        tree.insert(prefix);
                         true
                     },
                 );
-                if !paths.is_empty() {
-                    paths_by_checkpoint.insert(checkpoint, paths);
+                if !tree.is_empty() {
+                    trees_by_checkpoint.insert(checkpoint, tree);
                 }
             }
         } else {
+            let mut seen_paths = FxHashSet::default();
             for path in all_paths.iter() {
                 if path.is_empty() {
                     continue;
@@ -379,38 +358,30 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     continue;
                 }
                 let last_block = BasicBlock::from(*path.last().unwrap());
-                let checkpoint = CallsiteLocation {
+                let checkpoint = CheckpointLocation {
                     caller: self.target.def_id,
                     block: last_block,
                 };
-                paths_by_checkpoint
+                trees_by_checkpoint
                     .entry(checkpoint)
-                    .or_default()
-                    .push(Path {
-                        target: checkpoint,
-                        start: PathStart::FunctionEntry,
-                        steps: path
-                            .iter()
-                            .map(|&b| PathStep::Block(BasicBlock::from(b)))
-                            .chain(std::iter::once(PathStep::Callsite(checkpoint)))
-                            .collect(),
-                    });
+                    .or_insert_with(PathTree::new)
+                    .insert(path.as_slice());
             }
         }
 
-        paths_by_checkpoint
+        trees_by_checkpoint
     }
 }
 
 /// Returns whether a function returns the owning struct type (i.e. is a constructor).
-/// Borrowed view of all verification inputs for one unsafe callsite.
-pub struct CallsiteCheckView<'view, 'target, 'tcx> {
-    /// Position among callsites that have properties to verify.
-    pub callsite_index: usize,
-    /// The concrete unsafe callsite in the caller MIR body.
-    pub callsite: &'view Callsite<'tcx>,
-    /// SCC-aware paths that can reach this callsite.
-    pub paths: &'view [Path],
+/// Borrowed view of all verification inputs for one unsafe checkpoint.
+pub struct CheckpointCheckView<'view, 'target, 'tcx> {
+    /// Position among checkpoints that have properties to verify.
+    pub checkpoint_index: usize,
+    /// The concrete unsafe checkpoint in the caller MIR body.
+    pub checkpoint: &'view Checkpoint<'tcx>,
+    /// Per-checkpoint prefix tree of all verification paths to this checkpoint.
+    pub tree: &'view PathTree,
     /// Required safety properties for the unsafe callee.
     pub properties: &'target [Property<'tcx>],
 }
@@ -512,7 +483,7 @@ impl<'tcx> VerifyRun<'tcx> {
         FunctionTarget {
             def_id: read_def_id,
             owner_struct_def_id: read_target.owner_struct_def_id,
-            callsites: read_target.callsites.clone(),
+            checkpoints: read_target.checkpoints.clone(),
             callee_requires: read_target.callee_requires.clone(),
             caller_requires: accumulated_requires,
             struct_invariants: Vec::new(),
@@ -557,26 +528,26 @@ impl<'tcx> VerifyRun<'tcx> {
             .filter(|r| !matches!(r.result, super::report::CheckResult::Proved))
             .count();
 
-        let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> =
+        let mut groups: IndexMap<(CheckpointLocation, String), Vec<&PropertyCheckResult<'_>>> =
             IndexMap::new();
         for r in &all_results {
             groups
-                .entry((r.callsite, r.callee_name.clone()))
+                .entry((r.checkpoint, r.callee_name.clone()))
                 .or_default()
                 .push(r);
         }
 
-        let callsite_groups: Vec<_> = groups
+        let checkpoint_groups: Vec<_> = groups
             .iter()
             .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
             .collect();
 
-        if !callsite_groups.is_empty() {
-            rap_info!("  --- unsafe callsites ---");
-            for ((callsite, callee_name), results) in &callsite_groups {
+        if !checkpoint_groups.is_empty() {
+            rap_info!("  --- unsafe checkpoints ---");
+            for ((checkpoint, callee_name), results) in &checkpoint_groups {
                 rap_info!(
-                    "      unsafe callsite: bb{} -> {callee_name}",
-                    callsite.block.as_usize(),
+                    "      unsafe checkpoint: bb{} -> {callee_name}",
+                    checkpoint.block.as_usize(),
                 );
                 emit_property_rows(results);
             }
@@ -610,7 +581,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             let target_path = self.tcx.def_path_str(target.def_id);
             let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
-            // Phase 1: unsafe callsite verification
+            // Phase 1: unsafe checkpoint verification
             for repeat in 0..=self.allow_pathseg_repeat {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
                 let report = driver.verify_function();
@@ -628,7 +599,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
 
             if all_results.is_empty() {
-                if target.callsites.is_empty()
+                if target.checkpoints.is_empty()
                     && target.raw_ptr_deref_checks.is_empty()
                     && target.static_mut_checks.is_empty()
                     && target.struct_invariants.is_empty()
@@ -642,7 +613,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                             rap_info!("  + constructor: {}", self.tcx.def_path_str(*con));
                         }
                     }
-                    rap_info!("  --- unsafe callsites ---");
+                    rap_info!("  --- unsafe checkpoints ---");
                     rap_info!("      <none>");
                     rap_info!("        Unknown | Unproved");
                     rap_warn!("  result: UNSOUND (no safety contracts found)");
@@ -733,18 +704,18 @@ fn emit_verify_summary<'tcx>(
         }
     }
 
-    // Group results by (callsite, callee_name)
-    let mut groups: IndexMap<(CallsiteLocation, String), Vec<&PropertyCheckResult<'_>>> =
+    // Group results by (checkpoint, callee_name)
+    let mut groups: IndexMap<(CheckpointLocation, String), Vec<&PropertyCheckResult<'_>>> =
         IndexMap::new();
     for r in all_results {
         groups
-            .entry((r.callsite, r.callee_name.clone()))
+            .entry((r.checkpoint, r.callee_name.clone()))
             .or_default()
             .push(r);
     }
 
-    // Separate into callsite groups and struct-invariant groups
-    let callsite_groups: Vec<_> = groups
+    // Separate into checkpoint groups and struct-invariant groups
+    let checkpoint_groups: Vec<_> = groups
         .iter()
         .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
         .collect();
@@ -753,13 +724,13 @@ fn emit_verify_summary<'tcx>(
         .filter(|((_, name), _)| name.starts_with("struct-invariant"))
         .collect();
 
-    // Print unsafe callsite results
-    if !callsite_groups.is_empty() {
-        rap_info!("  --- unsafe callsites ---");
-        for ((callsite, callee_name), results) in &callsite_groups {
+    // Print unsafe checkpoint results
+    if !checkpoint_groups.is_empty() {
+        rap_info!("  --- unsafe checkpoints ---");
+        for ((checkpoint, callee_name), results) in &checkpoint_groups {
             rap_info!(
-                "      unsafe callsite: bb{} -> {callee_name}",
-                callsite.block.as_usize(),
+                "      unsafe checkpoint: bb{} -> {callee_name}",
+                checkpoint.block.as_usize(),
             );
             emit_property_rows(results);
         }

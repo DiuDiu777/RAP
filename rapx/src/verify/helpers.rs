@@ -12,7 +12,7 @@ use syn::Expr;
 
 pub use crate::helpers::fn_info::parse_expr_into_number;
 pub use crate::helpers::mir_scan::{
-    Callsite, CallsiteKind, CallsiteLocation, collect_unsafe_callsites,
+    Checkpoint, CheckpointKind, CheckpointLocation, collect_unsafe_callsites,
 };
 pub use crate::helpers::name::{
     access_ident_recursive, get_cleaned_def_path_name, get_struct_self_ty, match_ty_with_ident,
@@ -64,7 +64,7 @@ pub fn parse_expr_into_local_and_ty<'tcx>(
 ///
 /// Contract annotations written with parameter names are parsed in the callee's
 /// local namespace.  MIR local `_0` is the return place and argument locals are
-/// `_1..=_arg_count`, so callee local `_1` denotes callsite argument `0`.
+/// `_1..=_arg_count`, so callee local `_1` denotes checkpoint argument `0`.
 pub fn callee_param_index_for_local(tcx: TyCtxt<'_>, callee: DefId, local: usize) -> Option<usize> {
     if local == 0 {
         return None;

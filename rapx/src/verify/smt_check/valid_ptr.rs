@@ -20,29 +20,29 @@ use super::{
 };
 use crate::verify::{
     contract::{Property, PropertyKind},
-    forward_visit::ForwardVisitResult,
-    helpers::Callsite,
+    verifier::ForwardVisitResult,
+    helpers::Checkpoint,
     report::CheckResult,
 };
 
 /// Check `ValidPtr` using `Size(T,0) || (!Size(T,0) && Deref(p,T,n))`.
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(required_ty) = checker.property_required_ty(callsite, property) else {
+    let Some(required_ty) = checker.property_required_ty(checkpoint, property) else {
         return SmtCheckResult::unknown("ValidPtr type could not be resolved");
     };
 
-    match checker.type_size_class(callsite.caller, required_ty) {
+    match checker.type_size_class(checkpoint.caller, required_ty) {
         TypeSizeClass::Zero => {
             SmtCheckResult::proved(format!("ValidPtr proved by Size({required_ty:?}, 0)"))
         }
         TypeSizeClass::NonZero => {
             let deref_property = primitive_property(property, PropertyKind::Deref);
-            let deref = deref::check(checker, callsite, &deref_property, forward);
+            let deref = deref::check(checker, checkpoint, &deref_property, forward);
             match &deref.result {
                 CheckResult::Proved => {
                     SmtCheckResult::proved("ValidPtr proved: non-ZST target satisfies Deref")
@@ -62,7 +62,7 @@ pub(crate) fn check<'tcx>(
         }
         TypeSizeClass::Unknown => {
             let deref_property = primitive_property(property, PropertyKind::Deref);
-            let deref = deref::check(checker, callsite, &deref_property, forward);
+            let deref = deref::check(checker, checkpoint, &deref_property, forward);
             match &deref.result {
                 CheckResult::Proved => SmtCheckResult::proved(
                     "ValidPtr proved: Deref holds, so the formula holds for zero and non-zero sizes",

@@ -5,24 +5,24 @@ use std::fmt::Write;
 use rustc_middle::ty::TyCtxt;
 
 use crate::verify::{
-    helpers::CallsiteLocation,
-    path::{PathStart, PathStep},
+    helpers::CheckpointLocation,
+    path_extractor::PathStep,
 };
 
 use super::types::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems};
 
 impl<'tcx> RelevantMirItems<'tcx> {
-    /// Render a detailed, path-ordered diagnostic for a callsite visit.
+    /// Render a detailed, path-ordered diagnostic for a checkpoint visit.
     pub fn describe(
         &self,
         tcx: TyCtxt<'tcx>,
-        callsite: &crate::verify::helpers::Callsite<'tcx>,
+        checkpoint: &crate::verify::helpers::Checkpoint<'tcx>,
         path_index: usize,
     ) -> String {
         let header = format!(
-            "      callsite: {} at bb{}",
-            callsite.callee_name(tcx),
-            callsite.block.as_usize()
+            "      checkpoint: {} at bb{}",
+            checkpoint.callee_name(tcx),
+            checkpoint.block.as_usize()
         );
         self.describe_common(tcx, path_index, &header)
     }
@@ -31,7 +31,7 @@ impl<'tcx> RelevantMirItems<'tcx> {
     pub fn describe_for_checkpoint(
         &self,
         tcx: TyCtxt<'tcx>,
-        checkpoint: CallsiteLocation,
+        checkpoint: CheckpointLocation,
         path_index: usize,
     ) -> String {
         let header = format!("      checkpoint: bb{}", checkpoint.block.as_usize());
@@ -40,7 +40,7 @@ impl<'tcx> RelevantMirItems<'tcx> {
 
     fn describe_common(&self, tcx: TyCtxt<'tcx>, path_index: usize, header: &str) -> String {
         let mut out = String::new();
-        let caller = self.callsite.caller;
+        let caller = self.checkpoint.caller;
         let body = tcx.optimized_mir(caller);
 
         let _ = writeln!(out, "{header}");
@@ -52,8 +52,7 @@ impl<'tcx> RelevantMirItems<'tcx> {
         let _ = writeln!(out, "      path {path_index}:");
         let _ = writeln!(
             out,
-            "        |_ kind: {}",
-            describe_path_start(&self.path.start)
+            "        |_ kind: entry",
         );
         let _ = writeln!(out, "        |_ steps: {}", self.path.describe_body());
         let _ = writeln!(
@@ -110,10 +109,10 @@ fn item_belongs_to_step(item: &BackwardItem<'_>, step: &PathStep) -> bool {
     match (item, step) {
         (BackwardItem::Statement { block, .. }, PathStep::Block(step_block)) => block == step_block,
         (BackwardItem::Terminator { block, kind }, PathStep::Block(step_block)) => {
-            block == step_block && *kind != KeepReason::Callsite
+            block == step_block && *kind != KeepReason::Checkpoint
         }
-        (BackwardItem::Terminator { block, kind }, PathStep::Callsite(location)) => {
-            *kind == KeepReason::Callsite && *block == location.block
+        (BackwardItem::Terminator { block, kind }, PathStep::Checkpoint(location)) => {
+            *kind == KeepReason::Checkpoint && *block == location.block
         }
 
         (
@@ -129,21 +128,15 @@ fn item_belongs_to_step(item: &BackwardItem<'_>, step: &PathStep) -> bool {
 fn same_path_step(lhs: &PathStep, rhs: &PathStep) -> bool {
     match (lhs, rhs) {
         (PathStep::Block(lhs), PathStep::Block(rhs)) => lhs == rhs,
-        (PathStep::Callsite(lhs), PathStep::Callsite(rhs)) => lhs == rhs,
+        (PathStep::Checkpoint(lhs), PathStep::Checkpoint(rhs)) => lhs == rhs,
         _ => false,
-    }
-}
-
-fn describe_path_start(start: &PathStart) -> String {
-    match start {
-        PathStart::FunctionEntry => "entry".to_string(),
     }
 }
 
 fn describe_path_step(step: &PathStep) -> String {
     match step {
         PathStep::Block(block) => format!("bb{}", block.as_usize()),
-        PathStep::Callsite(location) => format!("callsite(bb{})", location.block.as_usize()),
+        PathStep::Checkpoint(location) => format!("checkpoint(bb{})", location.block.as_usize()),
     }
 }
 

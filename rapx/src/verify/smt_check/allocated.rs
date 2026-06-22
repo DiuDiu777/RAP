@@ -6,32 +6,32 @@
 //! even when their addresses happen to be close.
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
-use crate::verify::{contract::Property, forward_visit::ForwardVisitResult, helpers::Callsite};
+use crate::verify::{contract::Property, verifier::ForwardVisitResult, helpers::Checkpoint};
 
 /// Check `Allocated` by lowering it to a common allocation obligation.
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(target) = checker.property_target(callsite, property) else {
+    let Some(target) = checker.property_target(checkpoint, property) else {
         return SmtCheckResult::unknown("Allocated target could not be resolved");
     };
-    let Some(required_ty) = checker.property_required_ty(callsite, property) else {
+    let Some(required_ty) = checker.property_required_ty(checkpoint, property) else {
         return SmtCheckResult::unknown("Allocated type could not be resolved");
     };
-    let Some(elements_expr) = checker.property_len_expr(callsite, property) else {
+    let Some(elements_expr) = checker.property_len_expr(checkpoint, property) else {
         return SmtCheckResult::unknown("Allocated element-count argument could not be resolved");
     };
-    let Some(elements) = checker.contract_expr_to_smt_term(callsite.caller, &elements_expr) else {
+    let Some(elements) = checker.contract_expr_to_smt_term(checkpoint.caller, &elements_expr) else {
         return SmtCheckResult::unknown(
             "Allocated element-count argument could not be lowered to SMT",
         );
     };
 
     checker.prove_obligation(
-        callsite,
+        checkpoint,
         forward,
         SmtObligation::Allocated {
             place: target,

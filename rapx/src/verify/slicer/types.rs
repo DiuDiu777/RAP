@@ -8,16 +8,16 @@
 use crate::verify::{
     contract,
     def_use::RelevantPlaces,
-    helpers::CallsiteLocation,
-    path::{Path, PathStep},
+    helpers::CheckpointLocation,
+    path_extractor::{Path, PathStep},
 };
 use rustc_middle::mir::BasicBlock;
 
-/// MIR items relevant to one `(callsite, path, property)` item.
+/// MIR items relevant to one `(checkpoint, path, property)` item.
 #[derive(Clone, Debug)]
 pub struct RelevantMirItems<'tcx> {
-    /// Unsafe callsite whose obligation is being checked.
-    pub callsite: CallsiteLocation,
+    /// Unsafe checkpoint whose obligation is being checked.
+    pub checkpoint: CheckpointLocation,
     /// Required property that determines the relevance roots.
     pub property: contract::Property<'tcx>,
     /// Path being visited.
@@ -71,8 +71,8 @@ pub enum KeepReason {
     PointerFlow,
     /// The item refines state through a runtime check.
     RuntimeCheck,
-    /// The item is the unsafe callsite being checked.
-    Callsite,
+    /// The item is the unsafe checkpoint being checked.
+    Checkpoint,
     /// The item represents a loop summary or loop exit.
     LoopExit,
     /// The item may invalidate a relevant fact.

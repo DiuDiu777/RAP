@@ -23,8 +23,8 @@ use crate::{
     helpers::mir_scan::check_safety,
     verify::{
         def_use::{PlaceBaseKey, PlaceKey},
-        forward_visit::{AbstractValue, ForwardVisitResult},
-        helpers::Callsite,
+        verifier::{AbstractValue, ForwardVisitResult},
+        helpers::Checkpoint,
         primitive::PrimitiveCall,
         report::CheckResult,
     },
@@ -60,11 +60,11 @@ enum RawAccessKind {
 /// Check the path-sensitive / escaped hazard part of `Alias`.
 pub fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
-    callsite: &Callsite<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
     _forward_property: &crate::verify::contract::Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let Some(callee) = callsite.callee else {
+    let Some(callee) = checkpoint.callee else {
         return SmtCheckResult::unknown("Alias target callee could not be resolved");
     };
     let callee_name = checker.tcx.def_path_str(callee);
@@ -74,7 +74,7 @@ pub fn check<'tcx>(
         );
     };
 
-    let Some(origin_arg) = callsite.args.first() else {
+    let Some(origin_arg) = checkpoint.args.first() else {
         return SmtCheckResult::unknown("Alias producer has no pointer argument");
     };
     let Some(origin_place) = operand_place(origin_arg) else {
@@ -85,13 +85,13 @@ pub fn check<'tcx>(
     if !local_origins.contains(&origin) {
         local_origins.push(origin.clone());
     }
-    let destination = call_destination(checker.tcx, callsite);
+    let destination = call_destination(checker.tcx, checkpoint);
 
     let AliasProducer::View(kind) = producer else {
         if let Some(reason) = ownership_transfer_violation(
             checker.tcx,
-            callsite.caller,
-            callsite.block,
+            checkpoint.caller,
+            checkpoint.block,
             destination,
             &local_origins,
         ) {
@@ -104,8 +104,8 @@ pub fn check<'tcx>(
 
     if let Some(reason) = local_hazard_violation(
         checker.tcx,
-        callsite.caller,
-        callsite.block,
+        checkpoint.caller,
+        checkpoint.block,
         destination,
         &local_origins,
         kind,
@@ -113,14 +113,14 @@ pub fn check<'tcx>(
         return failed(reason);
     }
 
-    if !destination_flows_to_return(checker.tcx, callsite.caller, destination) {
+    if !destination_flows_to_return(checker.tcx, checkpoint.caller, destination) {
         return SmtCheckResult::proved(
             "Alias hazard is local and no conflicting raw access was found after the view producer",
         );
     }
 
-    if let Some(origin) = self_field_origin(checker.tcx, callsite.caller, &origin) {
-        if let Some(reason) = escaped_self_field_violation(checker.tcx, callsite.caller, &origin) {
+    if let Some(origin) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
+        if let Some(reason) = escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin) {
             return failed(reason);
         }
         return SmtCheckResult::proved(format!(
@@ -183,9 +183,9 @@ fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
     }
 }
 
-fn call_destination<'tcx>(tcx: TyCtxt<'tcx>, callsite: &Callsite<'tcx>) -> Option<Local> {
-    let body = tcx.optimized_mir(callsite.caller);
-    let terminator = body.basic_blocks[callsite.block].terminator();
+fn call_destination<'tcx>(tcx: TyCtxt<'tcx>, checkpoint: &Checkpoint<'tcx>) -> Option<Local> {
+    let body = tcx.optimized_mir(checkpoint.caller);
+    let terminator = body.basic_blocks[checkpoint.block].terminator();
     let TerminatorKind::Call { destination, .. } = &terminator.kind else {
         return None;
     };

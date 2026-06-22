@@ -22,9 +22,9 @@ use super::{
     call_summary::{self, CallEffect, CallEffectSummary},
     contract::Property,
     def_use::{PlaceBaseKey, PlaceKey},
-    helpers::CallsiteLocation,
-    path::{Path, PathStep},
-    path_refine::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
+    helpers::CheckpointLocation,
+    path_extractor::{Path, PathStep},
+    slicer::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
 };
 
 /// Visits relevant MIR items forward and builds an abstract state.
@@ -41,8 +41,8 @@ impl<'tcx> ForwardVerifier<'tcx> {
     /// Visit relevant MIR items in path order and produce an abstract state.
     pub fn visit(&self, items: &RelevantMirItems<'tcx>) -> ForwardVisitResult<'tcx> {
         let mut result =
-            ForwardVisitResult::new(items.callsite, items.property.clone(), items.path.clone());
-        let body = self.tcx.optimized_mir(items.callsite.caller);
+            ForwardVisitResult::new(items.checkpoint, items.property.clone(), items.path.clone());
+        let body = self.tcx.optimized_mir(items.checkpoint.caller);
 
         for item in &items.items {
             match item {
@@ -150,7 +150,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     .collect();
                 let effect_summary = call_summary::effect_summary(
                     self.tcx,
-                    result.callsite.caller,
+                    result.checkpoint.caller,
                     func,
                     destination.local,
                 );
@@ -173,7 +173,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     block,
                     &effect_summary,
                     args,
-                    reason == KeepReason::Callsite,
+                    reason == KeepReason::Checkpoint,
                     result,
                 );
             }
@@ -286,7 +286,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     source: source.clone(),
                 });
                 if let Some((ty_name, elements)) =
-                    self.allocated_element_summary(result.callsite.caller, object.local())
+                    self.allocated_element_summary(result.checkpoint.caller, object.local())
                 {
                     result.facts.push(StateFact::KnownAllocated {
                         place: target,
@@ -300,7 +300,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             Rvalue::RawPtr(_, source) => {
                 let source_key = PlaceKey::from_mir_place(source);
                 if let Some(alias) =
-                    self.deref_pointer_value_for_place(result.callsite.caller, source)
+                    self.deref_pointer_value_for_place(result.checkpoint.caller, source)
                 {
                     result.record_value_definition(
                         block,
@@ -309,7 +309,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         AbstractValue::Place(alias.clone()),
                     );
                     let ty =
-                        self.tcx.optimized_mir(result.callsite.caller).local_decls[place.local].ty;
+                        self.tcx.optimized_mir(result.checkpoint.caller).local_decls[place.local].ty;
                     result.facts.push(StateFact::Cast {
                         target: target.clone(),
                         source: AbstractValue::Place(alias),
@@ -317,14 +317,14 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     });
                 }
                 let object = self
-                    .referenced_object_for_place(result.callsite.caller, source)
+                    .referenced_object_for_place(result.checkpoint.caller, source)
                     .unwrap_or_else(|| allocation_object_for_source(&source_key, result));
                 result.facts.push(StateFact::PointsTo {
                     pointer: target.clone(),
                     source: source_key,
                 });
                 if let Some((ty_name, elements)) =
-                    self.allocated_element_summary(result.callsite.caller, object.local())
+                    self.allocated_element_summary(result.checkpoint.caller, object.local())
                 {
                     result.facts.push(StateFact::KnownAllocated {
                         place: target,
@@ -370,7 +370,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 }
                 if let AbstractValue::Place(source_place) = &source_val
                     && let Some((ty_name, elements)) =
-                        self.box_projection_allocation(result.callsite.caller, source_place, *ty)
+                        self.box_projection_allocation(result.checkpoint.caller, source_place, *ty)
                 {
                     result.facts.push(StateFact::KnownAllocated {
                         place: target,
@@ -502,7 +502,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
         block: BasicBlock,
         summary: &CallEffectSummary,
         args: &[Spanned<Operand<'tcx>>],
-        is_target_callsite: bool,
+        is_target_checkpoint: bool,
         result: &mut ForwardVisitResult<'tcx>,
     ) {
         result.facts.push(StateFact::CallEffect(summary.clone()));
@@ -524,7 +524,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                             source: source.clone(),
                         });
                         if let Some((ty_name, elements)) =
-                            self.allocated_element_summary(result.callsite.caller, object.local())
+                            self.allocated_element_summary(result.checkpoint.caller, object.local())
                         {
                             result.facts.push(StateFact::KnownAllocated {
                                 place: destination_place.clone(),
@@ -585,7 +585,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
 
                         for place in init_places {
                             let ty_name =
-                                self.init_write_ty_name(summary, result.callsite.caller, &place);
+                                self.init_write_ty_name(summary, result.checkpoint.caller, &place);
                             result.facts.push(StateFact::KnownInit {
                                 place,
                                 ty_name,
@@ -602,7 +602,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             }
         }
 
-        if summary.unsupported && !is_target_callsite {
+        if summary.unsupported && !is_target_checkpoint {
             result.forgets.push(ForgetReason::UnknownCall);
             result
                 .notes
@@ -753,9 +753,9 @@ impl<'tcx> ForwardVerifier<'tcx> {
 /// Result produced by visiting relevant MIR items forward.
 #[derive(Clone, Debug)]
 pub struct ForwardVisitResult<'tcx> {
-    /// Unsafe callsite being checked.
-    pub callsite: CallsiteLocation,
-    /// Required property checked at the callsite.
+    /// Unsafe checkpoint being checked.
+    pub checkpoint: CheckpointLocation,
+    /// Required property checked at the checkpoint.
     pub property: Property<'tcx>,
     /// Path whose relevant items were visited.
     pub path: Path,
@@ -775,9 +775,9 @@ pub struct ForwardVisitResult<'tcx> {
 
 impl<'tcx> ForwardVisitResult<'tcx> {
     /// Create an empty forward visit result.
-    pub fn new(callsite: CallsiteLocation, property: Property<'tcx>, path: Path) -> Self {
+    pub fn new(checkpoint: CheckpointLocation, property: Property<'tcx>, path: Path) -> Self {
         Self {
-            callsite,
+            checkpoint,
             property,
             path,
             values: FxHashMap::default(),
@@ -1065,7 +1065,7 @@ fn chosen_successor(path: &Path, block: BasicBlock) -> Option<BasicBlock> {
                 }
                 previous = Some(*current);
             }
-            PathStep::Callsite(_) => return None,
+            PathStep::Checkpoint(_) => return None,
         }
     }
     None

@@ -1,6 +1,6 @@
 //! Common SMT checking backend for the staged verifier.
 //!
-//! The SMT layer consumes the abstract facts produced by `forward_visit` and
+//! The SMT layer consumes the abstract facts produced by `verifying` and
 //! exposes one property-oriented entry point. Safety properties do not call Z3
 //! directly. Instead, each property-specific module lowers its requirement into
 //! one of the common SMT obligations below, and the common backend discharges
@@ -45,9 +45,9 @@ use crate::verify::{
         Property, PropertyArg, PropertyKind, RelOp,
     },
     def_use::{PlaceBaseKey, PlaceKey},
-    forward_visit::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
+    verifier::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
     generic::GenericTypeCandidates,
-    helpers::{Callsite, callee_param_index_for_local},
+    helpers::{Checkpoint, callee_param_index_for_local},
     primitive::PrimitiveCall,
     report::CheckResult,
 };
@@ -69,21 +69,21 @@ impl<'tcx> SmtChecker<'tcx> {
     /// Try to prove one property using SMT.
     pub fn check(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
         forward: &ForwardVisitResult<'tcx>,
     ) -> SmtCheckResult {
         match property.kind {
-            PropertyKind::Align => align::check(self, callsite, property, forward),
-            PropertyKind::Alias => alias::check(self, callsite, property, forward),
-            PropertyKind::Allocated => allocated::check(self, callsite, property, forward),
-            PropertyKind::Deref => deref::check(self, callsite, property, forward),
-            PropertyKind::NonNull => non_null::check(self, callsite, property, forward),
-            PropertyKind::InBound => in_bound::check(self, callsite, property, forward),
-            PropertyKind::Init => init::check(self, callsite, property, forward),
-            PropertyKind::NonOverlap => non_overlap::check(self, callsite, property, forward),
-            PropertyKind::ValidNum => valid_num::check(self, callsite, property, forward),
-            PropertyKind::ValidPtr => valid_ptr::check(self, callsite, property, forward),
+            PropertyKind::Align => align::check(self, checkpoint, property, forward),
+            PropertyKind::Alias => alias::check(self, checkpoint, property, forward),
+            PropertyKind::Allocated => allocated::check(self, checkpoint, property, forward),
+            PropertyKind::Deref => deref::check(self, checkpoint, property, forward),
+            PropertyKind::NonNull => non_null::check(self, checkpoint, property, forward),
+            PropertyKind::InBound => in_bound::check(self, checkpoint, property, forward),
+            PropertyKind::Init => init::check(self, checkpoint, property, forward),
+            PropertyKind::NonOverlap => non_overlap::check(self, checkpoint, property, forward),
+            PropertyKind::ValidNum => valid_num::check(self, checkpoint, property, forward),
+            PropertyKind::ValidPtr => valid_ptr::check(self, checkpoint, property, forward),
             _ => SmtCheckResult::unknown("no SMT lowering for this property yet"),
         }
     }
@@ -121,7 +121,7 @@ impl<'tcx> SmtChecker<'tcx> {
     /// Prove one already-lowered common SMT obligation.
     pub(crate) fn prove_obligation(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         forward: &ForwardVisitResult<'tcx>,
         obligation: SmtObligation,
     ) -> SmtCheckResult {
@@ -148,7 +148,7 @@ impl<'tcx> SmtChecker<'tcx> {
         let cfg = Config::new();
         let ctx = Context::new(&cfg);
         let solver = Solver::new(&ctx);
-        let mut model = SmtModel::new(self.tcx, callsite, forward, &ctx);
+        let mut model = SmtModel::new(self.tcx, checkpoint, forward, &ctx);
         model.assert_forward_facts(&solver);
         if matches!(solver.check(), SatResult::Unsat) {
             return SmtCheckResult::proved(
@@ -1069,7 +1069,7 @@ impl<'tcx> SmtChecker<'tcx> {
 
     /// Prove one lowered obligation at a return checkpoint (struct invariant).
     ///
-    /// Wraps `prove_obligation` with a minimal dummy callsite that only carries
+    /// Wraps `prove_obligation` with a minimal dummy checkpoint that only carries
     /// the caller DefId. No callee-to-caller argument mapping is needed.
     pub(crate) fn prove_obligation_for_checkpoint(
         &self,
@@ -1077,53 +1077,53 @@ impl<'tcx> SmtChecker<'tcx> {
         forward: &ForwardVisitResult<'tcx>,
         obligation: SmtObligation,
     ) -> SmtCheckResult {
-        let dummy_callsite = Callsite {
+        let dummy_checkpoint = Checkpoint {
             caller,
             callee: Some(caller),
             block: rustc_middle::mir::BasicBlock::from_usize(0),
             span: rustc_span::Span::default(),
             args: Vec::new(),
-            kind: crate::helpers::mir_scan::CallsiteKind::UnsafeCall,
+            kind: crate::helpers::mir_scan::CheckpointKind::UnsafeCall,
         };
-        self.prove_obligation(&dummy_callsite, forward, obligation)
+        self.prove_obligation(&dummy_checkpoint, forward, obligation)
     }
 
-    /// Resolve the target place of a property at a concrete callsite.
+    /// Resolve the target place of a property at a concrete checkpoint.
     pub(crate) fn property_target(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> Option<PlaceKey> {
         let arg = property.args.first()?;
         match arg {
-            PropertyArg::Place(place) => self.contract_place_to_callsite_place(callsite, place),
+            PropertyArg::Place(place) => self.contract_place_to_callsite_place(checkpoint, place),
             PropertyArg::Expr(ContractExpr::Place(place)) => {
-                self.contract_place_to_callsite_place(callsite, place)
+                self.contract_place_to_callsite_place(checkpoint, place)
             }
             PropertyArg::Expr(ContractExpr::Const(index)) => {
                 let index = usize::try_from(*index).ok()?;
-                self.callsite_arg_place(callsite, index)
+                self.callsite_arg_place(checkpoint, index)
             }
             _ => None,
         }
     }
 
-    /// Resolve the `index`-th property argument as a concrete callsite place.
+    /// Resolve the `index`-th property argument as a concrete checkpoint place.
     pub(crate) fn property_place_arg(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
         index: usize,
     ) -> Option<PlaceKey> {
         let arg = property.args.get(index)?;
         match arg {
-            PropertyArg::Place(place) => self.contract_place_to_callsite_place(callsite, place),
+            PropertyArg::Place(place) => self.contract_place_to_callsite_place(checkpoint, place),
             PropertyArg::Expr(ContractExpr::Place(place)) => {
-                self.contract_place_to_callsite_place(callsite, place)
+                self.contract_place_to_callsite_place(checkpoint, place)
             }
             PropertyArg::Expr(ContractExpr::Const(arg_index)) => {
                 let arg_index = usize::try_from(*arg_index).ok()?;
-                self.callsite_arg_place(callsite, arg_index)
+                self.callsite_arg_place(checkpoint, arg_index)
             }
             _ => None,
         }
@@ -1154,14 +1154,14 @@ impl<'tcx> SmtChecker<'tcx> {
     /// Resolve the type argument used by an alignment property.
     pub(crate) fn property_required_ty(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> Option<Ty<'tcx>> {
         property.args.iter().find_map(|arg| {
             let PropertyArg::Ty(ty) = arg else {
                 return None;
             };
-            Some(self.instantiate_callsite_ty(callsite, *ty))
+            Some(self.instantiate_callsite_ty(checkpoint, *ty))
         })
     }
 
@@ -1178,7 +1178,7 @@ impl<'tcx> SmtChecker<'tcx> {
         })
     }
 
-    /// Resolve the trailing length expression directly (without callsite binding).
+    /// Resolve the trailing length expression directly (without checkpoint binding).
     ///
     /// For checkpoint checks this extracts the last argument as an expression
     /// using the function's own parameter space.
@@ -1194,22 +1194,22 @@ impl<'tcx> SmtChecker<'tcx> {
         })
     }
 
-    /// Resolve the trailing length expression at a concrete callsite.
+    /// Resolve the trailing length expression at a concrete checkpoint.
     ///
     /// This keeps constants unchanged and rewrites callee argument places, such
     /// as `Arg_2` from std-contract JSON, to the concrete MIR place passed by
-    /// the caller at this callsite.  Composite numeric expressions are rebound
+    /// the caller at this checkpoint.  Composite numeric expressions are rebound
     /// recursively.
     pub(crate) fn property_len_expr(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> Option<ContractExpr<'tcx>> {
         property.args.iter().rev().find_map(|arg| {
             let PropertyArg::Expr(expr) = arg else {
                 return None;
             };
-            self.bind_contract_expr_to_callsite(callsite, expr)
+            self.bind_contract_expr_to_callsite(checkpoint, expr)
         })
     }
 
@@ -1248,10 +1248,10 @@ impl<'tcx> SmtChecker<'tcx> {
         }
     }
 
-    /// Resolve a `ValidNum` predicate list at a concrete callsite.
+    /// Resolve a `ValidNum` predicate list at a concrete checkpoint.
     pub(crate) fn property_numeric_predicates(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> Option<Vec<NumericPredicate<'tcx>>> {
         property.args.iter().find_map(|arg| {
@@ -1262,9 +1262,9 @@ impl<'tcx> SmtChecker<'tcx> {
                 .iter()
                 .map(|predicate| {
                     Some(NumericPredicate {
-                        lhs: self.bind_contract_expr_to_callsite(callsite, &predicate.lhs)?,
+                        lhs: self.bind_contract_expr_to_callsite(checkpoint, &predicate.lhs)?,
                         op: predicate.op,
-                        rhs: self.bind_contract_expr_to_callsite(callsite, &predicate.rhs)?,
+                        rhs: self.bind_contract_expr_to_callsite(checkpoint, &predicate.rhs)?,
                     })
                 })
                 .collect()
@@ -1291,26 +1291,26 @@ impl<'tcx> SmtChecker<'tcx> {
 
     fn bind_contract_expr_to_callsite(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         expr: &ContractExpr<'tcx>,
     ) -> Option<ContractExpr<'tcx>> {
         match expr {
-            ContractExpr::Place(place) => self.contract_place_to_callsite_expr(callsite, place),
+            ContractExpr::Place(place) => self.contract_place_to_callsite_expr(checkpoint, place),
             ContractExpr::Const(value) => Some(ContractExpr::Const(*value)),
             ContractExpr::SizeOf(ty) => Some(ContractExpr::SizeOf(
-                self.instantiate_callsite_ty(callsite, *ty),
+                self.instantiate_callsite_ty(checkpoint, *ty),
             )),
             ContractExpr::AlignOf(ty) => Some(ContractExpr::AlignOf(
-                self.instantiate_callsite_ty(callsite, *ty),
+                self.instantiate_callsite_ty(checkpoint, *ty),
             )),
             ContractExpr::Binary { op, lhs, rhs } => Some(ContractExpr::Binary {
                 op: *op,
-                lhs: Box::new(self.bind_contract_expr_to_callsite(callsite, lhs)?),
-                rhs: Box::new(self.bind_contract_expr_to_callsite(callsite, rhs)?),
+                lhs: Box::new(self.bind_contract_expr_to_callsite(checkpoint, lhs)?),
+                rhs: Box::new(self.bind_contract_expr_to_callsite(checkpoint, rhs)?),
             }),
             ContractExpr::Unary { op, expr } => Some(ContractExpr::Unary {
                 op: *op,
-                expr: Box::new(self.bind_contract_expr_to_callsite(callsite, expr)?),
+                expr: Box::new(self.bind_contract_expr_to_callsite(checkpoint, expr)?),
             }),
             ContractExpr::Unknown => Some(ContractExpr::Unknown),
         }
@@ -1318,18 +1318,18 @@ impl<'tcx> SmtChecker<'tcx> {
 
     fn contract_place_to_callsite_expr(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         place: &ContractPlace<'tcx>,
     ) -> Option<ContractExpr<'tcx>> {
         let key = PlaceKey::from_contract_place(place);
         match place.base {
-            PlaceBase::Arg(index) => self.callsite_arg_expr(callsite, index, &key.fields),
+            PlaceBase::Arg(index) => self.callsite_arg_expr(checkpoint, index, &key.fields),
             PlaceBase::Local(local) => {
-                if let Some(index) = callsite
+                if let Some(index) = checkpoint
                     .callee
                     .and_then(|callee| callee_param_index_for_local(self.tcx, callee, local))
                 {
-                    self.callsite_arg_expr(callsite, index, &key.fields)
+                    self.callsite_arg_expr(checkpoint, index, &key.fields)
                 } else {
                     Some(ContractExpr::Place(place.clone()))
                 }
@@ -1340,40 +1340,40 @@ impl<'tcx> SmtChecker<'tcx> {
 
     fn callsite_arg_expr(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         index: usize,
         fields: &[usize],
     ) -> Option<ContractExpr<'tcx>> {
-        let operand = callsite.args.get(index)?;
+        let operand = checkpoint.args.get(index)?;
         if fields.is_empty()
             && let Operand::Constant(constant) = operand
             && let Some(value) = const_int_from_debug(&format!("{:?}", constant.const_))
         {
             return Some(ContractExpr::Const(value));
         }
-        self.callsite_arg_place_with_fields(callsite, index, fields)
+        self.callsite_arg_place_with_fields(checkpoint, index, fields)
             .map(contract_expr_from_place_key)
     }
 
     /// Convert a contract place into a concrete MIR place when possible.
     pub(crate) fn contract_place_to_callsite_place(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         place: &ContractPlace<'tcx>,
     ) -> Option<PlaceKey> {
         match place.base {
             PlaceBase::Arg(index) => self.callsite_arg_place_with_fields(
-                callsite,
+                checkpoint,
                 index,
                 &PlaceKey::from_contract_place(place).fields,
             ),
             PlaceBase::Local(local) => {
-                if let Some(index) = callsite
+                if let Some(index) = checkpoint
                     .callee
                     .and_then(|callee| callee_param_index_for_local(self.tcx, callee, local))
                 {
                     self.callsite_arg_place_with_fields(
-                        callsite,
+                        checkpoint,
                         index,
                         &PlaceKey::from_contract_place(place).fields,
                     )
@@ -1388,21 +1388,21 @@ impl<'tcx> SmtChecker<'tcx> {
     /// Return the concrete MIR place used as the `index`-th call argument.
     pub(crate) fn callsite_arg_place(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         index: usize,
     ) -> Option<PlaceKey> {
-        let operand = callsite.args.get(index)?;
+        let operand = checkpoint.args.get(index)?;
         operand_place(operand)
     }
 
     /// Return the `index`-th call argument as a common SMT term.
     pub(crate) fn callsite_arg_smt_term(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         index: usize,
     ) -> Option<SmtTerm> {
-        let expr = self.callsite_arg_expr(callsite, index, &[])?;
-        self.contract_expr_to_smt_term(callsite.caller, &expr)
+        let expr = self.callsite_arg_expr(checkpoint, index, &[])?;
+        self.contract_expr_to_smt_term(checkpoint.caller, &expr)
     }
 
     /// Return the pointee size for a concrete pointer place.
@@ -1428,27 +1428,27 @@ impl<'tcx> SmtChecker<'tcx> {
     /// Return the `index`-th call argument with contract projections appended.
     pub(crate) fn callsite_arg_place_with_fields(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         index: usize,
         fields: &[usize],
     ) -> Option<PlaceKey> {
-        let mut place = self.callsite_arg_place(callsite, index)?;
+        let mut place = self.callsite_arg_place(checkpoint, index)?;
         place.fields.extend(fields.iter().copied());
         Some(place)
     }
 
-    /// Replace a callee generic parameter with its concrete callsite type.
+    /// Replace a callee generic parameter with its concrete checkpoint type.
     pub(crate) fn instantiate_callsite_ty(
         &self,
-        callsite: &Callsite<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
         ty: Ty<'tcx>,
     ) -> Ty<'tcx> {
         let TyKind::Param(param) = ty.kind() else {
             return ty;
         };
 
-        let body = self.tcx.optimized_mir(callsite.caller);
-        let terminator = body.basic_blocks[callsite.block].terminator();
+        let body = self.tcx.optimized_mir(checkpoint.caller);
+        let terminator = body.basic_blocks[checkpoint.block].terminator();
         let TerminatorKind::Call { func, .. } = &terminator.kind else {
             return ty;
         };
@@ -1983,7 +1983,7 @@ fn pointer_range_negated_goal(
 /// Per-query SMT term builder over a forward visit result.
 pub(crate) struct SmtModel<'a, 'ctx, 'tcx> {
     tcx: TyCtxt<'tcx>,
-    callsite: &'a Callsite<'tcx>,
+    checkpoint: &'a Checkpoint<'tcx>,
     forward: &'a ForwardVisitResult<'tcx>,
     ctx: &'ctx Context,
     place_terms: HashMap<PlaceKey, Int<'ctx>>,
@@ -1995,13 +1995,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// Create a fresh SMT model builder.
     pub(crate) fn new(
         tcx: TyCtxt<'tcx>,
-        callsite: &'a Callsite<'tcx>,
+        checkpoint: &'a Checkpoint<'tcx>,
         forward: &'a ForwardVisitResult<'tcx>,
         ctx: &'ctx Context,
     ) -> Self {
         Self {
             tcx,
-            callsite,
+            checkpoint,
             forward,
             ctx,
             place_terms: HashMap::new(),
@@ -3187,12 +3187,12 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             PlaceBaseKey::Local(local) => Local::from_usize(local),
             PlaceBaseKey::Arg(_) => return None,
         };
-        Some(self.tcx.optimized_mir(self.callsite.caller).local_decls[local].ty)
+        Some(self.tcx.optimized_mir(self.checkpoint.caller).local_decls[local].ty)
     }
 
     /// Return ABI alignment and size for a type.
     fn type_layout(&self, ty: Ty<'tcx>) -> Option<(u64, u64)> {
-        let typing_env = rustc_middle::ty::TypingEnv::post_analysis(self.tcx, self.callsite.caller);
+        let typing_env = rustc_middle::ty::TypingEnv::post_analysis(self.tcx, self.checkpoint.caller);
         let input = PseudoCanonicalInput {
             typing_env,
             value: ty,
@@ -3213,7 +3213,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     fn generic_candidate_alignments(&self, ty: Ty<'tcx>) -> Option<Vec<u64>> {
-        let candidates = GenericTypeCandidates::for_def(self.tcx, self.callsite.caller);
+        let candidates = GenericTypeCandidates::for_def(self.tcx, self.checkpoint.caller);
         let alignments = candidates
             .candidates_for_ty(ty)?
             .iter()

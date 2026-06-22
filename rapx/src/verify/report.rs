@@ -6,7 +6,7 @@
 
 use rustc_hir::def_id::DefId;
 
-use super::{contract::Property, helpers::CallsiteLocation};
+use super::{contract::Property, helpers::CheckpointLocation};
 
 /// Verification status for one required property on one path.
 #[derive(Clone, Debug)]
@@ -19,16 +19,16 @@ pub enum CheckResult {
     Unknown,
 }
 
-/// Result for one required property along one path to a callsite.
+/// Result for one required property along one path to a checkpoint.
 #[derive(Clone, Debug)]
 pub struct PropertyCheckResult<'tcx> {
-    /// Unsafe callsite being checked.
-    pub callsite: CallsiteLocation,
-    /// Index of the callsite in the function-level callsite list.
-    pub callsite_index: usize,
-    /// Index of the path in the callsite path set.
+    /// Unsafe checkpoint being checked.
+    pub checkpoint: CheckpointLocation,
+    /// Index of the checkpoint in the function-level checkpoint list.
+    pub checkpoint_index: usize,
+    /// Index of the path in the checkpoint path set.
     pub path_index: usize,
-    /// Index of the property in the callsite-level property list.
+    /// Index of the property in the checkpoint-level property list.
     pub property_index: usize,
     /// Required property checked on this path.
     pub property: Property<'tcx>,
@@ -38,7 +38,7 @@ pub struct PropertyCheckResult<'tcx> {
     pub diagnostics: Option<VisitDiagnostics>,
     /// Human-readable path description.
     pub path_description: String,
-    /// Callee name for this callsite.
+    /// Callee name for this checkpoint.
     pub callee_name: String,
 }
 
@@ -102,9 +102,9 @@ impl<'tcx> VerificationReport<'tcx> {
 
         for (index, result) in self.results.iter().enumerate() {
             out.push_str(&format!(
-                "  check #{index}: callsite #{}, bb{}, path #{}, property #{} {:?}, result {:?}\n",
-                result.callsite_index,
-                result.callsite.block.as_usize(),
+                "  check #{index}: checkpoint #{}, bb{}, path #{}, property #{} {:?}, result {:?}\n",
+                result.checkpoint_index,
+                result.checkpoint.block.as_usize(),
                 result.path_index,
                 result.property_index,
                 result.property.kind,
