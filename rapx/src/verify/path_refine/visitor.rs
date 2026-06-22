@@ -28,11 +28,11 @@ use super::{
 };
 
 /// Entry point for backward path visiting.
-pub struct BackwardVisitor<'tcx> {
+pub struct BackwardSlicer<'tcx> {
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'tcx> BackwardVisitor<'tcx> {
+impl<'tcx> BackwardSlicer<'tcx> {
     /// Create a backward visitor over the current compiler type context.
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self { tcx }

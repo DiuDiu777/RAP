@@ -23,6 +23,7 @@ use super::{
     engine::VerifyEngine,
     helpers::{Callsite, CallsiteKind, CallsiteLocation, collect_return_block_indices},
     path::{FunctionPaths, PATH_LIMIT, Path, PathExtractor, PathStart, PathStep},
+    path_refine::BackwardItem,
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     target::{FunctionTarget, VerifyTargetCollector},
 };
@@ -256,6 +257,23 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         let is_constructor = get_type(self.tcx, self.target.def_id) == FnKind::Constructor;
         let caller_contracts = &self.target.caller_requires;
 
+        let entry_facts: Vec<BackwardItem<'tcx>> = if is_constructor {
+            caller_contracts
+                .iter()
+                .filter(|c| !matches!(c.kind, PropertyKind::Unknown))
+                .map(|c| BackwardItem::ContractFact {
+                    property: c.clone(),
+                })
+                .collect()
+        } else {
+            invariants
+                .iter()
+                .map(|inv| BackwardItem::ContractFact {
+                    property: inv.clone(),
+                })
+                .collect()
+        };
+
         for (checkpoint, paths) in self.build_invariant_paths(is_constructor) {
             rap_debug!(
                 "[rapx::verify] struct invariant checkpoint bb{}: {} reachable path(s)",
@@ -264,35 +282,30 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             );
 
             for (path_index, path) in paths.iter().enumerate() {
-                for (property_index, property) in invariants.iter().enumerate() {
+                for (property_index, invariant) in invariants.iter().enumerate() {
                     rap_debug!(
                         "[rapx::verify] struct invariant path {} check: kind={:?}",
                         path_index,
-                        property.kind
+                        invariant.kind
                     );
 
-                    let (backward, forward, smt_check) = self.engine.check_invariant(
+                    let check = self.engine.check_invariant(
                         self.target.def_id,
-                        checkpoint,
                         path,
-                        property,
-                        invariants,
-                        is_constructor,
-                        caller_contracts,
+                        invariant,
+                        &entry_facts,
                     );
-                    let check_diagnostics =
-                        format!("{}\n{}", forward.describe(), smt_check.describe());
 
                     report.push(PropertyCheckResult {
                         callsite: checkpoint,
                         callsite_index: checkpoint.block.as_usize(),
                         path_index,
                         property_index,
-                        property: property.clone(),
-                        result: smt_check.result,
+                        property: invariant.clone(),
+                        result: check.result,
                         diagnostics: Some(VisitDiagnostics::new(
-                            backward.describe_for_checkpoint(self.tcx, checkpoint, path_index),
-                            check_diagnostics,
+                            check.slicing_diag,
+                            check.verification_diag,
                         )),
                         path_description: path.describe_indices(),
                         callee_name: format!("struct-invariant(bb{})", checkpoint.block.as_usize()),

@@ -4,4 +4,4 @@ pub mod types;
 mod visitor;
 
 pub use types::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems};
-pub use visitor::BackwardVisitor;
+pub use visitor::BackwardSlicer;

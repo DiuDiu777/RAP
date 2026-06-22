@@ -28,11 +28,11 @@ use super::{
 };
 
 /// Visits relevant MIR items forward and builds an abstract state.
-pub struct ForwardVisitor<'tcx> {
+pub struct ForwardVerifier<'tcx> {
     tcx: TyCtxt<'tcx>,
 }
 
-impl<'tcx> ForwardVisitor<'tcx> {
+impl<'tcx> ForwardVerifier<'tcx> {
     /// Create a forward visitor over the current compiler type context.
     pub fn new(tcx: TyCtxt<'tcx>) -> Self {
         Self { tcx }
