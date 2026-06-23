@@ -568,10 +568,11 @@ fn heap_proxy() {
 #[test]
 fn path_1() {
     let output = run_with_args("analyze/path_1", ANALYZE_PATHS_CMD);
-    assert_contain(&output, "Function: \"read1\":");
-    assert_contain(&output, "Path [0, 1, 3, 6, 7, 8]");
-    assert_contain(&output, "Path [0, 2, 3, 5, 8]");
-    assert_eq!(path_count_for(&output, "read1"), 2);
+    assert_contain(&output, "Function: \"example\":");
+    // 2 paths — reachability filtering prunes crossed enum branches
+    assert_contain(&output, "Path [0, 3, 4, 6, 7, 9]");
+    assert_contain(&output, "Path [0, 2, 4, 5, 8, 9]");
+    assert_eq!(path_count_for(&output, "example"), 2);
 }
 
 #[test]

@@ -3,11 +3,13 @@
 #![allow(dead_code)]
 #![allow(unused)]
 
-#[rapx::verify]
-fn read1(x: i32) -> Option<i32> {
-    let p: Option<i32> = if x > 0 { Some(x) } else { None };
-    match p {
-        Some(v) => Some(v * 2),
-        None => None,
+fn example(x: Option<i32>) -> i32 {
+    let a = match x {
+        Some(_) => 1,
+        None => -1,
+    };
+    match x {
+        Some(_) => a + 1,
+        None => a - 1,
     }
 }
