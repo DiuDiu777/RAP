@@ -72,7 +72,7 @@ pub enum AnalysisKind {
     Paths {
         /// allow repeated SCC postfix segments (default 0)
         #[arg(long, default_value_t = 0)]
-        allow_pathseg_repeat: usize,
+        postfix_repeat: usize,
     },
     /// extract path constraints
     Pathcond,

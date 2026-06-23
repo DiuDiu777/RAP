@@ -19,7 +19,7 @@ pub struct VerifyArgs {
     /// Number of extra SCC postfix repetitions allowed during path enumeration.
     /// Default is 0 (postfix segments appear once each). Set to 1 to allow one extra repetition (two total occurrences), etc.
     #[arg(long, default_value_t = 0)]
-    pub allow_pathseg_repeat: usize,
+    pub postfix_repeat: usize,
     /// Verification mode: `targeted` verifies #[rapx::verify] functions (default), `scan` auto-detects unannotated unsafe targets.
     #[arg(long, default_value = "targeted")]
     pub mode: VerifyMode,

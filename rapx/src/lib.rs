@@ -242,10 +242,10 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
                 rap_info!("{}", OHAResultMapWrapper(result));
             }
             &AnalysisKind::Paths {
-                allow_pathseg_repeat,
+                postfix_repeat,
             } => {
                 let mut analyzer = PathAnalyzer::new(tcx, false);
-                analyzer.run_with_repeat(allow_pathseg_repeat);
+                analyzer.run_with_repeat(postfix_repeat);
                 let result = analyzer.get_all_paths();
                 rap_info!("{}", PathMapWrapper(result, &analyzer.graphs));
             }
@@ -278,13 +278,13 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
 
         Commands::Verify(VerifyArgs {
             prepare_targets,
-            allow_pathseg_repeat,
+            postfix_repeat,
             mode,
         }) => {
             if *prepare_targets {
                 PrepareTargets::new(tcx, *mode).run();
             } else {
-                VerifyRun::new(tcx, *allow_pathseg_repeat, *mode).run();
+                VerifyRun::new(tcx, *postfix_repeat, *mode).run();
             }
         }
     }

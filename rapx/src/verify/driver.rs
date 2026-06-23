@@ -389,16 +389,16 @@ pub struct CheckpointCheckView<'view, 'target, 'tcx> {
 /// Analysis pass that runs verification and emits function-level summaries.
 pub struct VerifyRun<'tcx> {
     tcx: TyCtxt<'tcx>,
-    allow_pathseg_repeat: usize,
+    postfix_repeat: usize,
     mode: VerifyMode,
 }
 
 impl<'tcx> VerifyRun<'tcx> {
     /// Create the default verify pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize, mode: VerifyMode) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, postfix_repeat: usize, mode: VerifyMode) -> Self {
         Self {
             tcx,
-            allow_pathseg_repeat,
+            postfix_repeat,
             mode,
         }
     }
@@ -503,7 +503,7 @@ impl<'tcx> VerifyRun<'tcx> {
     ) {
         let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
-        for repeat in 0..=self.allow_pathseg_repeat {
+        for repeat in 0..=self.postfix_repeat {
             let driver = VerifyDriver::new_with_repeat(self.tcx, con_target, repeat);
             let report = driver.verify_function();
             rap_debug!("{}", report.describe());
@@ -569,7 +569,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
     /// Collect verify targets, run the staged driver, and emit a compact summary.
     ///
-    /// For each target, extracts paths with increasing `allow-pathseg-repeat`
+    /// For each target, extracts paths with increasing `postfix-repeat`
     /// levels from 0 to the configured maximum, running verification at each
     /// level. Earlier rounds use fewer loop unrollings; later rounds incrementally
     /// add deeper paths.
@@ -582,7 +582,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
             // Phase 1: unsafe checkpoint verification
-            for repeat in 0..=self.allow_pathseg_repeat {
+            for repeat in 0..=self.postfix_repeat {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
                 let report = driver.verify_function();
                 rap_debug!("{}", report.describe());
@@ -592,7 +592,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             // Phase 2: struct invariant verification
             if !target.struct_invariants.is_empty() && !matches!(self.mode, VerifyMode::Invless) {
                 let driver =
-                    VerifyDriver::new_with_repeat(self.tcx, target, self.allow_pathseg_repeat);
+                    VerifyDriver::new_with_repeat(self.tcx, target, self.postfix_repeat);
                 let struct_report = driver.verify_struct_invariants();
                 rap_debug!("{}", struct_report.describe());
                 all_results.extend(struct_report.results);
@@ -773,7 +773,7 @@ fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
 /// Analysis pass that dumps backward and forward visitor diagnostics.
 pub struct VerifyVisitDump<'tcx> {
     tcx: TyCtxt<'tcx>,
-    allow_pathseg_repeat: usize,
+    postfix_repeat: usize,
     mode: VerifyMode,
 }
 
@@ -826,10 +826,10 @@ fn property_field_indices(property: &crate::verify::contract::Property<'_>) -> V
 
 impl<'tcx> VerifyVisitDump<'tcx> {
     /// Create a diagnostic dump pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>, allow_pathseg_repeat: usize, mode: VerifyMode) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, postfix_repeat: usize, mode: VerifyMode) -> Self {
         Self {
             tcx,
-            allow_pathseg_repeat,
+            postfix_repeat,
             mode,
         }
     }
@@ -854,12 +854,12 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
                 target.def_id
             );
 
-            for repeat in 0..=self.allow_pathseg_repeat {
-                if self.allow_pathseg_repeat > 0 {
+            for repeat in 0..=self.postfix_repeat {
+                if self.postfix_repeat > 0 {
                     rap_debug!(
-                        "[rapx::verify::diagnostics] round {}/{}: allow-pathseg-repeat={}",
+                        "[rapx::verify::diagnostics] round {}/{}: postfix-repeat={}",
                         repeat,
-                        self.allow_pathseg_repeat,
+                        self.postfix_repeat,
                         repeat
                     );
                 }
