@@ -26,16 +26,33 @@ pub fn format_path_annotated(path: &[usize], graph: &PathGraph<'_>) -> String {
     format!("[{}]", blocks.join(", "))
 }
 
-/// A prefix-tree (trie) representation of whole-CFG paths.
+/// A prefix-tree (trie) of whole-CFG paths sharing common prefixes.
 ///
-/// Shares common prefixes across paths, avoiding duplication of
-/// repeated block sequences that appear in many paths.
+/// Paths are sequences of MIR block indices.  The trie compresses shared
+/// prefixes — if two paths `[0,1,2,5]` and `[0,1,2,6]` are both inserted,
+/// blocks 0→1→2 are stored once and branch at block 2.
+///
+/// Each node is a [`PathNode`]; a node with `is_path_end == true` marks the
+/// end of a complete path that exists in the tree.  The `len` field tracks
+/// the number of complete paths stored.
+///
+/// # Invariants
+/// - All paths inserted into a given tree start with the same root block
+///   (by construction, block 0 — the CFG entry).
+/// - A path is only stored if it passed reachability filtering
+///   (see [`PathGraph::check_transition`]).
 #[derive(Debug, Clone)]
 pub struct PathTree {
     root: Option<PathNode>,
     len: usize,
 }
 
+/// A node in a [`PathTree`] trie.
+///
+/// `block` is the MIR block index for this node.  `children` holds
+/// successor blocks that appear after `block` in at least one stored
+/// path.  `is_path_end` is `true` when some path terminates at this
+/// node (i.e. this block is a CFG terminator for that path).
 #[derive(Debug, Clone)]
 pub struct PathNode {
     pub block: usize,
@@ -202,6 +219,11 @@ impl Default for PathTree {
     }
 }
 
+/// DFS iterator over all complete paths in a [`PathTree`].
+///
+/// Yields each path as an owned `Vec<usize>`.  Internal nodes (where
+/// `is_path_end == false`) are skipped; only terminal path nodes are
+/// emitted.
 pub struct PathTreeIter<'a> {
     stack: Vec<(&'a PathNode, Vec<usize>)>,
 }
@@ -224,6 +246,8 @@ impl<'a> Iterator for PathTreeIter<'a> {
     }
 }
 
+/// Display wrapper that prints all paths for every function, annotated
+/// with cleanup-block markers via [`format_path_annotated`].
 pub struct PathMapWrapper<'a, 'tcx>(
     pub FxHashMap<DefId, PathTree>,
     pub &'a FxHashMap<DefId, PathGraph<'tcx>>,

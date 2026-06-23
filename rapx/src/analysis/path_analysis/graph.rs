@@ -54,29 +54,56 @@ fn extract_segment(path: &[usize], enter: usize) -> Vec<usize> {
 }
 
 #[derive(Clone, Debug)]
-/// A single enumerated path through an SCC region.
+/// A single enumerated acyclic path through an SCC region.
 ///
 /// `blocks` is the ordered sequence of MIR block indices from the SCC entry
-/// to an exit point. `exit_successors` lists CFG successors of the last block
-/// that are outside this SCC.
-pub struct SccEnumeratedPath {
+/// to the last block before exiting. The last block may have multiple CFG
+/// successors outside the SCC (e.g. a `SwitchInt` branching to different
+/// out-of-SCC targets), which are stored in `exit_successors`.
+///
+/// For example, in a loop with `switch x { A => loop_body, B => done1, C => done2 }`,
+/// the corresponding `SccPath` would have `exit_successors = [done1, done2]`
+/// — the DFS forks recursively into each of these when constructing whole-CFG paths.
+pub struct SccPath {
     pub blocks: Vec<usize>,
     pub exit_successors: Vec<usize>,
 }
 
+/// Per-block info collected during construction for path reachability
+/// analysis.  Each block's assignments, constants, and copy chains are
+/// stored together so they can be read with a single index lookup.
+#[derive(Clone, Debug, Default)]
+pub struct BlockConstantInfo {
+    pub assigned_locals: FxHashSet<usize>,
+    pub constants: FxHashMap<usize, usize>,
+    pub constraint_copies: FxHashMap<usize, usize>,
+}
+
+/// Enum discriminant metadata used by [`check_switch_transition`].
+///
+/// `source_of` maps a discriminant local to the ADT local it was read from
+/// (via `Rvalue::Discriminant`).  `variant_count_of` tracks the number of
+/// variants for each ADT local, used to determine whether a `SwitchInt`
+/// otherwise-target is uniquely determined.
+#[derive(Clone, Debug, Default)]
+pub struct DiscriminantInfo {
+    pub source_of: FxHashMap<usize, usize>,
+    pub variant_count_of: FxHashMap<usize, usize>,
+}
+
+/// CFG augmented with per-block constant info and discriminant metadata
+/// for path reachability analysis.
+///
+/// `PathGraph` wraps a `ControlFlowGraph` and adds block-indexed data
+/// that track assignments, constants, and copy chains.  These are used by
+/// [`check_transition`](PathGraph::check_transition) to update a set of
+/// discriminant constraints while traversing the CFG, enabling early
+/// pruning of infeasible `SwitchInt` branches during path enumeration.
 #[derive(Clone)]
 pub struct PathGraph<'tcx> {
     pub cfg: ControlFlowGraph<'tcx>,
-    /// Path-analysis-specific metadata: locals assigned in each block.
-    pub assigned_locals: Vec<FxHashSet<usize>>,
-    /// Path-analysis-specific metadata: discriminant local -> source local mapping.
-    pub discriminants: FxHashMap<usize, usize>,
-    /// Path-analysis-specific metadata: block -> (local -> constant value).
-    pub constants: Vec<FxHashMap<usize, usize>>,
-    /// Path-analysis-specific metadata: block -> (dest_local -> source_local) for copy/move.
-    pub constraint_copies: Vec<FxHashMap<usize, usize>>,
-    /// Path-analysis-specific metadata: source ADT local -> discriminant variant count.
-    pub discriminant_ranges: FxHashMap<usize, usize>,
+    pub block_info: Vec<BlockConstantInfo>,
+    pub disc_info: DiscriminantInfo,
 }
 
 impl<'tcx> PathGraph<'tcx> {
@@ -84,24 +111,19 @@ impl<'tcx> PathGraph<'tcx> {
         let body = tcx.optimized_mir(def_id);
         let basicblocks = &body.basic_blocks;
         let mut cfg_blocks = Vec::<CfgBlock>::new();
-        let mut assigned_locals = Vec::new();
-        let mut constants: Vec<FxHashMap<usize, usize>> = Vec::new();
-        let mut constraint_copies: Vec<FxHashMap<usize, usize>> = Vec::new();
-        let mut discriminant_ranges: FxHashMap<usize, usize> = FxHashMap::default();
-        let mut discriminants = FxHashMap::default();
+        let mut block_info = Vec::new();
+        let mut disc_info = DiscriminantInfo::default();
 
         for i in 0..basicblocks.len() {
             let bb = &basicblocks[BasicBlock::from(i)];
             let mut cfg_block = CfgBlock::new(i, bb.is_cleanup);
-            let mut block_assigned_locals = FxHashSet::default();
-            let mut block_constants = FxHashMap::default();
-            let mut block_constraint_copies = FxHashMap::default();
+            let mut info = BlockConstantInfo::default();
 
             for stmt in &bb.statements {
                 if let StatementKind::Assign(assign) = &stmt.kind {
                     let (place, rvalue) = &**assign;
                     let dest = place.local.as_usize();
-                    block_assigned_locals.insert(dest);
+                    info.assigned_locals.insert(dest);
                     match rvalue {
                         Rvalue::Use(Operand::Constant(c), ..) => {
                             let typing_env = TypingEnv::post_analysis(tcx, def_id);
@@ -116,21 +138,21 @@ impl<'tcx> PathGraph<'tcx> {
                                 _ => None,
                             };
                             if let Some(val) = val {
-                                block_constants.insert(dest, val);
+                                info.constants.insert(dest, val);
                             }
                         }
                         Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) => {
-                            block_constraint_copies.insert(dest, src.local.as_usize());
+                            info.constraint_copies.insert(dest, src.local.as_usize());
                         }
                         Rvalue::Discriminant(rv_place) => {
-                            discriminants.insert(dest, rv_place.local.as_usize());
+                            disc_info.source_of.insert(dest, rv_place.local.as_usize());
                             let src_local = rv_place.local.as_usize();
-                            if !discriminant_ranges.contains_key(&src_local) {
+                            if !disc_info.variant_count_of.contains_key(&src_local) {
                                 let src_ty = body.local_decls[rv_place.local].ty;
                                 if let TyKind::Adt(adt_def, _) = src_ty.kind() {
                                     let num = adt_def.variants().len();
                                     if num > 0 {
-                                        discriminant_ranges.insert(src_local, num);
+                                        disc_info.variant_count_of.insert(src_local, num);
                                     }
                                 }
                             }
@@ -138,13 +160,13 @@ impl<'tcx> PathGraph<'tcx> {
                         Rvalue::Aggregate(kind, _) => {
                             if let AggregateKind::Adt(_, variant_idx, _, _, _) = kind.as_ref() {
                                 let discr = variant_idx.as_usize();
-                                block_constants.insert(dest, discr);
-                                if !discriminant_ranges.contains_key(&dest) {
+                                info.constants.insert(dest, discr);
+                                if !disc_info.variant_count_of.contains_key(&dest) {
                                     let dest_ty = body.local_decls[place.local].ty;
                                     if let TyKind::Adt(adt_def, _) = dest_ty.kind() {
                                         let num = adt_def.variants().len();
                                         if num > 0 {
-                                            discriminant_ranges.insert(dest, num);
+                                            disc_info.variant_count_of.insert(dest, num);
                                         }
                                     }
                                 }
@@ -253,20 +275,15 @@ impl<'tcx> PathGraph<'tcx> {
             }
 
             cfg_blocks.push(cfg_block);
-            assigned_locals.push(block_assigned_locals);
-            constants.push(block_constants);
-            constraint_copies.push(block_constraint_copies);
+            block_info.push(info);
         }
 
         let cfg = ControlFlowGraph::new(def_id, tcx, cfg_blocks);
 
         PathGraph {
             cfg,
-            assigned_locals,
-            discriminants,
-            constants,
-            constraint_copies,
-            discriminant_ranges,
+            block_info,
+            disc_info,
         }
     }
 
@@ -296,10 +313,6 @@ impl<'tcx> PathGraph<'tcx> {
         self.cfg.terminator(index)
     }
 
-    pub fn assigned_locals(&self, index: usize) -> Option<&FxHashSet<usize>> {
-        self.assigned_locals.get(index)
-    }
-
     pub fn is_cleanup_block(&self, index: usize) -> bool {
         self.cfg
             .blocks
@@ -308,172 +321,52 @@ impl<'tcx> PathGraph<'tcx> {
             .unwrap_or(false)
     }
 
-    /// Verify whether a given path (sequence of block indices) is reachable.
-    ///
-    /// The path can contain arbitrary loops. The verification uses
-    /// discriminant/constant-based filtering: it tracks concrete values for
-    /// enum discriminants across `SwitchInt` branches, invalidates them when
-    /// the corresponding local is reassigned, and rejects transitions that
-    /// contradict known constraints.
-    ///
-    /// Returns `false` if the path is empty or contains a transition that
-    /// is provably unreachable.
-    pub fn is_path_reachable(&self, path: &[usize]) -> bool {
-        self.is_path_reachable_with(path, &FxHashMap::default())
-    }
-
-    /// Like `is_path_reachable` but accepts caller-provided initial
-    /// constraints (e.g. accumulated before entering an SCC).
-    pub fn is_path_reachable_with(
+    /// Check a single transition `cur -> next` for reachability and update
+    /// discriminant constraints. Returns `false` if the transition is
+    /// provably unreachable.
+    pub fn check_transition(
         &self,
-        path: &[usize],
-        initial: &FxHashMap<usize, usize>,
+        cur: usize,
+        next: usize,
+        constraints: &mut FxHashMap<usize, usize>,
     ) -> bool {
-        if path.is_empty() {
+        if cur >= self.cfg.blocks.len() || next >= self.cfg.blocks.len() {
             return false;
         }
-        if path.len() == 1 {
-            return true;
-        }
 
-        let mut constraints: FxHashMap<usize, usize> = initial.clone();
-
-        for i in 0..path.len() - 1 {
-            let cur = path[i];
-            let next = path[i + 1];
-
-            if cur >= self.cfg.blocks.len() || next >= self.cfg.blocks.len() {
-                return false;
-            }
-
-            if let Some(assigned) = self.assigned_locals.get(cur) {
-                let consts = self.constants.get(cur);
-                let copies = self.constraint_copies.get(cur);
-                for local in assigned {
-                    // copy propagation: transfer constraint from source local
-                    if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
-                        if let Some(&src_val) = constraints.get(&src) {
-                            constraints.insert(*local, src_val);
-                            continue;
-                        }
-                        // backward propagation: if dest has a known value, propagate to src
-                        if let Some(&dst_val) = constraints.get(local) {
-                            constraints.insert(src, dst_val);
-                            constraints.insert(*local, dst_val);
-                            continue;
-                        }
-                    }
-                    // constant assignment propagation
-                    if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
-                        constraints.insert(*local, val);
+        if let Some(info) = self.block_info.get(cur) {
+            for local in &info.assigned_locals {
+                if let Some(&src) = info.constraint_copies.get(local) {
+                    if let Some(&src_val) = constraints.get(&src) {
+                        constraints.insert(*local, src_val);
                         continue;
                     }
-                    // unknown value — invalidate
-                    constraints.remove(local);
+                    if let Some(&dst_val) = constraints.get(local) {
+                        constraints.insert(src, dst_val);
+                        constraints.insert(*local, dst_val);
+                        continue;
+                    }
                 }
-            }
-
-            let successors = &self.cfg.block(cur).next;
-
-            // Fast path: if next is not even a CFG successor, it's impossible.
-            if !successors.contains(&next) {
-                // Cleanup blocks can be special; if this is a call/drop terminator,
-                // also check unwind targets that may not be in `next` of the cfg block.
-                if !self.is_unwind_target(cur, next) {
-                    return false;
+                if let Some(&val) = info.constants.get(local) {
+                    constraints.insert(*local, val);
+                    continue;
                 }
+                constraints.remove(local);
             }
+        }
 
-            // Handle SwitchInt with constraint tracking.
-            if !self.check_switch_transition(cur, next, &mut constraints) {
+        let successors = &self.cfg.block(cur).next;
+        if !successors.contains(&next) {
+            if !self.is_unwind_target(cur, next) {
                 return false;
             }
+        }
+
+        if !self.check_switch_transition(cur, next, constraints) {
+            return false;
         }
 
         true
-    }
-
-    /// Like `is_path_reachable` but returns the reconstructed discriminant
-    /// constraints. Returns `None` if the path is unreachable.
-    pub fn is_path_reachable_with_constraints(
-        &self,
-        path: &[usize],
-    ) -> Option<FxHashMap<usize, usize>> {
-        if path.is_empty() || path[0] != 0 {
-            return None;
-        }
-        self.check_reachability(path)
-    }
-
-    /// Check a path segment with caller-provided initial constraints.
-    /// Returns `None` if unreachable, otherwise the reconstructed constraints.
-    pub fn check_segment_reachability_with(
-        &self,
-        path: &[usize],
-        initial: &FxHashMap<usize, usize>,
-    ) -> Option<FxHashMap<usize, usize>> {
-        if path.len() <= 1 {
-            return Some(initial.clone());
-        }
-        self.check_reachability_from(path, initial)
-    }
-
-    fn check_reachability(&self, path: &[usize]) -> Option<FxHashMap<usize, usize>> {
-        self.check_reachability_from(path, &FxHashMap::default())
-    }
-
-    fn check_reachability_from(
-        &self,
-        path: &[usize],
-        initial: &FxHashMap<usize, usize>,
-    ) -> Option<FxHashMap<usize, usize>> {
-        let mut constraints: FxHashMap<usize, usize> = initial.clone();
-
-        for i in 0..path.len() - 1 {
-            let cur = path[i];
-            let next = path[i + 1];
-
-            if cur >= self.cfg.blocks.len() || next >= self.cfg.blocks.len() {
-                return None;
-            }
-
-            if let Some(assigned) = self.assigned_locals.get(cur) {
-                let consts = self.constants.get(cur);
-                let copies = self.constraint_copies.get(cur);
-                for local in assigned {
-                    if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
-                        if let Some(&src_val) = constraints.get(&src) {
-                            constraints.insert(*local, src_val);
-                            continue;
-                        }
-                        // backward propagation: if dest has a known value, propagate to src
-                        if let Some(&dst_val) = constraints.get(local) {
-                            constraints.insert(src, dst_val);
-                            constraints.insert(*local, dst_val);
-                            continue;
-                        }
-                    }
-                    if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
-                        constraints.insert(*local, val);
-                        continue;
-                    }
-                    constraints.remove(local);
-                }
-            }
-
-            let successors = &self.cfg.block(cur).next;
-            if !successors.contains(&next) {
-                if !self.is_unwind_target(cur, next) {
-                    return None;
-                }
-            }
-
-            if !self.check_switch_transition(cur, next, &mut constraints) {
-                return None;
-            }
-        }
-
-        Some(constraints)
     }
 
     /// Check whether `cur → next` is a valid `SwitchInt` transition given
@@ -494,7 +387,7 @@ impl<'tcx> PathGraph<'tcx> {
             TerminatorKind::SwitchInt { discr, targets } => {
                 let discr_local = discr.place().map(|p| p.local.as_usize());
                 let constraint_local = discr_local
-                    .and_then(|l| self.discriminants.get(&l).copied())
+                    .and_then(|l| self.disc_info.source_of.get(&l).copied())
                     .or(discr_local);
 
                 // Collect all possible successor blocks for this switch.
@@ -547,7 +440,7 @@ impl<'tcx> PathGraph<'tcx> {
                 // and record the newly learned constraint from the taken branch.
                 if next == targets.otherwise().as_usize() {
                     if let Some(local) = constraint_local {
-                        if let Some(&num_variants) = self.discriminant_ranges.get(&local) {
+                        if let Some(&num_variants) = self.disc_info.variant_count_of.get(&local) {
                             let all_covered = (0..num_variants)
                                 .all(|v| targets.iter().any(|(tv, _)| tv == v as u128));
                             if all_covered {
@@ -605,11 +498,11 @@ impl<'tcx> PathGraph<'tcx> {
         val: usize,
         constraints: &mut FxHashMap<usize, usize>,
     ) {
-        let Some(copies) = self.constraint_copies.get(cur) else {
+        let Some(info) = self.block_info.get(cur) else {
             return;
         };
         let mut current = local;
-        while let Some(&src) = copies.get(&current) {
+        while let Some(&src) = info.constraint_copies.get(&current) {
             if current == src {
                 break;
             }
@@ -705,31 +598,107 @@ impl<'tcx> PathGraph<'tcx> {
     }
 }
 
-/// Enumerates whole-CFG paths from a `PathGraph` into a `PathTree`.
+/// Hash of the constraint state accumulated along a path prefix.
 ///
-/// Owns the SCC-path cache so that repeated enumeration (e.g. with different
-/// `postfix_repeat` values) can reuse cached SCC paths. The underlying graph
-/// is borrowed immutably — it must have `find_scc()` called beforehand.
+/// Computed by walking the prefix, collecting `(local → constant_value)`
+/// bindings from each block's [`BlockConstantInfo`], sorting them, and
+/// hashing the result.  Used by [`PathEnumerator::visited_sccs`] to
+/// skip redundant re-entries into the same SCC with the same state.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default)]
+pub struct ConstraintHash(u64);
+
+impl ConstraintHash {
+    fn from_path(path: &[usize], graph: &PathGraph<'_>) -> Self {
+        let mut hasher = DefaultHasher::new();
+        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
+
+        for &block in path.iter() {
+            if let Some(info) = graph.block_info.get(block) {
+                for local in &info.assigned_locals {
+                    if let Some(&src) = info.constraint_copies.get(local) {
+                        if let Some(&src_val) = constraints.get(&src) {
+                            constraints.insert(*local, src_val);
+                            continue;
+                        }
+                        if let Some(&dst_val) = constraints.get(local) {
+                            constraints.insert(src, dst_val);
+                            constraints.insert(*local, dst_val);
+                            continue;
+                        }
+                    }
+                    if let Some(&val) = info.constants.get(local) {
+                        constraints.insert(*local, val);
+                        continue;
+                    }
+                    constraints.remove(local);
+                }
+            }
+        }
+
+        let mut entries: Vec<(usize, usize)> = constraints.into_iter().collect();
+        entries.sort();
+        entries.hash(&mut hasher);
+        ConstraintHash(hasher.finish())
+    }
+}
+
+/// Key for [`PathEnumerator::scc_paths`] and [`PathEnumerator::visited_sccs`] and [`PathEnumerator::visited_sccs`]:
+/// which SCC entry block, with what constraint state, and how many
+/// additional postfix repeats are allowed.
+///
+/// In `scc_paths` the `constraint` field is unused (cache keyed by
+/// `entry` + `repeat`); in `visited_sccs` the `repeat` field is
+/// unused (deduplicated by `entry` + `constraint`).
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub struct SccKey {
+    pub entry: usize,
+    pub repeat: usize,
+    pub constraint: ConstraintHash,
+}
+
+/// Builds a [`PathTree`] by depth-first enumeration of whole-CFG paths.
+///
+/// The enumerator holds a `&PathGraph` (which must have `find_scc()` called
+/// beforehand) and two caches:
+///
+/// The **constraint hash** used by `visited_sccs` is a
+/// [`ConstraintHash`]: it walks the current path prefix, accumulates
+/// `(local → constant_value)` bindings from each block's
+/// [`BlockConstantInfo`], sorts them, and hashes the result.  Different
+/// constraint states (e.g. a loop variable changing from `true` to
+/// `false`) produce different hashes.
+///
+/// 1. `scc_paths` — maps [`SccKey`] to a list of acyclic paths through
+///    that SCC.  Reused across repeated enumerations of the same function
+///    with different repeat counts.
+///
+/// 2. `visited_sccs` — set of [`SccKey`] entries already explored
+///    (matched by `entry` + `constraint`, ignoring `repeat`).
+///    When the same SCC is reached with the same constraint state, its
+///    sub-paths are identical, so the re-entry is skipped.
+///
+/// Constraint-based filtering runs incrementally during DFS via
+/// [`PathGraph::check_transition`], so only feasible paths are inserted
+/// into the resulting tree.
 pub struct PathEnumerator<'g, 'tcx> {
     graph: &'g PathGraph<'tcx>,
-    scc_path_cache: FxHashMap<(DefId, usize, usize), Vec<SccEnumeratedPath>>,
-    child_context_cache: FxHashSet<(usize, u64)>,
+    scc_paths: FxHashMap<SccKey, Vec<SccPath>>,
+    visited_sccs: FxHashSet<SccKey>,
 }
 
 impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
     pub fn new(graph: &'g PathGraph<'tcx>) -> Self {
         PathEnumerator {
             graph,
-            scc_path_cache: FxHashMap::default(),
-            child_context_cache: FxHashSet::default(),
+            scc_paths: FxHashMap::default(),
+            visited_sccs: FxHashSet::default(),
         }
     }
 
-    /// Enumerate all structurally possible whole-CFG paths.
+    /// Enumerate all whole-CFG paths, pruning infeasible transitions via
+    /// incremental constraint-based filtering during DFS.
     ///
-    /// SCC regions are flattened into a bounded set of acyclic paths. No
-    /// constraint-based filtering is performed here — reachability checking
-    /// is done separately via `PathGraph::is_path_reachable`.
+    /// SCC regions are flattened into a bounded set of acyclic paths.
     pub fn enumerate_paths(&mut self) -> PathTree {
         self.enumerate_paths_repeat(0)
     }
@@ -744,27 +713,14 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             return tree;
         }
 
-        self.collect_whole_cfg_paths(0, &mut vec![0], &mut tree, 0, postfix_repeat);
+        self.collect_whole_cfg_paths(0, &mut vec![0], &mut tree, 0, postfix_repeat, &FxHashMap::default());
 
         tree
     }
 
-    /// Enumerate all structurally possible simple paths through `scc`
-    /// starting at `start`.
-    ///
-    /// The SCC is traversed depth-first. `segment_counts` tracks how many
-    /// times each postfix segment has appeared — when a segment's count
-    /// exceeds `postfix_repeat + 1`, the branch is pruned.
-    ///
-    /// Results are cached per `(def_id, scc_enter)`.
-    pub fn find_scc_paths(&mut self, start: usize, scc: &SccInfo) -> Vec<SccEnumeratedPath> {
-        self.find_scc_paths_repeat(start, scc, 0)
-    }
-
-    /// Enumerate all structurally possible simple paths through `scc`,
-    /// allowing the same postfix segment to repeat up to `postfix_repeat`
-    /// additional times. `postfix_repeat = 0` is equivalent to the default
-    /// `find_scc_paths`.
+    /// Enumerate all acyclic paths through `scc` starting at `start`,
+    /// allowing each postfix segment to repeat up to `postfix_repeat`
+    /// additional times.
     ///
     /// Results are cached per `(def_id, scc_enter, postfix_repeat)`.
     pub fn find_scc_paths_repeat(
@@ -772,9 +728,13 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         start: usize,
         scc: &SccInfo,
         postfix_repeat: usize,
-    ) -> Vec<SccEnumeratedPath> {
-        let cache_key = (self.graph.cfg.def_id, scc.enter, postfix_repeat);
-        if let Some(cached) = self.scc_path_cache.get(&cache_key) {
+    ) -> Vec<SccPath> {
+        let cache_key = SccKey {
+            entry: scc.enter,
+            repeat: postfix_repeat,
+            constraint: ConstraintHash::default(),
+        };
+        if let Some(cached) = self.scc_paths.get(&cache_key) {
             return cached.clone();
         }
 
@@ -794,10 +754,10 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             0,
         );
 
-        if self.scc_path_cache.len() >= SCC_PATH_CACHE_LIMIT {
-            self.scc_path_cache.clear();
+        if self.scc_paths.len() >= SCC_PATH_CACHE_LIMIT {
+            self.scc_paths.clear();
         }
-        self.scc_path_cache.insert(cache_key, out.clone());
+        self.scc_paths.insert(cache_key, out.clone());
 
         out
     }
@@ -811,7 +771,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
     /// When `postfix_repeat > 0`, allows the same postfix segment to repeat
     /// up to `postfix_repeat` additional times beyond the first occurrence.
     ///
-    /// Child SCC paths are pre-enumerated via `find_scc_paths` and treated as
+    /// Child SCC paths are pre-enumerated via `find_scc_paths_repeat` and treated as
     /// atomic building blocks (no recursive descent into child SCC internals).
     #[allow(clippy::too_many_arguments)]
     fn dfs_scc_tree(
@@ -821,7 +781,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         path: &mut Vec<usize>,
         segment_counts: &mut FxHashMap<Vec<usize>, usize>,
         postfix_repeat: usize,
-        out: &mut Vec<SccEnumeratedPath>,
+        out: &mut Vec<SccPath>,
         seen_paths: &mut FxHashSet<Vec<usize>>,
         depth: usize,
     ) {
@@ -857,7 +817,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
 
         if is_child {
             let ctx = self.constraint_context(path);
-            if !self.child_context_cache.insert((cur, ctx)) {
+            if !self.visited_sccs.insert(SccKey { entry: cur, repeat: 0, constraint: ctx }) {
                 return;
             }
 
@@ -890,7 +850,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             return;
         }
 
-        let successors = self.enumerate_scc_traversals(cur);
+        let successors: Vec<usize> = self.graph.cfg.block(cur).next.iter().copied().collect();
         let saved_counts = segment_counts.clone();
         for next in successors {
             if next != scc.enter && !scc.nodes.contains(&next) {
@@ -913,57 +873,18 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         }
     }
 
-    /// Build a fingerprint of the constraint state along `path`.
-    ///
-    /// Walks `path` collecting assigned constants and copy chains, producing
-    /// a hash that distinguishes truly different constraint contexts at child
-    /// SCC entries (e.g. `outer_retry` changed from `true` to `false`).
-    fn constraint_context(&self, path: &[usize]) -> u64 {
-        let mut hasher = DefaultHasher::new();
-        let mut constraints: FxHashMap<usize, usize> = FxHashMap::default();
-
-        for &block in path.iter() {
-            if let Some(assigned) = self.graph.assigned_locals.get(block) {
-                let consts = self.graph.constants.get(block);
-                let copies = self.graph.constraint_copies.get(block);
-                for local in assigned.iter() {
-                    if let Some(&src) = copies.and_then(|cs| cs.get(local)) {
-                        if let Some(&src_val) = constraints.get(&src) {
-                            constraints.insert(*local, src_val);
-                            continue;
-                        }
-                        if let Some(&dst_val) = constraints.get(local) {
-                            constraints.insert(src, dst_val);
-                            constraints.insert(*local, dst_val);
-                            continue;
-                        }
-                    }
-                    if let Some(&val) = consts.and_then(|cs| cs.get(local)) {
-                        constraints.insert(*local, val);
-                        continue;
-                    }
-                    constraints.remove(local);
-                }
-            }
-        }
-
-        let mut entries: Vec<(usize, usize)> = constraints.into_iter().collect();
-        entries.sort();
-        entries.hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Return all CFG successors of `cur` as traversal actions.
-    ///
-    /// No constraint-based narrowing — purely structural.
-    fn enumerate_scc_traversals(&self, cur: usize) -> Vec<usize> {
-        self.graph.cfg.block(cur).next.iter().copied().collect()
+    /// Build a [`ConstraintHash`] from the constraint state along `path`.
+    fn constraint_context(&self, path: &[usize]) -> ConstraintHash {
+        ConstraintHash::from_path(path, self.graph)
     }
 
     /// Depth-first enumeration of all CFG paths from `current` to a terminator.
     ///
-    /// SCC nodes are flattened via `find_scc_paths`; non-SCC blocks are followed
+    /// SCC nodes are flattened via `find_scc_paths_repeat`; non-SCC blocks are followed
     /// one by one.  No cycle detection is needed because the post-SCC CFG is a DAG.
+    /// Constraints are maintained incrementally — each transition is checked
+    /// via `PathGraph::check_transition` before recursing, and infeasible
+    /// branches are pruned early.
     fn collect_whole_cfg_paths(
         &mut self,
         current: usize,
@@ -971,6 +892,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         tree: &mut PathTree,
         depth: usize,
         postfix_repeat: usize,
+        constraints: &FxHashMap<usize, usize>,
     ) {
         if current >= self.graph.cfg.blocks.len() {
             return;
@@ -986,9 +908,7 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             let segments = self.find_scc_paths_repeat(current, &scc, postfix_repeat);
 
             if segments.is_empty() {
-                if self.graph.is_path_reachable(path) {
-                    tree.insert(path);
-                }
+                tree.insert(path);
                 return;
             }
 
@@ -998,19 +918,34 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
                 }
 
                 let orig_len = path.len();
+                let mut seg_constraints = constraints.clone();
+                let mut reachable = true;
+
                 if seg.blocks.len() > 1 {
-                    path.extend_from_slice(&seg.blocks[1..]);
+                    for i in 0..seg.blocks.len() - 1 {
+                        if !self.graph.check_transition(seg.blocks[i], seg.blocks[i + 1], &mut seg_constraints) {
+                            reachable = false;
+                            break;
+                        }
+                    }
+                    if reachable {
+                        path.extend_from_slice(&seg.blocks[1..]);
+                    }
                 }
 
-                if seg.exit_successors.is_empty() {
-                    if self.graph.is_path_reachable(path) {
+                if reachable {
+                    if seg.exit_successors.is_empty() {
                         tree.insert(path);
-                    }
-                } else {
-                    for &next in &seg.exit_successors {
-                        path.push(next);
-                        self.collect_whole_cfg_paths(next, path, tree, depth + 1, postfix_repeat);
-                        path.pop();
+                    } else {
+                        for &next in &seg.exit_successors {
+                            let mut next_constraints = seg_constraints.clone();
+                            let last = *path.last().unwrap();
+                            if self.graph.check_transition(last, next, &mut next_constraints) {
+                                path.push(next);
+                                self.collect_whole_cfg_paths(next, path, tree, depth + 1, postfix_repeat, &next_constraints);
+                                path.pop();
+                            }
+                        }
                     }
                 }
 
@@ -1022,16 +957,17 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         // Non-SCC block: follow CFG successors.
         let successors: Vec<usize> = self.graph.cfg_block(current).next.iter().copied().collect();
         if successors.is_empty() {
-            if self.graph.is_path_reachable(path) {
-                tree.insert(path);
-            }
+            tree.insert(path);
             return;
         }
 
         for next in successors {
-            path.push(next);
-            self.collect_whole_cfg_paths(next, path, tree, depth + 1, postfix_repeat);
-            path.pop();
+            let mut next_constraints = constraints.clone();
+            if self.graph.check_transition(current, next, &mut next_constraints) {
+                path.push(next);
+                self.collect_whole_cfg_paths(next, path, tree, depth + 1, postfix_repeat, &next_constraints);
+                path.pop();
+            }
         }
     }
 
@@ -1043,14 +979,14 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
         &self,
         path: &[usize],
         scc: &SccInfo,
-        out: &mut Vec<SccEnumeratedPath>,
+        out: &mut Vec<SccPath>,
         seen_paths: &mut FxHashSet<Vec<usize>>,
     ) {
         if !seen_paths.insert(path.to_vec()) {
             return;
         }
         let exit_successors = self.compute_exit_successors(path, scc);
-        out.push(SccEnumeratedPath {
+        out.push(SccPath {
             blocks: path.to_vec(),
             exit_successors,
         });

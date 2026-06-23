@@ -97,9 +97,10 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     /// Process pre-enumerated whole-function paths for SafeDrop via DFS on
-    /// the path tree. All paths have already passed `is_path_reachable`
-    /// during enumeration, so no per-path filtering is needed. State is
-    /// saved at branch points and restored before each sibling subtree.
+    /// the path tree. All paths have already been filtered by incremental
+    /// constraint-based reachability checks during enumeration, so no
+    /// per-path filtering is needed. State is saved at branch points and
+    /// restored before each sibling subtree.
     pub fn process_function_paths(&mut self, fn_map: &MopFnAliasMap) {
         let paths = self.alias_graph.enumerate_paths();
 

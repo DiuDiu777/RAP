@@ -27,11 +27,16 @@ impl<'tcx> PathAnalyzer<'tcx> {
         }
     }
 
-    pub fn start_path_analysis_for_defid(&mut self, def_id: DefId) -> Option<PathTree> {
-        self.start_path_analysis_for_defid_with_repeat(def_id, 0)
+    /// Analyze a single function, returning all whole-CFG paths for it.
+    /// Results are cached — subsequent calls for the same `def_id` return
+    /// the cached tree.
+    pub fn analyze(&mut self, def_id: DefId) -> Option<PathTree> {
+        self.analyze_repeat(def_id, 0)
     }
 
-    pub fn start_path_analysis_for_defid_with_repeat(
+    /// Analyze a single function allowing each SCC postfix segment to
+    /// repeat up to `postfix_repeat` additional times.
+    pub fn analyze_repeat(
         &mut self,
         def_id: DefId,
         postfix_repeat: usize,
@@ -62,33 +67,23 @@ impl<'tcx> PathAnalyzer<'tcx> {
         self.paths.clone()
     }
 
-    pub fn start_path_analysis(&mut self) {
-        self.start_path_analysis_with_repeat(0);
+    /// Analyze all functions in the local crate.
+    pub fn analyze_all(&mut self) {
+        self.analyze_all_repeat(0);
     }
 
-    pub fn start_path_analysis_with_repeat(&mut self, postfix_repeat: usize) {
+    /// Analyze all functions with the given postfix-repeat count.
+    pub fn analyze_all_repeat(&mut self, postfix_repeat: usize) {
         for local_def_id in self.tcx.iter_local_def_id() {
             if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
                 let def_id = local_def_id.to_def_id();
-                let _ = self.start_path_analysis_for_defid_with_repeat(def_id, postfix_repeat);
+                let _ = self.analyze_repeat(def_id, postfix_repeat);
             }
         }
     }
 
     pub fn run_with_repeat(&mut self, postfix_repeat: usize) {
-        self.start_path_analysis_with_repeat(postfix_repeat);
-    }
-
-    /// Verify whether a given path is reachable for the specified function.
-    ///
-    /// The path is a sequence of MIR block indices (can include loops).
-    /// Uses discriminant/constant-based filtering to reject infeasible paths.
-    pub fn check_path_reachability(&self, def_id: DefId, path: &[usize]) -> bool {
-        if let Some(graph) = self.graphs.get(&def_id) {
-            return graph.is_path_reachable(path);
-        }
-        let graph = PathGraph::new(self.tcx, def_id);
-        graph.is_path_reachable(path)
+        self.analyze_all_repeat(postfix_repeat);
     }
 }
 
@@ -98,7 +93,7 @@ impl<'tcx> Analysis for PathAnalyzer<'tcx> {
     }
 
     fn run(&mut self) {
-        self.start_path_analysis();
+        self.analyze_all();
     }
 
     fn reset(&mut self) {

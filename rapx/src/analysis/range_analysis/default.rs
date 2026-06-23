@@ -327,7 +327,7 @@ where
             let mut body = self.tcx.optimized_mir(def_id).clone();
             let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
             let mut path_analyzer = PathAnalyzer::new(self.tcx, self.debug);
-            let paths = path_analyzer.start_path_analysis_for_defid(def_id)?;
+            let paths = path_analyzer.analyze(def_id)?;
 
             let mut cg: ConstraintGraph<'tcx, T> =
                 ConstraintGraph::new_without_ssa(body_mut_ref, self.tcx, def_id);
@@ -366,7 +366,7 @@ where
 
                     let mut cg: ConstraintGraph<'tcx, T> =
                         ConstraintGraph::new_without_ssa(body_mut_ref, self.tcx, def_id);
-                    let Some(paths) = path_analyzer.start_path_analysis_for_defid(def_id) else {
+                    let Some(paths) = path_analyzer.analyze(def_id) else {
                         continue;
                     };
                     let result = cg.start_analyze_path_constraints(body_mut_ref, &paths);

@@ -465,7 +465,7 @@ impl<'tcx> std::fmt::Display for AliasGraph<'tcx> {
         writeln!(f, "  cfg_blocks: {:?}", self.path_graph.cfg.blocks)?;
         writeln!(f, "  block_facts: {:?}", self.block_facts)?;
         writeln!(f, "  constants: {:?}", self.constants)?;
-        writeln!(f, "  discriminants: {:?}", self.path_graph.discriminants)?;
+        writeln!(f, "  disc_info: {:?}", self.path_graph.disc_info)?;
         write!(f, "}}")
     }
 }
