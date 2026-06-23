@@ -116,7 +116,7 @@ Usage: cargo rapx verify [OPTIONS]
 
 Options:
       --prepare-targets            identify #[rapx::verify] functions and list their safety contracts
-      --allow-pathseg-repeat <N>  number of extra SCC postfix repetitions during path enumeration (default 0)
+      --postfix-repeat <N>       number of extra SCC postfix repetitions during path enumeration (default 0)
       --mode <MODE>               verification mode: scan, targeted, invless (default scan)
   -h, --help                      Print help
 ```
