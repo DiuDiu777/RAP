@@ -2,7 +2,7 @@ use rustc_hir::def_id::DefId;
 
 use std::collections::HashSet;
 
-use crate::analysis::path_analysis::PathNode;
+use crate::analysis::path_analysis::{PathNode, PathTree};
 use crate::compat::{FxHashMap, FxHashSet};
 
 use super::value::Value;
@@ -35,8 +35,23 @@ impl<'tcx> AliasGraph<'tcx> {
     /// Shared prefixes are processed once. State is saved at branch points
     /// and restored before processing sibling subtrees, avoiding redundant
     /// re-analysis of common path prefixes.
+    ///
+    /// If `precomputed_paths` is `Some`, it is used directly instead of
+    /// re-enumerating from the internal `PathGraph`. This allows callers
+    /// that have already cached a `PathTree` (e.g., via `PathAnalyzer`) to
+    /// avoid redundant work.
     pub fn process_function_paths(
         &mut self,
+        fn_map: &mut MopFnAliasMap,
+        recursion_set: &mut HashSet<DefId>,
+    ) {
+        self.process_function_paths_opt(None, fn_map, recursion_set)
+    }
+
+    /// Like `process_function_paths` but accepts an optional precomputed `PathTree`.
+    pub fn process_function_paths_opt(
+        &mut self,
+        precomputed_paths: Option<PathTree>,
         fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
@@ -45,7 +60,7 @@ impl<'tcx> AliasGraph<'tcx> {
             self.def_id(),
             self.path_graph.cfg.blocks.len()
         );
-        let paths = self.enumerate_paths();
+        let paths = precomputed_paths.unwrap_or_else(|| self.enumerate_paths());
         rap_debug!(
             "process_function_paths: def_id={:?} paths_enumerated={}",
             self.def_id(),

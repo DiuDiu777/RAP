@@ -8,7 +8,11 @@ pub mod value;
 
 use super::{AliasAnalysis, AliasPair, FnAliasMap, FnAliasPairs};
 use crate::compat::FxHashMap;
-use crate::{analysis::Analysis, def_id::*, utils::source::*};
+use crate::{
+    analysis::{Analysis, path_analysis::default::PathAnalyzer},
+    def_id::*,
+    utils::source::*,
+};
 use graph::AliasGraph;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
@@ -150,6 +154,7 @@ pub type MopFnAliasMap = FxHashMap<DefId, MopFnAliasPairs>;
 pub struct AliasAnalyzer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub fn_map: FxHashMap<DefId, MopFnAliasPairs>,
+    path_analyzer: PathAnalyzer<'tcx>,
 }
 
 impl<'tcx> Analysis for AliasAnalyzer<'tcx> {
@@ -197,6 +202,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
         Self {
             tcx,
             fn_map: FxHashMap::default(),
+            path_analyzer: PathAnalyzer::new(tcx, false),
         }
     }
 
@@ -231,13 +237,25 @@ impl<'tcx> AliasAnalyzer<'tcx> {
         }
 
         if self.tcx.is_mir_available(def_id) {
-            let mut alias_graph = AliasGraph::new(self.tcx, def_id);
+            let paths = self.path_analyzer.analyze(def_id);
+            let path_graph = self
+                .path_analyzer
+                .graphs
+                .get(&def_id)
+                .cloned()
+                .unwrap_or_else(|| {
+                    let mut g = crate::analysis::path_analysis::graph::PathGraph::new(self.tcx, def_id);
+                    g.find_scc();
+                    g
+                });
+            let mut alias_graph = AliasGraph::from_path_graph(self.tcx, def_id, path_graph);
             rap_debug!("Alias graph created: {}", alias_graph);
             rap_debug!("Search scc components in the graph.");
             alias_graph.find_scc();
             rap_trace!("After searching scc: {}", alias_graph);
             let mut recursion_set = HashSet::default();
-            alias_graph.process_function_paths(&mut self.fn_map, &mut recursion_set);
+            alias_graph
+                .process_function_paths_opt(paths, &mut self.fn_map, &mut recursion_set);
             if alias_graph.visit_times() > VISIT_LIMIT {
                 rap_trace!("Over visited: {:?}", def_id);
             }
@@ -249,5 +267,9 @@ impl<'tcx> AliasAnalyzer<'tcx> {
 
     pub fn get_all_fn_alias_raw(&mut self) -> MopFnAliasMap {
         self.fn_map.clone()
+    }
+
+    pub fn take_path_analyzer(&mut self) -> PathAnalyzer<'tcx> {
+        std::mem::replace(&mut self.path_analyzer, PathAnalyzer::new(self.tcx, false))
     }
 }

@@ -40,6 +40,16 @@ impl<'tcx> AliasGraph<'tcx> {
         let fn_name = get_fn_name(tcx, def_id);
         rap_debug!("New an AliasGraph for: {:?}", fn_name);
         let path_graph = PathGraph::new(tcx, def_id);
+        Self::from_path_graph(tcx, def_id, path_graph)
+    }
+
+    pub fn from_path_graph(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        path_graph: PathGraph<'tcx>,
+    ) -> AliasGraph<'tcx> {
+        let fn_name = get_fn_name(tcx, def_id);
+        rap_debug!("New an AliasGraph from existing PathGraph for: {:?}", fn_name);
         // handle variables
         let body = tcx.optimized_mir(def_id);
         let locals = &body.local_decls;

@@ -1,7 +1,7 @@
 use super::{bug_records::*, corner_case::*, drop::*, graph::*};
 use crate::{
     analysis::alias_analysis::default::{MopFnAliasMap, types::ValueKind},
-    analysis::path_analysis::PathNode,
+    analysis::path_analysis::{PathNode, PathTree},
     def_id::is_drop_fn,
     utils::source::{get_filename, get_name},
 };
@@ -35,7 +35,8 @@ impl<'tcx> SafeDropGraph<'tcx> {
                     if !self.drop_heap_item_check(place) {
                         return;
                     }
-                    let value_idx = self.projection(place.clone());
+                    let value_idx = self.alias_graph.projection(place.clone());
+                    self.sync_drop_record();
                     self.add_to_drop_record(value_idx, bb_idx, is_cleanup);
                 }
                 TerminatorKind::Call {
@@ -62,7 +63,8 @@ impl<'tcx> SafeDropGraph<'tcx> {
                         if !self.drop_heap_item_check(&place) {
                             return;
                         }
-                        let local = self.projection(place.clone());
+                        let local = self.alias_graph.projection(place.clone());
+                        self.sync_drop_record();
                         self.add_to_drop_record(local, bb_idx, is_cleanup);
                     }
                 }
@@ -102,7 +104,15 @@ impl<'tcx> SafeDropGraph<'tcx> {
     /// per-path filtering is needed. State is saved at branch points and
     /// restored before each sibling subtree.
     pub fn process_function_paths(&mut self, fn_map: &MopFnAliasMap) {
-        let paths = self.alias_graph.enumerate_paths();
+        self.process_function_paths_opt(None, fn_map)
+    }
+
+    pub fn process_function_paths_opt(
+        &mut self,
+        precomputed_paths: Option<PathTree>,
+        fn_map: &MopFnAliasMap,
+    ) {
+        let paths = precomputed_paths.unwrap_or_else(|| self.alias_graph.enumerate_paths());
 
         let Some(root) = paths.root() else {
             return;
