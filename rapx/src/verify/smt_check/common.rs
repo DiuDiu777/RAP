@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 use rustc_middle::{
     mir::{BinOp, Local, Operand, Rvalue, TerminatorKind, UnOp},
-    ty::{GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind, UintTy},
+    ty::{ConstKind, GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind, UintTy},
 };
 use z3::{
     Config, Context, SatResult, Solver,
@@ -66,6 +66,44 @@ struct PathCursorCutoff {
 /// SMT backend for verifier properties.
 pub struct SmtChecker<'tcx> {
     pub(crate) tcx: TyCtxt<'tcx>,
+}
+
+fn ty_has_param_const(ty: Ty<'_>) -> bool {
+    use rustc_type_ir::TypeVisitableExt;
+
+    if ty.has_param() {
+        return true;
+    }
+    for arg in ty.walk() {
+        match arg.kind() {
+            GenericArgKind::Const(c) if matches!(c.kind(), ConstKind::Param(_)) => return true,
+            GenericArgKind::Type(inner_ty) if matches!(inner_ty.kind(), TyKind::Alias(..)) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn safe_type_layout<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: rustc_hir::def_id::DefId,
+    ty: Ty<'tcx>,
+) -> Option<(u64, u64)> {
+    if ty_has_param_const(ty) {
+        return None;
+    }
+    let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, caller);
+    let input = PseudoCanonicalInput {
+        typing_env,
+        value: ty,
+    };
+    match tcx.layout_of(input) {
+        Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
+        Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
+        Err(_) => None,
+    }
 }
 
 impl<'tcx> SmtChecker<'tcx> {
@@ -1743,16 +1781,7 @@ impl<'tcx> SmtChecker<'tcx> {
         caller: rustc_hir::def_id::DefId,
         ty: Ty<'tcx>,
     ) -> Option<(u64, u64)> {
-        let typing_env = rustc_middle::ty::TypingEnv::post_analysis(self.tcx, caller);
-        let input = PseudoCanonicalInput {
-            typing_env,
-            value: ty,
-        };
-        match self.tcx.layout_of(input) {
-            Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
-            Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
-            Err(_) => None,
-        }
+        safe_type_layout(self.tcx, caller, ty)
     }
 
     /// Return the alignment required by a property type.
@@ -3532,19 +3561,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         Some(self.tcx.optimized_mir(self.checkpoint.caller).local_decls[local].ty)
     }
 
-    /// Return ABI alignment and size for a type.
     fn type_layout(&self, ty: Ty<'tcx>) -> Option<(u64, u64)> {
-        let typing_env =
-            rustc_middle::ty::TypingEnv::post_analysis(self.tcx, self.checkpoint.caller);
-        let input = PseudoCanonicalInput {
-            typing_env,
-            value: ty,
-        };
-        match self.tcx.layout_of(input) {
-            Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
-            Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
-            Err(_) => None,
-        }
+        safe_type_layout(self.tcx, self.checkpoint.caller, ty)
     }
 
     /// Return the alignment guaranteed by a concrete or generic type.

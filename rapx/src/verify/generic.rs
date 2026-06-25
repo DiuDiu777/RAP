@@ -9,11 +9,29 @@ use std::collections::{HashMap, HashSet};
 
 use if_chain::if_chain;
 use rustc_hir::{ImplPolarity, ItemId, ItemKind, hir_id::OwnerId};
-use rustc_middle::ty::{FloatTy, IntTy, ParamEnv, Ty, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{ConstKind, FloatTy, GenericArgKind, IntTy, ParamEnv, Ty, TyCtxt, TyKind, UintTy};
 
 /// Representative concrete types satisfying generic trait bounds.
 pub struct GenericTypeCandidates<'tcx> {
     trait_map: HashMap<String, HashSet<Ty<'tcx>>>,
+}
+
+fn ty_has_param_const(ty: Ty<'_>) -> bool {
+    use rustc_type_ir::TypeVisitableExt;
+
+    if ty.has_param() {
+        return true;
+    }
+    for arg in ty.walk() {
+        match arg.kind() {
+            GenericArgKind::Const(c) if matches!(c.kind(), ConstKind::Param(_)) => return true,
+            GenericArgKind::Type(inner_ty) if matches!(inner_ty.kind(), TyKind::Alias(..)) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }
 
 impl<'tcx> GenericTypeCandidates<'tcx> {
@@ -66,11 +84,16 @@ impl<'tcx> GenericTypeCandidates<'tcx> {
                         let impl_ty = binder.skip_binder().self_ty();
                         match impl_ty.kind() {
                             TyKind::Adt(adt_def, _) => {
-                                type_set.insert(tcx.type_of(adt_def.did()).skip_binder());
+                                let ty = tcx.type_of(adt_def.did()).skip_binder();
+                                if !ty_has_param_const(ty) {
+                                    type_set.insert(ty);
+                                }
                             }
                             TyKind::Param(_) => {}
                             _ => {
-                                type_set.insert(impl_ty);
+                                if !ty_has_param_const(impl_ty) {
+                                    type_set.insert(impl_ty);
+                                }
                             }
                         }
                     }

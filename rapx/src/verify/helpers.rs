@@ -216,6 +216,9 @@ fn resolve_next_field<'tcx>(
 ) -> Option<(usize, Ty<'tcx>)> {
     let peeled_ty = base_ty.peel_refs();
     if let TyKind::Adt(adt_def, arg_list) = *peeled_ty.kind() {
+        if !adt_def.is_struct() && !adt_def.is_union() {
+            return None;
+        }
         let variant = adt_def.non_enum_variant();
         if let Ok(field_idx) = field_name.parse::<usize>() {
             if field_idx < variant.fields.len() {

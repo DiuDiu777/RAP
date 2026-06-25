@@ -15,7 +15,7 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{BasicBlock, Local, Operand, Rvalue, StatementKind, TerminatorKind},
-    ty::{PseudoCanonicalInput, Ty, TyCtxt, TyKind},
+    ty::{ConstKind, GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind},
 };
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
@@ -951,8 +951,10 @@ fn nonnull_inner_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
     args.iter().find_map(|arg| arg.as_type())
 }
 
-/// Return ABI alignment and size for a type in the caller environment.
 fn type_layout<'tcx>(tcx: TyCtxt<'tcx>, caller: DefId, ty: Ty<'tcx>) -> Option<(u64, u64)> {
+    if ty_has_param_const(ty) {
+        return None;
+    }
     let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, caller);
     let input = PseudoCanonicalInput {
         typing_env,
@@ -960,4 +962,22 @@ fn type_layout<'tcx>(tcx: TyCtxt<'tcx>, caller: DefId, ty: Ty<'tcx>) -> Option<(
     };
     let layout = tcx.layout_of(input).ok()?;
     Some((layout.align.abi.bytes(), layout.size.bytes()))
+}
+
+fn ty_has_param_const(ty: Ty<'_>) -> bool {
+    use rustc_type_ir::TypeVisitableExt;
+
+    if ty.has_param() {
+        return true;
+    }
+    for arg in ty.walk() {
+        match arg.kind() {
+            GenericArgKind::Const(c) if matches!(c.kind(), ConstKind::Param(_)) => return true,
+            GenericArgKind::Type(inner_ty) if matches!(inner_ty.kind(), TyKind::Alias(..)) => {
+                return true;
+            }
+            _ => {}
+        }
+    }
+    false
 }

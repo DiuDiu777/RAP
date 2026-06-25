@@ -248,6 +248,9 @@ fn field_ty<'tcx>(tcx: TyCtxt<'tcx>, base_ty: Ty<'tcx>, field: usize) -> Option<
     let peeled_ty = base_ty.peel_refs();
     match *peeled_ty.kind() {
         TyKind::Adt(adt_def, args) => {
+            if !adt_def.is_struct() && !adt_def.is_union() {
+                return None;
+            }
             let variant = adt_def.non_enum_variant();
             if field >= variant.fields.len() {
                 return None;

@@ -20,6 +20,7 @@ use crate::compat::{FxHashMap, FxHashSet};
 use indexmap::IndexMap;
 use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::TyCtxt;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use super::{
     contract::Property,
@@ -511,9 +512,26 @@ impl<'tcx> VerifyRun<'tcx> {
 
         for repeat in 0..=self.postfix_repeat {
             let driver = VerifyDriver::new_with_repeat(self.tcx, con_target, repeat);
-            let report = driver.verify_function();
-            rap_debug!("{}", report.describe());
-            all_results.extend(report.results);
+            let result = catch_unwind(AssertUnwindSafe(|| driver.verify_function()));
+            match result {
+                Ok(report) => {
+                    rap_debug!("{}", report.describe());
+                    all_results.extend(report.results);
+                }
+                Err(e) => {
+                    let msg = e.downcast_ref::<String>()
+                        .map(|s| s.as_str())
+                        .or_else(|| e.downcast_ref::<&str>().copied())
+                        .unwrap_or("<rustc ICE>");
+                    rap_warn!("Skipping invless constructor {} (repeat {}): {}",
+                        self.tcx.def_path_str(con_id),
+                        repeat,
+                        msg
+                    );
+                    all_results.clear();
+                    break;
+                }
+            }
         }
 
         let read_name = short_fn_name(self.tcx, read_def_id);
@@ -590,9 +608,27 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             // Phase 1: unsafe checkpoint verification
             for repeat in 0..=self.postfix_repeat {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
-                let report = driver.verify_function();
-                rap_debug!("{}", report.describe());
-                all_results.extend(report.results);
+                let result = catch_unwind(AssertUnwindSafe(|| driver.verify_function()));
+                match result {
+                    Ok(report) => {
+                        rap_debug!("{}", report.describe());
+                        all_results.extend(report.results);
+                    }
+                    Err(e) => {
+                        let msg = e.downcast_ref::<String>()
+                            .map(|s| s.as_str())
+                            .or_else(|| e.downcast_ref::<&str>().copied())
+                            .unwrap_or("<rustc ICE>");
+                        rap_warn!(
+                            "Skipping function {} (repeat {}): {}",
+                            target_path,
+                            repeat,
+                            msg
+                        );
+                        all_results.clear();
+                        break;
+                    }
+                }
             }
 
             // Phase 2: struct invariant verification
@@ -869,8 +905,17 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
                     );
                 }
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
-                let report = driver.verify_function();
-                rap_debug!("{}", report.describe());
+                let result = catch_unwind(AssertUnwindSafe(|| driver.verify_function()));
+                match result {
+                    Ok(report) => {
+                        rap_debug!("{}", report.describe());
+                    }
+                    Err(_) => {
+                        rap_debug!("[rapx::verify::diagnostics] function {} skipped due to ICE",
+                            self.tcx.def_path_str(target.def_id)
+                        );
+                    }
+                }
             }
         }
 
