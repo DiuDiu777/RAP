@@ -278,7 +278,9 @@ impl<'tcx> Property<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, name: &str, exprs: &[Expr]) -> Self {
         match name {
             "Align" => {
-                Self::check_arg_length(exprs.len(), 2, "Align");
+                if !Self::check_arg_length(exprs.len(), 2, "Align") {
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
                 let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
                 let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "Align") else {
                     return Self::new_simple(PropertyKind::Unknown);
@@ -360,7 +362,9 @@ impl<'tcx> Property<'tcx> {
             "ValidString" => Self::new_with_target(PropertyKind::ValidString, tcx, def_id, exprs),
             "ValidCStr" => Self::new_with_target(PropertyKind::ValidCStr, tcx, def_id, exprs),
             "Init" => {
-                Self::check_arg_length(exprs.len(), 3, "Init");
+                if !Self::check_arg_length(exprs.len(), 3, "Init") {
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
                 let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
                 let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "Init") else {
                     return Self::new_simple(PropertyKind::Unknown);
@@ -373,7 +377,9 @@ impl<'tcx> Property<'tcx> {
             }
             "Unwrap" => Self::new_with_target(PropertyKind::Unwrap, tcx, def_id, exprs),
             "Typed" => {
-                Self::check_arg_length(exprs.len(), 2, "Typed");
+                if !Self::check_arg_length(exprs.len(), 2, "Typed") {
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
                 let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
                 let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "Typed") else {
                     return Self::new_simple(PropertyKind::Unknown);
@@ -389,7 +395,9 @@ impl<'tcx> Property<'tcx> {
             "Trait" => Self::new_with_target(PropertyKind::Trait, tcx, def_id, exprs),
             "Unreachable" => Self::new_with_target(PropertyKind::Unreachable, tcx, def_id, exprs),
             "ValidPtr" => {
-                Self::check_arg_length(exprs.len(), 3, "ValidPtr");
+                if !Self::check_arg_length(exprs.len(), 3, "ValidPtr") {
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
                 let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
                 let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "ValidPtr") else {
                     return Self::new_simple(PropertyKind::Unknown);
@@ -401,7 +409,9 @@ impl<'tcx> Property<'tcx> {
                 )
             }
             "ValidSlice" => {
-                Self::check_arg_length(exprs.len(), 2, "ValidSlice");
+                if !Self::check_arg_length(exprs.len(), 2, "ValidSlice") {
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
                 let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
                 let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "ValidSlice") else {
                     return Self::new_simple(PropertyKind::Unknown);
@@ -503,7 +513,8 @@ impl<'tcx> Property<'tcx> {
 
     fn check_arg_length(expr_len: usize, required_len: usize, sp: &str) -> bool {
         if expr_len != required_len {
-            panic!("Wrong args length for {:?} Tag!", sp);
+            rap_error!("Wrong args length for {:?} Tag! expected {required_len}, got {expr_len}", sp);
+            return false;
         }
         true
     }

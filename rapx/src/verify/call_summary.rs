@@ -206,6 +206,14 @@ pub fn dependency_summary<'tcx>(
     }
 
     if let Some(callee) = callee {
+        // Skip interprocedural analysis for intrinsics and
+        // compiler-generated functions — their MIR can trigger
+        // worker-thread stack overflows during `optimized_mir`.
+        if name.contains("::intrinsics::") || name.starts_with("intrinsics::")
+            || name.ends_with("::drop_in_place")
+        {
+            return CallDependencySummary::unknown(Some(callee), name, arg_count);
+        }
         if let Some(must_write_args) = local_must_write_args(tcx, callee) {
             if !must_write_args.is_empty() {
                 return CallDependencySummary {
@@ -376,6 +384,13 @@ pub fn effect_summary<'tcx>(
     }
 
     if let Some(callee) = callee {
+        // Skip interprocedural analysis for intrinsics and
+        // compiler-generated functions.
+        if name.contains("::intrinsics::") || name.starts_with("intrinsics::")
+            || name.ends_with("::drop_in_place")
+        {
+            return CallEffectSummary::unknown(Some(callee), name, destination);
+        }
         if let Some(must_write_args) = local_must_write_args(tcx, callee) {
             let effects: Vec<_> = must_write_args
                 .into_iter()
@@ -619,7 +634,13 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
         return None;
     }
 
+    // Skip functions whose MIR is too large — they're unlikely to be
+    // simple pointer-arithmetic wrappers and can trigger worker-thread
+    // stack overflows during `optimized_mir`.
     let body = tcx.optimized_mir(callee);
+    if body.basic_blocks.len() > 16 {
+        return None;
+    }
     let ret = Local::from_usize(0);
 
     for bb in body.basic_blocks.iter() {
@@ -644,6 +665,13 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
         // Also check if the inner callee is itself a pointer-arithmetic wrapper.
         let inner_effect = if !is_add && !is_sub {
             callee_def_id(func).and_then(|inner_callee| {
+                let inner_name = call_name(tcx, func);
+                if inner_name.contains("::intrinsics::")
+                    || inner_name.starts_with("intrinsics::")
+                    || inner_name.ends_with("::drop_in_place")
+                {
+                    return None;
+                }
                 try_pointer_arith_wrapper_effect(tcx, inner_callee, Some(call_dest.local))
             })
         } else {
@@ -762,6 +790,9 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
 /// Use the existing dataflow graph to approximate local callee return deps.
 fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
     callee.as_local()?;
+    if !tcx.is_mir_available(callee) {
+        return None;
+    }
     catch_unwind(AssertUnwindSafe(|| {
         let mut analyzer = DataflowAnalyzer::new(tcx, false);
         analyzer.build_graph(callee);

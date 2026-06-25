@@ -387,6 +387,16 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         // `function_has_struct_invariant` catches methods on structs with invariants;
         // `function_has_trait_ensurance` catches methods on unsafe trait impls with contracts.
         let def_id = id.to_def_id();
+
+        // Skip never-returning (divergent) functions — they have no return
+        // paths and can trigger stack overflows in downstream analysis.
+        if let rustc_hir::def::DefKind::Fn = self.tcx.def_kind(def_id) {
+            let fn_sig = self.tcx.fn_sig(def_id).skip_binder();
+            if matches!(fn_sig.output().skip_binder().kind(), rustc_type_ir::TyKind::Never) {
+                return;
+            }
+        }
+
         if !matches!(self.mode, VerifyMode::Targeted) {
             if !hir_contains_unsafe(self.tcx, body_id)
                 && !function_has_struct_invariant(self.tcx, def_id)
