@@ -9,7 +9,9 @@ use std::collections::{HashMap, HashSet};
 
 use if_chain::if_chain;
 use rustc_hir::{ImplPolarity, ItemId, ItemKind, hir_id::OwnerId};
-use rustc_middle::ty::{ConstKind, FloatTy, GenericArgKind, IntTy, ParamEnv, Ty, TyCtxt, TyKind, UintTy};
+use rustc_middle::ty::{
+    ConstKind, FloatTy, GenericArgKind, IntTy, ParamEnv, Ty, TyCtxt, TyKind, UintTy,
+};
 
 /// Representative concrete types satisfying generic trait bounds.
 pub struct GenericTypeCandidates<'tcx> {

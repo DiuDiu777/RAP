@@ -131,7 +131,7 @@ impl Callbacks for RapCallback {
             .opts
             .crate_name
             .as_deref()
-                .map(|s| matches!(s, "core" | "std" | "alloc" | "proc_macro" | "test"))
+            .map(|s| matches!(s, "core" | "std" | "alloc" | "proc_macro" | "test"))
             .unwrap_or(false);
         preprocess::dummy_fns::create_dummy_fns(krate, build_std);
         preprocess::ssa_preprocess::create_ssa_struct(krate, build_std);

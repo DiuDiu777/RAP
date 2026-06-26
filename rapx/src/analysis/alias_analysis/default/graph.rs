@@ -49,7 +49,10 @@ impl<'tcx> AliasGraph<'tcx> {
         path_graph: PathGraph<'tcx>,
     ) -> AliasGraph<'tcx> {
         let fn_name = get_fn_name(tcx, def_id);
-        rap_debug!("New an AliasGraph from existing PathGraph for: {:?}", fn_name);
+        rap_debug!(
+            "New an AliasGraph from existing PathGraph for: {:?}",
+            fn_name
+        );
         // handle variables
         let body = tcx.optimized_mir(def_id);
         let locals = &body.local_decls;

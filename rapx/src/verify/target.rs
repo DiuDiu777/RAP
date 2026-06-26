@@ -392,7 +392,10 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         // paths and can trigger stack overflows in downstream analysis.
         if let rustc_hir::def::DefKind::Fn = self.tcx.def_kind(def_id) {
             let fn_sig = self.tcx.fn_sig(def_id).skip_binder();
-            if matches!(fn_sig.output().skip_binder().kind(), rustc_type_ir::TyKind::Never) {
+            if matches!(
+                fn_sig.output().skip_binder().kind(),
+                rustc_type_ir::TyKind::Never
+            ) {
                 return;
             }
         }

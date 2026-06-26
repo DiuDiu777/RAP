@@ -519,11 +519,13 @@ impl<'tcx> VerifyRun<'tcx> {
                     all_results.extend(report.results);
                 }
                 Err(e) => {
-                    let msg = e.downcast_ref::<String>()
+                    let msg = e
+                        .downcast_ref::<String>()
                         .map(|s| s.as_str())
                         .or_else(|| e.downcast_ref::<&str>().copied())
                         .unwrap_or("<rustc ICE>");
-                    rap_warn!("Skipping invless constructor {} (repeat {}): {}",
+                    rap_warn!(
+                        "Skipping invless constructor {} (repeat {}): {}",
                         self.tcx.def_path_str(con_id),
                         repeat,
                         msg
@@ -615,7 +617,8 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                         all_results.extend(report.results);
                     }
                     Err(e) => {
-                        let msg = e.downcast_ref::<String>()
+                        let msg = e
+                            .downcast_ref::<String>()
                             .map(|s| s.as_str())
                             .or_else(|| e.downcast_ref::<&str>().copied())
                             .unwrap_or("<rustc ICE>");
@@ -911,7 +914,8 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
                         rap_debug!("{}", report.describe());
                     }
                     Err(_) => {
-                        rap_debug!("[rapx::verify::diagnostics] function {} skipped due to ICE",
+                        rap_debug!(
+                            "[rapx::verify::diagnostics] function {} skipped due to ICE",
                             self.tcx.def_path_str(target.def_id)
                         );
                     }

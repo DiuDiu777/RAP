@@ -513,7 +513,10 @@ impl<'tcx> Property<'tcx> {
 
     fn check_arg_length(expr_len: usize, required_len: usize, sp: &str) -> bool {
         if expr_len != required_len {
-            rap_error!("Wrong args length for {:?} Tag! expected {required_len}, got {expr_len}", sp);
+            rap_error!(
+                "Wrong args length for {:?} Tag! expected {required_len}, got {expr_len}",
+                sp
+            );
             return false;
         }
         true

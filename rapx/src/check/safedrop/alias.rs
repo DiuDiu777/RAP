@@ -4,9 +4,7 @@ use rustc_middle::{
 };
 
 use super::graph::*;
-use crate::analysis::alias_analysis::default::{
-    MopFnAliasMap, alias::is_no_alias_intrinsic,
-};
+use crate::analysis::alias_analysis::default::{MopFnAliasMap, alias::is_no_alias_intrinsic};
 
 impl<'tcx> SafeDropGraph<'tcx> {
     pub fn alias_bb(&mut self, bb_index: usize) {

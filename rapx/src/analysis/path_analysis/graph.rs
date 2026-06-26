@@ -713,7 +713,14 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
             return tree;
         }
 
-        self.collect_whole_cfg_paths(0, &mut vec![0], &mut tree, 0, postfix_repeat, &FxHashMap::default());
+        self.collect_whole_cfg_paths(
+            0,
+            &mut vec![0],
+            &mut tree,
+            0,
+            postfix_repeat,
+            &FxHashMap::default(),
+        );
 
         tree
     }
@@ -817,7 +824,11 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
 
         if is_child {
             let ctx = self.constraint_context(path);
-            if !self.visited_sccs.insert(SccKey { entry: cur, repeat: 0, constraint: ctx }) {
+            if !self.visited_sccs.insert(SccKey {
+                entry: cur,
+                repeat: 0,
+                constraint: ctx,
+            }) {
                 return;
             }
 
@@ -923,7 +934,11 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
 
                 if seg.blocks.len() > 1 {
                     for i in 0..seg.blocks.len() - 1 {
-                        if !self.graph.check_transition(seg.blocks[i], seg.blocks[i + 1], &mut seg_constraints) {
+                        if !self.graph.check_transition(
+                            seg.blocks[i],
+                            seg.blocks[i + 1],
+                            &mut seg_constraints,
+                        ) {
                             reachable = false;
                             break;
                         }
@@ -940,9 +955,19 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
                         for &next in &seg.exit_successors {
                             let mut next_constraints = seg_constraints.clone();
                             let last = *path.last().unwrap();
-                            if self.graph.check_transition(last, next, &mut next_constraints) {
+                            if self
+                                .graph
+                                .check_transition(last, next, &mut next_constraints)
+                            {
                                 path.push(next);
-                                self.collect_whole_cfg_paths(next, path, tree, depth + 1, postfix_repeat, &next_constraints);
+                                self.collect_whole_cfg_paths(
+                                    next,
+                                    path,
+                                    tree,
+                                    depth + 1,
+                                    postfix_repeat,
+                                    &next_constraints,
+                                );
                                 path.pop();
                             }
                         }
@@ -963,9 +988,19 @@ impl<'g, 'tcx> PathEnumerator<'g, 'tcx> {
 
         for next in successors {
             let mut next_constraints = constraints.clone();
-            if self.graph.check_transition(current, next, &mut next_constraints) {
+            if self
+                .graph
+                .check_transition(current, next, &mut next_constraints)
+            {
                 path.push(next);
-                self.collect_whole_cfg_paths(next, path, tree, depth + 1, postfix_repeat, &next_constraints);
+                self.collect_whole_cfg_paths(
+                    next,
+                    path,
+                    tree,
+                    depth + 1,
+                    postfix_repeat,
+                    &next_constraints,
+                );
                 path.pop();
             }
         }

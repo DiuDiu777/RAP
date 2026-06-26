@@ -209,7 +209,8 @@ pub fn dependency_summary<'tcx>(
         // Skip interprocedural analysis for intrinsics and
         // compiler-generated functions — their MIR can trigger
         // worker-thread stack overflows during `optimized_mir`.
-        if name.contains("::intrinsics::") || name.starts_with("intrinsics::")
+        if name.contains("::intrinsics::")
+            || name.starts_with("intrinsics::")
             || name.ends_with("::drop_in_place")
         {
             return CallDependencySummary::unknown(Some(callee), name, arg_count);
@@ -386,7 +387,8 @@ pub fn effect_summary<'tcx>(
     if let Some(callee) = callee {
         // Skip interprocedural analysis for intrinsics and
         // compiler-generated functions.
-        if name.contains("::intrinsics::") || name.starts_with("intrinsics::")
+        if name.contains("::intrinsics::")
+            || name.starts_with("intrinsics::")
             || name.ends_with("::drop_in_place")
         {
             return CallEffectSummary::unknown(Some(callee), name, destination);

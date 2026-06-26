@@ -36,11 +36,7 @@ impl<'tcx> PathAnalyzer<'tcx> {
 
     /// Analyze a single function allowing each SCC postfix segment to
     /// repeat up to `postfix_repeat` additional times.
-    pub fn analyze_repeat(
-        &mut self,
-        def_id: DefId,
-        postfix_repeat: usize,
-    ) -> Option<PathTree> {
+    pub fn analyze_repeat(&mut self, def_id: DefId, postfix_repeat: usize) -> Option<PathTree> {
         if let Some(paths) = self.paths.get(&def_id) {
             return Some(paths.clone());
         }

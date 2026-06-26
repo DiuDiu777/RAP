@@ -244,7 +244,8 @@ impl<'tcx> AliasAnalyzer<'tcx> {
                 .get(&def_id)
                 .cloned()
                 .unwrap_or_else(|| {
-                    let mut g = crate::analysis::path_analysis::graph::PathGraph::new(self.tcx, def_id);
+                    let mut g =
+                        crate::analysis::path_analysis::graph::PathGraph::new(self.tcx, def_id);
                     g.find_scc();
                     g
                 });
@@ -254,8 +255,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
             alias_graph.find_scc();
             rap_trace!("After searching scc: {}", alias_graph);
             let mut recursion_set = HashSet::default();
-            alias_graph
-                .process_function_paths_opt(paths, &mut self.fn_map, &mut recursion_set);
+            alias_graph.process_function_paths_opt(paths, &mut self.fn_map, &mut recursion_set);
             if alias_graph.visit_times() > VISIT_LIMIT {
                 rap_trace!("Over visited: {:?}", def_id);
             }
