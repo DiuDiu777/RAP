@@ -1,7 +1,9 @@
 use super::default::CallGraph;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
-use rustc_middle::ty::{FnDef, Instance, InstanceKind, ShimKind, TyCtxt, TypingEnv};
+use rustc_middle::ty::{FnDef, Instance, InstanceKind, TyCtxt, TypingEnv};
+#[cfg(rapx_rustc_ge_198)]
+use rustc_middle::ty::ShimKind;
 use std::collections::HashSet;
 
 pub struct CallGraphVisitor<'b, 'tcx> {
@@ -109,6 +111,7 @@ impl<'b, 'tcx> CallGraphVisitor<'b, 'tcx> {
                     {
                         let mut is_virtual = false;
                         // Try to analysis the specific type of callee.
+                        #[cfg(rapx_rustc_ge_198)]
                         let instance_def_id = match instance.def {
                             InstanceKind::Item(def_id) => Some(def_id),
                             InstanceKind::Intrinsic(def_id) => Some(def_id),
@@ -138,6 +141,36 @@ impl<'b, 'tcx> CallGraphVisitor<'b, 'tcx> {
                                 }
                                 _ => todo!(),
                             },
+                        };
+
+                        #[cfg(not(rapx_rustc_ge_198))]
+                        let instance_def_id = match instance.def {
+                            InstanceKind::Item(def_id) => Some(def_id),
+                            InstanceKind::Intrinsic(def_id) => Some(def_id),
+                            InstanceKind::VTableShim(def_id) => Some(def_id),
+                            InstanceKind::ReifyShim(def_id, _) => Some(def_id),
+                            InstanceKind::FnPtrShim(def_id, _) => Some(def_id),
+                            InstanceKind::Virtual(def_id, _) => {
+                                is_virtual = true;
+                                Some(def_id)
+                            }
+                            InstanceKind::ClosureOnceShim { call_once, .. } => Some(call_once),
+                            InstanceKind::ConstructCoroutineInClosureShim {
+                                coroutine_closure_def_id,
+                                ..
+                            } => Some(coroutine_closure_def_id),
+                            InstanceKind::ThreadLocalShim(def_id) => Some(def_id),
+                            InstanceKind::DropGlue(def_id, _) => Some(def_id),
+                            InstanceKind::FnPtrAddrShim(def_id, _) => Some(def_id),
+                            InstanceKind::AsyncDropGlueCtorShim(def_id, _) => Some(def_id),
+                            InstanceKind::CloneShim(def_id, _) => {
+                                if !self.tcx.is_closure_like(def_id) {
+                                    Some(def_id)
+                                } else {
+                                    None
+                                }
+                            }
+                            _ => todo!(),
                         };
 
                         if let Some(instance_def_id) = instance_def_id {
