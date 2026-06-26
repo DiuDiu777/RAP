@@ -17,8 +17,6 @@ pub struct GenericTypeCandidates<'tcx> {
 }
 
 fn ty_has_param_const(ty: Ty<'_>) -> bool {
-    use rustc_type_ir::TypeVisitableExt;
-
     for arg in ty.walk() {
         match arg.kind() {
             GenericArgKind::Const(c) if matches!(c.kind(), ConstKind::Param(_)) => return true,
