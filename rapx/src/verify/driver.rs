@@ -610,6 +610,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
         let mut collector =
             VerifyTargetCollector::new(self.tcx, self.mode, self.module_filter.clone());
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
+        collector.check_module_filter_result();
 
         for target in &collector.function_targets {
             let target_path = self.tcx.def_path_str(target.def_id);

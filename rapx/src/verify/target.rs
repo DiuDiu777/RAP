@@ -150,6 +150,7 @@ pub struct VerifyTargetCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,
     module_filter: Option<String>,
+    module_filter_matched: bool,
     /// All function targets to verify collected from the current crate.
     pub function_targets: Vec<FunctionTarget<'tcx>>,
     /// All struct targets to verify collected from the current crate.
@@ -167,6 +168,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             tcx,
             mode,
             module_filter,
+            module_filter_matched: false,
             function_targets: Vec::new(),
             struct_targets: HashMap::new(),
             trait_targets: HashMap::new(),
@@ -294,6 +296,16 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                 })
                 .function_targets
                 .push(function_target);
+        }
+    }
+
+    pub fn check_module_filter_result(&self) {
+        if let Some(ref filter) = self.module_filter {
+            if !self.module_filter_matched {
+                rap_warn!(
+                    "[rapx::verify] --module \"{filter}\" matched no functions in the crate"
+                );
+            }
         }
     }
 }
@@ -440,9 +452,22 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 
         if let Some(ref filter) = self.module_filter {
             let def_path = self.tcx.def_path_str(def_id);
-            if def_path != *filter && !def_path.starts_with(&format!("{}::", filter)) {
+            let matched = def_path == *filter
+                || def_path.starts_with(&format!("{}::", filter))
+                || {
+                    let crate_name = self.tcx.crate_name(def_id.krate);
+                    let prefix = format!("{}::", crate_name.as_str());
+                    filter.strip_prefix(&prefix).map_or(false, |inner| {
+                        def_path == *inner || def_path.starts_with(&format!("{}::", inner))
+                    })
+                };
+            rap_debug!(
+                "[rapx::verify] module_filter: filter=\"{filter}\" def_path=\"{def_path}\" matched={matched}",
+            );
+            if !matched {
                 return;
             }
+            self.module_filter_matched = true;
         }
 
         self.push_function_target(function_target);
@@ -468,6 +493,7 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
         let mut collector =
             VerifyTargetCollector::new(self.tcx, self.mode, self.module_filter.clone());
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
+        collector.check_module_filter_result();
 
         // Free functions (no owning struct)
         let free_targets: Vec<_> = collector
