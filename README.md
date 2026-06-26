@@ -118,6 +118,7 @@ Options:
       --prepare-targets            identify #[rapx::verify] functions and list their safety contracts
       --postfix-repeat <N>       number of extra SCC postfix repetitions during path enumeration (default 0)
       --mode <MODE>               verification mode: scan, targeted, invless (default scan)
+      --module <MODULE_PATH>     filter verification targets to only those within the specified module path
   -h, --help                      Print help
 ```
 
@@ -125,6 +126,8 @@ Verification modes:
 - `scan` — auto-detect: verify all functions with unsafe callees or struct invariants
 - `targeted` — only verify functions annotated with `#[rapx::verify]`
 - `invless` — verify without struct invariants as pre/post-conditions, deriving safety requirements automatically from the safety flow graph
+
+Use `--module` with any mode to limit verification to functions within a specific module path (e.g. `--module my_mod::sub`).
 
 ```rust
 #![feature(register_tool)]
