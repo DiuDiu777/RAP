@@ -2056,6 +2056,25 @@ fn adg_simple_graph() {
 }
 
 #[test]
+fn verify_module_filter() {
+    let output = run_with_args(
+        "verify/module_filter",
+        &["verify", "--mode", "targeted", "--module", "a"],
+    );
+    assert_contain(&output, "function: a::f");
+    assert_not_contain(&output, "function: b::g");
+    assert_not_contain(&output, "function: c::h");
+
+    let output = run_with_args(
+        "verify/module_filter",
+        &["verify", "--mode", "scan", "--module", "b"],
+    );
+    assert_contain(&output, "function: b::g");
+    assert_not_contain(&output, "function: a::f");
+    assert_not_contain(&output, "function: c::h");
+}
+
+#[test]
 fn opt_bounds_len() {
     let output = run_with_args("opt/bounds_len", &["opt"]);
     assert_not_contain(&output, "RAPx|ERROR|");

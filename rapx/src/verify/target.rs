@@ -149,6 +149,7 @@ pub struct TraitEnsurance<'tcx> {
 pub struct VerifyTargetCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,
+    module_filter: Option<String>,
     /// All function targets to verify collected from the current crate.
     pub function_targets: Vec<FunctionTarget<'tcx>>,
     /// All struct targets to verify collected from the current crate.
@@ -161,10 +162,11 @@ pub struct VerifyTargetCollector<'tcx> {
 
 impl<'tcx> VerifyTargetCollector<'tcx> {
     /// Creates a new collector for the current type context.
-    pub fn new(tcx: TyCtxt<'tcx>, mode: VerifyMode) -> Self {
+    pub fn new(tcx: TyCtxt<'tcx>, mode: VerifyMode, module_filter: Option<String>) -> Self {
         VerifyTargetCollector {
             tcx,
             mode,
+            module_filter,
             function_targets: Vec::new(),
             struct_targets: HashMap::new(),
             trait_targets: HashMap::new(),
@@ -436,6 +438,13 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             }
         }
 
+        if let Some(ref filter) = self.module_filter {
+            let def_path = self.tcx.def_path_str(def_id);
+            if def_path != *filter && !def_path.starts_with(&format!("{}::", filter)) {
+                return;
+            }
+        }
+
         self.push_function_target(function_target);
     }
 }
@@ -447,6 +456,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 pub struct PrepareTargets<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,
+    module_filter: Option<String>,
 }
 
 impl<'tcx> Analysis for PrepareTargets<'tcx> {
@@ -455,7 +465,8 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
     }
 
     fn run(&mut self) {
-        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode);
+        let mut collector =
+            VerifyTargetCollector::new(self.tcx, self.mode, self.module_filter.clone());
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         // Free functions (no owning struct)
@@ -545,8 +556,12 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
 }
 
 impl<'tcx> PrepareTargets<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, mode: VerifyMode) -> Self {
-        PrepareTargets { tcx, mode }
+    pub fn new(tcx: TyCtxt<'tcx>, mode: VerifyMode, module_filter: Option<String>) -> Self {
+        PrepareTargets {
+            tcx,
+            mode,
+            module_filter,
+        }
     }
 
     fn log_struct_invariants(&self, struct_target: &StructTarget<'tcx>) {

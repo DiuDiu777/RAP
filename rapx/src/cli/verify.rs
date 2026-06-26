@@ -23,4 +23,8 @@ pub struct VerifyArgs {
     /// Verification mode: `scan` auto-detects unannotated unsafe targets (default), `targeted` verifies #[rapx::verify] functions.
     #[arg(long, default_value = "scan")]
     pub mode: VerifyMode,
+    /// Filter verification targets to only those within the specified module path
+    /// (e.g. `my_crate::my_module`). Applies to all verification modes.
+    #[arg(long)]
+    pub module: Option<String>,
 }

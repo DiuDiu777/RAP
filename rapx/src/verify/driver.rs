@@ -398,15 +398,22 @@ pub struct VerifyRun<'tcx> {
     tcx: TyCtxt<'tcx>,
     postfix_repeat: usize,
     mode: VerifyMode,
+    module_filter: Option<String>,
 }
 
 impl<'tcx> VerifyRun<'tcx> {
     /// Create the default verify pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>, postfix_repeat: usize, mode: VerifyMode) -> Self {
+    pub fn new(
+        tcx: TyCtxt<'tcx>,
+        postfix_repeat: usize,
+        mode: VerifyMode,
+        module_filter: Option<String>,
+    ) -> Self {
         Self {
             tcx,
             postfix_repeat,
             mode,
+            module_filter,
         }
     }
 
@@ -600,7 +607,8 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
     /// level. Earlier rounds use fewer loop unrollings; later rounds incrementally
     /// add deeper paths.
     fn run(&mut self) {
-        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode);
+        let mut collector =
+            VerifyTargetCollector::new(self.tcx, self.mode, self.module_filter.clone());
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {
@@ -887,8 +895,7 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
     /// Collect verify targets and print the current staged visitor output.
     fn run(&mut self) {
         rap_debug!("======== #[rapx::verify] visitor diagnostics ========");
-        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode);
-        self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
+        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode, None);        self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {
             let target_path = self.tcx.def_path_str(target.def_id);
