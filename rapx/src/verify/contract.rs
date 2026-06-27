@@ -256,6 +256,7 @@ pub enum PropertyKind {
     Deref,
     Ptr2Ref,
     Layout,
+    ValidTransmute,
     Unknown,
 }
 
@@ -347,7 +348,13 @@ impl<'tcx> Property<'tcx> {
                     Self::new_simple(PropertyKind::Unknown)
                 }
             },
-            "NonOverlap" => Self::new_with_targets(PropertyKind::NonOverlap, tcx, def_id, exprs),
+            "NonOverlap" => match exprs {
+                [indices] => {
+                    let target = Self::parse_target_arg(tcx, def_id, indices);
+                    Self::new_with_args(PropertyKind::NonOverlap, vec![target])
+                }
+                _ => Self::new_with_targets(PropertyKind::NonOverlap, tcx, def_id, exprs),
+            },
             "ValidNum" => {
                 let predicates = Self::parse_valid_num(tcx, def_id, exprs);
                 if predicates.is_empty() {
@@ -447,6 +454,21 @@ impl<'tcx> Property<'tcx> {
                 Self::new_with_target(PropertyKind::Ptr2Ref, tcx, def_id, exprs)
             }
             "Layout" => Self::new_with_target(PropertyKind::Layout, tcx, def_id, exprs),
+            "ValidTransmute" => {
+                if !Self::check_arg_length(exprs.len(), 2, "ValidTransmute") {
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
+                let Some(src_ty) = Self::parse_type(tcx, def_id, &exprs[0], "ValidTransmute") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                let Some(dst_ty) = Self::parse_type(tcx, def_id, &exprs[1], "ValidTransmute") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                Self::new_with_args(
+                    PropertyKind::ValidTransmute,
+                    vec![PropertyArg::Ty(src_ty), PropertyArg::Ty(dst_ty)],
+                )
+            }
             _ => Self::new_simple(PropertyKind::Unknown),
         }
     }

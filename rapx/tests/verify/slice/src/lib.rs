@@ -98,7 +98,8 @@ impl<T> SliceExt<T> for [T] {
     }
 
     #[rapx::verify]
-    #[rapx::requires(InBound(self, T, len(self)))]
+    #[rapx::requires(ValidNum(N, "[1,)"))]
+    #[rapx::requires(ValidNum(len(self) % N == 0))]
     unsafe fn as_chunks_unchecked_ext<const N: usize>(&self) -> &[[T; N]] {
         debug_assert!(N != 0);
         debug_assert!(self.len() % N == 0);
@@ -108,7 +109,8 @@ impl<T> SliceExt<T> for [T] {
     }
 
     #[rapx::verify]
-    #[rapx::requires(InBound(self, T, len(self)))]
+    #[rapx::requires(ValidNum(N, "[1,)"))]
+    #[rapx::requires(ValidNum(len(self) % N == 0))]
     unsafe fn as_chunks_unchecked_mut_ext<const N: usize>(&mut self) -> &mut [[T; N]] {
         debug_assert!(N != 0);
         debug_assert!(self.len() % N == 0);
@@ -118,6 +120,7 @@ impl<T> SliceExt<T> for [T] {
     }
 
     #[rapx::verify]
+    #[rapx::requires(ValidTransmute(T, U))]
     unsafe fn align_to_ext<U>(&self) -> (&[T], &[U], &[T]) {
         if std::mem::size_of::<T>() == 0 || std::mem::size_of::<U>() == 0 {
             return (self, &[], &[]);
@@ -144,6 +147,7 @@ impl<T> SliceExt<T> for [T] {
     }
 
     #[rapx::verify]
+    #[rapx::requires(ValidTransmute(T, U))]
     unsafe fn align_to_mut_ext<U>(&mut self) -> (&mut [T], &mut [U], &mut [T]) {
         if std::mem::size_of::<T>() == 0 || std::mem::size_of::<U>() == 0 {
             return (self, &mut [], &mut []);
@@ -176,6 +180,7 @@ impl<T> SliceExt<T> for [T] {
 
     #[rapx::verify]
     #[rapx::requires(InBound(self, T, indices))]
+    #[rapx::requires(NonOverlap(indices))]
     unsafe fn get_disjoint_unchecked_mut_ext<I, const N: usize>(
         &mut self,
         indices: [I; N],
