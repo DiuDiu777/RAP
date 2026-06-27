@@ -367,6 +367,25 @@ pub fn effect_summary<'tcx>(
         };
     }
 
+    if let Some(prim) = primitive
+        && matches!(prim, PrimitiveCall::FromRawParts | PrimitiveCall::FromRawPartsMut)
+    {
+        let mut effects = vec![
+            CallEffect::ReturnAliasArg { arg: 0 },
+            CallEffect::ReturnNonZero,
+        ];
+        if let Some((align, ty_name)) = destination_pointee_alignment(tcx, caller, destination) {
+            effects.push(CallEffect::ReturnAligned { align, ty_name });
+        }
+        return CallEffectSummary {
+            callee,
+            name,
+            destination,
+            effects,
+            unsupported: false,
+        };
+    }
+
     if is_from_trait_call(&name) && is_nonnull_destination(tcx, caller, destination) {
         let mut effects = vec![
             CallEffect::ReturnPointerFromArg { arg: 0 },
@@ -962,8 +981,11 @@ fn type_layout<'tcx>(tcx: TyCtxt<'tcx>, caller: DefId, ty: Ty<'tcx>) -> Option<(
         typing_env,
         value: ty,
     };
-    let layout = tcx.layout_of(input).ok()?;
-    Some((layout.align.abi.bytes(), layout.size.bytes()))
+    match tcx.layout_of(input) {
+        Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
+        Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
+        Err(_) => None,
+    }
 }
 
 fn ty_has_param_const(ty: Ty<'_>) -> bool {

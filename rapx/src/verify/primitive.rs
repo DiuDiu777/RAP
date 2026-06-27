@@ -23,6 +23,8 @@ pub enum PrimitiveCall {
     MaybeUninitUninit,
     AlignOf,
     SizeOf,
+    FromRawParts,
+    FromRawPartsMut,
 }
 
 impl PrimitiveCall {
@@ -73,6 +75,12 @@ impl PrimitiveCall {
         }
         if name.contains("size_of") {
             return Some(Self::SizeOf);
+        }
+        if name.ends_with("::from_raw_parts_mut") || name.contains("::from_raw_parts_mut") {
+            return Some(Self::FromRawPartsMut);
+        }
+        if name.ends_with("::from_raw_parts") || name.contains("::from_raw_parts") {
+            return Some(Self::FromRawParts);
         }
         None
     }

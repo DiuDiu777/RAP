@@ -39,7 +39,10 @@ pub(crate) fn check<'tcx>(
         rap_debug!("  [SMT InBound] target could not be resolved");
         return SmtCheckResult::unknown("InBound target could not be resolved");
     };
-    let Some(required_ty) = checker.property_required_ty(checkpoint, property) else {
+    let Some(required_ty) = checker
+        .property_required_ty(checkpoint, property)
+        .or_else(|| checker.infer_pointee_ty(checkpoint.caller, &target))
+    else {
         rap_debug!("  [SMT InBound] type could not be resolved");
         return SmtCheckResult::unknown("InBound type could not be resolved");
     };
@@ -50,19 +53,10 @@ pub(crate) fn check<'tcx>(
             required_ty
         ));
     };
-    let Some(access_count_expr) = checker.property_len_expr(checkpoint, property) else {
-        rap_debug!("  [SMT InBound] length argument could not be resolved");
-        return SmtCheckResult::unknown("InBound length argument could not be resolved");
-    };
-    let Some(access_count) =
-        checker.contract_expr_to_smt_term(checkpoint.caller, &access_count_expr)
-    else {
-        rap_debug!(
-            "  [SMT InBound] length expression could not be lowered: {:?}",
-            access_count_expr
-        );
-        return SmtCheckResult::unknown("InBound length argument could not be lowered to SMT");
-    };
+    let access_count = checker
+        .property_len_expr(checkpoint, property)
+        .and_then(|expr| checker.contract_expr_to_smt_term(checkpoint.caller, &expr))
+        .unwrap_or(SmtTerm::Const(1));
 
     if let Some(obligation) =
         pointer_arithmetic_obligation(checker, checkpoint, required_ty, access_count.clone())

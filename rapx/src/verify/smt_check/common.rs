@@ -1143,6 +1143,14 @@ impl<'tcx> SmtChecker<'tcx> {
             PropertyArg::Expr(ContractExpr::Place(place)) => {
                 self.contract_place_to_callsite_place(checkpoint, place)
             }
+            PropertyArg::Expr(ContractExpr::IndexAccess { slice, .. }) => {
+                match slice.as_ref() {
+                    ContractExpr::Place(place) => {
+                        self.contract_place_to_callsite_place(checkpoint, place)
+                    }
+                    _ => None,
+                }
+            }
             PropertyArg::Expr(ContractExpr::Const(index)) => {
                 let index = usize::try_from(*index).ok()?;
                 self.callsite_arg_place(checkpoint, index)
@@ -1539,6 +1547,15 @@ impl<'tcx> SmtChecker<'tcx> {
         Some(self.tcx.optimized_mir(caller).local_decls[local].ty)
     }
 
+    pub(crate) fn infer_pointee_ty(
+        &self,
+        caller: rustc_hir::def_id::DefId,
+        place: &PlaceKey,
+    ) -> Option<Ty<'tcx>> {
+        let ty = self.place_ty_for_caller(caller, place)?;
+        infer_element_ty(ty)
+    }
+
     /// Return true if a place is a safe reference/slice/string carrying object length.
     pub(crate) fn is_len_carrying_place_for_caller(
         &self,
@@ -1792,9 +1809,18 @@ impl<'tcx> SmtChecker<'tcx> {
         if let Some((align, _)) = self.type_layout(caller, ty).filter(|(align, _)| *align > 0) {
             return Some(align);
         }
-        self.generic_candidate_alignments(caller, ty)?
-            .into_iter()
-            .max()
+        if let Some(max_align) = self
+            .generic_candidate_alignments(caller, ty)
+            .and_then(|candidates| candidates.into_iter().max())
+        {
+            return Some(max_align);
+        }
+        if let TyKind::Array(elem, _) = ty.kind()
+            && matches!(elem.kind(), TyKind::Param(_))
+        {
+            return Some(0);
+        }
+        None
     }
 
     /// Return a conservative byte size for a concrete or bounded generic type.
@@ -1811,7 +1837,18 @@ impl<'tcx> SmtChecker<'tcx> {
         if !matches!(ty.kind(), TyKind::Param(_)) {
             return self.type_layout(caller, ty).map(|(_, size)| size);
         }
-        self.generic_candidate_sizes(caller, ty)?.into_iter().max()
+        if let Some(max_size) = self
+            .generic_candidate_sizes(caller, ty)
+            .and_then(|candidates| candidates.into_iter().max())
+        {
+            return Some(max_size);
+        }
+        if let TyKind::Array(elem, _) = ty.kind()
+            && matches!(elem.kind(), TyKind::Param(_))
+        {
+            return Some(0);
+        }
+        None
     }
 
     /// Classify whether a type is definitely zero-sized, definitely non-zero,
@@ -2293,6 +2330,7 @@ pub(crate) struct SmtModel<'a, 'ctx, 'tcx> {
     ctx: &'ctx Context,
     place_terms: HashMap<PlaceKey, Int<'ctx>>,
     symbolic_align_terms: HashMap<String, Int<'ctx>>,
+    symbolic_len_terms: HashMap<String, Int<'ctx>>,
     assumptions: Vec<SmtPredicate>,
 }
 
@@ -2311,18 +2349,30 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             ctx,
             place_terms: HashMap::new(),
             symbolic_align_terms: HashMap::new(),
+            symbolic_len_terms: HashMap::new(),
             assumptions: Vec::new(),
         }
     }
 
     /// Create or return a cached symbolic alignment constant for a type name.
     pub(crate) fn symbolic_align_term(&mut self, ty_name: &str) -> Int<'ctx> {
-        if let Some(term) = self.symbolic_align_terms.get(ty_name) {
+        let ty_name = normalize_init_ty_name(ty_name);
+        if let Some(term) = self.symbolic_align_terms.get(&ty_name) {
             return term.clone();
         }
         let term = Int::new_const(self.ctx, format!("align_{ty_name}"));
         self.symbolic_align_terms
             .insert(ty_name.to_string(), term.clone());
+        term
+    }
+
+    fn symbolic_len_term(&mut self, len_key: &str) -> Int<'ctx> {
+        let name = sanitize_smt_name(len_key);
+        if let Some(term) = self.symbolic_len_terms.get(&name) {
+            return term.clone();
+        }
+        let term = Int::new_const(self.ctx, name.as_str());
+        self.symbolic_len_terms.insert(name, term.clone());
         term
     }
 
@@ -2365,6 +2415,66 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             }
         }
         false
+    }
+
+    fn contract_predicate_to_smt(
+        &mut self,
+        predicate: &NumericPredicate<'tcx>,
+    ) -> Option<SmtPredicate> {
+        let lhs = self.smt_term_from_contract_expr(&predicate.lhs)?;
+        let rhs = self.smt_term_from_contract_expr(&predicate.rhs)?;
+        Some(match predicate.op {
+            RelOp::Eq => SmtPredicate::Eq(lhs, rhs),
+            RelOp::Ne => SmtPredicate::Ne(lhs, rhs),
+            RelOp::Lt => SmtPredicate::Lt(lhs, rhs),
+            RelOp::Le => SmtPredicate::Le(lhs, rhs),
+            RelOp::Gt => SmtPredicate::Gt(lhs, rhs),
+            RelOp::Ge => SmtPredicate::Ge(lhs, rhs),
+        })
+    }
+
+    fn smt_term_from_contract_expr(
+        &mut self,
+        expr: &ContractExpr<'tcx>,
+    ) -> Option<SmtTerm> {
+        match expr {
+            ContractExpr::Place(place) => {
+                let mut key = PlaceKey::from_contract_place(place);
+                if let PlaceBaseKey::Arg(index) = key.base {
+                    key.base = PlaceBaseKey::Local(index + 1);
+                }
+                Some(SmtTerm::Place(key))
+            }
+            ContractExpr::Const(value) => {
+                u64::try_from(*value).ok().map(SmtTerm::Const)
+            }
+            ContractExpr::Len(inner) => {
+                let label = match inner.as_ref() {
+                    ContractExpr::Place(place) => {
+                        let mut key = PlaceKey::from_contract_place(place);
+                        if let PlaceBaseKey::Arg(index) = key.base {
+                            key.base = PlaceBaseKey::Local(index + 1);
+                        }
+                        place_label(&key)
+                    }
+                    _ => return None,
+                };
+                Some(SmtTerm::Value(format!("len({label})")))
+            }
+            ContractExpr::Binary { op, lhs, rhs } => {
+                let lhs = Box::new(self.smt_term_from_contract_expr(lhs)?);
+                let rhs = Box::new(self.smt_term_from_contract_expr(rhs)?);
+                Some(match op {
+                    NumericOp::Add => SmtTerm::Add(lhs, rhs),
+                    NumericOp::Sub => SmtTerm::Sub(lhs, rhs),
+                    NumericOp::Mul => SmtTerm::Mul(lhs, rhs),
+                    NumericOp::Div => SmtTerm::Div(lhs, rhs),
+                    NumericOp::Rem => SmtTerm::Rem(lhs, rhs),
+                    _ => return None,
+                })
+            }
+            _ => None,
+        }
     }
 
     /// Assert facts collected by the forward visitor.
@@ -2643,6 +2753,20 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             required_ty
                         )));
                     }
+                    PropertyKind::ValidNum => {
+                        if let Some(PropertyArg::Predicates(predicates)) =
+                            property.args.first()
+                        {
+                            for predicate in predicates {
+                                if let Some(smt_pred) = self.contract_predicate_to_smt(predicate) {
+                                    if let Some(z3_bool) = self.bool_for_predicate(&smt_pred) {
+                                        solver.assert(&z3_bool);
+                                    }
+                                    self.assumptions.push(smt_pred);
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 },
                 StateFact::PathCondition(_)
@@ -2911,6 +3035,18 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         ty_name: &str,
         reason: &str,
     ) {
+        if align == 0 {
+            if let Some(term) = self.term_for_place(place) {
+                let align_term = self.symbolic_align_term(ty_name);
+                let zero = Int::from_u64(self.ctx, 0);
+                solver.assert(&term.modulo(&align_term)._eq(&zero));
+                self.assumptions.push(SmtPredicate::Custom(format!(
+                    "{} aligned for {ty_name} (symbolic, {reason})",
+                    place_label(place)
+                )));
+            }
+            return;
+        }
         if align <= 1 {
             return;
         }
@@ -3023,12 +3159,12 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         })
                         .or_else(|| call.args.get(*arg).map(value_label))
                         .unwrap_or_else(|| format!("arg{arg}"));
-                    let len_term =
-                        Int::new_const(self.ctx, sanitize_smt_name(&format!("len({source})")));
+                    let len_key = format!("len({source})");
+                    let len_term = self.symbolic_len_term(&len_key);
                     self.place_terms.insert(destination.clone(), len_term);
                     self.assumptions.push(SmtPredicate::Eq(
                         SmtTerm::Place(destination.clone()),
-                        SmtTerm::Value(format!("len({source})")),
+                        SmtTerm::Value(len_key),
                     ));
                 }
                 crate::verify::call_summary::CallEffect::ReturnPointerFromArg { arg }
@@ -3273,7 +3409,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     fn term_for_smt_term(&mut self, term: &SmtTerm) -> Option<Int<'ctx>> {
         match term {
             SmtTerm::Place(place) => self.term_for_place(place),
-            SmtTerm::Value(name) => Some(Int::new_const(self.ctx, sanitize_smt_name(name))),
+            SmtTerm::Value(name) => {
+                if name.starts_with("len(") {
+                    Some(self.symbolic_len_term(name))
+                } else {
+                    Some(Int::new_const(self.ctx, sanitize_smt_name(name)))
+                }
+            }
             SmtTerm::Const(value) => Some(Int::from_u64(self.ctx, *value)),
             SmtTerm::Add(lhs, rhs) => {
                 let lhs = self.term_for_smt_term(lhs)?;
@@ -4010,7 +4152,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     fn origin_is_initialized_for_ty(&self, origin_key: &str, required_ty_name: &str) -> bool {
-        self.forward.facts.iter().any(|fact| {
+        if self.forward.facts.iter().any(|fact| {
             let StateFact::KnownAllocated {
                 place,
                 object,
@@ -4030,7 +4172,22 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 || self
                     .initialized_element_ty_for_place(object)
                     .is_some_and(|elem| init_type_compatible(&elem, required_ty_name))
-        })
+        }) {
+            return true;
+        }
+        if let Some(local_index) = origin_key
+            .strip_prefix('_')
+            .and_then(|s| s.parse::<usize>().ok())
+        {
+            let local = rustc_middle::mir::Local::from_usize(local_index);
+            let ty = self.tcx.optimized_mir(self.checkpoint.caller).local_decls[local].ty;
+            if let Some(elem_ty_name) = initialized_element_ty_name(ty) {
+                if init_type_compatible(&elem_ty_name, required_ty_name) {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     fn initialized_element_ty_for_place(&self, place: &PlaceKey) -> Option<String> {
@@ -4209,6 +4366,16 @@ fn abstract_value_from_rvalue<'tcx>(rvalue: &Rvalue<'tcx>) -> Option<AbstractVal
         }
         _ => return None,
     })
+}
+
+fn infer_element_ty<'tcx>(ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    match ty.kind() {
+        TyKind::Slice(elem_ty) => Some(*elem_ty),
+        TyKind::Array(elem_ty, _) => Some(*elem_ty),
+        TyKind::Ref(_, inner, _) => infer_element_ty(*inner),
+        TyKind::RawPtr(inner_ty, _) => infer_element_ty(*inner_ty),
+        _ => Some(ty),
+    }
 }
 
 fn abstract_value_from_operand<'tcx>(operand: &Operand<'tcx>) -> AbstractValue<'tcx> {
@@ -4445,6 +4612,12 @@ fn normalize_init_ty_name(ty_name: &str) -> String {
         {
             return normalize_init_ty_name(inner);
         }
+    }
+    if let Some(rest) = ty_name.strip_prefix('[')
+        && let Some(semi_pos) = rest.rfind("; ")
+        && rest.ends_with(']')
+    {
+        return normalize_init_ty_name(&rest[..semi_pos]);
     }
     ty_name.to_string()
 }

@@ -228,7 +228,7 @@ impl<'tcx> NumericPredicate<'tcx> {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum PropertyKind {
     Align,
     Size,
