@@ -926,7 +926,15 @@ fn destination_pointee_alignment<'tcx>(
     let destination = destination?;
     let ty = tcx.optimized_mir(caller).local_decls[destination].ty;
     let pointee = pointee_ty(ty).or(Some(ty))?;
-    type_layout(tcx, caller, pointee).map(|(align, _)| (align, format!("{pointee:?}")))
+    if let Some((align, _)) = type_layout(tcx, caller, pointee) {
+        return Some((align, format!("{pointee:?}")));
+    }
+    if let TyKind::Array(elem, _) = pointee.kind()
+        && let Some((align, _)) = type_layout(tcx, caller, *elem)
+    {
+        return Some((align, format!("{pointee:?}")));
+    }
+    Some((0, format!("{pointee:?}")))
 }
 
 /// Return pointee alignment when the destination is `NonNull<T>`.

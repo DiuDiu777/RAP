@@ -176,6 +176,25 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     reason == KeepReason::Checkpoint,
                     result,
                 );
+                let is_uninit = call_summary::call_name(self.tcx, func).contains("maybe_uninit::uninit");
+                if is_uninit
+                    && let Some((_, elements)) =
+                        self.allocated_element_summary(result.checkpoint.caller, Some(destination.local))
+                {
+                    let dest_place = PlaceKey {
+                        base: crate::verify::def_use::PlaceBaseKey::Local(destination.local.as_usize()),
+                        fields: Vec::new(),
+                    };
+                    let actual_ty = self.tcx.optimized_mir(result.checkpoint.caller)
+                        .local_decls[destination.local].ty;
+                    result.facts.push(StateFact::KnownAllocated {
+                        place: dest_place.clone(),
+                        object: dest_place,
+                        ty_name: format!("{actual_ty:?}"),
+                        elements,
+                        reason: "live local allocation".to_string(),
+                    });
+                }
             }
             TerminatorKind::SwitchInt { discr, .. } => {
                 if let Some(equals) = chosen_switch_value(&result.path, block, terminator) {

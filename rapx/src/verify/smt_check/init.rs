@@ -12,9 +12,11 @@
 //! initialized pointer.  Range initialization across loops still needs a loop
 //! summary and is intentionally left as `Unknown`.
 
-use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
+use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 
 use crate::verify::{contract::Property, helpers::Checkpoint, verifier::ForwardVisitResult};
+use rustc_middle::ty::{Ty, TyKind};
+use rustc_hir::def_id::DefId;
 
 /// Check `Init` by lowering it to a common initialized-memory obligation.
 pub(crate) fn check<'tcx>(
@@ -37,6 +39,8 @@ pub(crate) fn check<'tcx>(
         return SmtCheckResult::unknown("Init element-count argument could not be lowered to SMT");
     };
 
+    let elem_size = compute_elem_size(checker, checkpoint.caller, required_ty);
+
     checker.prove_obligation(
         checkpoint,
         forward,
@@ -44,8 +48,56 @@ pub(crate) fn check<'tcx>(
             place: target,
             ty_name: format!("{required_ty:?}"),
             elements: elements_term,
+            elem_size,
+            array_elem_size: array_elem_size(checker, checkpoint.caller, required_ty),
+            array_len_term: array_len_term(checker, required_ty),
         },
     )
+}
+
+fn compute_elem_size<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    caller: rustc_hir::def_id::DefId,
+    ty: Ty<'tcx>,
+) -> Option<u64> {
+    if let Some((_, size)) = checker.type_layout(caller, ty) {
+        return Some(size);
+    }
+    None
+}
+
+fn array_elem_size<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    caller: rustc_hir::def_id::DefId,
+    ty: Ty<'tcx>,
+) -> Option<u64> {
+    if let TyKind::Array(elem, _) = ty.kind() {
+        checker.type_layout(caller, *elem).map(|(_, s)| s)
+    } else {
+        None
+    }
+}
+
+fn array_len_term<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    ty: Ty<'tcx>,
+) -> Option<SmtTerm> {
+    use rustc_middle::ty::ConstKind;
+    if let TyKind::Array(_, len) = ty.kind() {
+        if let Some(val) = len.try_to_target_usize(checker.tcx) {
+            return Some(SmtTerm::Const(val));
+        }
+        if let ConstKind::Param(param) = len.kind() {
+            return Some(SmtTerm::ConstParam(format!(
+                "Ty(usize, {}/#{})",
+                param.name,
+                param.index
+            )));
+        }
+        Some(SmtTerm::ConstParam(format!("Ty(usize, {len})")))
+    } else {
+        None
+    }
 }
 
 /// Check `Init` at a return checkpoint for struct invariant verification.
@@ -75,6 +127,9 @@ pub(crate) fn check_for_checkpoint<'tcx>(
             place: target,
             ty_name: format!("{required_ty:?}"),
             elements,
+            elem_size: compute_elem_size(checker, caller, required_ty),
+            array_elem_size: array_elem_size(checker, caller, required_ty),
+            array_len_term: array_len_term(checker, required_ty),
         },
     )
 }

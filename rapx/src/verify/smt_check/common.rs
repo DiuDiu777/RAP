@@ -86,6 +86,11 @@ fn safe_type_layout<'tcx>(
     caller: rustc_hir::def_id::DefId,
     ty: Ty<'tcx>,
 ) -> Option<(u64, u64)> {
+    if let TyKind::Ref(_, _, _) | TyKind::RawPtr(_, _) = ty.kind() {
+        let ptr_size = tcx.data_layout.pointer_size().bytes();
+        let ptr_align = tcx.data_layout.pointer_align().abi.bytes();
+        return Some((ptr_align, ptr_size));
+    }
     if ty_has_param_const(ty) {
         return None;
     }
@@ -524,7 +529,34 @@ impl<'tcx> SmtChecker<'tcx> {
                 place,
                 ty_name,
                 elements,
+                elem_size,
+                array_elem_size,
+                array_len_term,
             } => {
+                if *elem_size == Some(0) {
+                    return SmtCheckResult::proved(format!(
+                        "initialization proved; zero-sized type {ty_name}"
+                    ));
+                }
+                if let (Some(ae), Some(alt)) = (array_elem_size, array_len_term) {
+                    if *ae > 0 {
+                        if let Some(len_term) = model.term_for_smt_term(alt) {
+                            let zero = Int::from_u64(&ctx, 0);
+                            let size_term = Int::from_u64(&ctx, *ae);
+                            let total_gt_zero =
+                                Bool::and(&ctx, &[&len_term.gt(&zero), &size_term.gt(&zero)]);
+                            solver.push();
+                            solver.assert(&total_gt_zero);
+                            let check = solver.check();
+                            solver.pop(1);
+                            if matches!(check, SatResult::Unsat) {
+                                return SmtCheckResult::proved(format!(
+                                    "initialization proved; array length is provably zero for {ty_name}"
+                                ));
+                            }
+                        }
+                    }
+                }
                 let target_label = place_label(place);
                 let target_terms = model.init_target_terms(place);
                 if target_terms.is_empty() {
@@ -1852,6 +1884,9 @@ impl<'tcx> SmtChecker<'tcx> {
         if matches!(ty.kind(), TyKind::Param(_)) {
             return Some(0);
         }
+        if matches!(ty.kind(), TyKind::Ref(..) | TyKind::RawPtr(..)) {
+            return Some(0);
+        }
         None
     }
 
@@ -2008,6 +2043,12 @@ pub enum SmtObligation {
         place: PlaceKey,
         ty_name: String,
         elements: SmtTerm,
+        /// Byte size of one element of the required type (None = unknown).
+        elem_size: Option<u64>,
+        /// Per-element size of the inner array element type.
+        array_elem_size: Option<u64>,
+        /// SMT term for the array length const-generic (when type is [T; N]).
+        array_len_term: Option<SmtTerm>,
     },
     /// Prove that `place` points to `elements` elements in one live allocation.
     Allocated {
@@ -2080,6 +2121,7 @@ impl SmtObligation {
                 place,
                 ty_name,
                 elements,
+                ..
             } => format!(
                 "Init({}, {}, {} element(s))",
                 place_label(place),
@@ -2128,6 +2170,9 @@ pub enum SmtTerm {
     Place(PlaceKey),
     Value(String),
     Const(u64),
+    /// Const-generic parameter value (produces the same SMT constant as
+    /// `term_for_value` for `AbstractValue::Const`).
+    ConstParam(String),
     Add(Box<SmtTerm>, Box<SmtTerm>),
     Sub(Box<SmtTerm>, Box<SmtTerm>),
     Mul(Box<SmtTerm>, Box<SmtTerm>),
@@ -2141,6 +2186,7 @@ impl SmtTerm {
         match self {
             SmtTerm::Place(place) => place_label(place),
             SmtTerm::Value(value) => value.clone(),
+            SmtTerm::ConstParam(value) => value.clone(),
             SmtTerm::Const(value) => value.to_string(),
             SmtTerm::Add(lhs, rhs) => format!("({} + {})", lhs.describe(), rhs.describe()),
             SmtTerm::Sub(lhs, rhs) => format!("({} - {})", lhs.describe(), rhs.describe()),
@@ -2708,20 +2754,77 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             index,
                         })) = property.args.first()
                         {
-                            let slice_label = match slice.as_ref() {
+                            let slice_key = match slice.as_ref() {
                                 ContractExpr::Place(place) => {
                                     let mut key = PlaceKey::from_contract_place(place);
                                     if let PlaceBaseKey::Arg(ix) = key.base {
                                         key.base = PlaceBaseKey::Local(ix + 1);
                                     }
-                                    place_label(&key)
+                                    key
                                 }
                                 _ => {
                                     continue;
                                 }
                             };
+                            let slice_label = place_label(&slice_key);
                             let len =
                                 SmtTerm::Value(format!("len({slice_label})"));
+
+                            if let ContractExpr::Place(place) = index.as_ref() {
+                                let mut index_key =
+                                    PlaceKey::from_contract_place(place);
+                                if let PlaceBaseKey::Arg(ix) = index_key.base {
+                                    index_key.base = PlaceBaseKey::Local(ix + 1);
+                                }
+                                if let Some(ty) = self.place_ty(&index_key)
+                                    && let TyKind::Array(_, len_const) = ty.kind()
+                                {
+                                    if let Some(array_len) =
+                                        len_const.try_to_target_usize(self.tcx)
+                                    {
+                                        for j in 0..array_len {
+                                            let elem_key = PlaceKey {
+                                                base: index_key.base.clone(),
+                                                fields: vec![j as usize],
+                                            };
+                                            let index_term =
+                                                SmtTerm::Place(elem_key);
+                                            let lower = index_term.clone();
+                                            let upper = SmtTerm::Add(
+                                                Box::new(index_term),
+                                                Box::new(SmtTerm::Const(1)),
+                                            );
+                                            let preds = vec![
+                                                SmtPredicate::Le(
+                                                    SmtTerm::Const(0),
+                                                    lower.clone(),
+                                                ),
+                                                SmtPredicate::Le(
+                                                    lower.clone(),
+                                                    upper.clone(),
+                                                ),
+                                                SmtPredicate::Le(
+                                                    upper,
+                                                    len.clone(),
+                                                ),
+                                            ];
+                                            for pred in &preds {
+                                                if let Some(bool_term) =
+                                                    self.bool_for_predicate(pred)
+                                                {
+                                                    solver.assert(&bool_term);
+                                                }
+                                                self.assumptions
+                                                    .push(pred.clone());
+                                            }
+                                        }
+                                        self.has_index_access_assumptions =
+                                            true;
+                                        continue;
+                                    }
+                                }
+                            }
+
                             let index_term = match index.as_ref() {
                                 ContractExpr::Place(place) => {
                                     let mut key =
@@ -3602,6 +3705,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 }
             }
             SmtTerm::Const(value) => Some(Int::from_u64(self.ctx, *value)),
+            SmtTerm::ConstParam(text) => {
+                let name = sanitize_smt_name(text);
+                if name.is_empty() { None }
+                else { Some(Int::new_const(self.ctx, format!("const_{name}"))) }
+            }
             SmtTerm::Add(lhs, rhs) => {
                 let lhs = self.term_for_smt_term(lhs)?;
                 let rhs = self.term_for_smt_term(rhs)?;
@@ -3830,7 +3938,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 self.assert_unsigned_bounds_for_term(solver, lhs, seen);
                 self.assert_unsigned_bounds_for_term(solver, rhs, seen);
             }
-            SmtTerm::Value(_) | SmtTerm::Const(_) => {}
+            SmtTerm::Value(_) | SmtTerm::Const(_) | SmtTerm::ConstParam(_) => {}
         }
     }
 
@@ -3895,7 +4003,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         if let Some(alignments) = self.generic_candidate_alignments(ty) {
             return alignments.into_iter().min();
         }
-        if matches!(ty.kind(), TyKind::Param(_) | TyKind::Array(..)) {
+        if matches!(ty.kind(), TyKind::Param(_) | TyKind::Array(..) | TyKind::Ref(..) | TyKind::RawPtr(..)) {
             return Some(0);
         }
         None
@@ -4085,13 +4193,23 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 self.origin_key_for_value_before(call.args.get(source_arg)?, call_cursor, seen)
             }
             AbstractValue::CallResult(call) => {
-                let source_arg = call.effects.iter().find_map(|effect| match effect {
+                if let Some(source_arg) = call.effects.iter().find_map(|effect| match effect {
                     crate::verify::call_summary::CallEffect::ReturnPointerFromArg { arg }
                     | crate::verify::call_summary::CallEffect::ReturnAliasArg { arg } => Some(*arg),
                     _ => None,
-                })?;
-                let call_cursor = self.call_definition_cursor(&call);
-                self.origin_key_for_value_before(call.args.get(source_arg)?, call_cursor, seen)
+                }) {
+                    let call_cursor = self.call_definition_cursor(&call);
+                    return self.origin_key_for_value_before(
+                        call.args.get(source_arg)?,
+                        call_cursor,
+                        seen,
+                    );
+                }
+                let destination = PlaceKey {
+                    base: PlaceBaseKey::Local(call.destination.as_usize()),
+                    fields: Vec::new(),
+                };
+                Some(place_label(&destination))
             }
             _ => Some(value_label(&resolved)),
         }
@@ -4265,8 +4383,18 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         if !seen.insert(place.clone()) {
             return None;
         }
-        if let Some(AbstractValue::Place(inner)) = value_for_place(self.forward, place) {
-            return self.storage_addr_for_place(inner, seen);
+        if let Some(value) = value_for_place(self.forward, place) {
+            match &value {
+                AbstractValue::Place(inner) => {
+                    return self.storage_addr_for_place(inner, seen);
+                }
+                AbstractValue::Cast(inner, _) => {
+                    if let AbstractValue::Place(inner_place) = inner.as_ref() {
+                        return self.storage_addr_for_place(inner_place, seen);
+                    }
+                }
+                _ => {}
+            }
         }
         if let Some(source) = self.source_from_points_to(place) {
             return self.storage_addr_for_place(&source, seen);

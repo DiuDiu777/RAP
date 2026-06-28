@@ -35,7 +35,7 @@ pub trait SliceExt<T> {
         indices: [I; N],
     ) -> [&mut I::Output; N]
     where
-        I: SliceIndex<[T]> + Clone;
+        I: SliceIndex<[T]> + Copy;
 }
 
 impl<T> SliceExt<T> for [T] {
@@ -186,20 +186,22 @@ impl<T> SliceExt<T> for [T] {
         indices: [I; N],
     ) -> [&mut I::Output; N]
     where
-        I: SliceIndex<[T]> + Clone,
+        I: SliceIndex<[T]> + Copy,
     {
         let slice: *mut [T] = self;
         let mut arr: MaybeUninit<[&mut I::Output; N]> = MaybeUninit::uninit();
         let arr_ptr = arr.as_mut_ptr() as *mut &mut I::Output;
 
-        for i in 0..N {
-            let idx = indices[i].clone();
+        let mut i = 0;
+        while i < N {
+            let idx = indices[i];
             let slice_ref: &mut [T] = unsafe { &mut *slice };
             let elem: &mut I::Output = unsafe { slice_ref.get_unchecked_mut(idx) };
 
             unsafe {
                 arr_ptr.add(i).write(elem);
             }
+            i += 1;
         }
 
         arr.assume_init()
