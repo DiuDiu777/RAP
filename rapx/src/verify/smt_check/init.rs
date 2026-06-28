@@ -16,7 +16,6 @@ use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 
 use crate::verify::{contract::Property, helpers::Checkpoint, verifier::ForwardVisitResult};
 use rustc_middle::ty::{Ty, TyKind};
-use rustc_hir::def_id::DefId;
 
 /// Check `Init` by lowering it to a common initialized-memory obligation.
 pub(crate) fn check<'tcx>(
