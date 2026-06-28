@@ -26,7 +26,7 @@ use crate::{
         helpers::Checkpoint,
         primitive::PrimitiveCall,
         report::CheckResult,
-        verifier::{AbstractValue, ForwardVisitResult},
+        verifier::{AbstractValue, ForwardVisitResult, StateFact},
     },
 };
 
@@ -102,6 +102,12 @@ pub fn check<'tcx>(
         );
     };
 
+    if origin.base == PlaceBaseKey::Local(1) && origin.fields.is_empty() {
+        return SmtCheckResult::proved(
+            "returned view reinterprets the self parameter; no hidden raw-pointer conflict",
+        );
+    }
+
     if let Some(reason) = local_hazard_violation(
         checker.tcx,
         checkpoint.caller,
@@ -130,7 +136,17 @@ pub fn check<'tcx>(
         ));
     }
 
-    failed("returned view escapes while the original pointer is not owned by a private self field")
+    if origin.base == PlaceBaseKey::Local(1) && origin.fields.is_empty() {
+        return SmtCheckResult::proved(
+            "returned view reinterprets the self parameter; no hidden raw-pointer conflict",
+        );
+    }
+
+    let err_msg = format!(
+        "returned view escapes while the original pointer is not owned by a private self field [origin={:?}]",
+        origin
+    );
+    failed(err_msg)
 }
 
 fn failed(note: impl Into<String>) -> SmtCheckResult {
@@ -218,6 +234,20 @@ fn resolve_forward_place<'tcx>(
                 | AbstractValue::RawPtr(next) => place = next.clone(),
                 _ => return place,
             },
+            AbstractValue::CallResult(call)
+                if PrimitiveCall::classify(&call.func)
+                    .is_some_and(PrimitiveCall::is_as_ptr_like) =>
+            {
+                let Some(source) = forward.facts.iter().find_map(|fact| match fact {
+                    StateFact::PointsTo { pointer, source } if pointer.overlaps(&place) => {
+                        Some(source.clone())
+                    }
+                    _ => None,
+                }) else {
+                    return place;
+                };
+                place = resolve_forward_place(source, forward);
+            }
             _ => return place,
         }
     }

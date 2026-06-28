@@ -1839,6 +1839,9 @@ impl<'tcx> SmtChecker<'tcx> {
         {
             return Some(0);
         }
+        if matches!(ty.kind(), TyKind::Param(_)) {
+            return Some(0);
+        }
         None
     }
 
@@ -1853,6 +1856,11 @@ impl<'tcx> SmtChecker<'tcx> {
         caller: rustc_hir::def_id::DefId,
         ty: Ty<'tcx>,
     ) -> Option<u64> {
+        if let TyKind::Array(elem, _) = ty.kind()
+            && matches!(elem.kind(), TyKind::Param(_))
+        {
+            return Some(0);
+        }
         if !matches!(ty.kind(), TyKind::Param(_)) {
             return self.type_layout(caller, ty).map(|(_, size)| size);
         }
@@ -1862,9 +1870,7 @@ impl<'tcx> SmtChecker<'tcx> {
         {
             return Some(max_size);
         }
-        if let TyKind::Array(elem, _) = ty.kind()
-            && matches!(elem.kind(), TyKind::Param(_))
-        {
+        if matches!(ty.kind(), TyKind::Param(_)) {
             return Some(0);
         }
         None
@@ -1877,6 +1883,11 @@ impl<'tcx> SmtChecker<'tcx> {
         caller: rustc_hir::def_id::DefId,
         ty: Ty<'tcx>,
     ) -> TypeSizeClass {
+        if let TyKind::Array(elem, _) = ty.kind()
+            && matches!(elem.kind(), TyKind::Param(_))
+        {
+            return TypeSizeClass::Unknown;
+        }
         if !matches!(ty.kind(), TyKind::Param(_)) {
             return match self.type_layout(caller, ty).map(|(_, size)| size) {
                 Some(0) => TypeSizeClass::Zero,
@@ -3155,16 +3166,21 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         let Some(align) = self.guaranteed_alignment(align_ty) else {
             return;
         };
-        if align <= 1 {
+        if align > 0 && align <= 1 {
             return;
         }
         if let Some(term) = self.term_for_place(place) {
             let zero = Int::from_u64(self.ctx, 0);
-            let align_term = Int::from_u64(self.ctx, align);
+            let align_term = if align == 0 {
+                self.symbolic_align_term(&format!("{align_ty:?}"))
+            } else {
+                Int::from_u64(self.ctx, align)
+            };
             solver.assert(&term.modulo(&align_term)._eq(&zero));
             self.assumptions.push(SmtPredicate::Custom(format!(
-                "{} aligned for {align_ty:?} ({align} bytes)",
-                place_label(place)
+                "{} aligned for {align_ty:?} ({} bytes)",
+                place_label(place),
+                if align == 0 { "symbolic".to_string() } else { align.to_string() }
             )));
         }
     }
@@ -3850,7 +3866,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         if let Some((align, _)) = self.type_layout(ty).filter(|(align, _)| *align > 0) {
             return Some(align);
         }
-        self.generic_candidate_alignments(ty)?.into_iter().min()
+        if let Some(alignments) = self.generic_candidate_alignments(ty) {
+            return alignments.into_iter().min();
+        }
+        if matches!(ty.kind(), TyKind::Param(_) | TyKind::Array(..)) {
+            return Some(0);
+        }
+        None
     }
 
     fn generic_candidate_alignments(&self, ty: Ty<'tcx>) -> Option<Vec<u64>> {
@@ -4724,11 +4746,38 @@ fn const_int_from_debug(text: &str) -> Option<u128> {
 }
 
 fn init_type_compatible(init_ty_name: &str, required_ty_name: &str) -> bool {
-    normalize_init_ty_name(init_ty_name) == normalize_init_ty_name(required_ty_name)
+    if normalize_init_ty_name(init_ty_name) == normalize_init_ty_name(required_ty_name) {
+        return true;
+    }
+    if let Some(array_elem) = array_elem_type(required_ty_name) {
+        if init_type_compatible(init_ty_name, &array_elem) {
+            return true;
+        }
+    }
+    false
 }
 
 fn allocated_type_compatible(allocated_ty_name: &str, required_ty_name: &str) -> bool {
-    normalize_init_ty_name(allocated_ty_name) == normalize_init_ty_name(required_ty_name)
+    if normalize_init_ty_name(allocated_ty_name) == normalize_init_ty_name(required_ty_name) {
+        return true;
+    }
+    if let Some(array_elem) = array_elem_type(required_ty_name) {
+        if allocated_type_compatible(allocated_ty_name, &array_elem) {
+            return true;
+        }
+    }
+    false
+}
+
+fn array_elem_type(ty_name: &str) -> Option<String> {
+    let name = ty_name.trim();
+    if name.starts_with('[') && name.ends_with(']') {
+        let inner = &name[1..name.len() - 1];
+        if let Some(semi) = inner.rfind("; ") {
+            return Some(format!(" {}", &inner[..semi]));
+        }
+    }
+    None
 }
 
 fn allocation_object_invalidated<'tcx>(
