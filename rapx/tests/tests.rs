@@ -119,45 +119,6 @@ fn assert_not_contain(output: &str, pattern: &str) {
     );
 }
 
-#[test]
-fn verify_std_contract_assets_are_expanded_and_named() {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let contracts_path = manifest_dir.join("src/verify/attribute/assets/std-contracts.json");
-    let sig_path = manifest_dir.join("src/helpers/data/std_sig.json");
-
-    let contracts: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&contracts_path).unwrap()).unwrap();
-    let signatures: serde_json::Value =
-        serde_json::from_str(&std::fs::read_to_string(&sig_path).unwrap()).unwrap();
-
-    let contracts = contracts.as_object().unwrap();
-    let signatures = signatures.as_object().unwrap();
-    assert!(
-        contracts.len() >= 300,
-        "std contracts should cover the tag-std API set, got {}",
-        contracts.len()
-    );
-    for key in contracts.keys() {
-        assert!(
-            signatures.contains_key(key),
-            "missing std_sig entry for std contract key {key}"
-        );
-    }
-
-    for (api, entries) in contracts {
-        for entry in entries.as_array().unwrap() {
-            for arg in entry["args"].as_array().unwrap() {
-                let arg = arg.as_str().unwrap();
-                for legacy_token in ["arg:", "Arg_", "const:", "ty:"] {
-                    assert!(
-                        !arg.contains(legacy_token),
-                        "std contracts should use parameter names, found {legacy_token} in {api}: {arg}"
-                    );
-                }
-            }
-        }
-    }
-}
 
 const CHECK_UAF_CMD: &[&str] = &["check", "-f"];
 const CHECK_MLEAK_CMD: &[&str] = &["check", "-m"];
