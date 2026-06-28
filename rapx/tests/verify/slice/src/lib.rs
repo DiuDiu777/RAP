@@ -40,7 +40,7 @@ pub trait SliceExt<T> {
 
 impl<T> SliceExt<T> for [T] {
     #[rapx::verify]
-    #[rapx::requires(InBound(self, T, index))]
+    #[rapx::requires(InBound(index_access(self, index)))]
     unsafe fn get_unchecked_ext<I>(&self, index: I) -> &I::Output
     where
         I: SliceIndex<[T]>,
@@ -49,7 +49,7 @@ impl<T> SliceExt<T> for [T] {
     }
 
     #[rapx::verify]
-    #[rapx::requires(InBound(self, T, index))]
+    #[rapx::requires(InBound(index_access(self, index)))]
     unsafe fn get_unchecked_mut_ext<I>(&mut self, index: I) -> &mut I::Output
     where
         I: SliceIndex<[T]>,
@@ -179,7 +179,7 @@ impl<T> SliceExt<T> for [T] {
     }
 
     #[rapx::verify]
-    #[rapx::requires(InBound(self, T, indices))]
+    #[rapx::requires(InBound(index_access(self, indices)))]
     #[rapx::requires(NonOverlap(indices))]
     unsafe fn get_disjoint_unchecked_mut_ext<I, const N: usize>(
         &mut self,

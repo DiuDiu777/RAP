@@ -846,9 +846,15 @@ fn is_contract_token_char(ch: char) -> bool {
 
 fn is_rapx_named_attr(attr: &Attribute, name: &str) -> bool {
     let path = attr.path();
-    path.len() >= 2
+    if path.len() >= 2
         && path[path.len() - 2].as_str() == "rapx"
         && path[path.len() - 1].as_str() == name
+    {
+        return true;
+    }
+    // In newer rustc, tool attrs may have the tool prefix stripped from the path.
+    // Match bare name when the attribute has exactly one path segment.
+    path.len() == 1 && path[0].as_str() == name
 }
 
 /// Collects properties from `#[rapx::requires(...)]` attributes.
@@ -922,6 +928,20 @@ pub(crate) fn get_contract_from_annotation<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> FnContracts<'tcx> {
+    // Prefer HIR-level attrs for local defs (tool attributes visible),
+    // fall back to get_all_attrs for external defs.
+    if let Some(local_def_id) = def_id.as_local() {
+        let hir_id = tcx.local_def_id_to_hir_id(local_def_id);
+        let hir_attrs = tcx.hir_attrs(hir_id);
+        // hir_attrs is &'tcx [Attribute<'tcx>]; iter yields &'tcx Attribute<'tcx>
+        return collect_properties_from_requires_attrs(
+            tcx,
+            hir_attrs,
+            def_id,
+            "requires",
+        );
+    }
+
     #[allow(deprecated)]
     let attrs = tcx.get_all_attrs(def_id);
     collect_properties_from_requires_attrs(tcx, attrs, def_id, "requires")

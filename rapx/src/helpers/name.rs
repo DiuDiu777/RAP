@@ -116,6 +116,16 @@ pub fn get_known_std_names<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec
 }
 
 /// Parse argument names and types from a local function's HIR body.
+/// Recursively unwrap Ref/Paren patterns to find the inner binding identifier.
+/// Needed because `&self` / `&mut self` produce PatKind::Ref(PatKind::Binding(...)).
+fn extract_pat_ident(pat: &rustc_hir::Pat<'_>) -> Option<rustc_span::symbol::Ident> {
+    match &pat.kind {
+        rustc_hir::PatKind::Binding(_, _, ident, _) => Some(*ident),
+        rustc_hir::PatKind::Ref(inner, ..) => extract_pat_ident(inner),
+        _ => None,
+    }
+}
+
 pub fn parse_local_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
@@ -131,17 +141,16 @@ pub fn parse_local_signature<'tcx>(
     let mut param_names = Vec::new();
     let mut param_tys = Vec::new();
     for param in params {
-        match param.pat.kind {
-            rustc_hir::PatKind::Binding(_, _, ident, _) => {
-                param_names.push(ident.name.to_string());
-                let ty = typeck_results.pat_ty(param.pat);
-                param_tys.push(ty);
+        let ident = extract_pat_ident(&param.pat);
+        match ident {
+            Some(name) => {
+                param_names.push(name.name.to_string());
             }
-            _ => {
+            None => {
                 param_names.push(String::new());
-                param_tys.push(typeck_results.pat_ty(param.pat));
             }
         }
+        param_tys.push(typeck_results.pat_ty(param.pat));
     }
     (param_names, param_tys)
 }

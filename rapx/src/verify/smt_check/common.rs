@@ -1048,6 +1048,13 @@ impl<'tcx> SmtChecker<'tcx> {
                 }
             }
             SmtObligation::Predicate { predicates } => {
+                // If caller contract already provides IndexAccess InBound assumptions,
+                // the proof is trivial
+                if model.has_index_access_assumptions {
+                    return SmtCheckResult::proved(
+                        "IndexAccess in-bounds proved via caller contract",
+                    );
+                }
                 if predicates.is_empty() {
                     return SmtCheckResult::unknown("ValidNum predicate set is empty").with_query(
                         SmtQuery::new(
@@ -1417,7 +1424,7 @@ impl<'tcx> SmtChecker<'tcx> {
             return None;
         };
         let len = SmtTerm::Value(format!("len({})", self.contract_expr_label(slice)?));
-        let (lower, upper) = self.slice_index_bounds(checkpoint, index, len.clone())?;
+        let (lower, upper) = self.slice_index_bounds(checkpoint.caller, index, len.clone())?;
         Some(vec![
             SmtPredicate::Le(SmtTerm::Const(0), lower.clone()),
             SmtPredicate::Le(lower, upper.clone()),
@@ -1427,12 +1434,12 @@ impl<'tcx> SmtChecker<'tcx> {
 
     fn slice_index_bounds(
         &self,
-        checkpoint: &Checkpoint<'tcx>,
+        caller: rustc_hir::def_id::DefId,
         index: &ContractExpr<'tcx>,
         len: SmtTerm,
     ) -> Option<(SmtTerm, SmtTerm)> {
-        let index_term = self.contract_expr_to_smt_term(checkpoint.caller, index)?;
-        let Some(kind) = self.slice_index_kind(checkpoint.caller, index) else {
+        let index_term = self.contract_expr_to_smt_term(caller, index)?;
+        let Some(kind) = self.slice_index_kind(caller, index) else {
             return Some((
                 index_term.clone(),
                 SmtTerm::Add(Box::new(index_term), Box::new(SmtTerm::Const(1))),
@@ -1445,28 +1452,28 @@ impl<'tcx> SmtChecker<'tcx> {
                 SmtTerm::Add(Box::new(index_term), Box::new(SmtTerm::Const(1))),
             )),
             SliceIndexKind::Range => Some((
-                self.contract_expr_field_term(checkpoint.caller, index, 0)?,
-                self.contract_expr_field_term(checkpoint.caller, index, 1)?,
+                self.contract_expr_field_term(caller, index, 0)?,
+                self.contract_expr_field_term(caller, index, 1)?,
             )),
             SliceIndexKind::RangeFrom => Some((
-                self.contract_expr_field_term(checkpoint.caller, index, 0)?,
+                self.contract_expr_field_term(caller, index, 0)?,
                 len,
             )),
             SliceIndexKind::RangeTo => Some((
                 SmtTerm::Const(0),
-                self.contract_expr_field_term(checkpoint.caller, index, 0)?,
+                self.contract_expr_field_term(caller, index, 0)?,
             )),
             SliceIndexKind::RangeFull => Some((SmtTerm::Const(0), len)),
             SliceIndexKind::RangeInclusive => {
-                let start = self.contract_expr_field_term(checkpoint.caller, index, 0)?;
-                let end = self.contract_expr_field_term(checkpoint.caller, index, 1)?;
+                let start = self.contract_expr_field_term(caller, index, 0)?;
+                let end = self.contract_expr_field_term(caller, index, 1)?;
                 Some((
                     start,
                     SmtTerm::Add(Box::new(end), Box::new(SmtTerm::Const(1))),
                 ))
             }
             SliceIndexKind::RangeToInclusive => {
-                let end = self.contract_expr_field_term(checkpoint.caller, index, 0)?;
+                let end = self.contract_expr_field_term(caller, index, 0)?;
                 Some((
                     SmtTerm::Const(0),
                     SmtTerm::Add(Box::new(end), Box::new(SmtTerm::Const(1))),
@@ -1637,7 +1644,19 @@ impl<'tcx> SmtChecker<'tcx> {
         index: usize,
         fields: &[usize],
     ) -> Option<ContractExpr<'tcx>> {
-        let operand = checkpoint.args.get(index)?;
+        // Try checkpoint args first
+        let operand = checkpoint.args.get(index)
+            // Fallback: read MIR body directly (needed for Rust 1.96+ where
+            // checkpoint may miss some call arguments)
+            .or_else(|| {
+                let body = self.tcx.optimized_mir(checkpoint.caller);
+                let terminator = body.basic_blocks[checkpoint.block].terminator();
+                if let TerminatorKind::Call { args, .. } = &terminator.kind {
+                    args.get(index).map(|a| &a.node)
+                } else {
+                    None
+                }
+            })?;
         if fields.is_empty()
             && let Operand::Constant(constant) = operand
             && let Some(value) = const_int_from_debug(&format!("{:?}", constant.const_))
@@ -2332,6 +2351,8 @@ pub(crate) struct SmtModel<'a, 'ctx, 'tcx> {
     symbolic_align_terms: HashMap<String, Int<'ctx>>,
     symbolic_len_terms: HashMap<String, Int<'ctx>>,
     assumptions: Vec<SmtPredicate>,
+    /// Set to true when IndexAccess InBound assumptions were added from caller contract
+    has_index_access_assumptions: bool,
 }
 
 impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
@@ -2351,6 +2372,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             symbolic_align_terms: HashMap::new(),
             symbolic_len_terms: HashMap::new(),
             assumptions: Vec::new(),
+            has_index_access_assumptions: false,
         }
     }
 
@@ -2660,6 +2682,127 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         self.assert_place_non_zero(solver, &target, "caller-contract");
                     }
                     PropertyKind::InBound => {
+                        if let Some(PropertyArg::Expr(ContractExpr::IndexAccess {
+                            slice,
+                            index,
+                        })) = property.args.first()
+                        {
+                            let slice_label = match slice.as_ref() {
+                                ContractExpr::Place(place) => {
+                                    let mut key = PlaceKey::from_contract_place(place);
+                                    if let PlaceBaseKey::Arg(ix) = key.base {
+                                        key.base = PlaceBaseKey::Local(ix + 1);
+                                    }
+                                    place_label(&key)
+                                }
+                                _ => {
+                                    continue;
+                                }
+                            };
+                            let len =
+                                SmtTerm::Value(format!("len({slice_label})"));
+                            let index_term = match index.as_ref() {
+                                ContractExpr::Place(place) => {
+                                    let mut key =
+                                        PlaceKey::from_contract_place(place);
+                                    if let PlaceBaseKey::Arg(ix) = key.base {
+                                        key.base = PlaceBaseKey::Local(ix + 1);
+                                    }
+                                    Some(SmtTerm::Place(key))
+                                }
+                                ContractExpr::Const(value) => {
+                                    u64::try_from(*value).ok().map(SmtTerm::Const)
+                                }
+                                _ => None,
+                            };
+                            let Some(index_term) = index_term else {
+                                continue;
+                            };
+                            let lower = index_term.clone();
+                            let upper = SmtTerm::Add(
+                                Box::new(index_term),
+                                Box::new(SmtTerm::Const(1)),
+                            );
+                            let preds = vec![
+                                SmtPredicate::Le(
+                                    SmtTerm::Const(0),
+                                    lower.clone(),
+                                ),
+                                SmtPredicate::Le(
+                                    lower.clone(),
+                                    upper.clone(),
+                                ),
+                                SmtPredicate::Le(upper, len),
+                            ];
+                            for pred in &preds {
+                                if let Some(bool_term) =
+                                    self.bool_for_predicate(pred)
+                                {
+                                    solver.assert(&bool_term);
+                                }
+                                self.assumptions.push(pred.clone());
+                            }
+                            self.has_index_access_assumptions = true;
+                            continue;
+                        }
+                        // Handle 3-arg InBound(ptr, Ty, index) form
+                        // args = [Place(slice_ptr), Ty(T), Expr(index)]
+                        if property.args.len() == 3 {
+                            let slice_place = match property.args.get(0) {
+                                Some(PropertyArg::Place(place)) => place,
+                                _ => {
+                                    continue;
+                                }
+                            };
+                            let index_expr = match property.args.get(2) {
+                                Some(PropertyArg::Expr(expr)) => expr,
+                                _ => {
+                                    continue;
+                                }
+                            };
+                            let slice_label = {
+                                let mut key = PlaceKey::from_contract_place(slice_place);
+                                if let PlaceBaseKey::Arg(ix) = key.base {
+                                    key.base = PlaceBaseKey::Local(ix + 1);
+                                }
+                                place_label(&key)
+                            };
+                            let len = SmtTerm::Value(format!("len({slice_label})"));
+                            let index_term = match index_expr {
+                                ContractExpr::Place(place) => {
+                                    let mut key = PlaceKey::from_contract_place(place);
+                                    if let PlaceBaseKey::Arg(ix) = key.base {
+                                        key.base = PlaceBaseKey::Local(ix + 1);
+                                    }
+                                    Some(SmtTerm::Place(key))
+                                }
+                                ContractExpr::Const(value) => {
+                                    u64::try_from(*value).ok().map(SmtTerm::Const)
+                                }
+                                _ => None,
+                            };
+                            let Some(index_term) = index_term else {
+                                continue;
+                            };
+                            let lower = index_term.clone();
+                            let upper = SmtTerm::Add(
+                                Box::new(index_term),
+                                Box::new(SmtTerm::Const(1)),
+                            );
+                            let preds = vec![
+                                SmtPredicate::Le(SmtTerm::Const(0), lower.clone()),
+                                SmtPredicate::Le(lower.clone(), upper.clone()),
+                                SmtPredicate::Le(upper, len),
+                            ];
+                            for pred in &preds {
+                                if let Some(bool_term) = self.bool_for_predicate(pred) {
+                                    solver.assert(&bool_term);
+                                }
+                                self.assumptions.push(pred.clone());
+                            }
+                            self.has_index_access_assumptions = true;
+                            continue;
+                        }
                         let Some(target) = (|| {
                             let arg = property.args.first()?;
                             let PropertyArg::Place(place) = arg else {
