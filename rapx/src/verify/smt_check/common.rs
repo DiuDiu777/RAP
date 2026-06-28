@@ -381,10 +381,12 @@ impl<'tcx> SmtChecker<'tcx> {
                 };
                 let index_non_negative = bounds.index.ge(&zero);
                 let access_non_negative = access.ge(&zero);
+                let len_non_negative = bounds.len.ge(&zero);
                 let covered_end = Int::add(&ctx, &[bounds.index.clone(), access]);
                 let within_len = covered_end.le(&bounds.len);
                 solver.assert(&index_non_negative);
                 solver.assert(&access_non_negative);
+                solver.assert(&len_non_negative);
                 model.assumptions.push(SmtPredicate::Ge(
                     bounds.index_term.clone(),
                     SmtTerm::Const(0),
@@ -569,8 +571,10 @@ impl<'tcx> SmtChecker<'tcx> {
                     let zero = Int::from_u64(&ctx, 0);
                     let index_non_negative = bounds.index.ge(&zero);
                     let access_non_negative = access.ge(&zero);
+                    let len_non_negative = bounds.len.ge(&zero);
                     let covered_end = Int::add(&ctx, &[bounds.index.clone(), access]);
                     let within_len = covered_end.le(&bounds.len);
+                    solver.assert(&len_non_negative);
                     let goal = Bool::and(
                         &ctx,
                         &[&index_non_negative, &access_non_negative, &within_len],
@@ -742,10 +746,12 @@ impl<'tcx> SmtChecker<'tcx> {
                     };
                     let index_non_negative = bounds.index.ge(&zero);
                     let access_non_negative = access.ge(&zero);
+                    let len_non_negative = bounds.len.ge(&zero);
                     let covered_end = Int::add(&ctx, &[bounds.index.clone(), access]);
                     let within_len = covered_end.le(&bounds.len);
                     solver.assert(&index_non_negative);
                     solver.assert(&access_non_negative);
+                    solver.assert(&len_non_negative);
                     model.assumptions.push(SmtPredicate::Ge(
                         bounds.index_term.clone(),
                         SmtTerm::Const(0),
@@ -753,6 +759,10 @@ impl<'tcx> SmtChecker<'tcx> {
                     model
                         .assumptions
                         .push(SmtPredicate::Ge(elements.clone(), SmtTerm::Const(0)));
+                    model.assumptions.push(SmtPredicate::Ge(
+                        bounds.len_term.clone(),
+                        SmtTerm::Const(0),
+                    ));
                     let goal = Bool::and(
                         &ctx,
                         &[&index_non_negative, &access_non_negative, &within_len],
@@ -3527,6 +3537,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             AbstractValue::ConstInt(value) => Some(Int::from_u64(self.ctx, *value as u64)),
             AbstractValue::Const(text) => {
                 const_int_from_debug(text).map(|value| Int::from_u64(self.ctx, value as u64))
+                    .or_else(|| {
+                        let name = sanitize_smt_name(text);
+                        if name.is_empty() { None }
+                        else { Some(Int::new_const(self.ctx, format!("const_{name}"))) }
+                    })
             }
             AbstractValue::Place(place) => self.term_for_place_before(place, cursor, seen),
             AbstractValue::Cast(inner, _) => self.term_for_value_at(inner, cursor, seen),
@@ -3555,10 +3570,21 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             AbstractValue::Unknown(_)
             | AbstractValue::ThreadLocal(_)
             | AbstractValue::Repeat(_)
-            | AbstractValue::Unary(_, _)
             | AbstractValue::Nullary(_)
             | AbstractValue::Discriminant(_)
             | AbstractValue::Aggregate(_, _) => None,
+            AbstractValue::Unary(op, inner) => match op {
+                UnOp::PtrMetadata => {
+                    let source = self
+                        .origin_key_for_value_before(inner, cursor, seen)
+                        .unwrap_or_else(|| value_label(inner));
+                    Some(Int::new_const(
+                        self.ctx,
+                        sanitize_smt_name(&format!("len({source})")),
+                    ))
+                }
+                _ => None,
+            },
             #[cfg(not(rapx_rustc_ge_196))]
             AbstractValue::ShallowInitBox(_, _) => None,
         }
@@ -4667,7 +4693,15 @@ fn smt_term_for_value(value: &AbstractValue<'_>) -> Option<SmtTerm> {
         AbstractValue::ConstInt(value) => u64::try_from(*value).ok().map(SmtTerm::Const),
         AbstractValue::Const(text) => const_int_from_debug(text)
             .and_then(|value| u64::try_from(value).ok())
-            .map(SmtTerm::Const),
+            .map(SmtTerm::Const)
+            .or_else(|| {
+                let name = sanitize_smt_name(text);
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(SmtTerm::Value(format!("const_{name}")))
+                }
+            }),
         AbstractValue::Place(place) => Some(SmtTerm::Place(place.clone())),
         AbstractValue::Cast(inner, _) => smt_term_for_value(inner),
         AbstractValue::Binary(op, lhs, rhs) => {
@@ -4811,7 +4845,21 @@ fn normalize_init_ty_name(ty_name: &str) -> String {
     {
         return normalize_init_ty_name(&rest[..semi_pos]);
     }
-    ty_name.to_string()
+    let mut result = ty_name.to_string();
+    while let Some(slash) = result.rfind('/')
+        && slash + 1 < result.len()
+        && result[slash + 1..].starts_with('#')
+    {
+        let trimmed = result[..slash].to_string();
+        if let Some(after_hash) = result[slash + 2..].chars().next()
+            && after_hash.is_ascii_digit()
+        {
+            result = trimmed;
+            continue;
+        }
+        break;
+    }
+    result
 }
 
 /// Stable SMT identifier for diagnostic-only symbolic terms.

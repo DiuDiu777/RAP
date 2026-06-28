@@ -46,13 +46,10 @@ pub(crate) fn check<'tcx>(
         rap_debug!("  [SMT InBound] type could not be resolved");
         return SmtCheckResult::unknown("InBound type could not be resolved");
     };
-    let Some((_, elem_size)) = checker.type_layout(checkpoint.caller, required_ty) else {
-        rap_debug!("  [SMT InBound] layout unavailable for {:?}", required_ty);
-        return SmtCheckResult::unknown(format!(
-            "InBound layout unavailable for {:?}",
-            required_ty
-        ));
-    };
+    let elem_size = checker
+        .type_layout(checkpoint.caller, required_ty)
+        .map(|(_, s)| s)
+        .unwrap_or(0);
     let access_count = checker
         .property_len_expr(checkpoint, property)
         .and_then(|expr| checker.contract_expr_to_smt_term(checkpoint.caller, &expr))
@@ -120,12 +117,10 @@ pub(crate) fn check_for_checkpoint<'tcx>(
     let Some(required_ty) = checker.property_required_ty_direct(property) else {
         return SmtCheckResult::unknown("InBound type could not be resolved");
     };
-    let Some((_, elem_size)) = checker.type_layout(caller, required_ty) else {
-        return SmtCheckResult::unknown(format!(
-            "InBound layout unavailable for {:?}",
-            required_ty
-        ));
-    };
+    let elem_size = checker
+        .type_layout(caller, required_ty)
+        .map(|(_, s)| s)
+        .unwrap_or(0);
     let Some(access_count_expr) = checker.property_len_expr_direct(property) else {
         return SmtCheckResult::unknown("InBound length argument could not be resolved");
     };
