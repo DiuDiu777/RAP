@@ -1869,7 +1869,30 @@ fn verify_static_mut_unknown() {
 #[test]
 fn verify_slice() {
     let output = run_with_args("verify/slice", VERIFY_CMD);
-    assert_contain(&output, "function:");
+
+    let functions = [
+        "<[T] as SliceExt<T>>::get_unchecked_ext",
+        "<[T] as SliceExt<T>>::get_unchecked_mut_ext",
+        "<[T] as SliceExt<T>>::split_at_unchecked_ext",
+        "<[T] as SliceExt<T>>::split_at_mut_unchecked_ext",
+        "<[T] as SliceExt<T>>::swap_unchecked_ext",
+        "<[T] as SliceExt<T>>::as_chunks_unchecked_ext",
+        "<[T] as SliceExt<T>>::as_chunks_unchecked_mut_ext",
+        "<[T] as SliceExt<T>>::align_to_ext",
+        "<[T] as SliceExt<T>>::align_to_mut_ext",
+        "<[T] as SliceExt<T>>::get_disjoint_unchecked_mut_ext",
+    ];
+
+    for fn_name in &functions {
+        assert_contain(&output, fn_name);
+    }
+
+    assert_eq!(
+        output.matches("result: SOUND").count(),
+        functions.len(),
+        "expected {} SOUND results",
+        functions.len()
+    );
 }
 
 #[test]
