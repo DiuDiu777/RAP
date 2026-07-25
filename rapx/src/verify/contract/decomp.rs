@@ -7,8 +7,8 @@
 //! Every SMT checker that processes a compound SP should obtain the primitive
 //! list from this module rather than hard-coding the decomposition.
 
-use super::types::PropertyKind;
 use super::types::Property;
+use super::types::PropertyKind;
 
 /// Reuse the argument structure of an original property while replacing its
 /// kind for primitive-component checking.  `null_guard` and `or_alternatives`
@@ -65,9 +65,7 @@ pub fn kind_implies(declared: &PropertyKind, required: &PropertyKind) -> bool {
         return true;
     }
     // InBound ⇒ Allocated
-    if matches!(declared, PropertyKind::InBound)
-        && matches!(required, PropertyKind::Allocated)
-    {
+    if matches!(declared, PropertyKind::InBound) && matches!(required, PropertyKind::Allocated) {
         return true;
     }
     // ValidPtr ⇒ Allocated | InBound  (non-ZST; caller guards the ZST case)

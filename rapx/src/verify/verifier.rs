@@ -1927,10 +1927,13 @@ fn for_each_place_in_chain<'tcx, T>(
 
 fn known_nonzero_of<'tcx>(value: &AbstractValue<'tcx>, result: &ForwardVisitResult<'tcx>) -> bool {
     for_each_place_in_chain(value, result, |p| {
-        result.facts.iter().any(|f| {
-            matches!(f, StateFact::KnownNonZero { place, .. } if place == p)
-        }).then_some(())
-    }).is_some()
+        result
+            .facts
+            .iter()
+            .any(|f| matches!(f, StateFact::KnownNonZero { place, .. } if place == p))
+            .then_some(())
+    })
+    .is_some()
 }
 
 fn known_allocated_for<'tcx>(
@@ -1940,7 +1943,11 @@ fn known_allocated_for<'tcx>(
     for_each_place_in_chain(value, result, |p| {
         for f in &result.facts {
             if let StateFact::KnownAllocated {
-                place, object, ty_name, elements, ..
+                place,
+                object,
+                ty_name,
+                elements,
+                ..
             } = f
             {
                 if place == p {

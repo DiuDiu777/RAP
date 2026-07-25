@@ -67,6 +67,8 @@ pub fn fmt_contract_expanded(
     let tag = format!("{:?}", property.kind);
     let tag = if property.contract_kind == crate::verify::contract::ContractKind::Hazard {
         format!("[hazard] {tag}")
+    } else if property.contract_kind == crate::verify::contract::ContractKind::Option_ {
+        format!("[option] {tag}")
     } else {
         tag
     };
@@ -552,6 +554,7 @@ pub fn emit_verify_summary<'tcx>(
         .iter()
         .filter(|r| {
             r.property.contract_kind != crate::verify::contract::ContractKind::Hazard
+                && r.property.contract_kind != crate::verify::contract::ContractKind::Option_
                 && !matches!(r.result, super::report::CheckResult::Proved)
         })
         .count();
@@ -643,25 +646,35 @@ pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
         let mut counts: Vec<(
             crate::verify::contract::PropertyKind,
             bool,
+            bool,
             super::report::CheckResult,
             usize,
         )> = Vec::new();
         for r in props.iter() {
             let is_hazard =
                 r.property.contract_kind == crate::verify::contract::ContractKind::Hazard;
+            let is_option =
+                r.property.contract_kind == crate::verify::contract::ContractKind::Option_;
             let result = r.result.clone();
-            if let Some(entry) = counts
-                .iter_mut()
-                .find(|(k, h, res, _)| *k == r.property.kind && *h == is_hazard && *res == result)
-            {
-                entry.3 += 1;
+            if let Some(entry) = counts.iter_mut().find(|(k, h, o, res, _)| {
+                *k == r.property.kind && *h == is_hazard && *o == is_option && *res == result
+            }) {
+                entry.4 += 1;
             } else {
-                counts.push((r.property.kind.clone(), is_hazard, result, 1usize));
+                counts.push((
+                    r.property.kind.clone(),
+                    is_hazard,
+                    is_option,
+                    result,
+                    1usize,
+                ));
             }
         }
-        for (kind, is_hazard, result, count) in &counts {
+        for (kind, is_hazard, is_option, result, count) in &counts {
             let tag = if *is_hazard {
                 format!("[hazard] {:?}", kind)
+            } else if *is_option {
+                format!("[option] {:?}", kind)
             } else {
                 format!("{:?}", kind)
             };

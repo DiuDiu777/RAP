@@ -11,14 +11,12 @@ use rustc_middle::{
     ty::{Ty, TyCtxt, TyKind},
 };
 use z3::{
-    ast::{Ast, Bool, Int},
     Context, Solver,
+    ast::{Ast, Bool, Int},
 };
 
 use crate::verify::{
-    contract::{
-        ContractExpr, NumericOp, NumericPredicate, PropertyArg, PropertyKind, RelOp,
-    },
+    contract::{ContractExpr, NumericOp, NumericPredicate, PropertyArg, PropertyKind, RelOp},
     def_use::{PlaceBaseKey, PlaceKey},
     generic::GenericTypeCandidates,
     helpers::Checkpoint,
@@ -104,7 +102,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     ///
     /// Used by struct-invariant checkpoint checks to short-circuit when a
     /// caller `#[rapx::requires]` already establishes the property.
-    pub(crate) fn has_equivalent_contract_fact(&mut self, place: &PlaceKey, _kind: PropertyKind) -> bool {
+    pub(crate) fn has_equivalent_contract_fact(
+        &mut self,
+        place: &PlaceKey,
+        _kind: PropertyKind,
+    ) -> bool {
         let Some(target_term) = self.term_for_place(place) else {
             return false;
         };
@@ -158,7 +160,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         })
     }
 
-    pub(crate) fn smt_term_from_contract_expr(&mut self, expr: &ContractExpr<'tcx>) -> Option<SmtTerm> {
+    pub(crate) fn smt_term_from_contract_expr(
+        &mut self,
+        expr: &ContractExpr<'tcx>,
+    ) -> Option<SmtTerm> {
         match expr {
             ContractExpr::Place(place) => {
                 let mut key = PlaceKey::from_contract_place(place);
@@ -228,7 +233,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
                 Some(SmtTerm::Value(format!("len({})", origin_str)))
             }
-        ContractExpr::Binary { op, lhs, rhs } => {
+            ContractExpr::Binary { op, lhs, rhs } => {
                 let lhs = Box::new(self.smt_term_from_contract_expr(lhs)?);
                 let rhs = Box::new(self.smt_term_from_contract_expr(rhs)?);
                 Some(match op {
@@ -510,16 +515,17 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     let lhs_term = abstract_value_to_smt_term(lhs);
                     let rhs_term = abstract_value_to_smt_term(rhs);
                     let combined = match op {
-                        BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked =>
-                            SmtTerm::Add(Box::new(lhs_term), Box::new(rhs_term)),
-                        BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked =>
-                            SmtTerm::Sub(Box::new(lhs_term), Box::new(rhs_term)),
-                        BinOp::Mul | BinOp::MulWithOverflow | BinOp::MulUnchecked =>
-                            SmtTerm::Mul(Box::new(lhs_term), Box::new(rhs_term)),
-                        BinOp::Div =>
-                            SmtTerm::Div(Box::new(lhs_term), Box::new(rhs_term)),
-                        BinOp::Rem =>
-                            SmtTerm::Rem(Box::new(lhs_term), Box::new(rhs_term)),
+                        BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked => {
+                            SmtTerm::Add(Box::new(lhs_term), Box::new(rhs_term))
+                        }
+                        BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked => {
+                            SmtTerm::Sub(Box::new(lhs_term), Box::new(rhs_term))
+                        }
+                        BinOp::Mul | BinOp::MulWithOverflow | BinOp::MulUnchecked => {
+                            SmtTerm::Mul(Box::new(lhs_term), Box::new(rhs_term))
+                        }
+                        BinOp::Div => SmtTerm::Div(Box::new(lhs_term), Box::new(rhs_term)),
+                        BinOp::Rem => SmtTerm::Rem(Box::new(lhs_term), Box::new(rhs_term)),
                         _ => SmtTerm::Value(format!(
                             "({} {} {})",
                             value_label(lhs),
@@ -527,10 +533,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             value_label(rhs)
                         )),
                     };
-                    self.assumptions.push(SmtPredicate::Eq(
-                        SmtTerm::Place(target.clone()),
-                        combined,
-                    ));
+                    self.assumptions
+                        .push(SmtPredicate::Eq(SmtTerm::Place(target.clone()), combined));
                 }
                 StateFact::Contract(property) => match property.kind {
                     PropertyKind::Align => {
@@ -742,7 +746,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                                     // was already created above; just assert non‑negativity
                                     // and record it so pointer‑bounds recovery can discover
                                     // it later.
-                                    let len_int = self.symbolic_len_term(&format!("len({slice_label})"));
+                                    let len_int =
+                                        self.symbolic_len_term(&format!("len({slice_label})"));
                                     let zero = Int::from_u64(self.ctx, 0);
                                     solver.assert(&len_int.ge(&zero));
                                     self.assumptions.push(SmtPredicate::Le(
@@ -751,17 +756,17 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                                     ));
                                     // Record this bound so that `pointer_bounds_for_place`
                                     // can find the allocation length for sub‑range queries.
-                                self.contract_inbound_lens
-                                    .insert(slice_label.to_string(), (len_int, len.clone()));
-                                // Also assert the full InBounds fact so that
-                                // `allocated_len_for_origin` / KnownAllocated
-                                // paths see the length.
-                                self.assumptions.push(SmtPredicate::InBounds {
-                                    index: SmtTerm::Const(0),
-                                    access_count: SmtTerm::Const(1),
-                                    len: len.clone(),
-                                });
-                                self.has_index_access_assumptions = true;
+                                    self.contract_inbound_lens
+                                        .insert(slice_label.to_string(), (len_int, len.clone()));
+                                    // Also assert the full InBounds fact so that
+                                    // `allocated_len_for_origin` / KnownAllocated
+                                    // paths see the length.
+                                    self.assumptions.push(SmtPredicate::InBounds {
+                                        index: SmtTerm::Const(0),
+                                        access_count: SmtTerm::Const(1),
+                                        len: len.clone(),
+                                    });
+                                    self.has_index_access_assumptions = true;
                                     continue;
                                 }
                                 _ => None,
@@ -891,6 +896,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                                     self.assert_numeric_term_non_negativity(solver, &smt_pred);
                                     self.assumptions.push(smt_pred);
                                 }
+                                // For predicates of the form `SizeOf(T) * X <= Bound`,
+                                // also assert `X <= Bound`.  Sound because
+                                // `size_of::<T>() >= 1` for every type T, so
+                                // `X * size_of::<T>() <= Bound` ⇒ `X <= Bound`.
+                                self.assert_sizeof_simplified_bound(solver, predicate);
                             }
                         }
                     }
@@ -1009,7 +1019,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
     /// Walk a pointer place's definition chain through plain copies to the
     /// nearest defining `Cast`, returning `(cast_operand, cast_target_ty)`.
-    pub(crate) fn defining_cast(&self, place: &PlaceKey) -> Option<(AbstractValue<'tcx>, Ty<'tcx>)> {
+    pub(crate) fn defining_cast(
+        &self,
+        place: &PlaceKey,
+    ) -> Option<(AbstractValue<'tcx>, Ty<'tcx>)> {
         let mut cur = place.clone();
         for _ in 0..8 {
             let local = cur.local()?;
@@ -1046,7 +1059,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// `*const [T; N] -> *const () -> *const T` reinterpret shape emitted by
     /// some toolchains, where the immediate operand's pointee (`()`) would
     /// otherwise hide the real `[T; N]` source element type.
-    pub(crate) fn cast_source_pointee(&self, value: &AbstractValue<'tcx>, depth: usize) -> Option<Ty<'tcx>> {
+    pub(crate) fn cast_source_pointee(
+        &self,
+        value: &AbstractValue<'tcx>,
+        depth: usize,
+    ) -> Option<Ty<'tcx>> {
         if depth > 8 {
             return None;
         }
@@ -1148,7 +1165,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             });
         }
 
-                let value = self
+        let value = self
             .resolved_value_for_place(place, &mut TraceSeen::new())
             .unwrap_or_else(|| AbstractValue::Place(place.clone()));
         let base_origin =
@@ -1214,8 +1231,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
         // Compute the correct index for field projections from Range types.
         // Field [0] (start) is at offset 0; field [1] (end) is at offset len.
-        let (mut index_term, mut index_val) =
-            self.field_projection_index(place, &base_origin);
+        let (mut index_term, mut index_val) = self.field_projection_index(place, &base_origin);
 
         // When the place traces to a pointer-arithmetic call result
         // (e.g. `.add(idx)`), use the call's offset argument as the index
@@ -1229,16 +1245,15 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         if let Some(call) = pointer_add_call {
             for effect in &call.effects {
                 if let crate::verify::call_summary::CallEffect::ReturnPointerAdd {
-                    offset_arg, ..
+                    offset_arg,
+                    ..
                 } = effect
                 {
                     if let Some(offset) = call.args.get(*offset_arg) {
                         let call_cursor = self.call_definition_cursor(&call);
-                        if let Some(off_val) = self.term_for_value_at(
-                            offset,
-                            call_cursor,
-                            &mut TraceSeen::new(),
-                        ) {
+                        if let Some(off_val) =
+                            self.term_for_value_at(offset, call_cursor, &mut TraceSeen::new())
+                        {
                             index_term = SmtTerm::Value(value_label(offset));
                             index_val = off_val;
                         }
@@ -1374,7 +1389,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// place. This is intentionally small: it handles base pointers returned by
     /// `as_ptr`/`as_mut_ptr` and offsets produced by pointer arithmetic
     /// summaries.
-    pub(crate) fn pointer_object_offset_for_place(&self, place: &PlaceKey) -> Option<(PlaceKey, SmtTerm)> {
+    pub(crate) fn pointer_object_offset_for_place(
+        &self,
+        place: &PlaceKey,
+    ) -> Option<(PlaceKey, SmtTerm)> {
         self.pointer_object_offset_for_place_before(
             place,
             self.latest_cursor(),
@@ -1683,7 +1701,12 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     /// Assert equal slice lengths for two slice-like places that alias.
-    pub(crate) fn assert_length_alias(&mut self, solver: &Solver<'ctx>, left: &PlaceKey, right: &PlaceKey) {
+    pub(crate) fn assert_length_alias(
+        &mut self,
+        solver: &Solver<'ctx>,
+        left: &PlaceKey,
+        right: &PlaceKey,
+    ) {
         if !self.is_len_carrying_place(left) || !self.is_len_carrying_place(right) {
             return;
         }
@@ -1742,7 +1765,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// `len(self)` obligation on the prefix — or a reborrow of it linked via
     /// `assert_length_alias` — resolves to the correct `mid` rather than a
     /// free symbol.
-    pub(crate) fn bridge_tuple_field_lengths(&mut self, solver: &Solver<'ctx>, call: &CallSummary<'tcx>) {
+    pub(crate) fn bridge_tuple_field_lengths(
+        &mut self,
+        solver: &Solver<'ctx>,
+        call: &CallSummary<'tcx>,
+    ) {
         for effect in &call.effects {
             let crate::verify::call_summary::CallEffect::ReturnTupleFieldLength { field, .. } =
                 effect
@@ -1817,7 +1844,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// `d`.  Such a value is always a multiple of `d`.  Recognises the
     /// `slice.len() / N * N` (round-down-to-multiple) idiom, including the
     /// `MulWithOverflow`/`.0` shape produced by MIR overflow checks.
-    pub(crate) fn multiple_divisor(&self, value: &AbstractValue<'tcx>) -> Option<AbstractValue<'tcx>> {
+    pub(crate) fn multiple_divisor(
+        &self,
+        value: &AbstractValue<'tcx>,
+    ) -> Option<AbstractValue<'tcx>> {
         let AbstractValue::Binary(op, lhs, rhs) = self.resolve_arith(value, 0)? else {
             return None;
         };
@@ -1878,7 +1908,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     /// Record call-effect definitions that the term builder understands.
-    pub(crate) fn record_call_effect_assumptions(&mut self, solver: &Solver<'ctx>, call: &CallSummary<'tcx>) {
+    pub(crate) fn record_call_effect_assumptions(
+        &mut self,
+        solver: &Solver<'ctx>,
+        call: &CallSummary<'tcx>,
+    ) {
         let destination = PlaceKey {
             base: PlaceBaseKey::Local(call.destination.as_usize()),
             fields: Vec::new(),
@@ -2527,7 +2561,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     /// Build a boolean term for a conjunction of shared predicates.
-    pub(crate) fn bool_for_predicates(&mut self, predicates: &[SmtPredicate]) -> Option<Bool<'ctx>> {
+    pub(crate) fn bool_for_predicates(
+        &mut self,
+        predicates: &[SmtPredicate],
+    ) -> Option<Bool<'ctx>> {
         match predicates {
             [] => None,
             [predicate] => self.bool_for_predicate(predicate),
@@ -2662,6 +2699,55 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
+    /// For predicates of the form `SizeOf(T) * X <= Bound`, also assert
+    /// `X <= Bound`.  This is sound because `size_of::<T>() >= 1` for every
+    /// Rust type, so the simplified bound is strictly weaker.
+    fn assert_sizeof_simplified_bound(
+        &mut self,
+        solver: &Solver<'ctx>,
+        predicate: &crate::verify::contract::NumericPredicate<'tcx>,
+    ) {
+        use crate::verify::contract::{ContractExpr, NumericOp, RelOp};
+        use rustc_middle::ty::{FloatTy, IntTy, UintTy};
+        if !matches!(predicate.op, RelOp::Le | RelOp::Lt) {
+            return;
+        }
+        let bound_val = match &predicate.rhs {
+            ContractExpr::Const(v) => *v,
+            _ => return,
+        };
+        let (factor, rest) = match &predicate.lhs {
+            ContractExpr::Binary { op: NumericOp::Mul, lhs, rhs } => (lhs, rhs),
+            _ => return,
+        };
+        let _ty = match factor.as_ref() {
+            ContractExpr::SizeOf(ty) => ty,
+            _ => match rest.as_ref() {
+                ContractExpr::SizeOf(ty) => ty,
+                _ => return,
+            },
+        };
+        let rest_expr = if matches!(factor.as_ref(), ContractExpr::SizeOf(_)) {
+            rest.as_ref().clone()
+        } else {
+            factor.as_ref().clone()
+        };
+        if matches!(&rest_expr, ContractExpr::Const(0)) {
+            return;
+        }
+        let simplified = crate::verify::contract::NumericPredicate::new(
+            rest_expr,
+            predicate.op,
+            ContractExpr::Const(bound_val),
+        );
+        if let Some(smt_pred) = self.contract_predicate_to_smt(&simplified) {
+            if let Some(z3_bool) = self.bool_for_predicate(&smt_pred) {
+                solver.assert(&z3_bool);
+            }
+            self.assumptions.push(smt_pred);
+        }
+    }
+
     pub(crate) fn assert_len_term_non_negativity(&mut self, solver: &Solver<'ctx>, term: &SmtTerm) {
         match term {
             SmtTerm::Value(name) if name.starts_with("len(") => {
@@ -2790,7 +2876,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     SmtTerm::Const(0),
                 ));
             }
-            SmtTerm::Value(_) | SmtTerm::Const(_) | SmtTerm::ConstParam(_) | SmtTerm::Min(..) | SmtTerm::Max(..) => {}
+            SmtTerm::Value(_)
+            | SmtTerm::Const(_)
+            | SmtTerm::ConstParam(_)
+            | SmtTerm::Min(..)
+            | SmtTerm::Max(..) => {}
         }
     }
 
@@ -2835,7 +2925,12 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     /// Lower a binary MIR operation to an integer term.
-    pub(crate) fn term_for_binary(&self, op: BinOp, lhs: &Int<'ctx>, rhs: &Int<'ctx>) -> Option<Int<'ctx>> {
+    pub(crate) fn term_for_binary(
+        &self,
+        op: BinOp,
+        lhs: &Int<'ctx>,
+        rhs: &Int<'ctx>,
+    ) -> Option<Int<'ctx>> {
         let one = Int::from_u64(self.ctx, 1);
         let zero = Int::from_u64(self.ctx, 0);
         Some(match op {
@@ -3365,7 +3460,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     }
 
     /// Return true when `haystack` contains the same resolved value as `needle`.
-    pub(crate) fn value_mentions(&self, haystack: &AbstractValue<'tcx>, needle: &AbstractValue<'tcx>) -> bool {
+    pub(crate) fn value_mentions(
+        &self,
+        haystack: &AbstractValue<'tcx>,
+        needle: &AbstractValue<'tcx>,
+    ) -> bool {
         self.value_mentions_inner(haystack, needle, &mut HashSet::new())
     }
 
@@ -3652,7 +3751,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
     /// Look up a symbolic length in `contract_inbound_lens` for `origin_key`,
     /// trying exact match, single-entry fallback, and substring heuristics.
-    pub(crate) fn contract_inbound_lens_find(&self, origin_key: &str) -> Option<(Int<'ctx>, SmtTerm)> {
+    pub(crate) fn contract_inbound_lens_find(
+        &self,
+        origin_key: &str,
+    ) -> Option<(Int<'ctx>, SmtTerm)> {
         if let Some((term, smt)) = self.contract_inbound_lens.get(origin_key) {
             return Some((term.clone(), smt.clone()));
         }
@@ -3677,7 +3779,10 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// that `pointer_bounds_for_place` can discover the allocation length and
     /// combine it with path conditions (e.g. `ValidNum(idx < self.len())`)
     /// to prove sub-range bounds for `.add(idx)` and similar pointer arithmetic.
-    pub(crate) fn bounds_len_from_contract_fact(&mut self, origin_key: &str) -> Option<(Int<'ctx>, SmtTerm)> {
+    pub(crate) fn bounds_len_from_contract_fact(
+        &mut self,
+        origin_key: &str,
+    ) -> Option<(Int<'ctx>, SmtTerm)> {
         for fact in &self.forward.facts {
             let StateFact::Contract(property) = fact else {
                 continue;
@@ -3685,17 +3790,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             if property.kind != PropertyKind::InBound {
                 continue;
             }
-            if let Some(target_place) = property
-                .args
-                .get(0)
-                .and_then(|arg| {
-                    if let PropertyArg::Place(place) = arg {
-                        Some(place)
-                    } else {
-                        None
-                    }
-                })
-            {
+            if let Some(target_place) = property.args.get(0).and_then(|arg| {
+                if let PropertyArg::Place(place) = arg {
+                    Some(place)
+                } else {
+                    None
+                }
+            }) {
                 let mut key = PlaceKey::from_contract_place(target_place);
                 if let PlaceBaseKey::Arg(ix) = key.base {
                     key.base = PlaceBaseKey::Local(ix + 1);
@@ -3864,7 +3965,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// consults the full MIR body, because the backward slicer may prune the
     /// drop (it does not define the checked pointer) even though it frees the
     /// underlying memory.
-    pub(crate) fn allocation_dropped_on_path(&self, object: &PlaceKey, alloc_place: &PlaceKey) -> bool {
+    pub(crate) fn allocation_dropped_on_path(
+        &self,
+        object: &PlaceKey,
+        alloc_place: &PlaceKey,
+    ) -> bool {
         use crate::verify::path_extractor::PathStep;
         use rustc_middle::mir::TerminatorKind;
 
@@ -4074,7 +4179,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         None
     }
 
-    pub(crate) fn origin_is_initialized_for_ty(&self, origin_key: &str, required_ty_name: &str) -> bool {
+    pub(crate) fn origin_is_initialized_for_ty(
+        &self,
+        origin_key: &str,
+        required_ty_name: &str,
+    ) -> bool {
         if self.forward.facts.iter().any(|fact| {
             let StateFact::KnownAllocated {
                 place,
@@ -4120,15 +4229,25 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
     /// Check whether a struct InBound invariant backs this pointer's origin,
     /// providing a contract-level guarantee of allocation.
-    pub(crate) fn improve_allocated_via_inbound_contract(&self, bounds: &PointerBounds<'ctx>) -> bool {
+    pub(crate) fn improve_allocated_via_inbound_contract(
+        &self,
+        bounds: &PointerBounds<'ctx>,
+    ) -> bool {
         let origin_key = &bounds.origin_key;
         self.forward.facts.iter().any(|fact| {
-            let StateFact::Contract(property) = fact else { return false; };
-            if !crate::verify::contract::decomp::kind_implies(&property.kind, &PropertyKind::Allocated) {
+            let StateFact::Contract(property) = fact else {
+                return false;
+            };
+            if !crate::verify::contract::decomp::kind_implies(
+                &property.kind,
+                &PropertyKind::Allocated,
+            ) {
                 return false;
             }
             property.args.first().is_some_and(|arg| {
-                let PropertyArg::Place(cp) = arg else { return false; };
+                let PropertyArg::Place(cp) = arg else {
+                    return false;
+                };
                 let mut key = PlaceKey::from_contract_place(cp);
                 if let PlaceBaseKey::Arg(ix) = key.base {
                     key.base = PlaceBaseKey::Local(ix + 1);
@@ -4153,12 +4272,22 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     ) -> Option<String> {
         let origin_key = &bounds.origin_key;
         for fact in &self.forward.facts {
-            let StateFact::Contract(property) = fact else { continue; };
-            if property.kind != PropertyKind::ValidNum { continue; }
-            let Some(PropertyArg::Predicates(predicates)) = property.args.first() else { continue; };
+            let StateFact::Contract(property) = fact else {
+                continue;
+            };
+            if property.kind != PropertyKind::ValidNum {
+                continue;
+            }
+            let Some(PropertyArg::Predicates(predicates)) = property.args.first() else {
+                continue;
+            };
             for predicate in predicates {
-                if !matches!(predicate.op, RelOp::Lt | RelOp::Le) { continue; }
-                if !contract_expr_refers_to_origin_deep(self, &predicate.rhs, origin_key) { continue; }
+                if !matches!(predicate.op, RelOp::Lt | RelOp::Le) {
+                    continue;
+                }
+                if !contract_expr_refers_to_origin_deep(self, &predicate.rhs, origin_key) {
+                    continue;
+                }
                 if smt_term_matches_expr(self, upper_delta, &predicate.lhs) {
                     return Some(format!(
                         "pointer arithmetic proved by ValidNum contract on origin {origin_key}"
@@ -4203,10 +4332,8 @@ fn resolve_if_saturating_sub(model: &SmtModel<'_, '_, '_>, term: &SmtTerm) -> Op
 fn smt_term_derives_from_len(model: &SmtModel<'_, '_, '_>, term: &SmtTerm) -> bool {
     match term {
         SmtTerm::Value(name) => name.starts_with("len("),
-        SmtTerm::Place(place) => {
-            resolved_term_for_place(model, place)
-                .is_some_and(|r| smt_term_derives_from_len(model, &r))
-        }
+        SmtTerm::Place(place) => resolved_term_for_place(model, place)
+            .is_some_and(|r| smt_term_derives_from_len(model, &r)),
         SmtTerm::Sub(tl, _tr) => smt_term_derives_from_len(model, tl),
         _ => false,
     }
@@ -4225,7 +4352,9 @@ fn abstract_value_to_smt_term(value: &AbstractValue<'_>) -> SmtTerm {
 fn contract_expr_refers_to_origin(expr: &ContractExpr<'_>, origin_key: &str) -> bool {
     match expr {
         ContractExpr::Len(inner) => {
-            let ContractExpr::Place(cp) = inner.as_ref() else { return false; };
+            let ContractExpr::Place(cp) = inner.as_ref() else {
+                return false;
+            };
             let mut key = PlaceKey::from_contract_place(cp);
             if let PlaceBaseKey::Arg(ix) = key.base {
                 key.base = PlaceBaseKey::Local(ix + 1);
@@ -4249,7 +4378,11 @@ fn contract_expr_refers_to_origin(expr: &ContractExpr<'_>, origin_key: &str) -> 
 
 /// Like contract_expr_refers_to_origin but also traces the origin_key
 /// back through value definitions to find the contract place.
-fn contract_expr_refers_to_origin_deep(model: &SmtModel<'_, '_, '_>, expr: &ContractExpr<'_>, origin_key: &str) -> bool {
+fn contract_expr_refers_to_origin_deep(
+    model: &SmtModel<'_, '_, '_>,
+    expr: &ContractExpr<'_>,
+    origin_key: &str,
+) -> bool {
     if contract_expr_refers_to_origin(expr, origin_key) {
         return true;
     }
@@ -4260,13 +4393,18 @@ fn contract_expr_refers_to_origin_deep(model: &SmtModel<'_, '_, '_>, expr: &Cont
         queue.push(origin_key[..dot].to_string());
     }
     while let Some(cur) = queue.pop() {
-        if !visited.insert(cur.clone()) { continue; }
+        if !visited.insert(cur.clone()) {
+            continue;
+        }
         if contract_expr_refers_to_origin(expr, &cur) {
             return true;
         }
         if let Ok(parts) = parse_origin_parts(&cur) {
             let local = rustc_middle::mir::Local::from_usize(parts.local);
-            if let Some(def) = model.forward.latest_value_definition_before(local, model.forward.value_definitions.len()) {
+            if let Some(def) = model
+                .forward
+                .latest_value_definition_before(local, model.forward.value_definitions.len())
+            {
                 let next = origin_key_from_value(&def.value);
                 queue.push(next);
             }
@@ -4276,10 +4414,16 @@ fn contract_expr_refers_to_origin_deep(model: &SmtModel<'_, '_, '_>, expr: &Cont
 }
 
 fn parse_origin_parts(origin: &str) -> Result<OriginParts, ()> {
-    if !origin.starts_with('_') { return Err(()); }
+    if !origin.starts_with('_') {
+        return Err(());
+    }
     let rest = &origin[1..];
     let dot_pos = rest.find('.');
-    let local_str = if let Some(pos) = dot_pos { &rest[..pos] } else { rest };
+    let local_str = if let Some(pos) = dot_pos {
+        &rest[..pos]
+    } else {
+        rest
+    };
     let local: usize = local_str.parse().map_err(|_| ())?;
     Ok(OriginParts { local })
 }
@@ -4332,7 +4476,9 @@ fn contract_expr_to_smt_term_helper(expr: &ContractExpr<'_>) -> SmtTerm {
 }
 
 fn smt_eq_deep(model: &SmtModel<'_, '_, '_>, term: &SmtTerm, target: &SmtTerm) -> bool {
-    if term.describe() == target.describe() { return true; }
+    if term.describe() == target.describe() {
+        return true;
+    }
     if let SmtTerm::Place(place) = term {
         if let Some(resolved) = resolved_term_for_place(model, place) {
             return smt_eq_deep(model, &resolved, target);
@@ -4343,12 +4489,12 @@ fn smt_eq_deep(model: &SmtModel<'_, '_, '_>, term: &SmtTerm, target: &SmtTerm) -
         | (SmtTerm::Sub(tl, tr), SmtTerm::Sub(sl, sr))
         | (SmtTerm::Mul(tl, tr), SmtTerm::Mul(sl, sr))
         | (SmtTerm::Div(tl, tr), SmtTerm::Div(sl, sr))
-        | (SmtTerm::Rem(tl, tr), SmtTerm::Rem(sl, sr)) =>
-            smt_eq_deep(model, tl, sl) && smt_eq_deep(model, tr, sr),
+        | (SmtTerm::Rem(tl, tr), SmtTerm::Rem(sl, sr)) => {
+            smt_eq_deep(model, tl, sl) && smt_eq_deep(model, tr, sr)
+        }
         // Sub(len, expr) where expr matches target: Sub ≤ len,
         // so target < len (from ValidNum) implies Sub < len.
-        (SmtTerm::Sub(tl, tr), _) if resolves_to_len(model, tl) =>
-            smt_eq_deep(model, tr, target),
+        (SmtTerm::Sub(tl, tr), _) if resolves_to_len(model, tl) => smt_eq_deep(model, tr, target),
         _ => false,
     }
 }
@@ -4357,8 +4503,7 @@ fn resolves_to_len(model: &SmtModel<'_, '_, '_>, term: &SmtTerm) -> bool {
     match term {
         SmtTerm::Value(name) => name.starts_with("len("),
         SmtTerm::Place(place) => {
-            resolved_term_for_place(model, place)
-                .is_some_and(|r| resolves_to_len(model, &r))
+            resolved_term_for_place(model, place).is_some_and(|r| resolves_to_len(model, &r))
         }
         // Sub(len, x) ≤ len for any x ≥ 0, so Sub(len, x) is a "len-derived" bound
         SmtTerm::Sub(tl, _tr) => resolves_to_len(model, tl),
@@ -4366,11 +4511,12 @@ fn resolves_to_len(model: &SmtModel<'_, '_, '_>, term: &SmtTerm) -> bool {
     }
 }
 
-
 fn resolved_term_for_place(model: &SmtModel<'_, '_, '_>, place: &PlaceKey) -> Option<SmtTerm> {
     let local = place.local()?;
     let cursor = model.forward.value_definitions.len();
-    model.forward.latest_value_definition_before(local, cursor)
+    model
+        .forward
+        .latest_value_definition_before(local, cursor)
         .and_then(|def| abstract_value_to_smt_term_def(&def.value))
 }
 
@@ -4384,12 +4530,15 @@ fn abstract_value_to_smt_term_def(value: &AbstractValue<'_>) -> Option<SmtTerm> 
             let l = abstract_value_to_smt_term(lhs.as_ref());
             let r = abstract_value_to_smt_term(rhs.as_ref());
             match op {
-                BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked =>
-                    Some(SmtTerm::Add(Box::new(l), Box::new(r))),
-                BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked =>
-                    Some(SmtTerm::Sub(Box::new(l), Box::new(r))),
-                BinOp::Mul | BinOp::MulWithOverflow | BinOp::MulUnchecked =>
-                    Some(SmtTerm::Mul(Box::new(l), Box::new(r))),
+                BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked => {
+                    Some(SmtTerm::Add(Box::new(l), Box::new(r)))
+                }
+                BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked => {
+                    Some(SmtTerm::Sub(Box::new(l), Box::new(r)))
+                }
+                BinOp::Mul | BinOp::MulWithOverflow | BinOp::MulUnchecked => {
+                    Some(SmtTerm::Mul(Box::new(l), Box::new(r)))
+                }
                 BinOp::Div => Some(SmtTerm::Div(Box::new(l), Box::new(r))),
                 BinOp::Rem => Some(SmtTerm::Rem(Box::new(l), Box::new(r))),
                 _ => None,
@@ -4401,7 +4550,10 @@ fn abstract_value_to_smt_term_def(value: &AbstractValue<'_>) -> Option<SmtTerm> 
         AbstractValue::CallResult(call) if call.func.ends_with("::len") => {
             call.args.first().and_then(|a| {
                 if let AbstractValue::Place(p) = a {
-                    Some(SmtTerm::Value(format!("len({})", super::common::place_label(p))))
+                    Some(SmtTerm::Value(format!(
+                        "len({})",
+                        super::common::place_label(p)
+                    )))
                 } else {
                     None
                 }

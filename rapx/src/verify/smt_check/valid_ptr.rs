@@ -14,9 +14,7 @@
 //! Zero-sized types do not require an allocated dereferenceable range.  For
 //! non-ZSTs, `ValidPtr` delegates to the `Deref` composite checker.
 
-use super::{
-    common::{SmtCheckResult, SmtChecker, TypeSizeClass},
-};
+use super::common::{SmtCheckResult, SmtChecker, TypeSizeClass};
 use crate::verify::{
     contract::{self, Property, PropertyKind},
     helpers::Checkpoint,
@@ -58,7 +56,11 @@ pub(crate) fn check<'tcx>(
                         checker, checkpoint, property, forward, true,
                     ) {
                         SmtCheckResult::proved(format!("ValidPtr proved: {reason}"))
-                    } else if let Some(reason) = super::field_invariant::discharge_from_contract_fact_with_checkpoint(property, forward, checkpoint) {
+                    } else if let Some(reason) =
+                        super::field_invariant::discharge_from_contract_fact_with_checkpoint(
+                            property, forward, checkpoint,
+                        )
+                    {
                         SmtCheckResult::proved(format!("ValidPtr proved: {reason}"))
                     } else if let Some(reason) =
                         field_invariant_reason(checker, checkpoint, property, forward, required_ty)

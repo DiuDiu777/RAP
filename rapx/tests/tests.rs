@@ -148,8 +148,10 @@ fn assert_unproved_exclusive_with_result(
             || block.contains(&format!("{primary} | Unknown"));
         let matches_hazard = block.contains(&format!("[hazard] {primary} | Failed"))
             || block.contains(&format!("[hazard] {primary} | Unknown"));
+        let matches_option = block.contains(&format!("[option] {primary} | Failed"))
+            || block.contains(&format!("[option] {primary} | Unknown"));
         assert!(
-            matches_plain || matches_hazard,
+            matches_plain || matches_hazard || matches_option,
             "Expected {primary} | Failed/Unknown for {function}\nBlock:\n{block}"
         );
     }
@@ -159,13 +161,12 @@ fn assert_unproved_exclusive_with_result(
     for line in block.lines() {
         for sfx in ["| Failed", "| Unknown"] {
             let Some(idx) = line.find(sfx) else { continue };
-            // Strip [hazard] prefix if present.
+            // Skip [option] and [hazard] lines — they don't count as unproved preconditions.
             let prefix = line[..idx].trim_end();
-            let prop = if let Some(stripped) = prefix.strip_prefix("[hazard] ") {
-                stripped.rsplit(' ').next().unwrap_or("")
-            } else {
-                prefix.rsplit(' ').next().unwrap_or("")
-            };
+            if prefix.contains("[hazard]") || prefix.contains("[option]") {
+                continue;
+            }
+            let prop = prefix.rsplit(' ').next().unwrap_or("");
             if !prop.is_empty() && prop != "Unknown" {
                 actual.push(prop);
             }
@@ -1464,10 +1465,7 @@ fn linked_list_rawptr() {
 
 #[test]
 fn linked_list_rawptr_skip_invariant() {
-    let output = run_with_args(
-        "verify_cases/linked_list_rawptr",
-        VERIFY_SKIP_INVARIANT_CMD,
-    );
+    let output = run_with_args("verify_cases/linked_list_rawptr", VERIFY_SKIP_INVARIANT_CMD);
     assert_contain(&output, "result: SOUND");
     assert_not_contain(&output, "result: UNSOUND");
 }
@@ -2063,4 +2061,23 @@ fn opt_hash_key_cloning() {
     assert_not_contain(&output, "RAPx|ERROR|");
     assert_contain(&output, "Potential optimizations detected");
     assert_contain(&output, "Cloning: 1");
+}
+
+#[test]
+fn std_contracts_valid() {
+    let json = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/verify/source/assets/std-public-contracts.json"),
+    )
+    .expect("failed to read contracts JSON");
+    let db: std::collections::HashMap<String, Vec<serde_json::Value>> =
+        serde_json::from_str(&json).expect("failed to parse contracts JSON");
+
+    for (key, entries) in &db {
+        for entry in entries {
+            assert!(entry["tag"].is_string(), "{key}: missing or invalid tag");
+            assert!(entry["args"].is_array(), "{key}: missing or invalid args");
+        }
+    }
+    assert!(!db.is_empty(), "contract database is empty");
 }

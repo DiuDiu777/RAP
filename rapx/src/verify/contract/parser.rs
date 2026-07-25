@@ -422,6 +422,11 @@ impl<'tcx> Property<'tcx> {
                     vec![PropertyArg::Ty(src_elem), PropertyArg::Ty(dst_elem)],
                 )
             }
+            "TobeSpecified" => {
+                // Placeholder for safety conditions not yet modeled as RAPx contracts.
+                // Accepts any args without error; evaluates as a no-op at verification time.
+                Self::new_simple(PropertyKind::Unknown)
+            }
             _ => Self::new_simple(PropertyKind::Unknown),
         }
     }
@@ -801,24 +806,104 @@ impl<'tcx> Property<'tcx> {
                     )),
                 }
             }
-            _ => {
-                if let Some(place) = Self::parse_contract_place(tcx, def_id, expr) {
-                    ContractExpr::Place(place)
-                } else if let Some(expr) = Self::parse_const_param(tcx, def_id, expr) {
-                    expr
-                } else if let Some(value) = Self::parse_builtin_const(tcx, expr) {
-                    ContractExpr::Const(value)
-                } else if let Some(value) = parse_expr_into_number(expr) {
-                    ContractExpr::new_value(value)
+            Expr::Path(expr_path) => Self::parse_path_constant(tcx, def_id, expr_path)
+                .unwrap_or_else(|| Self::fallback_contract_expr(tcx, def_id, expr, sp)),
+            _ => Self::fallback_contract_expr(tcx, def_id, expr, sp),
+        }
+    }
+
+    fn fallback_contract_expr(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        expr: &Expr,
+        sp: &str,
+    ) -> ContractExpr<'tcx> {
+        if let Some(place) = Self::parse_contract_place(tcx, def_id, expr) {
+            ContractExpr::Place(place)
+        } else if let Some(expr) = Self::parse_const_param(tcx, def_id, expr) {
+            expr
+        } else if let Some(value) = Self::parse_builtin_const(tcx, expr) {
+            ContractExpr::Const(value)
+        } else if let Some(value) = parse_expr_into_number(expr) {
+            ContractExpr::new_value(value)
+        } else {
+            rap_debug!(
+                "Numeric expression in {:?} could not be resolved: {:?}",
+                sp,
+                expr
+            );
+            ContractExpr::Unknown
+        }
+    }
+
+    fn parse_path_constant(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        expr_path: &safety_parser::syn::ExprPath,
+    ) -> Option<ContractExpr<'tcx>> {
+        let segments = &expr_path.path.segments;
+        if segments.len() != 2 {
+            return None;
+        }
+        let type_name = segments[0].ident.to_string();
+        let const_name = segments[1].ident.to_string();
+        if !matches!(const_name.as_str(), "MIN" | "MAX") {
+            return None;
+        }
+        let ty = Self::resolve_type_name(tcx, def_id, &type_name)?;
+        let (min, max) = Self::int_type_min_max(tcx, ty)?;
+        let value = if const_name == "MIN" { min } else { max };
+        Some(ContractExpr::Const(value))
+    }
+
+    fn resolve_type_name(tcx: TyCtxt<'tcx>, def_id: DefId, name: &str) -> Option<Ty<'tcx>> {
+        if name == "Self" {
+            let sig = tcx.fn_sig(def_id).skip_binder();
+            return sig.inputs().skip_binder().first().copied();
+        }
+        crate::verify::helpers::match_ty_with_ident(tcx, def_id, name.to_string())
+    }
+
+    fn int_type_min_max(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(u128, u128)> {
+        use rustc_middle::ty::IntTy;
+        use rustc_middle::ty::UintTy;
+        let bits: u32 = match ty.kind() {
+            TyKind::Uint(ut) => match ut {
+                UintTy::U8 => 8,
+                UintTy::U16 => 16,
+                UintTy::U32 => 32,
+                UintTy::U64 => 64,
+                UintTy::U128 => 128,
+                UintTy::Usize => tcx.data_layout.pointer_size().bits() as u32,
+            },
+            TyKind::Int(it) => match it {
+                IntTy::I8 => 8,
+                IntTy::I16 => 16,
+                IntTy::I32 => 32,
+                IntTy::I64 => 64,
+                IntTy::I128 => 128,
+                IntTy::Isize => tcx.data_layout.pointer_size().bits() as u32,
+            },
+            _ => return None,
+        };
+        if bits == 0 {
+            return None;
+        }
+        match ty.kind() {
+            TyKind::Uint(_) => {
+                let max = if bits == 128 {
+                    u128::MAX
                 } else {
-                    rap_debug!(
-                        "Numeric expression in {:?} could not be resolved: {:?}",
-                        sp,
-                        expr
-                    );
-                    ContractExpr::Unknown
-                }
+                    (1u128 << bits) - 1
+                };
+                Some((0, max))
             }
+            TyKind::Int(_) => {
+                let max = (1u128 << (bits - 1)) - 1;
+                let min = max + 1;
+                Some((min, max))
+            }
+            _ => None,
         }
     }
 
@@ -912,12 +997,18 @@ impl<'tcx> Property<'tcx> {
             "min" if expr_call.args.len() == 2 => {
                 let a = Self::parse_contract_expr(tcx, def_id, &expr_call.args[0], "min");
                 let b = Self::parse_contract_expr(tcx, def_id, &expr_call.args[1], "min");
-                Some(ContractExpr::Min { a: Box::new(a), b: Box::new(b) })
+                Some(ContractExpr::Min {
+                    a: Box::new(a),
+                    b: Box::new(b),
+                })
             }
             "max" if expr_call.args.len() == 2 => {
                 let a = Self::parse_contract_expr(tcx, def_id, &expr_call.args[0], "max");
                 let b = Self::parse_contract_expr(tcx, def_id, &expr_call.args[1], "max");
-                Some(ContractExpr::Max { a: Box::new(a), b: Box::new(b) })
+                Some(ContractExpr::Max {
+                    a: Box::new(a),
+                    b: Box::new(b),
+                })
             }
             _ => None,
         }

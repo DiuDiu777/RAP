@@ -696,7 +696,9 @@ impl<'tcx> VerifyRun<'tcx> {
         let unproved = all_results
             .iter()
             .filter(|r| {
-                if r.property.contract_kind == crate::verify::contract::ContractKind::Hazard {
+                if r.property.contract_kind == crate::verify::contract::ContractKind::Hazard
+                    || r.property.contract_kind == crate::verify::contract::ContractKind::Option_
+                {
                     return false;
                 }
                 !matches!(r.result, super::report::CheckResult::Proved)

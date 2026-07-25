@@ -368,8 +368,8 @@ pub(super) fn discharge_from_contract_fact_with_checkpoint<'tcx>(
     forward: &ForwardVisitResult<'tcx>,
     checkpoint: &Checkpoint<'tcx>,
 ) -> Option<String> {
-    let target_key = checkpoint_target_key(checkpoint, property)
-        .or_else(|| contract_property_key(property))?;
+    let target_key =
+        checkpoint_target_key(checkpoint, property).or_else(|| contract_property_key(property))?;
 
     for fact in &forward.facts {
         let StateFact::Contract(contract) = fact else {
@@ -442,24 +442,26 @@ fn provenance_chain_reaches<'tcx>(
         }
         if cur.fields.is_empty() {
             if let Some(local) = cur.local()
-                && let Some(def) = forward
-                    .latest_value_definition_before(local, forward.value_definitions.len())
+                && let Some(def) =
+                    forward.latest_value_definition_before(local, forward.value_definitions.len())
             {
                 match &def.value {
-                    AbstractValue::Place(p)
-                    | AbstractValue::Ref(p)
-                    | AbstractValue::RawPtr(p) => queue.push(p.clone()),
+                    AbstractValue::Place(p) | AbstractValue::Ref(p) | AbstractValue::RawPtr(p) => {
+                        queue.push(p.clone())
+                    }
                     _ => {}
                 }
             }
         }
         for fact in &forward.facts {
-            let StateFact::Cast { target, source, .. } = fact else { continue; };
+            let StateFact::Cast { target, source, .. } = fact else {
+                continue;
+            };
             if target == &cur {
                 match source {
-                    AbstractValue::Place(p)
-                    | AbstractValue::Ref(p)
-                    | AbstractValue::RawPtr(p) => queue.push(p.clone()),
+                    AbstractValue::Place(p) | AbstractValue::Ref(p) | AbstractValue::RawPtr(p) => {
+                        queue.push(p.clone())
+                    }
                     _ => {}
                 }
             }

@@ -1,9 +1,7 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::BinOp as MirBinOp;
 use rustc_middle::ty::{Ty, TyCtxt, TyKind};
-use safety_parser::syn::{
-    BinOp as SynBinOp, UnOp,
-};
+use safety_parser::syn::{BinOp as SynBinOp, UnOp};
 
 use crate::verify::def_use::PlaceKey;
 
@@ -183,7 +181,8 @@ pub enum NumericOp {
 }
 
 impl NumericOp {
-    pub(crate) fn from_syn(op: &SynBinOp) -> Option<Self> {        match op {
+    pub(crate) fn from_syn(op: &SynBinOp) -> Option<Self> {
+        match op {
             SynBinOp::Add(_) => Some(Self::Add),
             SynBinOp::Sub(_) => Some(Self::Sub),
             SynBinOp::Mul(_) => Some(Self::Mul),
@@ -292,7 +291,8 @@ impl RelOp {
         }
     }
 
-    pub(crate) fn from_syn(op: &SynBinOp) -> Option<Self> {        match op {
+    pub(crate) fn from_syn(op: &SynBinOp) -> Option<Self> {
+        match op {
             SynBinOp::Eq(_) => Some(Self::Eq),
             SynBinOp::Ne(_) => Some(Self::Ne),
             SynBinOp::Lt(_) => Some(Self::Lt),
@@ -502,6 +502,8 @@ impl<'tcx> PropertyArg<'tcx> {
 pub enum ContractKind {
     Precond,
     Hazard,
+    #[allow(dead_code)]
+    Option_,
 }
 
 #[derive(Clone, Debug)]

@@ -1073,6 +1073,8 @@ fn get_contract_from_entry<'tcx>(
         if let Some(ref kind_str) = entry.kind {
             if kind_str == "hazard" {
                 property.contract_kind = crate::verify::contract::ContractKind::Hazard;
+            } else if kind_str == "option" {
+                property.contract_kind = crate::verify::contract::ContractKind::Option_;
             }
         }
         if matches!(property.kind, PropertyKind::Unknown) {
@@ -1640,10 +1642,12 @@ fn instantiate_type_invariant<'tcx>(
         return None;
     }
     let mut property = Property::new(tcx, def_id, &entry.tag, &exprs);
-    if let Some(ref kind) = entry.kind
-        && kind == "hazard"
-    {
-        property.contract_kind = crate::verify::contract::ContractKind::Hazard;
+    if let Some(ref kind) = entry.kind {
+        if kind == "hazard" {
+            property.contract_kind = crate::verify::contract::ContractKind::Hazard;
+        } else if kind == "option" {
+            property.contract_kind = crate::verify::contract::ContractKind::Option_;
+        }
     }
     if !matches!(
         property.kind,

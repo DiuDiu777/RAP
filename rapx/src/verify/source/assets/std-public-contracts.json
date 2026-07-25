@@ -61,6 +61,12 @@
       "args": [
         "align != 0"
       ]
+    },
+    {
+      "tag": "ValidNum",
+      "args": [
+        "(align & (align - 1)) == 0"
+      ]
     }
   ],
   "core::alloc::layout::for_value_raw": [
@@ -252,7 +258,7 @@
   ],
   "core::any::downcast_ref_unchecked": [
     {
-      "tag": "Init",
+      "tag": "Typed",
       "args": [
         "self",
         "T",
@@ -262,7 +268,7 @@
   ],
   "core::any::downcast_mut_unchecked": [
     {
-      "tag": "Init",
+      "tag": "Typed",
       "args": [
         "self",
         "T",
@@ -290,7 +296,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self.each_element()",
+        "[0, 127]"
       ]
     }
   ],
@@ -298,7 +305,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "48 <= b && b <= 57"
       ]
     }
   ],
@@ -306,7 +313,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "0 <= b && b <= 127"
       ]
     }
   ],
@@ -322,31 +329,25 @@
   ],
   "core::char::from_u32_unchecked": [
     {
-      "tag": "ValidString",
+      "tag": "ValidNum",
       "args": [
-        "i",
-        "u32",
-        "1"
+        "i <= 0x10FFFF && (i < 0xD800 || i > 0xDFFF)"
       ]
     }
   ],
   "core::char::convert::from_u32_unchecked": [
     {
-      "tag": "ValidString",
+      "tag": "ValidNum",
       "args": [
-        "i",
-        "u32",
-        "1"
+        "i <= 0x10FFFF && (i < 0xD800 || i > 0xDFFF)"
       ]
     }
   ],
   "core::char::methods::from_u32_unchecked": [
     {
-      "tag": "ValidString",
+      "tag": "ValidNum",
       "args": [
-        "i",
-        "u32",
-        "1"
+        "i <= 0x10FFFF && (i < 0xD800 || i > 0xDFFF)"
       ]
     }
   ],
@@ -354,7 +355,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -362,7 +364,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -370,7 +373,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -378,7 +382,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -386,7 +391,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -394,7 +400,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -426,6 +433,13 @@
       "args": [
         "ptr",
         "ret"
+      ]
+    },
+    {
+      "tag": "Alive",
+      "args": [
+        "ptr",
+        "'a"
       ]
     }
   ],
@@ -473,7 +487,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "start <= end"
       ]
     }
   ],
@@ -481,7 +495,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "start <= end"
       ]
     }
   ],
@@ -489,7 +503,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "start <= end"
       ]
     }
   ],
@@ -497,7 +511,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "start <= end"
       ]
     }
   ],
@@ -511,11 +525,9 @@
   ],
   "core::mem::manually_drop::drop": [
     {
-      "tag": "Allocated",
+      "tag": "Owning",
       "args": [
-        "slot",
-        "ManuallyDrop",
-        "1"
+        "slot"
       ]
     }
   ],
@@ -539,10 +551,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::mem::maybe_uninit::assume_init_drop": [
@@ -675,6 +689,14 @@
         "src",
         "Src"
       ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dst",
+        "Dst",
+        "1"
+      ]
     }
   ],
   "core::mem::transmutability::TransmuteFrom::transmute": [
@@ -714,7 +736,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self != Self::MIN"
       ]
     }
   ],
@@ -782,7 +804,7 @@
       "tag": "ValidPtr",
       "args": [
         "ptr",
-        "bool",
+        "AtomicBool",
         "1"
       ]
     },
@@ -790,7 +812,7 @@
       "tag": "Align",
       "args": [
         "ptr",
-        "bool"
+        "AtomicBool"
       ]
     },
     {
@@ -813,7 +835,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self",
+        "[Int::MIN, Int::MAX]"
       ]
     }
   ],
@@ -833,6 +856,28 @@
         "y",
         "T",
         "1"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "y",
+        "T",
+        "1"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "x",
+        "T"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "y",
+        "T"
       ]
     }
   ],
@@ -869,10 +914,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "src"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::intrinsics::copy::copy": [
@@ -908,10 +955,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "src"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "ValidPtr",
@@ -937,10 +986,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "dst"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::intrinsics::exact_div": [
@@ -999,10 +1050,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "src"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "ValidPtr",
@@ -1028,10 +1081,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "dst"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::intrinsics::write_bytes": [
@@ -1164,7 +1219,7 @@
       "tag": "InBound",
       "args": [
         "self",
-        "T",
+        "u8",
         "count"
       ]
     }
@@ -1174,7 +1229,7 @@
       "tag": "InBound",
       "args": [
         "self",
-        "T",
+        "u8",
         "count"
       ]
     }
@@ -1184,7 +1239,7 @@
       "tag": "InBound",
       "args": [
         "self",
-        "T",
+        "u8",
         "count"
       ]
     }
@@ -1211,14 +1266,7 @@
       "tag": "InBound",
       "args": [
         "self",
-        "U",
-        "1"
-      ]
-    },
-    {
-      "tag": "Size",
-      "args": [
-        "T",
+        "u8",
         "1"
       ]
     }
@@ -1267,10 +1315,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Init",
@@ -1298,10 +1348,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Init",
@@ -1322,10 +1374,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Init",
@@ -1369,9 +1423,26 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dst",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dst",
+        "T"
       ]
     }
   ],
@@ -1409,10 +1480,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -1420,6 +1493,21 @@
       "args": [
         "self",
         "dst"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dest",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dest",
+        "T"
       ]
     }
   ],
@@ -1448,10 +1536,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -1459,6 +1549,21 @@
       "args": [
         "self",
         "src"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "src",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "src",
+        "T"
       ]
     }
   ],
@@ -1496,10 +1601,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -1507,6 +1614,21 @@
       "args": [
         "self",
         "src"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "src",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "src",
+        "T"
       ]
     }
   ],
@@ -1635,6 +1757,20 @@
         "self",
         "T"
       ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "other",
+        "T"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "other",
+        "T"
+      ]
     }
   ],
   "core::ptr::non_null::as_uninit_slice": [
@@ -1646,14 +1782,6 @@
     },
     {
       "tag": "ValidPtr",
-      "args": [
-        "self",
-        "T",
-        "1"
-      ]
-    },
-    {
-      "tag": "Init",
       "args": [
         "self",
         "T",
@@ -1692,14 +1820,6 @@
     },
     {
       "tag": "ValidPtr",
-      "args": [
-        "self",
-        "T",
-        "1"
-      ]
-    },
-    {
-      "tag": "Init",
       "args": [
         "self",
         "T",
@@ -1790,19 +1910,6 @@
   ],
   "core::ptr::const_ptr::add": [
     {
-      "tag": "NonNull",
-      "args": [
-        "self"
-      ]
-    },
-    {
-      "tag": "Align",
-      "args": [
-        "self",
-        "T"
-      ]
-    },
-    {
       "tag": "InBound",
       "args": [
         "self",
@@ -1875,14 +1982,7 @@
       "tag": "InBound",
       "args": [
         "self",
-        "U",
-        "1"
-      ]
-    },
-    {
-      "tag": "Size",
-      "args": [
-        "T",
+        "u8",
         "1"
       ]
     }
@@ -1973,10 +2073,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::ptr::const_ptr::read_volatile": [
@@ -2004,10 +2106,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::ptr::const_ptr::read_unaligned": [
@@ -2028,10 +2132,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::ptr::const_ptr::copy_to": [
@@ -2067,9 +2173,26 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dst",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dst",
+        "T"
       ]
     }
   ],
@@ -2107,10 +2230,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -2118,6 +2243,21 @@
       "args": [
         "self",
         "dst"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dest",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dest",
+        "T"
       ]
     }
   ],
@@ -2253,19 +2393,6 @@
   ],
   "core::ptr::mut_ptr::add": [
     {
-      "tag": "NonNull",
-      "args": [
-        "self"
-      ]
-    },
-    {
-      "tag": "Align",
-      "args": [
-        "self",
-        "T"
-      ]
-    },
-    {
       "tag": "InBound",
       "args": [
         "self",
@@ -2338,14 +2465,7 @@
       "tag": "InBound",
       "args": [
         "self",
-        "U",
-        "1"
-      ]
-    },
-    {
-      "tag": "Size",
-      "args": [
-        "T",
+        "u8",
         "1"
       ]
     }
@@ -2426,10 +2546,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Init",
@@ -2457,10 +2579,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Init",
@@ -2481,10 +2605,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Init",
@@ -2528,9 +2654,26 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dst",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dst",
+        "T"
       ]
     }
   ],
@@ -2568,10 +2711,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -2579,6 +2724,21 @@
       "args": [
         "self",
         "dst"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "dest",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "dest",
+        "T"
       ]
     }
   ],
@@ -2607,10 +2767,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -2618,6 +2780,21 @@
       "args": [
         "self",
         "src"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "src",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "src",
+        "T"
       ]
     }
   ],
@@ -2655,10 +2832,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "self"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     },
     {
       "tag": "Alias",
@@ -2666,6 +2845,21 @@
       "args": [
         "self",
         "src"
+      ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "src",
+        "T",
+        "count"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "src",
+        "T"
       ]
     }
   ],
@@ -2800,6 +2994,20 @@
         "self",
         "T"
       ]
+    },
+    {
+      "tag": "ValidPtr",
+      "args": [
+        "other",
+        "T"
+      ]
+    },
+    {
+      "tag": "Align",
+      "args": [
+        "other",
+        "T"
+      ]
     }
   ],
   "core::ptr::mut_ptr::split_at_mut": [
@@ -2850,14 +3058,6 @@
       ]
     },
     {
-      "tag": "Init",
-      "args": [
-        "self",
-        "T",
-        "1"
-      ]
-    },
-    {
       "tag": "Alive",
       "args": [
         "self",
@@ -2889,14 +3089,6 @@
     },
     {
       "tag": "ValidPtr",
-      "args": [
-        "self",
-        "T",
-        "1"
-      ]
-    },
-    {
-      "tag": "Init",
       "args": [
         "self",
         "T",
@@ -3031,10 +3223,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "src"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::ptr::write": [
@@ -3139,10 +3333,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "src"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::ptr::write_unaligned": [
@@ -3180,10 +3376,12 @@
       ]
     },
     {
-      "tag": "CopyTrait",
+      "tag": "Trait",
       "args": [
-        "src"
-      ]
+        "T",
+        "Copy"
+      ],
+      "kind": "option"
     }
   ],
   "core::ptr::write_volatile": [
@@ -3359,7 +3557,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "mid <= len(self)"
+        "0 <= mid && mid <= len(self)"
       ]
     }
   ],
@@ -3367,7 +3565,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "mid <= len(self)"
+        "0 <= mid && mid <= len(self)"
       ]
     }
   ],
@@ -3431,7 +3629,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self.each_element()",
+        "[0, 127]"
       ]
     }
   ],
@@ -3966,7 +4165,7 @@
       "args": [
         "self",
         "u8",
-        "1"
+        "n"
       ]
     }
   ],
@@ -3976,7 +4175,7 @@
       "args": [
         "self",
         "u8",
-        "1"
+        "n"
       ]
     }
   ],
@@ -4044,6 +4243,14 @@
       "args": [
         "ptr",
         "ret"
+      ]
+    },
+    {
+      "tag": "Init",
+      "args": [
+        "ptr",
+        "T",
+        "length"
       ]
     }
   ],
@@ -4138,6 +4345,14 @@
       "args": [
         "ptr",
         "ret"
+      ]
+    },
+    {
+      "tag": "Init",
+      "args": [
+        "ptr",
+        "T",
+        "length"
       ]
     }
   ],
@@ -4463,7 +4678,7 @@
   ],
   "alloc::collections::btree::map::insert_after_unchecked": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -4471,7 +4686,7 @@
   ],
   "alloc::collections::btree::map::insert_before_unchecked": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -4479,7 +4694,7 @@
   ],
   "alloc::collections::btree::set::insert_after_unchecked": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -4487,7 +4702,7 @@
   ],
   "alloc::collections::btree::set::insert_before_unchecked": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -4495,10 +4710,9 @@
   ],
   "alloc::ffi::c_str::from_vec_unchecked": [
     {
-      "tag": "ValidString",
+      "tag": "ValidCStr",
       "args": [
         "v",
-        "u8",
         "1"
       ]
     }
@@ -4730,7 +4944,7 @@
   ],
   "alloc::collections::btree::map::with_mutable_key": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -4738,7 +4952,7 @@
   ],
   "alloc::collections::btree::set::upper_bound_mut": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -5028,7 +5242,7 @@
   ],
   "std::env::set_var": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "key"
       ]
@@ -5036,7 +5250,7 @@
   ],
   "std::env::remove_var": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "key"
       ]
@@ -5095,7 +5309,7 @@
   ],
   "std::os::unix::process::CommandExt::before_exec": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -5103,7 +5317,7 @@
   ],
   "std::os::unix::process::pre_exec": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -5224,7 +5438,7 @@
   ],
   "std::sys::pal::unix::process::process_common::pre_exec": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]
@@ -5352,7 +5566,7 @@
   ],
   "std::from_raw_handle": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "handle"
       ]
@@ -5375,7 +5589,7 @@
       ]
     },
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "f"
       ]
@@ -5422,9 +5636,18 @@
   ],
   "core::intrinsics::const_deallocate": [
     {
-      "tag": "ValidNum",
+      "tag": "Allocated",
       "args": [
-        "0 == 0"
+        "ptr",
+        "u8",
+        "layout.size()"
+      ]
+    },
+    {
+      "tag": "Layout",
+      "args": [
+        "ptr",
+        "layout"
       ]
     }
   ],
@@ -5521,7 +5744,7 @@
   ],
   "core::task::wake::new": [
     {
-      "tag": "System_sp",
+      "tag": "TobeSpecified",
       "args": [
         "data"
       ]
@@ -5529,7 +5752,7 @@
   ],
   "alloc::collections::btree::set::with_mutable_key": [
     {
-      "tag": "Function_sp",
+      "tag": "TobeSpecified",
       "args": [
         "self"
       ]

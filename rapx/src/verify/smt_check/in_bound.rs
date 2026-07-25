@@ -28,9 +28,9 @@ pub(crate) fn check<'tcx>(
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    if let Some(reason) =
-        super::field_invariant::discharge_from_contract_fact_with_checkpoint(property, forward, checkpoint)
-    {
+    if let Some(reason) = super::field_invariant::discharge_from_contract_fact_with_checkpoint(
+        property, forward, checkpoint,
+    ) {
         return SmtCheckResult::proved(format!("InBound proved: {reason}"));
     }
 

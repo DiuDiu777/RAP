@@ -44,9 +44,9 @@ use super::{
 };
 
 use crate::verify::{
-    contract::{self,
-        ContractExpr, ContractPlace, ContractProjection, NumericOp, NumericPredicate, PlaceBase,
-        Property, PropertyArg, PropertyKind, RelOp,
+    contract::{
+        self, ContractExpr, ContractPlace, ContractProjection, NumericOp, NumericPredicate,
+        PlaceBase, Property, PropertyArg, PropertyKind, RelOp,
     },
     def_use::{PlaceBaseKey, PlaceKey},
     generic::GenericTypeCandidates,
@@ -140,8 +140,7 @@ impl<'tcx> SmtChecker<'tcx> {
         property: &Property<'tcx>,
         forward: &ForwardVisitResult<'tcx>,
     ) -> SmtCheckResult {
-        let primitives = contract::decomp::primitive_components(&property.kind)
-            .unwrap_or(&[]);
+        let primitives = contract::decomp::primitive_components(&property.kind).unwrap_or(&[]);
 
         let mut results: Vec<SmtCheckResult> = Vec::new();
         for &kind in primitives {
@@ -150,8 +149,12 @@ impl<'tcx> SmtChecker<'tcx> {
             results.push(result);
         }
 
-        let all_proved = results.iter().all(|r| matches!(r.result, CheckResult::Proved));
-        let any_failed = results.iter().any(|r| matches!(r.result, CheckResult::Failed));
+        let all_proved = results
+            .iter()
+            .all(|r| matches!(r.result, CheckResult::Proved));
+        let any_failed = results
+            .iter()
+            .any(|r| matches!(r.result, CheckResult::Failed));
 
         let kind_name = format!("{:?}", property.kind);
         if all_proved {
@@ -160,10 +163,14 @@ impl<'tcx> SmtChecker<'tcx> {
             SmtCheckResult {
                 result: CheckResult::Failed,
                 query: None,
-                notes: vec![format!("{kind_name} failed: one or more primitives do not hold")],
+                notes: vec![format!(
+                    "{kind_name} failed: one or more primitives do not hold"
+                )],
             }
         } else {
-            SmtCheckResult::unknown(format!("{kind_name} unknown: one or more primitives are unproven"))
+            SmtCheckResult::unknown(format!(
+                "{kind_name} unknown: one or more primitives are unproven"
+            ))
         }
     }
 
@@ -195,13 +202,9 @@ impl<'tcx> SmtChecker<'tcx> {
             }
             PropertyKind::NonVolatile => {
                 if checkpoint.is_ref {
-                    SmtCheckResult::proved(
-                        "NonVolatile holds for ref-derived pointer",
-                    )
+                    SmtCheckResult::proved("NonVolatile holds for ref-derived pointer")
                 } else {
-                    SmtCheckResult::proved(
-                        "NonVolatile assumed — std memory is never volatile",
-                    )
+                    SmtCheckResult::proved("NonVolatile assumed — std memory is never volatile")
                 }
             }
             PropertyKind::Owning => super::owning::check(self, checkpoint, property, forward),
@@ -735,7 +738,9 @@ impl<'tcx> SmtChecker<'tcx> {
                     );
                 };
 
-                if let Some(reason) = model.prove_pointer_bounds_via_valid_num(&bounds, &upper_delta) {
+                if let Some(reason) =
+                    model.prove_pointer_bounds_via_valid_num(&bounds, &upper_delta)
+                {
                     return SmtCheckResult::proved(reason);
                 }
 
@@ -769,10 +774,9 @@ impl<'tcx> SmtChecker<'tcx> {
                 // Assert count >= 0 so Z3 can derive count <= len from
                 // ValidNum constraints that imply len >= count + 1.
                 solver.assert(&upper.ge(&zero));
-                model.assumptions.push(SmtPredicate::Ge(
-                    upper_delta.clone(),
-                    SmtTerm::Const(0),
-                ));
+                model
+                    .assumptions
+                    .push(SmtPredicate::Ge(upper_delta.clone(), SmtTerm::Const(0)));
 
                 let lower_index = Int::add(&ctx, &[bounds.index.clone(), lower]);
                 let upper_index = Int::add(&ctx, &[bounds.index.clone(), upper]);
@@ -970,7 +974,7 @@ impl<'tcx> SmtChecker<'tcx> {
                         }
 
                         for init_term in &init_terms {
-                let query = SmtQuery::new(
+                            let query = SmtQuery::new(
                                 obligation.clone(),
                                 model.assumptions().to_vec(),
                                 SmtPredicate::Custom(format!(
@@ -2055,7 +2059,6 @@ impl<'tcx> SmtChecker<'tcx> {
         };
         Some(PlaceKey::from_contract_place(place))
     }
-
 
     fn contract_expr_label(&self, expr: &ContractExpr<'tcx>) -> Option<String> {
         match expr {
@@ -3856,7 +3859,9 @@ pub(crate) fn call_has_pointer_sub_effect(call: &CallSummary<'_>) -> bool {
     })
 }
 
-pub(crate) fn abstract_value_from_rvalue<'tcx>(rvalue: &Rvalue<'tcx>) -> Option<AbstractValue<'tcx>> {
+pub(crate) fn abstract_value_from_rvalue<'tcx>(
+    rvalue: &Rvalue<'tcx>,
+) -> Option<AbstractValue<'tcx>> {
     Some(match rvalue {
         Rvalue::Use(operand, ..) => abstract_value_from_operand(operand),
         Rvalue::Repeat(operand, _) => {
@@ -4337,7 +4342,10 @@ pub(crate) fn body_value_parents<'tcx>(
 }
 
 /// Follow the provenance map to the root local (with a cycle guard).
-pub(crate) fn follow_value_parents(parents: &crate::compat::FxHashMap<Local, Local>, start: Local) -> Local {
+pub(crate) fn follow_value_parents(
+    parents: &crate::compat::FxHashMap<Local, Local>,
+    start: Local,
+) -> Local {
     let mut current = start;
     let mut seen = std::collections::HashSet::new();
     while seen.insert(current) {

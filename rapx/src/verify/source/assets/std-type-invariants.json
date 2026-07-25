@@ -1,6 +1,6 @@
 {
   "&[T]": {
-    "comment": "Slice reference \u2014 the internal pointer is ValidPtr for len(self) elements",
+    "comment": "Slice reference — the internal pointer is ValidPtr for len(self) elements",
     "invariants": [
       {
         "tag": "ValidPtr",
@@ -14,6 +14,12 @@
         "tag": "NonNull",
         "args": [
           "$ptr"
+        ]
+      },
+      {
+        "tag": "ValidNum",
+        "args": [
+          "$len * size_of($elem_ty) <= isize::MAX"
         ]
       }
     ]
@@ -41,6 +47,12 @@
           "$ptr",
           "$elem_ty",
           "$len"
+        ]
+      },
+      {
+        "tag": "ValidNum",
+        "args": [
+          "$len * size_of($elem_ty) <= isize::MAX"
         ]
       }
     ]
