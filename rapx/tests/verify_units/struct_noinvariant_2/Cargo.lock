@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "invless_2"
+name = "struct_noinvariant_2"
 version = "0.1.0"

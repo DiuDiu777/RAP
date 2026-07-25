@@ -72,22 +72,20 @@ impl PrimitiveCall {
         if name.ends_with("::as_mut") && name.contains("ptr::non_null") {
             return Some(Self::AsMutPtr);
         }
-        if name.ends_with("::as_ptr")
-            || (name.contains("::as_ptr") && !name.ends_with("::as_ptr_range"))
+        if name.contains("::as_ptr") && !name.ends_with("::as_ptr_range")
             || name.ends_with("::into_raw")
         {
             return Some(Self::AsPtr);
         }
-        if name.ends_with("::as_mut_ptr")
-            || (name.contains("::as_mut_ptr") && !name.ends_with("::as_mut_ptr_range"))
+        if name.contains("::as_mut_ptr") && !name.ends_with("::as_mut_ptr_range")
             || name.ends_with("::into_raw_mut")
         {
             return Some(Self::AsMutPtr);
         }
-        if name.ends_with("::as_ptr_range") || name.contains("::as_ptr_range") {
+        if name.ends_with("::as_ptr_range") {
             return Some(Self::AsPtrRange);
         }
-        if name.ends_with("::as_mut_ptr_range") || name.contains("::as_mut_ptr_range") {
+        if name.ends_with("::as_mut_ptr_range") {
             return Some(Self::AsMutPtrRange);
         }
         if name.contains("::cast")
@@ -140,7 +138,7 @@ impl PrimitiveCall {
         {
             return Some(Self::PtrWrite);
         }
-        if name.ends_with("::len") || name.contains("::len") {
+        if name.contains("::len") {
             return Some(Self::Len);
         }
         if name.ends_with("::is_empty") {
@@ -160,16 +158,16 @@ impl PrimitiveCall {
         if name.contains("size_of") {
             return Some(Self::SizeOf);
         }
-        if name.ends_with("::from_raw_parts_mut") || name.contains("::from_raw_parts_mut") {
+        if name.contains("::from_raw_parts_mut") {
             return Some(Self::FromRawPartsMut);
         }
-        if name.contains("::split_at") || name.ends_with("::split_at_mut") {
+        if name.contains("::split_at") {
             if name.contains("_mut") {
                 return Some(Self::SplitAtMut);
             }
             return Some(Self::SplitAt);
         }
-        if name.ends_with("::from_raw_parts") || name.contains("::from_raw_parts") {
+        if name.contains("::from_raw_parts") {
             return Some(Self::FromRawParts);
         }
         None

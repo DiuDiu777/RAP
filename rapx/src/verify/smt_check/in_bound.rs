@@ -28,6 +28,12 @@ pub(crate) fn check<'tcx>(
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
+    if let Some(reason) =
+        super::field_invariant::discharge_from_contract_fact_with_checkpoint(property, forward, checkpoint)
+    {
+        return SmtCheckResult::proved(format!("InBound proved: {reason}"));
+    }
+
     // An `InBound(index_access(slice, indices))` over an array that a preceding
     // `get_disjoint`-style validator has checked is discharged by that trusted
     // summary.  Checked up front because the array-index contract does not

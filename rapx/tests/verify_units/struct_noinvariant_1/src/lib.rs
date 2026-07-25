@@ -8,15 +8,15 @@ struct Wrapper<T> {
 }
 
 impl<T> Wrapper<T> {
-    fn unsound_new(ptr: *const T, len: usize) -> Self {
+    fn new(ptr: *const T, len: usize) -> Self {
         Self { ptr, len }
     }
 
-    fn unsound_set_len(&mut self, len: usize) {
+    fn set_len(&mut self, len: usize) {
         self.len = len;
     }
 
-    fn sound_read(&self) -> Option<u32> {
+    fn read(&self) -> Option<u32> {
         let ptr = self.ptr;
 
         if self.len == 0 {
@@ -33,7 +33,7 @@ impl<T> Wrapper<T> {
         }
     }
 
-    fn unsound_read(&self) -> u32 {
+    fn read_unchecked(&self) -> u32 {
         let ptr = self.ptr;
 
         unsafe {

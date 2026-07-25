@@ -13,7 +13,6 @@ mod align;
 mod alive;
 mod allocated;
 pub(crate) mod common;
-mod deref;
 mod field_invariant;
 mod model;
 mod in_bound;

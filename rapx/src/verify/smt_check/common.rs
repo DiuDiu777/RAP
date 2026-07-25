@@ -39,12 +39,12 @@ use z3::{
 };
 
 use super::{
-    alias, align, alive, allocated, deref, in_bound, init, non_null, non_overlap, typed, valid_num,
+    alias, align, alive, allocated, in_bound, init, non_null, non_overlap, typed, valid_num,
     valid_ptr,
 };
 
 use crate::verify::{
-    contract::{
+    contract::{self,
         ContractExpr, ContractPlace, ContractProjection, NumericOp, NumericPredicate, PlaceBase,
         Property, PropertyArg, PropertyKind, RelOp,
     },
@@ -131,6 +131,42 @@ impl<'tcx> SmtChecker<'tcx> {
         Self { tcx }
     }
 
+    /// Try to prove a compound SP by decomposing into primitives, checking each
+    /// recursively, and combining the results.  Decomposition is driven entirely
+    /// by the central rules in `contract/decomp.rs`.
+    fn check_decomposed(
+        &self,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+        forward: &ForwardVisitResult<'tcx>,
+    ) -> SmtCheckResult {
+        let primitives = contract::decomp::primitive_components(&property.kind)
+            .unwrap_or(&[]);
+
+        let mut results: Vec<SmtCheckResult> = Vec::new();
+        for &kind in primitives {
+            let primitive = contract::decomp::with_kind(property, kind);
+            let result = self.check(checkpoint, &primitive, forward);
+            results.push(result);
+        }
+
+        let all_proved = results.iter().all(|r| matches!(r.result, CheckResult::Proved));
+        let any_failed = results.iter().any(|r| matches!(r.result, CheckResult::Failed));
+
+        let kind_name = format!("{:?}", property.kind);
+        if all_proved {
+            SmtCheckResult::proved(format!("{kind_name} proved: all primitives hold"))
+        } else if any_failed {
+            SmtCheckResult {
+                result: CheckResult::Failed,
+                query: None,
+                notes: vec![format!("{kind_name} failed: one or more primitives do not hold")],
+            }
+        } else {
+            SmtCheckResult::unknown(format!("{kind_name} unknown: one or more primitives are unproven"))
+        }
+    }
+
     /// Try to prove one property using SMT.
     pub fn check(
         &self,
@@ -143,7 +179,7 @@ impl<'tcx> SmtChecker<'tcx> {
             PropertyKind::Alias => alias::check(self, checkpoint, property, forward),
             PropertyKind::Alive => alive::check(self, checkpoint, property, forward),
             PropertyKind::Allocated => allocated::check(self, checkpoint, property, forward),
-            PropertyKind::Deref => deref::check(self, checkpoint, property, forward),
+            PropertyKind::Deref => self.check_decomposed(checkpoint, property, forward),
             PropertyKind::NonNull => non_null::check(self, checkpoint, property, forward),
             PropertyKind::InBound => in_bound::check(self, checkpoint, property, forward),
             PropertyKind::Init => init::check(self, checkpoint, property, forward),

@@ -80,7 +80,7 @@ pub(crate) fn check<'tcx>(
         return SmtCheckResult::proved(format!("Owning proved: {reason}"));
     }
 
-    if let Some(reason) = super::field_invariant::discharge_from_contract_fact(property, forward) {
+    if let Some(reason) = super::field_invariant::discharge_from_contract_fact_with_checkpoint(property, forward, checkpoint) {
         return SmtCheckResult::proved(format!("Owning proved: {reason}"));
     }
 

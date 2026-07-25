@@ -312,9 +312,19 @@ impl<'tcx> BackwardSlicer<'tcx> {
             }
         }
 
-        // Produce a leaf for this checkpoint occurrence.
+        // Produce a leaf for this checkpoint occurrence only when it is
+        // *not* an intermediate hit within a loop-unrolled path that
+        // reaches the same target block again deeper in the tree.
+        // Intermediate occurrences are already covered by the path-end
+        // leaf further down the same branch.
         if !checkpoint_items.is_empty() {
-            results.push((vec![node.block], checkpoint_items, checkpoint_relevant));
+            let has_deeper = results.iter().any(|(path, _, _)| {
+                // path[0] is the prepended node.block; check the rest
+                path.len() > 1 && path[1..].contains(&target_block)
+            });
+            if !has_deeper {
+                results.push((vec![node.block], checkpoint_items, checkpoint_relevant));
+            }
         }
 
         results

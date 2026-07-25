@@ -4124,7 +4124,9 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         let origin_key = &bounds.origin_key;
         self.forward.facts.iter().any(|fact| {
             let StateFact::Contract(property) = fact else { return false; };
-            if property.kind != PropertyKind::InBound { return false; }
+            if !crate::verify::contract::decomp::kind_implies(&property.kind, &PropertyKind::Allocated) {
+                return false;
+            }
             property.args.first().is_some_and(|arg| {
                 let PropertyArg::Place(cp) = arg else { return false; };
                 let mut key = PlaceKey::from_contract_place(cp);

@@ -16,8 +16,8 @@ use std::collections::{HashMap, HashSet};
 use syn::Expr;
 
 use super::{
-    attribute::assets_parser::*,
-    attribute::attr_parser::parse_rapx_attr,
+    source::assets::*,
+    source::attr::parse_rapx_attr,
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
     helpers::{
         Checkpoint, collect_return_block_indices, collect_unsafe_callsites,
@@ -160,7 +160,7 @@ fn resolve_chain_contracts<'tcx>(
     std_contracts: fn(
         TyCtxt<'tcx>,
         DefId,
-    ) -> &'static [super::attribute::assets_parser::PropertyEntry],
+    ) -> &'static [super::source::assets::PropertyEntry],
 ) -> FnContracts<'tcx> {
     if !visited.insert(callee_def_id) {
         return Vec::new();
@@ -1541,7 +1541,7 @@ fn build_type_invariants_from_params<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> Vec<Property<'tcx>> {
-    let db = crate::verify::attribute::assets_parser::get_std_type_invariants();
+    let db = crate::verify::source::assets::get_std_type_invariants();
     if db.is_empty() {
         return Vec::new();
     }
@@ -1580,7 +1580,7 @@ fn collect_type_invariants<'tcx>(
     def_id: DefId,
     db: &std::collections::HashMap<
         String,
-        crate::verify::attribute::assets_parser::TypeInvariantEntry,
+        crate::verify::source::assets::TypeInvariantEntry,
     >,
     type_path: &str,
     param_name: &str,
@@ -1615,7 +1615,7 @@ fn collect_type_invariants<'tcx>(
 fn instantiate_type_invariant<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    entry: &crate::verify::attribute::assets_parser::PropertyEntry,
+    entry: &crate::verify::source::assets::PropertyEntry,
     param_name: &str,
 ) -> Option<Property<'tcx>> {
     let mut exprs: Vec<syn::Expr> = Vec::new();
