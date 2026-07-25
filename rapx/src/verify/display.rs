@@ -1,6 +1,5 @@
 use rustc_middle::ty::TyCtxt;
 
-use crate::cli::VerifyMode;
 use crate::compat::FxHashMap;
 use crate::helpers::fn_info::get_cons;
 use indexmap::IndexMap;
@@ -547,7 +546,7 @@ pub fn emit_verify_summary<'tcx>(
     target_path: &str,
     def_id: rustc_hir::def_id::DefId,
     all_results: &[PropertyCheckResult<'tcx>],
-    mode: VerifyMode,
+    skip_invariant: bool,
 ) {
     let unproved = all_results
         .iter()
@@ -568,7 +567,7 @@ pub fn emit_verify_summary<'tcx>(
     rap_info!("[rapx::verify] function: {target_path}");
     rap_info!("============================================================");
 
-    if matches!(mode, VerifyMode::Invless) {
+    if skip_invariant {
         let cons = get_cons(tcx, def_id);
         for con in &cons {
             rap_info!("  + constructor: {}", tcx.def_path_str(*con));
@@ -651,9 +650,10 @@ pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
             let is_hazard =
                 r.property.contract_kind == crate::verify::contract::ContractKind::Hazard;
             let result = r.result.clone();
-            if let Some(entry) = counts.iter_mut().find(|(k, h, res, _)| {
-                *k == r.property.kind && *h == is_hazard && *res == result
-            }) {
+            if let Some(entry) = counts
+                .iter_mut()
+                .find(|(k, h, res, _)| *k == r.property.kind && *h == is_hazard && *res == result)
+            {
                 entry.3 += 1;
             } else {
                 counts.push((r.property.kind.clone(), is_hazard, result, 1usize));

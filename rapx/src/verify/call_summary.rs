@@ -21,7 +21,10 @@ use rustc_middle::{
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::analysis::path_analysis::graph::{PathEnumerator, PathGraph};
 
-use super::{helpers::ty_has_param_const, primitive::PrimitiveCall, slicer::ForgetReason, smt_check::common::pointee_ty};
+use super::{
+    helpers::ty_has_param_const, primitive::PrimitiveCall, slicer::ForgetReason,
+    smt_check::common::pointee_ty,
+};
 
 /// Dependency summary consumed by the backward visitor.
 #[derive(Clone, Debug)]
@@ -164,6 +167,16 @@ pub fn dependency_summary<'tcx>(
         };
     }
 
+    if name.contains("::transmute") || name.contains("intrinsics::transmute") {
+        return CallDependencySummary {
+            callee,
+            name,
+            return_depends_on_args: vec![0],
+            may_write_args: Vec::new(),
+            unsupported: false,
+        };
+    }
+
     if is_ownership_reconstruction(&name) {
         return CallDependencySummary {
             callee,
@@ -246,7 +259,10 @@ pub fn dependency_summary<'tcx>(
         };
     }
 
-    if primitive == Some(PrimitiveCall::NumericArith) || primitive == Some(PrimitiveCall::CmpMin) || primitive == Some(PrimitiveCall::SaturatingSub) {
+    if primitive == Some(PrimitiveCall::NumericArith)
+        || primitive == Some(PrimitiveCall::CmpMin)
+        || primitive == Some(PrimitiveCall::SaturatingSub)
+    {
         return CallDependencySummary {
             callee,
             name,
@@ -542,7 +558,9 @@ pub fn effect_summary<'tcx>(
         };
     }
 
-    if primitive == Some(PrimitiveCall::NumericArith) || primitive == Some(PrimitiveCall::SaturatingSub) {
+    if primitive == Some(PrimitiveCall::NumericArith)
+        || primitive == Some(PrimitiveCall::SaturatingSub)
+    {
         // Pure arithmetic: no memory effect and never precision-losing.  The
         // SMT model reconstructs the exact product/sum from the operands (see
         // the `unchecked_mul` handling in `assert_forward_facts`).
@@ -1398,7 +1416,6 @@ fn is_nonnull_destination<'tcx>(
 }
 
 // pointee_ty imported from smt_check::common.
-
 
 fn nonnull_inner_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
     let TyKind::Adt(def, args) = ty.kind() else {

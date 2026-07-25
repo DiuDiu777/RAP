@@ -211,7 +211,7 @@ const VERIFY_PREPARE_CMD: &[&str] = &["verify", "--prepare-targets"];
 const VERIFY_ALLOW_REPEAT_CMD: &[&str] = &["verify", "--postfix-repeat", "1"];
 const VERIFY_ALLOW_REPEAT2_CMD: &[&str] = &["verify", "--postfix-repeat", "2"];
 const VERIFY_SCAN_CMD: &[&str] = &["verify", "--mode", "scan"];
-const VERIFY_INVLESS_CMD: &[&str] = &["verify", "--mode", "invless"];
+const VERIFY_SKIP_INVARIANT_CMD: &[&str] = &["verify", "--skip-invariant"];
 
 // ==================== Dangling Pointer Detection Tests ====================
 #[test]
@@ -1446,6 +1446,16 @@ fn linked_list_nonnull() {
 }
 
 #[test]
+fn linked_list_nonnull_skip_invariant() {
+    let output = run_with_args(
+        "verify_cases/linked_list_nonnull",
+        VERIFY_SKIP_INVARIANT_CMD,
+    );
+    assert_contain(&output, "result: SOUND");
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
 fn linked_list_rawptr() {
     let output = run_with_args("verify_cases/linked_list_rawptr", VERIFY_CMD);
     assert_contain(&output, "result: SOUND");
@@ -1453,17 +1463,33 @@ fn linked_list_rawptr() {
 }
 
 #[test]
-fn invless_struct_noinvariant() {
-    let output = run_with_args("verify_units/struct_noinvariant_1", VERIFY_INVLESS_CMD);
+fn linked_list_rawptr_skip_invariant() {
+    let output = run_with_args(
+        "verify_cases/linked_list_rawptr",
+        VERIFY_SKIP_INVARIANT_CMD,
+    );
+    assert_contain(&output, "result: SOUND");
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
+fn skip_invariant_struct_noinvariant() {
+    let output = run_with_args(
+        "verify_units/struct_noinvariant_1",
+        VERIFY_SKIP_INVARIANT_CMD,
+    );
     assert_contain(&output, "result: UNSOUND");
 
-    let output = run_with_args("verify_units/struct_noinvariant_2", VERIFY_INVLESS_CMD);
+    let output = run_with_args(
+        "verify_units/struct_noinvariant_2",
+        VERIFY_SKIP_INVARIANT_CMD,
+    );
     assert_contain(&output, "result: SOUND");
 }
 
 #[test]
-fn invless_sound_callee() {
-    let output = run_with_args("verify_units/align_sound_1", VERIFY_INVLESS_CMD);
+fn skip_invariant_sound_callee() {
+    let output = run_with_args("verify_units/align_sound_1", VERIFY_SKIP_INVARIANT_CMD);
     assert_contain(&output, "function: sound_named_contract_binds_callsite_arg");
     assert_contain(&output, "result: SOUND");
 }

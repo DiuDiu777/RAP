@@ -1848,6 +1848,28 @@
       ]
     }
   ],
+  "core::ptr::const_ptr::offset_from_unsigned": [
+    {
+      "tag": "ValidNum",
+      "args": [
+        "self - origin >= 0"
+      ]
+    },
+    {
+      "tag": "ValidNum",
+      "args": [
+        "(self - origin) % size_of(T) == 0"
+      ]
+    },
+    {
+      "tag": "InBound",
+      "args": [
+        "origin",
+        "T",
+        "(self - origin) / size_of(T)"
+      ]
+    }
+  ],
   "core::ptr::const_ptr::byte_offset_from": [
     {
       "tag": "InBound",
@@ -2286,6 +2308,28 @@
       "args": [
         "T",
         "1"
+      ]
+    }
+  ],
+  "core::ptr::mut_ptr::offset_from_unsigned": [
+    {
+      "tag": "ValidNum",
+      "args": [
+        "self - origin >= 0"
+      ]
+    },
+    {
+      "tag": "ValidNum",
+      "args": [
+        "(self - origin) % size_of(T) == 0"
+      ]
+    },
+    {
+      "tag": "InBound",
+      "args": [
+        "origin",
+        "T",
+        "(self - origin) / size_of(T)"
       ]
     }
   ],

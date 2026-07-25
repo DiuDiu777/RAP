@@ -16,8 +16,6 @@ use std::collections::{HashMap, HashSet};
 use syn::Expr;
 
 use super::{
-    source::assets::*,
-    source::attr::parse_rapx_attr,
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
     helpers::{
         Checkpoint, collect_return_block_indices, collect_unsafe_callsites,
@@ -25,6 +23,8 @@ use super::{
         resolve_impl_self_ty_def_id,
     },
     path_extractor::PathExtractor,
+    source::assets::*,
+    source::attr::parse_rapx_attr,
 };
 
 /// A list of parsed `requires` contracts.
@@ -157,10 +157,7 @@ fn resolve_chain_contracts<'tcx>(
     tcx: TyCtxt<'tcx>,
     callee_def_id: DefId,
     visited: &mut HashSet<DefId>,
-    std_contracts: fn(
-        TyCtxt<'tcx>,
-        DefId,
-    ) -> &'static [super::source::assets::PropertyEntry],
+    std_contracts: fn(TyCtxt<'tcx>, DefId) -> &'static [super::source::assets::PropertyEntry],
 ) -> FnContracts<'tcx> {
     if !visited.insert(callee_def_id) {
         return Vec::new();
@@ -220,6 +217,7 @@ fn resolve_chain_contracts<'tcx>(
 pub struct VerifyTargetCollector<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,
+    skip_invariant: bool,
     crate_filter: Option<String>,
     crate_filter_matched: bool,
     module_filter: Option<String>,
@@ -239,12 +237,14 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
     pub fn new(
         tcx: TyCtxt<'tcx>,
         mode: VerifyMode,
+        skip_invariant: bool,
         crate_filter: Option<String>,
         module_filter: Option<String>,
     ) -> Self {
         VerifyTargetCollector {
             tcx,
             mode,
+            skip_invariant,
             crate_filter,
             crate_filter_matched: false,
             module_filter,
@@ -558,7 +558,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
     /// [`TraitEnsurance`] placeholders.
     ///
     /// In `targeted` mode, only `impl` blocks annotated with `#[rapx::verify]`
-    /// are recorded.  In `scan` and `invless` modes, all `unsafe trait` impls
+    /// are recorded.  In `scan` mode, all `unsafe trait` impls
     /// are recorded.
     fn visit_item(&mut self, item: &'tcx rustc_hir::Item<'tcx>) {
         if let ItemKind::Impl(rustc_hir::Impl { of_trait, .. }) = &item.kind
@@ -620,7 +620,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
     /// Visits each function body and records verification targets.
     ///
     /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are collected.
-    /// In `all` and `invariantless` modes, a HIR-level pre-filter (`contains_unsafe`
+    /// In `scan` mode, a HIR-level pre-filter (`contains_unsafe`
     /// and `function_has_struct_invariant`) avoids expensive MIR scanning for functions
     /// that have no unsafe content and no struct invariants.
     fn visit_fn(
@@ -670,21 +670,18 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                 if function_target.checkpoints.is_empty()
                     && function_target.raw_ptr_deref_checks.is_empty()
                     && function_target.static_mut_checks.is_empty()
-                    && function_target.struct_invariants.is_empty()
                 {
-                    let root =
-                        crate::analysis::safetyflow_analysis::root::scan_mir(self.tcx, def_id);
-                    if root.is_none() {
-                        return;
+                    if !function_target.struct_invariants.is_empty() {
+                        if self.skip_invariant {
+                            return;
+                        }
+                    } else {
+                        let root =
+                            crate::analysis::safetyflow_analysis::root::scan_mir(self.tcx, def_id);
+                        if root.is_none() {
+                            return;
+                        }
                     }
-                }
-            }
-            VerifyMode::Invless => {
-                if function_target.checkpoints.is_empty()
-                    && function_target.raw_ptr_deref_checks.is_empty()
-                    && function_target.static_mut_checks.is_empty()
-                {
-                    return;
                 }
             }
         }
@@ -710,6 +707,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
 pub struct PrepareTargets<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,
+    skip_invariant: bool,
     crate_filter: Option<String>,
     module_filter: Option<String>,
 }
@@ -723,6 +721,7 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
         let mut collector = VerifyTargetCollector::new(
             self.tcx,
             self.mode,
+            self.skip_invariant,
             self.crate_filter.clone(),
             self.module_filter.clone(),
         );
@@ -825,12 +824,14 @@ impl<'tcx> PrepareTargets<'tcx> {
     pub fn new(
         tcx: TyCtxt<'tcx>,
         mode: VerifyMode,
+        skip_invariant: bool,
         crate_filter: Option<String>,
         module_filter: Option<String>,
     ) -> Self {
         PrepareTargets {
             tcx,
             mode,
+            skip_invariant,
             crate_filter,
             module_filter,
         }
@@ -1578,10 +1579,7 @@ fn build_type_invariants_from_params<'tcx>(
 fn collect_type_invariants<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    db: &std::collections::HashMap<
-        String,
-        crate::verify::source::assets::TypeInvariantEntry,
-    >,
+    db: &std::collections::HashMap<String, crate::verify::source::assets::TypeInvariantEntry>,
     type_path: &str,
     param_name: &str,
     results: &mut Vec<Property<'tcx>>,

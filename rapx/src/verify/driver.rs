@@ -516,6 +516,7 @@ pub struct VerifyRun<'tcx> {
     tcx: TyCtxt<'tcx>,
     repeat_strategy: RepeatStrategy,
     mode: VerifyMode,
+    skip_invariant: bool,
     crate_filter: Option<String>,
     module_filter: Option<String>,
     debug_contracts: bool,
@@ -527,6 +528,7 @@ impl<'tcx> VerifyRun<'tcx> {
         tcx: TyCtxt<'tcx>,
         repeat_strategy: RepeatStrategy,
         mode: VerifyMode,
+        skip_invariant: bool,
         crate_filter: Option<String>,
         module_filter: Option<String>,
         debug_contracts: bool,
@@ -535,6 +537,7 @@ impl<'tcx> VerifyRun<'tcx> {
             tcx,
             repeat_strategy,
             mode,
+            skip_invariant,
             crate_filter,
             module_filter,
             debug_contracts,
@@ -552,7 +555,7 @@ impl<'tcx> VerifyRun<'tcx> {
         }
     }
 
-    /// In invless mode, generate verification sequences for each read method
+    /// With `--skip-invariant`, generate verification sequences for each read method
     /// that chain through constructors and mutators.
     ///
     /// Produces sequences like:
@@ -601,11 +604,10 @@ impl<'tcx> VerifyRun<'tcx> {
 
         // Start with the constructor's requires, remapped to refer to struct
         // fields (self.field) instead of constructor parameters.
-        let con_contracts: Vec<Property<'tcx>> =
-            get_contract_from_annotation(self.tcx, con_id)
-                .into_iter()
-                .map(|c| remap_constructor_contract(c))
-                .collect();
+        let con_contracts: Vec<Property<'tcx>> = get_contract_from_annotation(self.tcx, con_id)
+            .into_iter()
+            .map(|c| remap_constructor_contract(c))
+            .collect();
         accumulated_requires.extend(con_contracts);
 
         // Remove contracts that are invalidated by mutators
@@ -626,10 +628,12 @@ impl<'tcx> VerifyRun<'tcx> {
             }
         }
 
-        // Also include the read method's own requires (always — they are more
-        // specific than the constructor's and must not be deduplicated away).
-        let own_requires = get_contract_from_annotation(self.tcx, read_def_id);
-        accumulated_requires.extend(own_requires);
+        // Also include the read method's own caller requires (which already
+        // contains struct invariants merged by build_function_target).
+        // This is broader than just `get_contract_from_annotation` because
+        // it propagates struct-level properties even when the method has no
+        // explicit `#[rapx::requires]`.
+        accumulated_requires.extend(read_target.caller_requires.clone());
 
         FunctionTarget {
             def_id: read_def_id,
@@ -666,7 +670,7 @@ impl<'tcx> VerifyRun<'tcx> {
                 Err(e) => {
                     let msg = panic_downcast_msg(e);
                     rap_warn!(
-                        "Skipping invless constructor {} (repeat {}): {msg}",
+                        "Skipping constructor {} (repeat {}): {msg}",
                         self.tcx.def_path_str(con_id),
                         repeat,
                     );
@@ -724,7 +728,9 @@ impl<'tcx> VerifyRun<'tcx> {
             }
         }
 
-        if unproved == 0 && !all_results.is_empty() {
+        if all_results.is_empty() {
+            rap_info!("  result: SOUND (no unsafe checkpoints)");
+        } else if unproved == 0 {
             rap_info!(green, "  result: SOUND");
         } else {
             rap_warn!("  result: UNSOUND ({unproved} unproved)");
@@ -748,6 +754,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
         let mut collector = VerifyTargetCollector::new(
             self.tcx,
             self.mode,
+            self.skip_invariant,
             self.crate_filter.clone(),
             self.module_filter.clone(),
         );
@@ -788,7 +795,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
 
             // Phase 2: struct invariant verification
-            if !target.struct_invariants.is_empty() && !matches!(self.mode, VerifyMode::Invless) {
+            if !target.struct_invariants.is_empty() && !self.skip_invariant {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, planned_repeat);
                 let struct_report = driver.verify_struct_invariants();
                 rap_debug!("{}", struct_report.describe());
@@ -813,7 +820,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                     rap_info!("============================================================");
                     rap_info!("[rapx::verify] function: {target_path}");
                     rap_info!("============================================================");
-                    if matches!(self.mode, VerifyMode::Invless) {
+                    if self.skip_invariant {
                         let cons = get_cons(self.tcx, target.def_id);
                         for con in &cons {
                             rap_info!("  + constructor: {}", self.tcx.def_path_str(*con));
@@ -828,11 +835,9 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 continue;
             }
 
-            // In invless mode, skip standalone emission for methods that
+            // When --skip-invariant is set, skip standalone emission for methods that
             // have constructors — sequences will generate dedicated entries.
-            if matches!(self.mode, VerifyMode::Invless)
-                && !get_cons(self.tcx, target.def_id).is_empty()
-            {
+            if self.skip_invariant && !get_cons(self.tcx, target.def_id).is_empty() {
                 continue;
             }
 
@@ -841,7 +846,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 &target_path,
                 target.def_id,
                 &all_results,
-                self.mode,
+                self.skip_invariant,
             );
         }
 
@@ -885,8 +890,8 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
         }
 
-        // Invless mode: generate constructor-mutator-method sequences
-        if matches!(self.mode, VerifyMode::Invless) {
+        // --skip-invariant: generate constructor-mutator-method sequences
+        if self.skip_invariant {
             self.run_invless_sequences(&collector.function_targets);
         }
     }
@@ -1110,7 +1115,6 @@ impl<'tcx> VerifyRun<'tcx> {
     }
 }
 
-
 /// Analysis pass that dumps backward and forward visitor diagnostics.
 pub struct VerifyVisitDump<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -1162,9 +1166,7 @@ fn remap_constructor_contract<'tcx>(
         ContractExpr, ContractPlace, ContractProjection, PlaceBase, PropertyArg,
     };
 
-    fn remap_place_arg<'tcx>(
-        arg: &PropertyArg<'tcx>,
-    ) -> PropertyArg<'tcx> {
+    fn remap_place_arg<'tcx>(arg: &PropertyArg<'tcx>) -> PropertyArg<'tcx> {
         let place = match arg {
             PropertyArg::Place(p) => p,
             PropertyArg::Expr(ContractExpr::Place(p)) => p,
@@ -1181,7 +1183,9 @@ fn remap_constructor_contract<'tcx>(
             base: PlaceBase::Arg(0),
             projections: vec![projection],
         };
-        new_place.projections.extend(place.projections.iter().cloned());
+        new_place
+            .projections
+            .extend(place.projections.iter().cloned());
         match arg {
             PropertyArg::Place(_) => PropertyArg::Place(new_place),
             PropertyArg::Expr(_) => PropertyArg::Expr(ContractExpr::Place(new_place)),
@@ -1195,7 +1199,10 @@ fn remap_constructor_contract<'tcx>(
         .map(|arg| remap_place_arg(arg))
         .collect();
 
-    crate::verify::contract::Property { args: new_args, ..property }
+    crate::verify::contract::Property {
+        args: new_args,
+        ..property
+    }
 }
 
 impl<'tcx> VerifyVisitDump<'tcx> {
@@ -1217,7 +1224,7 @@ impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
     /// Collect verify targets and print the current staged visitor output.
     fn run(&mut self) {
         rap_debug!("======== #[rapx::verify] visitor diagnostics ========");
-        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode, None, None);
+        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode, false, None, None);
         self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
 
         for target in &collector.function_targets {
