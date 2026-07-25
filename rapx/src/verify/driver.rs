@@ -1741,14 +1741,36 @@ fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
     }
     for (path_desc, props) in &path_groups {
         rap_info!("        path {path_desc}:");
+        // Count identical (kind, hazard, result) groups.
+        let mut counts: Vec<(
+            crate::verify::contract::PropertyKind,
+            bool,
+            super::report::CheckResult,
+            usize,
+        )> = Vec::new();
         for r in props.iter() {
-            let tag = if r.property.contract_kind == crate::verify::contract::ContractKind::Hazard {
-                format!("[hazard] {:?}", r.property.kind)
+            let is_hazard =
+                r.property.contract_kind == crate::verify::contract::ContractKind::Hazard;
+            let result = r.result.clone();
+            if let Some(entry) = counts.iter_mut().find(|(k, h, res, _)| {
+                *k == r.property.kind && *h == is_hazard && *res == result
+            }) {
+                entry.3 += 1;
             } else {
-                format!("{:?}", r.property.kind)
+                counts.push((r.property.kind.clone(), is_hazard, result, 1usize));
+            }
+        }
+        for (kind, is_hazard, result, count) in &counts {
+            let tag = if *is_hazard {
+                format!("[hazard] {:?}", kind)
+            } else {
+                format!("{:?}", kind)
             };
-            let line = format!("          {tag} | {:?}", r.result);
-            if matches!(r.result, super::report::CheckResult::Proved) {
+            let mut line = format!("          {tag} | {:?}", result);
+            if *count > 1 {
+                line.push_str(&format!(" (x{count})"));
+            }
+            if matches!(result, super::report::CheckResult::Proved) {
                 rap_info!(green, "{line}");
             } else {
                 rap_warn!("{line}");
