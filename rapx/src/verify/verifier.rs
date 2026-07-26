@@ -755,7 +755,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             return;
         }
         for field in 0..2 {
-            let mut field_place = PlaceKey {
+            let field_place = PlaceKey {
                 base: PlaceBaseKey::Local(destination.as_usize()),
                 fields: vec![field],
             };

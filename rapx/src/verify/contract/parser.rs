@@ -457,26 +457,6 @@ impl<'tcx> Property<'tcx> {
         }
     }
 
-    fn new_with_target(
-        kind: PropertyKind,
-        tcx: TyCtxt<'tcx>,
-        def_id: DefId,
-        exprs: &[Expr],
-    ) -> Self {
-        let args = exprs
-            .first()
-            .map(|expr| Self::parse_target_arg(tcx, def_id, expr))
-            .into_iter()
-            .collect();
-        Self {
-            kind,
-            args,
-            contract_kind: ContractKind::Precond,
-            null_guard: None,
-            or_alternatives: Vec::new(),
-        }
-    }
-
     fn new_with_targets(
         kind: PropertyKind,
         tcx: TyCtxt<'tcx>,

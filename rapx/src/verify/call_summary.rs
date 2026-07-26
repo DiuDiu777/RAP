@@ -11,8 +11,6 @@
 
 use std::collections::HashSet;
 
-use crate::compat::FxHashMap;
-
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{BasicBlock, Local, Operand, Rvalue, StatementKind, TerminatorKind},

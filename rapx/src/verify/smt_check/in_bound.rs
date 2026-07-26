@@ -14,6 +14,7 @@
 //! branch facts from the forward visit result.
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
+use crate::verify::def_use::PlaceKey;
 use crate::verify::{
     contract::{ContractExpr, Property, PropertyArg},
     helpers::Checkpoint,
@@ -83,6 +84,18 @@ pub(crate) fn check<'tcx>(
     if let Some(obligation) =
         pointer_arithmetic_obligation(checker, checkpoint, required_ty, access_count.clone())
     {
+        // Direct static-backed InBound proof: when the base pointer traces
+        // to a known static/const allocation, compare offset<len directly.
+        if let SmtObligation::PointerRangeInBounds {
+            place, upper_delta, ..
+        } = &obligation
+        {
+            if let Some(result) =
+                prove_static_backed_pointer_range(checker, checkpoint, place, upper_delta)
+            {
+                return result;
+            }
+        }
         return checker.prove_obligation(
             checkpoint,
             forward,
@@ -102,6 +115,66 @@ pub(crate) fn check<'tcx>(
         },
         property.null_guard.as_ref(),
     )
+}
+
+/// Direct check: when pointer arithmetic targets a static/const-backed
+/// pointer, prove InBound by comparing the constant offset with the
+/// allocation size, without involving the SMT solver.
+fn prove_static_backed_pointer_range<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
+    base_place: &PlaceKey,
+    upper_delta: &SmtTerm,
+) -> Option<SmtCheckResult> {
+    use crate::verify::smt_check::valid_cstr::const_bytes_for_local;
+    let offset = match upper_delta {
+        SmtTerm::Const(n) => *n as usize,
+        _ => return None,
+    };
+    let body = checker.tcx.optimized_mir(checkpoint.caller);
+    let base_local = base_place.local()?;
+    let root = {
+        let parents = crate::verify::smt_check::common::body_parents(checker.tcx, body);
+        let mut cur = base_local;
+        let mut s = std::collections::HashSet::new();
+        while s.insert(cur) {
+            if let Some(n) = parents.get(&cur) { cur = *n; } else { break; }
+        }
+        let mut cur = cur;
+        let mut s2 = std::collections::HashSet::new();
+        loop {
+            if !s2.insert(cur) { break; }
+            let mut changed = false;
+            for data in body.basic_blocks.iter() {
+                for stmt in &data.statements {
+                    let assign = match &stmt.kind {
+                        rustc_middle::mir::StatementKind::Assign(a) => a,
+                        _ => continue,
+                    };
+                    let (target, rvalue) = assign.as_ref();
+                    if target.local != cur || !target.projection.is_empty() { continue; }
+                    if let rustc_middle::mir::Rvalue::Cast(_, op, _) = rvalue {
+                        match op {
+                            rustc_middle::mir::Operand::Copy(p) | rustc_middle::mir::Operand::Move(p)
+                                if p.projection.is_empty() => { cur = p.local; changed = true; }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            if !changed { break; }
+        }
+        cur
+    };
+    if let Some(bytes) = const_bytes_for_local(checker.tcx, body, root) {
+        if bytes.len() > offset {
+            return Some(SmtCheckResult::proved(format!(
+                "InBound proved: static-backed pointer, alloc {}B, offset {offset}",
+                bytes.len(),
+            )));
+        }
+    }
+    None
 }
 
 fn pointer_arithmetic_obligation<'tcx>(

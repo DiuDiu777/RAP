@@ -1246,7 +1246,6 @@ fn collect_properties_from_named_attrs<'tcx>(
         };
 
         results.extend(parsed.properties.into_iter().flat_map(|property| {
-            let is_hazard = property.kind.as_deref().is_some_and(|k| k == "hazard");
             Property::parse_list(tcx, property_def_id, property.tag.as_str(), &property.args)
                 .into_iter()
                 .map(move |mut p| { p.apply_kind(property.kind.as_deref()); p })
