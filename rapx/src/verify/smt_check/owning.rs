@@ -104,7 +104,6 @@ pub(crate) fn check_for_checkpoint<'tcx>(
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
-    let _ = checker;
     let Some(target) = checker.property_target(None, property) else {
         return SmtCheckResult::unknown("Owning target could not be resolved");
     };

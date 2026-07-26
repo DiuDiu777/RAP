@@ -155,10 +155,7 @@ impl<'tcx> MonoSet<'tcx> {
         res
     }
 
-    fn filter_unbound_solution(mut self) -> Self {
-        self.monos.retain(|mono| mono.has_infer_types());
-        self
-    }
+
 
     // if the unbound generic type is still exist (this could happen
     // if `T` has no trait bounds at all)
@@ -551,63 +548,9 @@ pub fn resolve_mono_apis<'tcx>(
     ret
 }
 
-pub fn add_transform_tys<'tcx>(available_ty: &mut HashSet<TyWrapper<'tcx>>, tcx: TyCtxt<'tcx>) {
-    let mut new_tys = Vec::new();
-    available_ty.iter().for_each(|ty| {
-        new_tys.push(
-            Ty::new_ref(
-                tcx,
-                tcx.lifetimes.re_erased,
-                (*ty).into(),
-                ty::Mutability::Not,
-            )
-            .into(),
-        );
-        new_tys.push(Ty::new_ref(
-            tcx,
-            tcx.lifetimes.re_erased,
-            (*ty).into(),
-            ty::Mutability::Mut,
-        ));
-        new_tys.push(Ty::new_ref(
-            tcx,
-            tcx.lifetimes.re_erased,
-            Ty::new_slice(tcx, (*ty).into()),
-            ty::Mutability::Not,
-        ));
-        new_tys.push(Ty::new_ref(
-            tcx,
-            tcx.lifetimes.re_erased,
-            Ty::new_slice(tcx, (*ty).into()),
-            ty::Mutability::Mut,
-        ));
-    });
 
-    new_tys.into_iter().for_each(|ty| {
-        available_ty.insert(ty.into());
-    });
-}
 
-pub fn eliminate_infer_var<'tcx>(
-    fn_did: DefId,
-    args: &[ty::GenericArg<'tcx>],
-    tcx: TyCtxt<'tcx>,
-) -> Vec<ty::GenericArg<'tcx>> {
-    let mut res = Vec::new();
-    let identity = ty::GenericArgs::identity_for_item(tcx, fn_did);
-    for (i, arg) in args.iter().enumerate() {
-        if let GenericArgKind::Type(ty) = arg.kind() {
-            if ty.is_ty_var() {
-                res.push(identity[i]);
-            } else {
-                res.push(*arg);
-            }
-        } else {
-            res.push(*arg);
-        }
-    }
-    res
-}
+
 
 /// if type parameter is unbound, e.g., `T` in `fn foo<T>()`,
 /// we use some predefined types to substitute it

@@ -14,7 +14,7 @@ use rustc_middle::{
 };
 use rustc_span::symbol::Symbol;
 use std::collections::{HashMap, HashSet};
-pub struct PhiPlaceholder;
+
 pub struct SSATransformer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     pub body: Body<'tcx>,
@@ -36,30 +36,7 @@ pub struct SSATransformer<'tcx> {
 }
 
 impl<'tcx> SSATransformer<'tcx> {
-    fn find_phi_placeholder(tcx: TyCtxt<'_>, crate_name: &str) -> Option<DefId> {
-        let sym_crate = Symbol::intern(crate_name);
-        let krate = tcx
-            .crates(())
-            .iter()
-            .find(|&&c| tcx.crate_name(c) == sym_crate)?;
-        let root_def_id = DefId {
-            krate: *krate,
-            index: CRATE_DEF_INDEX,
-        };
-        // print!("Phid\n");
 
-        for item in tcx.module_children(root_def_id) {
-            // println!("Module child: {:?}", item.ident.name.as_str());
-
-            if item.ident.name.as_str() == "PhiPlaceholder" {
-                if let Some(def_id) = item.res.opt_def_id() {
-                    return Some(def_id);
-                }
-            }
-        }
-        // print!("Phid\n");
-        return Some(root_def_id);
-    }
     pub fn new(
         tcx: TyCtxt<'tcx>,
         body: &Body<'tcx>,
@@ -108,9 +85,7 @@ impl<'tcx> SSATransformer<'tcx> {
         }
     }
 
-    pub fn return_body_ref(&self) -> &Body<'tcx> {
-        &self.body
-    }
+
 
     fn map_locals_to_definition_block(body: &Body) -> HashMap<Local, BasicBlock> {
         let mut local_to_block_map: HashMap<Local, BasicBlock> = HashMap::new();
@@ -174,32 +149,7 @@ impl<'tcx> SSATransformer<'tcx> {
         dfs(root, dom_tree, &mut visited, &mut preorder);
         preorder
     }
-    pub fn depth_first_search_postorder(
-        dom_tree: &HashMap<BasicBlock, Vec<BasicBlock>>,
-        root: &BasicBlock,
-    ) -> Vec<BasicBlock> {
-        let mut visited: HashSet<BasicBlock> = HashSet::new();
-        let mut postorder = Vec::new();
 
-        fn dfs(
-            node: BasicBlock,
-            dom_tree: &HashMap<BasicBlock, Vec<BasicBlock>>,
-            visited: &mut HashSet<BasicBlock>,
-            postorder: &mut Vec<BasicBlock>,
-        ) {
-            if visited.insert(node) {
-                if let Some(children) = dom_tree.get(&node) {
-                    for &child in children {
-                        dfs(child, dom_tree, visited, postorder);
-                    }
-                }
-                postorder.push(node);
-            }
-        }
-
-        dfs(*root, dom_tree, &mut visited, &mut postorder);
-        postorder
-    }
 
     fn map_locals_to_assign_blocks(body: &Body) -> HashMap<Local, HashSet<BasicBlock>> {
         let mut local_to_blocks: HashMap<Local, HashSet<BasicBlock>> = HashMap::new();
@@ -276,17 +226,7 @@ impl<'tcx> SSATransformer<'tcx> {
 
         cfg
     }
-    fn print_dominance_tree(
-        dom_tree: &HashMap<BasicBlock, Vec<BasicBlock>>,
-        current: BasicBlock,
-        depth: usize,
-    ) {
-        if let Some(children) = dom_tree.get(&current) {
-            for &child in children {
-                Self::print_dominance_tree(dom_tree, child, depth + 1);
-            }
-        }
-    }
+
 
     pub fn is_phi_statement(&self, statement: &Statement<'tcx>) -> bool {
         if let StatementKind::Assign(assign) = &statement.kind {

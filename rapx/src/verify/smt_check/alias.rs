@@ -401,7 +401,7 @@ pub(super) fn as_ptr_provenance_origins<'tcx>(
         }) else {
             continue;
         };
-        let resolved = resolve_mir_place(tcx, caller, place, &aliases);
+        let resolved = resolve_mir_place(place, &aliases);
         if !extra.contains(&resolved) {
             extra.push(resolved);
         }
@@ -1541,8 +1541,8 @@ fn collect_place_aliases<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> HashMap<Loca
 }
 
 fn alias_from_rvalue<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
+    _tcx: TyCtxt<'tcx>,
+    _def_id: DefId,
     rvalue: &Rvalue<'tcx>,
     aliases: &HashMap<Local, PlaceKey>,
 ) -> Option<PlaceKey> {
@@ -1556,12 +1556,10 @@ fn alias_from_rvalue<'tcx>(
         | Rvalue::CopyForDeref(place) => Some(place),
         _ => None,
     }?;
-    Some(resolve_mir_place(tcx, def_id, place, aliases))
+    Some(resolve_mir_place(place, aliases))
 }
 
 fn resolve_mir_place<'tcx>(
-    _tcx: TyCtxt<'tcx>,
-    _def_id: DefId,
     place: &Place<'tcx>,
     aliases: &HashMap<Local, PlaceKey>,
 ) -> PlaceKey {
@@ -1636,10 +1634,10 @@ fn rvalue_mentions_origin<'tcx>(
         | Rvalue::Cast(_, Operand::Move(place), _)
         | Rvalue::Ref(_, _, place)
         | Rvalue::RawPtr(_, place)
-        | Rvalue::CopyForDeref(place) => resolve_mir_place_dummy(place, aliases).overlaps(origin),
+        | Rvalue::CopyForDeref(place) => resolve_mir_place(place, aliases).overlaps(origin),
         Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
             Operand::Copy(place) | Operand::Move(place) => {
-                resolve_mir_place_dummy(place, aliases).overlaps(origin)
+                resolve_mir_place(place, aliases).overlaps(origin)
             }
             Operand::Constant(_) => false,
             #[cfg(rapx_rustc_ge_196)]
@@ -1649,21 +1647,9 @@ fn rvalue_mentions_origin<'tcx>(
     }
 }
 
-fn resolve_mir_place_dummy<'tcx>(
-    place: &Place<'tcx>,
-    aliases: &HashMap<Local, PlaceKey>,
-) -> PlaceKey {
-    let key = PlaceKey::from_mir_place(place);
-    if !key.fields.is_empty() {
-        key
-    } else {
-        aliases.get(&place.local).cloned().unwrap_or(key)
-    }
-}
-
 fn terminator_writes_origin<'tcx>(
     tcx: TyCtxt<'tcx>,
-    caller: DefId,
+    _caller: DefId,
     terminator: &TerminatorKind<'tcx>,
     origin: &PlaceKey,
     aliases: &HashMap<Local, PlaceKey>,
@@ -1686,12 +1672,12 @@ fn terminator_writes_origin<'tcx>(
     }) else {
         return false;
     };
-    resolve_mir_place(tcx, caller, place, aliases).overlaps(origin)
+    resolve_mir_place(place, aliases).overlaps(origin)
 }
 
 fn terminator_uses_origin<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
+    _tcx: TyCtxt<'tcx>,
+    _caller: DefId,
     terminator: &TerminatorKind<'tcx>,
     origin: &PlaceKey,
     aliases: &HashMap<Local, PlaceKey>,
@@ -1708,7 +1694,7 @@ fn terminator_uses_origin<'tcx>(
         }) else {
             return false;
         };
-        resolve_mir_place(tcx, caller, place, aliases).overlaps(origin)
+        resolve_mir_place(place, aliases).overlaps(origin)
     })
 }
 
@@ -1789,7 +1775,7 @@ fn vec_owners_for_origins<'tcx>(
         }) else {
             continue;
         };
-        let owner = resolve_mir_place(tcx, caller, owner_place, aliases);
+        let owner = resolve_mir_place(owner_place, aliases);
         if !owners.contains(&owner) {
             owners.push(owner);
         }
@@ -1800,7 +1786,7 @@ fn vec_owners_for_origins<'tcx>(
 
 fn terminator_invalidates_vec_owner<'tcx>(
     tcx: TyCtxt<'tcx>,
-    caller: DefId,
+    _caller: DefId,
     terminator: &TerminatorKind<'tcx>,
     owners: &[PlaceKey],
     aliases: &HashMap<Local, PlaceKey>,
@@ -1821,7 +1807,7 @@ fn terminator_invalidates_vec_owner<'tcx>(
         }) else {
             return false;
         };
-        let arg = resolve_mir_place(tcx, caller, place, aliases);
+        let arg = resolve_mir_place(place, aliases);
         owners
             .iter()
             .any(|owner| arg.overlaps(owner) || owner.overlaps(&arg))

@@ -8,7 +8,6 @@ use std::{default, fmt};
 use num_traits::{Bounded, Num, Zero};
 use rust_intervals::Interval;
 use rustc_middle::mir::{BinOp, UnOp};
-// use std::ops::Range;
 use std::ops::{Add, Mul, Sub};
 
 use crate::{
@@ -17,44 +16,6 @@ use crate::{
 };
 
 use super::domain::*;
-
-// fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-//     let lower: &Lazy<String> = if self.range.left.0 == T::min_value() {
-//         &STR_MIN
-//     } else if self.range.left.0 == T::max_value() {
-//         &STR_MAX
-//     } else {
-//         static DUMMY: Lazy<String> = Lazy::new(|| String::new());
-//         let tmp = format!("{}", self.range.left.0);
-//         let tmp_clone = tmp.clone();
-//         let local = Lazy::new(|| tmp);
-//         return write!(
-//             f,
-//             "{} [{}, {}]",
-//             self.rtype,
-//             *local,
-//             if self.range.right.0 == T::min_value() {
-//                 &*STR_MIN
-//             } else if self.range.right.0 == T::max_value() {
-//                 &*STR_MAX
-//             } else {
-//                 return write!(f, "{} [{}, {}]", self.rtype, tmp_clone, self.range.right.0);
-//             }
-//         );
-//     };
-
-//     let upper: &Lazy<String> = if self.range.right.0 == T::min_value() {
-//         &STR_MIN
-//     } else if self.range.right.0 == T::max_value() {
-//         &STR_MAX
-//     } else {
-//         let tmp = format!("{}", self.range.right.0);
-//         let local = Lazy::new(|| tmp);
-//         return write!(f, "{} [{}, {}]", self.rtype, &**lower, *local);
-//     };
-
-//     write!(f, "{} [{}, {}]", self.rtype, &**lower, &**upper)
-// }
 
 impl<T> Range<T>
 where
@@ -89,14 +50,6 @@ where
     pub fn get_upper(&self) -> T {
         self.range.upper().unwrap().clone()
     }
-
-    // // Setter for lower bound
-    // pub fn set_lower(&mut self, newl: T) {
-    // }
-
-    // // Setter for upper bound
-    // pub fn set_upper(&mut self, newu: T) {
-    // }
 
     // Check if the range type is unknown
     pub fn is_unknown(&self) -> bool {
@@ -206,21 +159,9 @@ where
             } else {
                 range
             }
-
-            // let left = std::cmp::max_by(self.get_lower(), other.get_lower(), |a, b| {
-            //     a.partial_cmp(b).unwrap()
-            // });
-            // let right = std::cmp::min_by(self.get_upper(), other.get_upper(), |a, b| {
-            //     a.partial_cmp(b).unwrap()
-            // });
-            // if left <= right {
-            //     Range::new(left.clone(), right.clone(), RangeType::Regular)
-            // } else {
-            //     let empty = T::min_value();
-            //     Range::new(empty.clone(), empty, RangeType::Empty)
-            // }
         }
     }
+
     pub fn unionwith(&self, other: &Range<T>) -> Range<T> {
         if self.is_unknown() {
             return Range::new(
@@ -244,22 +185,6 @@ where
             Range::new(left.clone(), right.clone(), RangeType::Regular)
         }
     }
-    // Check if the range is the maximum range
-    // pub fn is_max_range(&self) -> bool {
-    //     self.range.lower() == T::min_value() && self.range.upper() == T::max_value()
-    // }
-
-    // // Print the range
-    // pub fn print(&self) {
-    //     println!("Range: [{} - {}]", self.get_lower(), self.get_upper());
-    // }
-
-    // // Arithmetic and bitwise operations (example for addition)
-    // pub fn add(&self, other: &Range<T>) -> Range<T> {
-    //     let lower = self.get_lower() + other.get_lower();
-    //     let upper = self.get_upper() + other.get_upper();
-    //     Range::with_bounds(lower, upper, RangeType::Regular)
-    // }
 }
 
 // Implement the comparison operators

@@ -2270,9 +2270,7 @@ impl<'tcx> SmtChecker<'tcx> {
     pub(crate) fn maybeuninit_covering_init(
         &self,
         checkpoint: &Checkpoint<'tcx>,
-        _target: &PlaceKey,
         required_ty: Ty<'tcx>,
-        _forward: &ForwardVisitResult<'tcx>,
     ) -> bool {
         // The target array must be `[E; N]` with a const-generic length `N`.
         let TyKind::Array(_, array_len) = required_ty.kind() else {

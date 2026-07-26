@@ -9,7 +9,7 @@
 
 use rustc_hir::{def::DefKind, def_id::DefId};
 use rustc_middle::{
-    mir::{AggregateKind, BasicBlock, Body, Local, Operand, Rvalue, StatementKind, TerminatorKind},
+    mir::{AggregateKind, Body, Local, Operand, Rvalue, StatementKind, TerminatorKind},
     ty::{TyCtxt, TyKind},
 };
 
@@ -526,6 +526,3 @@ fn len_call_receiver<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, local: Local) -
     }
     None
 }
-
-#[allow(dead_code)]
-fn unused_block(_: BasicBlock) {}

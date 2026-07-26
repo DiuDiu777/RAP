@@ -127,68 +127,6 @@ impl<'tcx> SymbExpr<'tcx> {
         }
     }
 
-    // pub fn eval<T: IntervalArithmetic + ConstConvert + Debug>(
-    //     &self,
-    //     vars: &VarNodes<'tcx, T>,
-    // ) -> Range<T> {
-    //     match self {
-    //         SymbExpr::Unknown => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
-
-    //         SymbExpr::Constant(c) => {
-    //             if let Some(val) = T::from_const(c) {
-    //                 Range::new(val, val, RangeType::Regular)
-    //             } else {
-    //                 Range::new(T::min_value(), T::max_value(), RangeType::Regular)
-    //             }
-    //         }
-
-    //         SymbExpr::Place(place) => {
-    //             if let Some(node) = vars.get(place) {
-    //                 node.get_range().clone()
-    //             } else {
-    //                 Range::new(T::min_value(), T::max_value(), RangeType::Regular)
-    //             }
-    //         }
-
-    //         SymbExpr::Binary(op, lhs, rhs) => {
-    //             let l_range = lhs.eval(vars);
-    //             let r_range = rhs.eval(vars);
-
-    //             match op {
-    //                 BinOp::Add | BinOp::AddUnchecked | BinOp::AddWithOverflow => {
-    //                     l_range.add(&r_range)
-    //                 }
-    //                 BinOp::Sub | BinOp::SubUnchecked | BinOp::SubWithOverflow => {
-    //                     l_range.sub(&r_range)
-    //                 }
-    //                 BinOp::Mul | BinOp::MulUnchecked | BinOp::MulWithOverflow => {
-    //                     l_range.mul(&r_range)
-    //                 }
-
-    //                 _ => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
-    //             }
-    //         }
-
-    //         SymbExpr::Unary(op, inner) => {
-    //             let _inner_range = inner.eval(vars);
-    //             match op {
-    //                 UnOp::Neg => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
-    //                 UnOp::Not | UnOp::PtrMetadata => {
-    //                     Range::new(T::min_value(), T::max_value(), RangeType::Regular)
-    //                 }
-    //             }
-    //         }
-
-    //         SymbExpr::Cast(kind, inner, _target_ty) => {
-    //             let inner_range = inner.eval(vars);
-    //             match kind {
-    //                 CastKind::IntToInt => inner_range,
-
-    //                 _ => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
-    //             }
-    //         }
-    //     }
-    // }
     pub fn resolve_upper_bound<T: IntervalArithmetic + ConstConvert + Debug + Clone + PartialEq>(
         &mut self,
         vars: &VarNodes<'tcx, T>,
@@ -240,7 +178,6 @@ impl<'tcx> SymbExpr<'tcx> {
             _ => {}
         }
 
-        // self.try_fold_constants::<T>();
         rap_trace!("symexpr {}", self);
         if let SymbExpr::Place(place) = self {
             if let Some(node) = vars.get(place) {
@@ -419,10 +356,6 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicInterval<'tcx, T> 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<'tcx, T>
     for BasicInterval<'tcx, T>
 {
-    // fn get_value_id(&self) -> IntervalId {
-    //     IntervalId::BasicIntervalId
-    // }
-
     fn get_range(&self) -> &Range<T> {
         &self.range
     }
@@ -462,35 +395,6 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> SymbInterval<'tcx, T> {
             upper: SymbExpr::Unknown,
         }
     }
-
-    // pub fn refine(&mut self, vars: &VarNodes<'tcx, T>) {
-    //     if let SymbExpr::Unknown = self.lower {
-    //     } else {
-    //         let low_range = self.lower.eval(vars);
-    //         if low_range.get_lower() > self.range.get_lower() {
-    //             let new_range = Range::new(
-    //                 low_range.get_lower(),
-    //                 self.range.get_upper(),
-    //                 RangeType::Regular,
-    //             );
-    //             self.range = new_range;
-    //         }
-    //     }
-
-    //     if let SymbExpr::Unknown = self.upper {
-    //         // Do nothing
-    //     } else {
-    //         let high_range = self.upper.eval(vars);
-    //         if high_range.get_upper() < self.range.get_upper() {
-    //             let new_range = Range::new(
-    //                 self.range.get_lower(),
-    //                 high_range.get_upper(),
-    //                 RangeType::Regular,
-    //             );
-    //             self.range = new_range;
-    //         }
-    //     }
-    // }
 
     pub fn get_operation(&self) -> BinOp {
         self.predicate
@@ -546,10 +450,6 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> SymbInterval<'tcx, T> {
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> IntervalTypeTrait<'tcx, T>
     for SymbInterval<'tcx, T>
 {
-    // fn get_value_id(&self) -> IntervalId {
-    //     IntervalId::SymbIntervalId
-    // }
-
     fn get_range(&self) -> &Range<T> {
         &self.range
     }

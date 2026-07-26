@@ -156,16 +156,6 @@ impl<'tcx> ContractPlace<'tcx> {
             PlaceBase::Arg(_) => None,
         }
     }
-
-    pub fn field_indices(&self) -> Vec<usize> {
-        self.projections
-            .iter()
-            .filter_map(|projection| match projection {
-                ContractProjection::Field { index, .. } => Some(*index),
-                ContractProjection::Downcast { .. } => None,
-            })
-            .collect()
-    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -248,23 +238,8 @@ pub enum ContractExpr<'tcx> {
 }
 
 impl<'tcx> ContractExpr<'tcx> {
-    pub fn new_var(base: usize) -> Self {
-        Self::Place(ContractPlace::local(base, Vec::new()))
-    }
-
     pub fn new_value(value: usize) -> Self {
         Self::Const(value as u128)
-    }
-
-    pub fn new_unknown() -> Self {
-        Self::Unknown
-    }
-
-    pub fn get_var_base(&self) -> Option<usize> {
-        match self {
-            Self::Place(place) => place.local_base(),
-            _ => None,
-        }
     }
 }
 
@@ -302,17 +277,6 @@ impl RelOp {
             _ => None,
         }
     }
-
-    pub fn reversed(self) -> Self {
-        match self {
-            Self::Eq => Self::Eq,
-            Self::Ne => Self::Ne,
-            Self::Lt => Self::Gt,
-            Self::Le => Self::Ge,
-            Self::Gt => Self::Lt,
-            Self::Ge => Self::Le,
-        }
-    }
 }
 
 #[derive(Clone, Debug)]
@@ -325,11 +289,6 @@ pub struct NumericPredicate<'tcx> {
 impl<'tcx> NumericPredicate<'tcx> {
     pub fn new(lhs: ContractExpr<'tcx>, op: RelOp, rhs: ContractExpr<'tcx>) -> Self {
         Self { lhs, op, rhs }
-    }
-
-    pub fn from_mir_locals(lhs: usize, rhs: usize, op: MirBinOp) -> Option<Self> {
-        RelOp::from_mir(op)
-            .map(|rel| Self::new(ContractExpr::new_var(lhs), rel, ContractExpr::new_var(rhs)))
     }
 
     pub fn display_user_friendly(
@@ -502,7 +461,6 @@ impl<'tcx> PropertyArg<'tcx> {
 pub enum ContractKind {
     Precond,
     Hazard,
-    #[allow(dead_code)]
     Option_,
 }
 

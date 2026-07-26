@@ -41,7 +41,7 @@ pub(crate) fn check<'tcx>(
     // covering `for i in 0..N { base.add(i).write(v) }` loop.  When the
     // array length is a const generic and a write to every index `0..N` is
     // on the forward path, the whole array is initialized.
-    if checker.maybeuninit_covering_init(checkpoint, &target, required_ty, forward) {
+    if checker.maybeuninit_covering_init(checkpoint, required_ty) {
         return SmtCheckResult::proved(format!(
             "Init proved: MaybeUninit<[{required_ty:?}; N]> fully initialized by covering loop"
         ));

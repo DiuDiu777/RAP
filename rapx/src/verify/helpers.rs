@@ -167,7 +167,7 @@ pub fn get_owner_struct_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> Option<DefId> 
 
 fn resolve_projection_from_base_ident<'tcx>(
     tcx: TyCtxt<'tcx>,
-    base_ident: String,
+    _base_ident: String,
     fields: Vec<String>,
     base_local: usize,
     base_ty: Ty<'tcx>,
@@ -176,11 +176,7 @@ fn resolve_projection_from_base_ident<'tcx>(
     let mut field_indices = Vec::new();
     for field_name in fields {
         let Some((field_idx, field_ty)) = resolve_next_field(tcx, current_ty, &field_name) else {
-            return if field_indices.is_empty() && base_ident.is_empty() {
-                None
-            } else {
-                None
-            };
+            return None;
         };
         current_ty = field_ty;
         field_indices.push((field_idx, current_ty));

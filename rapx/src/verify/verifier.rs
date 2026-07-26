@@ -528,119 +528,11 @@ impl<'tcx> ForwardVerifier<'tcx> {
             }
             #[cfg(not(rapx_rustc_ge_198))]
             Rvalue::Use(operand) => {
-                let source_place = match operand {
-                    Operand::Copy(place) | Operand::Move(place) => Some(place),
-                    _ => None,
-                };
-                if let Some(source_place) = source_place {
-                    let source_has_projection = source_place.projection.iter().any(|p| {
-                        matches!(
-                            p,
-                            rustc_middle::mir::ProjectionElem::Deref
-                                | rustc_middle::mir::ProjectionElem::Field(..)
-                        )
-                    });
-                    let target_has_projection = place.projection.iter().any(|p| {
-                        matches!(
-                            p,
-                            rustc_middle::mir::ProjectionElem::Deref
-                                | rustc_middle::mir::ProjectionElem::Field(..)
-                        )
-                    });
-                    if !source_has_projection && !target_has_projection {
-                        return;
-                    }
-                    let source_val = value_from_operand(operand);
-                    let op_ty = operand.ty(&body.local_decls, self.tcx);
-                    result.facts.push(StateFact::Cast {
-                        target: target.clone(),
-                        source: source_val.clone(),
-                        ty: op_ty,
-                    });
-                    if let Some(align) = known_alignment_of(&source_val, result) {
-                        result.facts.push(StateFact::KnownAligned {
-                            place: target.clone(),
-                            align,
-                            ty_name: format!("cast-{align}"),
-                            reason: format!("cast preserves {align}-byte alignment"),
-                        });
-                    }
-                    if known_nonzero_of(&source_val, result) {
-                        result.facts.push(StateFact::KnownNonZero {
-                            place: target.clone(),
-                            reason: "cast preserves non-nullness".to_string(),
-                        });
-                    }
-                    if let Some((ty_name, elements, object)) =
-                        known_allocated_for(&source_val, result)
-                    {
-                        result.facts.push(StateFact::KnownAllocated {
-                            place: target.clone(),
-                            object,
-                            ty_name,
-                            elements,
-                            reason: "cast preserves allocation provenance".to_string(),
-                        });
-                    }
-                }
+                Self::record_use_rvalue_facts(self.tcx, place, operand, body, result);
             }
             #[cfg(rapx_rustc_ge_198)]
             Rvalue::Use(operand, _retag) => {
-                let source_place = match operand {
-                    Operand::Copy(place) | Operand::Move(place) => Some(place),
-                    _ => None,
-                };
-                if let Some(source_place) = source_place {
-                    let source_has_projection = source_place.projection.iter().any(|p| {
-                        matches!(
-                            p,
-                            rustc_middle::mir::ProjectionElem::Deref
-                                | rustc_middle::mir::ProjectionElem::Field(..)
-                        )
-                    });
-                    let target_has_projection = place.projection.iter().any(|p| {
-                        matches!(
-                            p,
-                            rustc_middle::mir::ProjectionElem::Deref
-                                | rustc_middle::mir::ProjectionElem::Field(..)
-                        )
-                    });
-                    if !source_has_projection && !target_has_projection {
-                        return;
-                    }
-                    let source_val = value_from_operand(operand);
-                    let op_ty = operand.ty(&body.local_decls, self.tcx);
-                    result.facts.push(StateFact::Cast {
-                        target: target.clone(),
-                        source: source_val.clone(),
-                        ty: op_ty,
-                    });
-                    if let Some(align) = known_alignment_of(&source_val, result) {
-                        result.facts.push(StateFact::KnownAligned {
-                            place: target.clone(),
-                            align,
-                            ty_name: format!("cast-{align}"),
-                            reason: format!("cast preserves {align}-byte alignment"),
-                        });
-                    }
-                    if known_nonzero_of(&source_val, result) {
-                        result.facts.push(StateFact::KnownNonZero {
-                            place: target.clone(),
-                            reason: "cast preserves non-nullness".to_string(),
-                        });
-                    }
-                    if let Some((ty_name, elements, object)) =
-                        known_allocated_for(&source_val, result)
-                    {
-                        result.facts.push(StateFact::KnownAllocated {
-                            place: target.clone(),
-                            object,
-                            ty_name,
-                            elements,
-                            reason: "cast preserves allocation provenance".to_string(),
-                        });
-                    }
-                }
+                Self::record_use_rvalue_facts(self.tcx, place, operand, body, result);
             }
             Rvalue::CopyForDeref(place) => {
                 let source_place = PlaceKey::from_mir_place(place);
@@ -725,6 +617,71 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 }
             }
             _ => {}
+        }
+    }
+
+    /// Record facts for Rvalue::Use assignments (extracted to avoid cfg duplication).
+    fn record_use_rvalue_facts(
+        tcx: TyCtxt<'tcx>,
+        place: &Place<'tcx>,
+        operand: &Operand<'tcx>,
+        body: &Body<'tcx>,
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        let source_place = match operand {
+            Operand::Copy(source) | Operand::Move(source) => Some(source),
+            _ => None,
+        };
+        let Some(source_place) = source_place else {
+            return;
+        };
+        let source_has_projection = source_place.projection.iter().any(|p| {
+            matches!(
+                p,
+                rustc_middle::mir::ProjectionElem::Deref
+                    | rustc_middle::mir::ProjectionElem::Field(..)
+            )
+        });
+        let target_has_projection = place.projection.iter().any(|p| {
+            matches!(
+                p,
+                rustc_middle::mir::ProjectionElem::Deref
+                    | rustc_middle::mir::ProjectionElem::Field(..)
+            )
+        });
+        if !source_has_projection && !target_has_projection {
+            return;
+        }
+        let target = PlaceKey::from_mir_place(place);
+        let source_val = value_from_operand(operand);
+        let op_ty = operand.ty(&body.local_decls, tcx);
+        result.facts.push(StateFact::Cast {
+            target: target.clone(),
+            source: source_val.clone(),
+            ty: op_ty,
+        });
+        if let Some(align) = known_alignment_of(&source_val, result) {
+            result.facts.push(StateFact::KnownAligned {
+                place: target.clone(),
+                align,
+                ty_name: format!("cast-{align}"),
+                reason: format!("cast preserves {align}-byte alignment"),
+            });
+        }
+        if known_nonzero_of(&source_val, result) {
+            result.facts.push(StateFact::KnownNonZero {
+                place: target.clone(),
+                reason: "cast preserves non-nullness".to_string(),
+            });
+        }
+        if let Some((ty_name, elements, object)) = known_allocated_for(&source_val, result) {
+            result.facts.push(StateFact::KnownAllocated {
+                place: target,
+                object,
+                ty_name,
+                elements,
+                reason: "cast preserves allocation provenance".to_string(),
+            });
         }
     }
 
@@ -893,10 +850,10 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         }
                     }
                 }
-                CallEffect::ReturnLengthOfArg { .. } => {}
-                CallEffect::ReturnIsEmptyOfArg { .. } => {}
-                CallEffect::ReturnMin { .. } => {}
-                CallEffect::ReturnTupleFieldLength { .. } => {}
+                CallEffect::ReturnLengthOfArg { .. }
+                | CallEffect::ReturnIsEmptyOfArg { .. }
+                | CallEffect::ReturnMin { .. }
+                | CallEffect::ReturnTupleFieldLength { .. } => {}
                 // Consumed by the InBound / NonOverlap checkers, which read the
                 // effect off the retained `StateFact::Call`.
                 CallEffect::ChecksIndexBoundsDisjoint { .. } => {}

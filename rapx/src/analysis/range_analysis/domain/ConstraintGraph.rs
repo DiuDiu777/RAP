@@ -15,7 +15,6 @@ use crate::rap_info;
 use crate::rap_trace;
 use num_traits::Bounded;
 use once_cell::sync::{Lazy, OnceCell};
-// use rand::Rng;
 use crate::analysis::path_analysis::PathTree;
 use crate::compat::FxHashMap;
 use crate::compat::Spanned;
@@ -53,7 +52,6 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub array_vars: VarNodes<'tcx, T>, // The array variables of the source program
     pub oprs: Vec<BasicOpKind<'tcx, T>>, // The operations of the source program
 
-    // func: Option<Function>,             // Save the last Function analyzed
     pub defmap: DefMap<'tcx>, // Map from variables to the operations that define them
     pub usemap: UseMap<'tcx>, // Map from variables to operations where variables are used
     pub symbmap: SymbMap<'tcx>, // Map from variables to operations where they appear as bounds
@@ -63,7 +61,6 @@ pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     pub inst_rand_place_set: Vec<Place<'tcx>>,
     pub essa: DefId,
     pub ssa: DefId,
-    // values_switchmap: ValuesSwitchMap<'tcx, T>, // Store intervals for switch branches
     pub index: i32,
     pub dfs: HashMap<&'tcx Place<'tcx>, i32>,
     pub root: HashMap<&'tcx Place<'tcx>, &'tcx Place<'tcx>>,
@@ -106,12 +103,10 @@ where
             local_inserted: HashSet::new(),
             array_vars: VarNodes::new(),
             oprs: GenOprs::new(),
-            // func: None,
             defmap: DefMap::new(),
             usemap: UseMap::new(),
             symbmap: SymbMap::new(),
             values_branchmap: ValuesBranchMap::new(),
-            // values_switchmap: ValuesSwitchMap::new(),
             constant_vector: Vec::new(),
             inst_rand_place_set: Vec::new(),
             essa,
@@ -145,12 +140,10 @@ where
 
             array_vars: VarNodes::new(),
             oprs: GenOprs::new(),
-            // func: None,
             defmap: DefMap::new(),
             usemap: UseMap::new(),
             symbmap: SymbMap::new(),
             values_branchmap: ValuesBranchMap::new(),
-            // values_switchmap: ValuesSwitchMap::new(),
             constant_vector: Vec::new(),
             inst_rand_place_set: Vec::new(),
             essa: self_def_id, // Assuming essa is the same as self_def_id
@@ -287,60 +280,13 @@ where
         }
         final_vars
     }
-    pub fn test_and_print_all_symbolic_expressions(&self) {
-        rap_info!("\n==== Testing and Printing All Symbolic Expressions ====");
 
-        let mut places: Vec<&'tcx Place<'tcx>> = self.vars.keys().copied().collect();
-        places.sort_by_key(|p| p.local.as_usize());
-
-        for place in places {
-            rap_info!("--- Place: {:?}", place);
-            // match self.get_symbolicexpression(place) {
-            //     Some(sym_expr) => {
-            //         rap_info!("    Symbolic Expr: {}", sym_expr);
-            //     }
-            //     None => {
-            //         rap_info!("    Symbolic Expr: Could not be resolved (None returned).");
-            //     }
-            // }
-        }
-        rap_info!("==== End of Symbolic Expression Test ====\n");
-    }
-    pub fn rap_print_final_vars(&self) {
-        for (&key, value) in &self.final_vars {
-            rap_debug!("Var: {:?}, {:?} ", key, value.get_range());
-        }
-    }
-    pub fn rap_print_vars(&self) {
-        for (&key, value) in &self.vars {
-            rap_trace!("Var: {:?}. {:?} ", key, value.get_range());
-        }
-    }
     pub fn print_vars(&self) {
         for (&key, value) in &self.vars {
             rap_trace!("Var: {:?}. {:?} ", key, value.get_range());
         }
     }
-    pub fn print_conponent_vars(&self) {
-        rap_trace!("====print_conponent_vars====");
-        for (key, value) in &self.components {
-            if value.len() > 1 {
-                rap_trace!("component: {:?} ", key);
-                for v in value {
-                    if let Some(var_node) = self.vars.get(v) {
-                        rap_trace!("Var: {:?}. {:?} ", v, var_node.get_range());
-                    } else {
-                        rap_trace!("Var: {:?} not found", v);
-                    }
-                }
-            }
-        }
-    }
-    fn print_values_branchmap(&self) {
-        for (&key, value) in &self.values_branchmap {
-            rap_info!("vbm place: {:?}. {:?}\n ", key, value);
-        }
-    }
+
     fn print_symbmap(&self) {
         for (&key, value) in &self.symbmap {
             for op in value.iter() {
@@ -406,16 +352,6 @@ where
             );
         }
     }
-    // pub fn create_random_place(&mut self) -> Place<'tcx> {
-    //     let mut rng = rand::rng();
-    //     let random_local = Local::from_usize(rng.random_range(10000..100000));
-    //     let place = Place {
-    //         local: random_local,
-    //         projection: ty::List::empty(),
-    //     };
-    //     self.inst_rand_place_set.push(place);
-    //     place
-    // }
     pub fn get_vars(&self) -> &VarNodes<'tcx, T> {
         &self.vars
     }
@@ -458,7 +394,6 @@ where
         let node_ref: &mut VarNode<'tcx, T> = self
             .vars
             .entry(v)
-            // .and_modify(|old| *old = node.clone())
             .or_insert(node);
         self.usemap.entry(v).or_insert(HashSet::new());
 
@@ -470,43 +405,6 @@ where
         }
 
         if !v.projection.is_empty() {
-            // for (&base_place, &def_op) in self
-            //     .defmap
-            //     .iter()
-            //     .filter(|(&p, _)| p.local == v.local && p.projection.is_empty())
-            // {
-            //     let mut v_op = self.oprs[def_op].clone();
-            //     v_op.set_sink(v);
-
-            //     for source in v_op.get_sources() {
-            //         self.usemap
-            //             .entry(source)
-            //             .or_insert(HashSet::new())
-            //             .insert(self.oprs.len());
-            //     }
-            //     self.oprs.push(v_op);
-            //     self.defmap.insert(v, self.oprs.len() - 1);
-            // }
-            // while let Some((&base_place, &def_op)) = self
-            //     .defmap
-            //     .iter()
-            //     .find(|(&p, _)| p.local == v.local && p.projection.is_empty())
-            // {
-            //     let mut v_op = self.oprs[def_op].clone();
-            //     v_op.set_sink(v);
-
-            //     for source in v_op.get_sources() {
-            //         self.usemap
-            //             .entry(source)
-            //             .or_insert(HashSet::new())
-            //             .insert(self.oprs.len());
-            //     }
-
-            //     self.oprs.push(v_op);
-            //     self.defmap.insert(v, self.oprs.len() - 1);
-
-            // }
-
             let matches: Vec<(_, _)> = self
                 .defmap
                 .iter()
@@ -656,25 +554,6 @@ where
             }
         }
     }
-    // pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'tcx, T> {
-    //     if !self.local_inserted.contains(&v.local) {
-    //         let node = VarNode::new(v);
-    //         let node_ref: &mut VarNode<'tcx, T> = self.vars.entry(v).or_insert(node);
-    //         self.usemap.entry(v).or_insert(HashSet::new());
-
-    //         self.local_inserted.insert(v.local);
-    //         return node_ref;
-    //     } else {
-    //         let first_place_key = self
-    //             .vars
-    //             .keys()
-    //             .find(|place_ref| place_ref.local == v.local)
-    //             .copied()
-    //             .unwrap();
-
-    //         self.vars.get_mut(first_place_key).unwrap()
-    //     }
-    // }
 
     pub fn build_graph(&mut self, body: &'tcx Body<'tcx>) {
         self.arg_count = body.arg_count;
@@ -688,13 +567,11 @@ where
             }
             self.build_terminator(block, block_data.terminator.as_ref().unwrap());
         }
-        // self.postprocess_defmap();
         self.resolve_all_symexpr();
         self.print_vars();
         self.print_defmap();
         self.print_usemap();
         self.print_symbexpr();
-        // rap_trace!("end\n");
     }
 
     pub fn build_value_maps(&mut self, body: &'tcx Body<'tcx>) {
@@ -708,19 +585,12 @@ where
                         }
                     }
                     TerminatorKind::Goto { target } => {
-                        // self.build_value_goto_map(block_index, *target);
                     }
                     _ => {
-                        // rap_trace!(
-                        //     "BasicBlock {:?} has an unsupported terminator: {:?}",
-                        //     block_index, terminator.kind
-                        // );
                     }
                 }
             }
         }
-        // rap_trace!("value_branchmap{:?}\n", self.values_branchmap);
-        // rap_trace!("varnodes{:?}\n,", self.vars);
     }
     fn trace_operand_source(
         &self,
@@ -777,7 +647,6 @@ where
         switch_block: BasicBlock,
         block_data: &'tcx BasicBlockData<'tcx>,
     ) {
-        // let place1: &Place<'tcx>;
         let first_target = targets.all_targets()[0];
         let target_data = &body.basic_blocks[first_target];
 
@@ -831,7 +700,6 @@ where
                         self.add_varnode(variable);
                         rap_trace!("add_vbm_varnode{:?}\n", variable.clone());
 
-                        // let value = c.const_.try_to_scalar_int().unwrap();
                         let value = Self::convert_const(&c.const_).unwrap();
                         let const_range =
                             Range::new(value.clone(), value.clone(), RangeType::Unknown);
@@ -843,8 +711,6 @@ where
                             self.apply_comparison(value.clone(), cmp_op, false, const_in_left);
                         true_range.set_regular();
                         false_range.set_regular();
-                        // rap_trace!("true_range{:?}\n", true_range);
-                        // rap_trace!("false_range{:?}\n", false_range);
                         let target_vec = targets.all_targets();
 
                         let vbm = ValueBranchMap::new(
@@ -855,7 +721,6 @@ where
                             IntervalType::Basic(BasicInterval::new(true_range)),
                         );
                         self.values_branchmap.insert(variable, vbm);
-                        // self.switchbbs.insert(block, (place, variable));
                     }
                     (None, None) => {
                         let CR = Range::new(T::min_value(), T::max_value(), RangeType::Unknown);
@@ -981,28 +846,6 @@ where
                     if lhs == place {
                         let mut return_op1: &Operand<'tcx> = &op1;
                         let mut return_op2: &Operand<'tcx> = &op2;
-                        // for stmt_original in &switch_block.statements {
-                        //     if op1.constant().is_none() {
-                        //         if let StatementKind::Assign(box (lhs, Rvalue::Use(OP1))) =
-                        //             &stmt_original.kind
-                        //         {
-                        //             if lhs.clone() == op1.place().unwrap() {
-                        //                 return_op1 = OP1;
-                        //             }
-                        //         }
-                        //     }
-                        // }
-                        // if op2.constant().is_none() {
-                        //     for stmt_original in &switch_block.statements {
-                        //         if let StatementKind::Assign(box (lhs, Rvalue::Use(OP2))) =
-                        //             &stmt_original.kind
-                        //         {
-                        //             if lhs.clone() == op2.place().unwrap() {
-                        //                 return_op2 = OP2;
-                        //             }
-                        //         }
-                        //     }
-                        // }
 
                         return Some((return_op1, return_op2, *bin_op));
                     }
@@ -1064,20 +907,7 @@ where
         }
     }
 
-    fn build_value_goto_map(&self, block_index: BasicBlock, target: BasicBlock) {
-        rap_trace!(
-            "Building value map for Goto in block {:?} targeting block {:?}",
-            block_index,
-            target
-        );
-    }
-    pub fn build_varnodes(&mut self) {
-        // Builds VarNodes
-        for (name, node) in self.vars.iter_mut() {
-            let is_undefined = !self.defmap.contains_key(name);
-            node.init(is_undefined);
-        }
-    }
+
 
     pub fn build_symbolic_intersect_map(&mut self) {
         for i in 0..self.oprs.len() {
@@ -1089,7 +919,6 @@ where
                 }
             }
         }
-        // rap_trace!("symbmap: {:?}", self.symbmap);
     }
     pub fn build_use_map(
         &mut self,
@@ -1281,12 +1110,6 @@ where
                     self.func_without_mir.insert(*def_id, path.clone());
                     rap_debug!("called external/no-MIR fn: {:?} -> {}", def_id, path);
                 }
-                // if !self.tcx.is_mir_available(*def_id) {
-                //     path = self.tcx.def_path_str(*def_id);
-
-                //     self.func_without_mir.insert(*def_id, path.clone());
-                //     rap_debug!("called external/no-MIR fn: {:?} -> {}", def_id, path);
-                // }
                 func_def_id = Some(def_id);
             }
         }
@@ -1413,7 +1236,6 @@ where
             Operand::Copy(place) | Operand::Move(place) => {
                 if sink.local == RETURN_PLACE && sink.projection.is_empty() {
                     self.rerurn_places.insert(place);
-                    // self.add_varnode_sym(place, rvalue);
 
                     let sink_node = self.def_add_varnode_sym(sink, rvalue);
 
@@ -1456,7 +1278,6 @@ where
                         RangeType::Regular,
                     ));
                     rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
-                    // rap_trace!("sinknoderange: {:?}\n", sink_node.get_range());
                 } else {
                     sink_node.set_range(Range::default(T::min_value()));
                 };
@@ -1473,11 +1294,9 @@ where
         operands: &'tcx IndexVec<FieldIdx, Operand<'tcx>>,
         block: BasicBlock,
     ) {
-        // rap_trace!("essa_op{:?}\n", inst);
         let sink_node = self.def_add_varnode_sym(sink, rvalue);
-        // rap_trace!("addsink_in_essa_op {:?}\n", sink_node);
 
-        // let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+
         let loc_1: usize = 0;
         let loc_2: usize = 1;
         let source1 = match &operands[FieldIdx::from_usize(loc_1)] {
@@ -1516,10 +1335,6 @@ where
 
             self.oprs.push(BasicOpKind::Essa(essaop));
             // Insert this definition in defmap
-            // self.usemap
-            //     .entry(source1.unwrap())
-            //     .or_default()
-            //     .insert(bop_index);
 
             self.defmap.insert(sink, bop_index);
         } else {
@@ -1542,10 +1357,6 @@ where
                 .entry(source1.unwrap())
                 .or_default()
                 .insert(bop_index);
-            // self.usemap
-            // .entry(source2.unwrap())
-            // .or_default()
-            // .insert(bop_index);
             let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), 0, true);
             // Insert the operation in the graph.
             rap_trace!(
@@ -1555,15 +1366,11 @@ where
             );
 
             self.oprs.push(BasicOpKind::Essa(essaop));
-            // Insert this definition in defmap
-            // self.usemap
-            //     .entry(source1.unwrap())
-            //     .or_default()
-            //     .insert(bop_index);
 
             self.defmap.insert(sink, bop_index);
         }
     }
+
     pub fn add_aggregate_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1792,7 +1599,7 @@ where
 
     fn fix_intersects(&mut self, component: &HashSet<&'tcx Place<'tcx>>) {
         for &place in component.iter() {
-            // node.fix_intersects();
+
             if let Some(sit) = self.symbmap.get_mut(place) {
                 let node = self.vars.get(place).unwrap();
 
@@ -1811,8 +1618,8 @@ where
         cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
         vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
     ) -> bool {
-        // use crate::range_util::{get_first_less_from_vector, get_first_greater_from_vector};
-        // assert!(!constant_vector.is_empty(), "Invalid constant vector");
+
+
         let op_kind = &self.oprs[op];
         let sink = op_kind.get_sink();
         let old_interval = self.vars.get(sink).unwrap().get_range().clone();
@@ -1833,20 +1640,10 @@ where
         let old_upper = old_interval.get_upper();
         let new_lower = estimated_interval.get_lower();
         let new_upper = estimated_interval.get_upper();
-        // op.set_intersect(estimated_interval.clone());
 
-        // let nlconstant = get_first_less_from_vector(constant_vector, new_lower);
-        // let nuconstant = get_first_greater_from_vector(constant_vector, new_upper);
-        // let nlconstant = constant_vector
-        //     .iter()
-        //     .find(|&&c| c <= new_lower)
-        //     .cloned()
-        //     .unwrap_or(T::min_value());
-        // let nuconstant = constant_vector
-        //     .iter()
-        //     .find(|&&c| c >= new_upper)
-        //     .cloned()
-        //     .unwrap_or(T::max_value());
+
+
+
 
         let updated = if old_interval.is_unknown() {
             estimated_interval.clone()
@@ -1898,28 +1695,19 @@ where
         let old_upper = old_interval.get_upper();
         let new_lower = estimated_interval.get_lower();
         let new_upper = estimated_interval.get_upper();
-        // op.set_intersect(estimated_interval.clone());
-        // let mut hasChanged = false;
+
+
         let mut final_lower = old_lower.clone();
         let mut final_upper = old_upper.clone();
         if old_lower.clone() == T::min_value() && new_lower.clone() > T::min_value() {
             final_lower = new_lower.clone();
-            // tightened = Range::new(new_lower.clone(), old_upper.clone(), RangeType::Regular);
-            // hasChanged = true;
         } else if old_lower.clone() <= new_lower.clone() {
             final_lower = new_lower.clone();
-
-            // tightened = Range::new(new_lower.clone(), old_upper.clone(), RangeType::Regular);
-            // hasChanged = true;
         };
         if old_upper.clone() == T::max_value() && new_upper.clone() < T::max_value() {
             final_upper = new_upper.clone();
-            // tightened = Range::new(old_lower.clone(), new_upper.clone(), RangeType::Regular);
-            // hasChanged = true;
         } else if old_upper.clone() >= new_upper.clone() {
             final_upper = new_upper.clone();
-            // tightened = Range::new(old_lower.clone(), new_upper.clone(), RangeType::Regular);
-            // hasChanged = true;
         }
         let tightened = Range::new(final_lower, final_upper, RangeType::Regular);
 
@@ -1956,7 +1744,6 @@ where
                     if self.widen(op, cg_map, vars_map) {
                         let sink = self.oprs[op].get_sink();
                         rap_trace!("W {:?}\n", sink);
-                        // let sink_node = self.vars.get_mut(sink).unwrap();
                         worklist.push(sink);
                     }
                 }
@@ -1986,7 +1773,6 @@ where
                         let sink = self.oprs[op].get_sink();
                         rap_trace!("N {:?}\n", sink);
 
-                        // let sink_node = self.vars.get_mut(sink).unwrap();
                         worklist.push(sink);
                     }
                 }
@@ -1994,17 +1780,7 @@ where
         }
         rap_trace!("pos_update finished after {} iterations\n", iteration);
     }
-    fn generate_active_vars(
-        &mut self,
-        component: &HashSet<&'tcx Place<'tcx>>,
-        active_vars: &mut HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-        for place in component {
-            let node = self.vars.get(place).unwrap();
-        }
-    }
+
     fn generate_entry_points(
         &mut self,
         component: &HashSet<&'tcx Place<'tcx>>,
@@ -2059,10 +1835,7 @@ where
                         op_kind.get_instruction()
                     );
                     sink_node.set_range(new_range);
-                    // if self.symbmap.contains_key(sink) {
-                    //     let symb_set = self.symbmap.get_mut(sink).unwrap();
-                    //     symb_set.insert(op.get_index());
-                    // }
+
                     if let BasicOpKind::Essa(essaop) = op_kind {
                         if essaop.get_intersect().get_range().is_unknown() {
                             essaop.mark_unresolved();
@@ -2104,8 +1877,8 @@ where
         cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
         vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
     ) {
-        // let scc_list = Nuutila::new(&self.vars, &self.usemap, &self.symbmap,false,&self.oprs);
-        // self.print_vars();
+
+
 
         self.solve_const_func_call(cg_map, vars_map);
         self.numSCCs = self.worklist.len();
@@ -2140,27 +1913,17 @@ where
                     varnode.set_default();
                 }
             } else {
-                // self.pre_update(&comp_use_map, &entry_points);
+
                 let comp_use_map = self.build_use_map(&component);
-                // build_constant_vec(&component, &self.oprs, &mut self.constant_vec);
+
                 let mut entry_points = HashSet::new();
-                // self.print_vars();
+
 
                 self.generate_entry_points(&component, &mut entry_points, cg_map, vars_map);
                 rap_trace!("entry_points {:?}  \n", entry_points);
-                // rap_trace!("comp_use_map {:?}  \n ", comp_use_map);
+
                 self.pre_update(&comp_use_map, &entry_points, cg_map, vars_map);
                 self.fix_intersects(&component);
-
-                // for &variable in &component {
-                //     let varnode = self.vars.get_mut(variable).unwrap();
-                //     if varnode.get_range().is_unknown() {
-                //         varnode.set_default();
-                //     }
-                // }
-
-                let mut active_vars = HashSet::new();
-                self.generate_active_vars(&component, &mut active_vars, cg_map, vars_map);
                 self.pos_update(&comp_use_map, &entry_points, cg_map, vars_map);
             }
             self.propagate_to_next_scc(&component, cg_map, vars_map);
@@ -2294,7 +2057,8 @@ where
             {
                 *self.root.get_mut(place).unwrap() = self.root.get(name).copied().unwrap();
 
-                // let weq = self.root.get(place)
+
+
             }
         }
 
@@ -2396,138 +2160,4 @@ where
         all_path_results
     }
 }
-#[derive(Debug)]
-pub struct Nuutila<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
-    pub variables: &'tcx VarNodes<'tcx, T>,
-    pub index: i32,
-    pub dfs: HashMap<&'tcx Place<'tcx>, i32>,
-    pub root: HashMap<&'tcx Place<'tcx>, &'tcx Place<'tcx>>,
-    pub in_component: HashSet<&'tcx Place<'tcx>>,
-    pub components: HashMap<&'tcx Place<'tcx>, HashSet<&'tcx Place<'tcx>>>,
-    pub worklist: VecDeque<&'tcx Place<'tcx>>,
-    // pub oprs: &Vec<BasicOpKind<'tcx, T>>,
-}
 
-impl<'tcx, T> Nuutila<'tcx, T>
-where
-    T: IntervalArithmetic + ConstConvert + Debug,
-{
-    pub fn new(
-        varNodes: &'tcx VarNodes<'tcx, T>,
-        use_map: &'tcx UseMap<'tcx>,
-        symb_map: &'tcx SymbMap<'tcx>,
-        single: bool,
-        oprs: &'tcx Vec<BasicOpKind<'tcx, T>>,
-    ) -> Self {
-        let mut n: Nuutila<'_, T> = Nuutila {
-            variables: varNodes,
-            index: 0,
-            dfs: HashMap::new(),
-            root: HashMap::new(),
-            in_component: HashSet::new(),
-            components: HashMap::new(),
-            worklist: std::collections::VecDeque::new(),
-            // oprs:oprs
-        };
-
-        if single {
-            // let mut scc = HashSet::new();
-            // for var_node in variables.values() {
-            //     scc.insert(var_node.clone());
-            // }
-
-            // for (place, _) in variables.iter() {
-            //     n.components.insert(place.clone(), scc.clone());
-            // }
-
-            // if let Some((first_place, _)) = variables.iter().next() {
-            //     n.worklist.push_back(first_place.clone());
-            // }
-        } else {
-            for place in n.variables.keys().copied() {
-                n.dfs.insert(place, -1);
-            }
-
-            n.add_control_dependence_edges(symb_map, use_map, varNodes);
-
-            for place in n.variables.keys() {
-                if n.dfs[place] < 0 {
-                    let mut stack = Vec::new();
-                    n.visit(place, &mut stack, use_map, oprs);
-                }
-            }
-
-            // n.del_control_dependence_edges(use_map);
-        }
-
-        n
-    }
-
-    pub fn visit(
-        &mut self,
-        place: &'tcx Place<'tcx>,
-        stack: &mut Vec<&'tcx Place<'tcx>>,
-        use_map: &'tcx UseMap<'tcx>,
-        oprs: &'tcx Vec<BasicOpKind<'tcx, T>>,
-    ) {
-        self.dfs.entry(place).and_modify(|v| *v = self.index);
-        self.index += 1;
-        self.root.insert(place, place);
-
-        if let Some(uses) = use_map.get(place) {
-            for op in uses {
-                let name = oprs[*op].get_sink();
-
-                if self.dfs.get(name).copied().unwrap_or(-1) < 0 {
-                    self.visit(name, stack, use_map, oprs);
-                }
-
-                if (!self.in_component.contains(name)
-                    && self.dfs[self.root[place]] >= self.dfs[self.root[name]])
-                {
-                    *self.root.get_mut(place).unwrap() = self.root.get(name).copied().unwrap();
-
-                    // let weq = self.root.get(place)
-                }
-            }
-        }
-
-        if self.root.get(place).copied().unwrap() == place {
-            self.worklist.push_back(place);
-
-            let mut scc = HashSet::new();
-            scc.insert(place);
-
-            self.in_component.insert(place);
-
-            while let Some(&top) = stack.last() {
-                if self.dfs.get(top).copied().unwrap_or(-1) > self.dfs.get(place).copied().unwrap()
-                {
-                    let node = stack.pop().unwrap();
-                    self.in_component.insert(node);
-
-                    scc.insert(node);
-                } else {
-                    break;
-                }
-            }
-
-            self.components.insert(place, scc);
-        } else {
-            stack.push(place);
-        }
-    }
-
-    pub fn add_control_dependence_edges(
-        &mut self,
-        _symb_map: &'tcx SymbMap<'tcx>,
-        _use_map: &'tcx UseMap<'tcx>,
-        _vars: &'tcx VarNodes<'tcx, T>,
-    ) {
-        todo!()
-    }
-
-    pub fn del_control_dependence_edges(&mut self, _use_map: &'tcx mut UseMap<'tcx>) {
-        todo!()
-    }
-}

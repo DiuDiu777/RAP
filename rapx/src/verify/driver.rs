@@ -234,25 +234,23 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
             }
 
             if group_proved {
-                for _path_idx in 0..best_per_path.len() {
-                    let desc = format!(
-                        "OR group {}/{} ({} sub-properties all proved)",
-                        group_idx + 1,
-                        num_groups,
-                        group.len(),
-                    );
-                    report.push(PropertyCheckResult {
-                        checkpoint: view.checkpoint.location(),
-                        checkpoint_index: view.checkpoint_index,
-                        path_index: 0,
-                        property_index,
-                        property: or_property.clone(),
-                        result: CheckResult::Proved,
-                        diagnostics: Some(VisitDiagnostics::new(String::new(), desc.clone())),
-                        path_description: format!("group-{}/{}", group_idx + 1, num_groups),
-                        callee_name: view.checkpoint.callee_name(self.tcx),
-                    });
-                }
+                let desc = format!(
+                    "OR group {}/{} ({} sub-properties all proved)",
+                    group_idx + 1,
+                    num_groups,
+                    group.len(),
+                );
+                report.push(PropertyCheckResult {
+                    checkpoint: view.checkpoint.location(),
+                    checkpoint_index: view.checkpoint_index,
+                    path_index: 0,
+                    property_index,
+                    property: or_property.clone(),
+                    result: CheckResult::Proved,
+                    diagnostics: Some(VisitDiagnostics::new(String::new(), desc)),
+                    path_description: format!("group-{}/{}", group_idx + 1, num_groups),
+                    callee_name: view.checkpoint.callee_name(self.tcx),
+                });
                 return;
             }
         }
@@ -575,18 +573,16 @@ impl<'tcx> VerifyRun<'tcx> {
 
             for &con_id in &cons {
                 let con_target = self.build_virtual_target(target, read_def_id, con_id, &[]);
-                self.verify_and_emit_sequence(target, read_def_id, &con_target, con_id, &[], 0);
+                self.verify_and_emit_sequence(read_def_id, &con_target, con_id, &[]);
 
-                for (mut_idx, &mut_id) in muts.iter().enumerate() {
+                for &mut_id in &muts {
                     let con_target =
                         self.build_virtual_target(target, read_def_id, con_id, &[mut_id]);
                     self.verify_and_emit_sequence(
-                        target,
                         read_def_id,
                         &con_target,
                         con_id,
                         &[mut_id],
-                        1 + mut_idx,
                     );
                 }
             }
@@ -649,12 +645,10 @@ impl<'tcx> VerifyRun<'tcx> {
 
     fn verify_and_emit_sequence(
         &self,
-        _read_target: &FunctionTarget<'tcx>,
         read_def_id: rustc_hir::def_id::DefId,
         con_target: &FunctionTarget<'tcx>,
         con_id: rustc_hir::def_id::DefId,
         mut_ids: &[rustc_hir::def_id::DefId],
-        _seq_index: usize,
     ) {
         let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
@@ -1117,13 +1111,6 @@ impl<'tcx> VerifyRun<'tcx> {
     }
 }
 
-/// Analysis pass that dumps backward and forward visitor diagnostics.
-pub struct VerifyVisitDump<'tcx> {
-    tcx: TyCtxt<'tcx>,
-    postfix_repeat: usize,
-    mode: VerifyMode,
-}
-
 /// Extract the last segment of a def-path (the bare function name).
 fn short_fn_name(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> String {
     let path = tcx.def_path_str(def_id);
@@ -1205,67 +1192,6 @@ fn remap_constructor_contract<'tcx>(
         args: new_args,
         ..property
     }
-}
-
-impl<'tcx> VerifyVisitDump<'tcx> {
-    /// Create a diagnostic dump pass for the current compiler type context.
-    pub fn new(tcx: TyCtxt<'tcx>, postfix_repeat: usize, mode: VerifyMode) -> Self {
-        Self {
-            tcx,
-            postfix_repeat,
-            mode,
-        }
-    }
-}
-
-impl<'tcx> Analysis for VerifyVisitDump<'tcx> {
-    fn name(&self) -> &'static str {
-        "Verify Visitor Diagnostic Dump"
-    }
-
-    /// Collect verify targets and print the current staged visitor output.
-    fn run(&mut self) {
-        rap_debug!("======== #[rapx::verify] visitor diagnostics ========");
-        let mut collector = VerifyTargetCollector::new(self.tcx, self.mode, false, None, None);
-        self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
-
-        for target in &collector.function_targets {
-            let target_path = self.tcx.def_path_str(target.def_id);
-            rap_debug!(
-                "[rapx::verify::diagnostics] target: {} (DefId: {:?})",
-                target_path,
-                target.def_id
-            );
-
-            for repeat in 0..=self.postfix_repeat {
-                if self.postfix_repeat > 0 {
-                    rap_debug!(
-                        "[rapx::verify::diagnostics] round {}/{}: postfix-repeat={}",
-                        repeat,
-                        self.postfix_repeat,
-                        repeat
-                    );
-                }
-                let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
-                let result = catch_unwind(AssertUnwindSafe(|| driver.verify_function()));
-                match result {
-                    Ok(report) => {
-                        rap_debug!("{}", report.describe());
-                    }
-                    Err(_) => {
-                        rap_debug!(
-                            "[rapx::verify::diagnostics] function {} skipped due to ICE",
-                            self.tcx.def_path_str(target.def_id)
-                        );
-                    }
-                }
-            }
-        }
-
-        rap_debug!("=======================================");
-    }
-
-    fn reset(&mut self) {}
 }
 
 fn panic_downcast_msg(e: Box<dyn std::any::Any + Send>) -> String {

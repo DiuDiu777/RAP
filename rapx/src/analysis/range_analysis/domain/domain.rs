@@ -105,12 +105,6 @@ impl IntervalArithmetic for usize {}
 impl IntervalArithmetic for i64 {}
 use rustc_middle::ty::Ty;
 
-// Define the basic operation trait
-pub trait Operation<T: IntervalArithmetic + ConstConvert + Debug> {
-    fn eval(&self) -> Range<T>; // Method to evaluate the range of the operation
-    fn print(&self, os: &mut dyn fmt::Write);
-}
-
 #[derive(Debug, Clone)]
 pub enum BasicOpKind<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     Unary(UnaryOp<'tcx, T>),

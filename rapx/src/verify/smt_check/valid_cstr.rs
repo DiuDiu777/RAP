@@ -51,7 +51,7 @@ pub(crate) fn check<'tcx>(
         );
     }
 
-    if nul_store_before_checkpoint(tcx, body, checkpoint, forward, &parents, root) {
+    if nul_store_before_checkpoint(body, checkpoint, forward, &parents, root) {
         return SmtCheckResult::proved(
             "ValidCStr proved: a nul byte is stored into the source buffer before the call",
         );
@@ -208,7 +208,6 @@ fn alloc_id_bytes<'tcx>(
 /// Detect a `0u8` constant store into the buffer that roots the pointer, on
 /// the executed path before the checkpoint block.
 fn nul_store_before_checkpoint<'tcx>(
-    tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
     checkpoint: &Checkpoint<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
@@ -216,7 +215,6 @@ fn nul_store_before_checkpoint<'tcx>(
     root: Local,
 ) -> bool {
     use crate::verify::path_extractor::PathStep;
-    let _ = tcx;
 
     for step in &forward.path.steps {
         let PathStep::Block(bb) = step else {

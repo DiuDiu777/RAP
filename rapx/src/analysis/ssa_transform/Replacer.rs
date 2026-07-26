@@ -9,10 +9,6 @@ use rustc_middle::ty::TyCtxt;
 use rustc_middle::{mir::*, ty::GenericArgs};
 use rustc_span::sym::new;
 use std::collections::{HashMap, HashSet, VecDeque};
-// use stable_mir::mir::FieldIdx;
-// use stable_mir::ty::ConstantKind;
-// // use rustc_middle::mir::visit::*;
-// // use rustc_index::IndexSlice;
 
 pub struct Replacer<'tcx> {
     pub(crate) tcx: TyCtxt<'tcx>,
@@ -50,18 +46,6 @@ impl<'tcx> Replacer<'tcx> {
                         }
                     }
                 }
-                // while let Some(block) = worklist.pop_front() {
-                //     if let Some(df_blocks) = self.ssatransformer.df.get(&block) {
-                //         for &df_block in df_blocks {
-                //             if !processed.contains(&df_block) {
-                //                 phi_functions.get_mut(&df_block).unwrap().insert(*var);
-                //                 processed.insert(df_block);
-                //                 if self.ssatransformer.local_assign_blocks[var].contains(&df_block)
-                //                 {
-                //                     worklist.push_back(df_block);
-                //                 }
-                //             }
-                //         }
                 //     }
                 // }
             }
@@ -95,13 +79,7 @@ impl<'tcx> Replacer<'tcx> {
                         ),
                     ))),
                 );
-                // let phi_stmt = Statement {
-                //     source_info: SourceInfo::outermost(body.span),
-                //     kind: StatementKind::Assign(Box::new((
-                //         Place::from(var),
-                //         Rvalue::Aggregate(Box::new(AggregateKind::Tuple), operands),
-                //     ))),
-                // };
+
                 body.basic_blocks_mut()[block]
                     .statements
                     .insert(0, phi_stmt);
@@ -857,79 +835,3 @@ impl<'tcx> Replacer<'tcx> {
         }
     }
 }
-
-// impl<'tcx> MutVisitor<'tcx> for Replacer< 'tcx> {
-//     fn tcx(&self) -> TyCtxt<'tcx> {
-//         self.tcx
-//     }
-
-//     fn visit_local(&mut self, local: &mut Local, ctxt: PlaceContext, _: Location) {
-//         let new_local = self.copy_classes[*local];
-//         // We must not unify two locals that are borrowed. But this is fine if one is borrowed and
-//         // the other is not. We chose to check the original local, and not the target. That way, if
-//         // the original local is borrowed and the target is not, we do not pessimize the whole class.
-//         if self.borrowed_locals.contains(*local) {
-//             return;
-//         }
-//         match ctxt {
-//             // Do not modify the local in storage statements.
-//             PlaceContext::NonUse(NonUseContext::StorageLive | NonUseContext::StorageDead) => {}
-//             // The local should have been marked as non-SSA.
-//             PlaceContext::MutatingUse(_) => assert_eq!(*local, new_local),
-//             // We access the value.
-//             _ => *local = new_local,
-//             // _ => *local = new_local,
-//         }
-//     }
-
-//     fn visit_place(&mut self, place: &mut Place<'tcx>, _: PlaceContext, loc: Location) {
-//         if let Some(new_projection) = self.process_projection(place.projection, loc) {
-//             place.projection = self.tcx().mk_place_elems(&new_projection);
-//         }
-//         // Any non-mutating use context is ok.
-//         let ctxt = PlaceContext::NonMutatingUse(NonMutatingUseContext::Copy);
-//         self.visit_local(&mut place.local, ctxt, loc);
-//         print!("{:?}", place);
-//     }
-
-//     fn visit_operand(&mut self, operand: &mut Operand<'tcx>, loc: Location) {
-//         if let Operand::Move(place) = *operand
-//             // A move out of a projection of a copy is equivalent to a copy of the original
-//             // projection.
-//             && !place.is_indirect_first_projection()
-//             && !self.fully_moved.contains(place.local)
-//         {
-//             *operand = Operand::Copy(place);
-//         }
-//         self.super_operand(operand, loc);
-//     }
-
-//     fn visit_statement(&mut self, stmt: &mut Statement<'tcx>, loc: Location) {
-//         // When removing storage statements, we need to remove both (#107511).
-//         if let StatementKind::StorageLive(l) | StatementKind::StorageDead(l) = stmt.kind
-//             && self.storage_to_remove.contains(l)
-//         {
-//             stmt.make_nop();
-//             return;
-//         }
-
-//         self.super_statement(stmt, loc);
-
-//         // Do not leave tautological assignments around.
-//         if let StatementKind::Assign(box (lhs, ref rhs)) = stmt.kind
-//             && let Rvalue::Use(Operand::Copy(rhs) | Operand::Move(rhs)) | Rvalue::CopyForDeref(rhs) =
-//                 *rhs
-//             && lhs == rhs
-//         {
-//             stmt.make_nop();
-//         }
-//     }
-//     fn visit_body_preserves_cfg(&mut self, body: &mut Body<'tcx>) {}
-//     fn visit_basic_block_data(&mut self, block: BasicBlock, data: &mut BasicBlockData<'tcx>) {
-//         let BasicBlockData {
-//             statements,
-//             terminator,
-//             is_cleanup: _,
-//         } = data;
-//     }
-// }

@@ -2708,7 +2708,6 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         predicate: &crate::verify::contract::NumericPredicate<'tcx>,
     ) {
         use crate::verify::contract::{ContractExpr, NumericOp, RelOp};
-        use rustc_middle::ty::{FloatTy, IntTy, UintTy};
         if !matches!(predicate.op, RelOp::Le | RelOp::Lt) {
             return;
         }

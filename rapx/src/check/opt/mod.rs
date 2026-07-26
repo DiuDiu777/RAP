@@ -1,6 +1,5 @@
 pub mod checking;
 pub mod data_collection;
-pub mod iterator;
 pub mod memory_cloning;
 
 use rustc_middle::ty::TyCtxt;
