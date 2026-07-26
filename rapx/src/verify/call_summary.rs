@@ -1412,7 +1412,7 @@ fn is_nonnull_destination<'tcx>(
         return false;
     };
     let ty = tcx.optimized_mir(caller).local_decls[destination].ty;
-    nonnull_inner_ty(tcx, ty).is_some() || format!("{ty:?}").contains("NonNull<")
+    nonnull_inner_ty(tcx, ty).is_some()
 }
 
 // pointee_ty imported from smt_check::common.

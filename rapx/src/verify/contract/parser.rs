@@ -3,24 +3,58 @@ use rustc_middle::ty::{GenericParamDefKind, Ty, TyCtxt, TyKind};
 use safety_parser::syn::{Expr, GenericArgument, Lit, PathArguments, Type};
 
 use super::types::*;
+use super::spec;
 use crate::verify::helpers::{
     access_ident_recursive, match_ty_with_ident, parse_expr_into_local_and_ty,
     parse_expr_into_number,
 };
 
 impl<'tcx> Property<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, name: &str, exprs: &[Expr]) -> Self {
-        match name {
-            "Align" => {
-                if !Self::check_arg_length(exprs.len(), 2, "Align") {
-                    return Self::new_simple(PropertyKind::Unknown);
+    /// Parse a property using the fixed-arity declaration table.
+    fn parse_from_spec(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        spec: &spec::PropertySpec,
+        exprs: &[Expr],
+    ) -> Self {
+        if !Self::check_arg_length(exprs.len(), spec.args.len(), spec.tag) {
+            return Self::new_simple(PropertyKind::Unknown);
+        }
+        let args: Vec<PropertyArg<'tcx>> = exprs
+            .iter()
+            .zip(spec.args.iter())
+            .map(|(expr, &arg_kind)| match arg_kind {
+                spec::ArgKind::Target => Self::parse_target_arg(tcx, def_id, expr),
+                spec::ArgKind::Ty => {
+                    let ty = Self::parse_type(tcx, def_id, expr, spec.tag)
+                        .unwrap_or_else(|| tcx.types.never);
+                    PropertyArg::Ty(ty)
                 }
-                let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
-                let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "Align") else {
-                    return Self::new_simple(PropertyKind::Unknown);
-                };
-                Self::new_with_args(PropertyKind::Align, vec![target, PropertyArg::Ty(ty)])
-            }
+                spec::ArgKind::Expr => {
+                    PropertyArg::Expr(Self::parse_contract_expr(tcx, def_id, expr, spec.tag))
+                }
+                spec::ArgKind::Ident => {
+                    let s = access_ident_recursive(expr)
+                        .map(|(name, _)| name)
+                        .unwrap_or_default();
+                    PropertyArg::Ident(s)
+                }
+            })
+            .collect();
+        Self {
+            kind: spec.kind,
+            args,
+            contract_kind: spec.contract_kind,
+            null_guard: None,
+            or_alternatives: Vec::new(),
+        }
+    }
+
+    pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, name: &str, exprs: &[Expr]) -> Self {
+        if let Some(spec) = spec::find_spec(name) {
+            return Self::parse_from_spec(tcx, def_id, spec, exprs);
+        }
+        match name {
             "Size" | "NonSize" => match exprs {
                 [ty_expr, const_expr] => {
                     let mut args = Vec::new();
@@ -45,23 +79,6 @@ impl<'tcx> Property<'tcx> {
                     Self::new_simple(PropertyKind::Unknown)
                 }
             },
-            "NoPadding" => match exprs {
-                [ty_expr] => {
-                    let mut args = Vec::new();
-                    if let Some(ty) = Self::parse_type(tcx, def_id, ty_expr, "NoPadding") {
-                        args.push(PropertyArg::Ty(ty));
-                    }
-                    Self::new_with_args(PropertyKind::NoPadding, args)
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for NoPadding Tag! expected 1, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "NonNull" => Self::new_with_target(PropertyKind::NonNull, tcx, def_id, exprs),
             "Allocated" => match exprs {
                 [target] => Self::new_with_args(
                     PropertyKind::Allocated,
@@ -181,87 +198,6 @@ impl<'tcx> Property<'tcx> {
                     )
                 }
             }
-            "ValidString" => match exprs {
-                [ptr_expr, ty_expr, len_expr] => {
-                    let target = Self::parse_target_arg(tcx, def_id, ptr_expr);
-                    let mut args = vec![target];
-                    if let Some(ty) = Self::parse_type(tcx, def_id, ty_expr, "ValidString") {
-                        args.push(PropertyArg::Ty(ty));
-                    }
-                    let len = Self::parse_contract_expr(tcx, def_id, len_expr, "ValidString");
-                    args.push(PropertyArg::Expr(len));
-                    Self::new_with_args(PropertyKind::ValidString, args)
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for ValidString Tag! expected 3, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "ValidCStr" => match exprs {
-                [ptr_expr, len_expr] => {
-                    let target = Self::parse_target_arg(tcx, def_id, ptr_expr);
-                    let len = Self::parse_contract_expr(tcx, def_id, len_expr, "ValidCStr");
-                    Self::new_with_args(
-                        PropertyKind::ValidCStr,
-                        vec![target, PropertyArg::Expr(len)],
-                    )
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for ValidCStr Tag! expected 2, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "Init" => {
-                if !Self::check_arg_length(exprs.len(), 3, "Init") {
-                    return Self::new_simple(PropertyKind::Unknown);
-                }
-                let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
-                let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "Init") else {
-                    return Self::new_simple(PropertyKind::Unknown);
-                };
-                let length = Self::parse_contract_expr(tcx, def_id, &exprs[2], "Init");
-                Self::new_with_args(
-                    PropertyKind::Init,
-                    vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(length)],
-                )
-            }
-            "Unwrap" => match exprs {
-                [ptr_expr, variant_expr] => {
-                    let target = Self::parse_target_arg(tcx, def_id, ptr_expr);
-                    let variant = access_ident_recursive(variant_expr)
-                        .map(|(name, _)| name)
-                        .unwrap_or_default();
-                    let mut args = vec![target];
-                    if !variant.is_empty() {
-                        args.push(PropertyArg::Ident(variant));
-                    }
-                    Self::new_with_args(PropertyKind::Unwrap, args)
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for Unwrap Tag! expected 2, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "Typed" => {
-                if !Self::check_arg_length(exprs.len(), 2, "Typed") {
-                    return Self::new_simple(PropertyKind::Unknown);
-                }
-                let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
-                let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "Typed") else {
-                    return Self::new_simple(PropertyKind::Unknown);
-                };
-                Self::new_with_args(PropertyKind::Typed, vec![target, PropertyArg::Ty(ty)])
-            }
-            "Owning" => Self::new_with_target(PropertyKind::Owning, tcx, def_id, exprs),
             "Alias" => {
                 let mut prop = Self::new_with_targets(PropertyKind::Alias, tcx, def_id, exprs);
                 prop.contract_kind = ContractKind::Hazard;
@@ -288,126 +224,6 @@ impl<'tcx> Property<'tcx> {
                     Self::new_simple(PropertyKind::Unknown)
                 }
             },
-            "NonVolatile" => match exprs {
-                [ptr_expr, ty_expr, len_expr] => {
-                    let target = Self::parse_target_arg(tcx, def_id, ptr_expr);
-                    let mut args = vec![target];
-                    if let Some(ty) = Self::parse_type(tcx, def_id, ty_expr, "NonVolatile") {
-                        args.push(PropertyArg::Ty(ty));
-                    }
-                    let len = Self::parse_contract_expr(tcx, def_id, len_expr, "NonVolatile");
-                    args.push(PropertyArg::Expr(len));
-                    Self::new_with_args(PropertyKind::NonVolatile, args)
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for NonVolatile Tag! expected 3, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "Opened" => Self::new_with_target(PropertyKind::Opened, tcx, def_id, exprs),
-            "Trait" => {
-                if let [type_expr, ident_expr] = exprs {
-                    let Some(ty) = Self::parse_type(tcx, def_id, type_expr, "Trait") else {
-                        return Self::new_simple(PropertyKind::Unknown);
-                    };
-                    let trait_name = access_ident_recursive(ident_expr)
-                        .map(|(s, _)| s)
-                        .unwrap_or_else(|| "?".to_string());
-                    Self::new_with_args(
-                        PropertyKind::Trait,
-                        vec![PropertyArg::Ty(ty), PropertyArg::Ident(trait_name)],
-                    )
-                } else {
-                    Self::check_arg_length(exprs.len(), 2, "Trait");
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            }
-            "Unreachable" => Self::new_with_target(PropertyKind::Unreachable, tcx, def_id, exprs),
-            "ValidPtr" => {
-                if !Self::check_arg_length(exprs.len(), 3, "ValidPtr") {
-                    return Self::new_simple(PropertyKind::Unknown);
-                }
-                let target = Self::parse_target_arg(tcx, def_id, &exprs[0]);
-                let Some(ty) = Self::parse_type(tcx, def_id, &exprs[1], "ValidPtr") else {
-                    return Self::new_simple(PropertyKind::Unknown);
-                };
-                let length = Self::parse_contract_expr(tcx, def_id, &exprs[2], "ValidPtr");
-                Self::new_with_args(
-                    PropertyKind::ValidPtr,
-                    vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(length)],
-                )
-            }
-            "Deref" => match exprs {
-                [target, ty_expr, len_expr] => {
-                    let target = Self::parse_target_arg(tcx, def_id, target);
-                    let Some(ty) = Self::parse_type(tcx, def_id, ty_expr, "Deref") else {
-                        return Self::new_simple(PropertyKind::Unknown);
-                    };
-                    let length = Self::parse_contract_expr(tcx, def_id, len_expr, "Deref");
-                    Self::new_with_args(
-                        PropertyKind::Deref,
-                        vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(length)],
-                    )
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for Deref Tag! expected 3, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "Ptr2Ref" => match exprs {
-                [ptr_expr, ty_expr] => {
-                    let target = Self::parse_target_arg(tcx, def_id, ptr_expr);
-                    let mut args = vec![target];
-                    if let Some(ty) = Self::parse_type(tcx, def_id, ty_expr, "Ptr2Ref") {
-                        args.push(PropertyArg::Ty(ty));
-                    }
-                    Self::new_with_args(PropertyKind::Ptr2Ref, args)
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for Ptr2Ref Tag! expected 2, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "Layout" => match exprs {
-                [ptr_expr, layout_expr] => {
-                    let ptr = Self::parse_target_arg(tcx, def_id, ptr_expr);
-                    let layout = Self::parse_target_arg(tcx, def_id, layout_expr);
-                    Self::new_with_args(PropertyKind::Layout, vec![ptr, layout])
-                }
-                _ => {
-                    rap_error!(
-                        "Wrong args length for Layout Tag! expected 2, got {}",
-                        exprs.len()
-                    );
-                    Self::new_simple(PropertyKind::Unknown)
-                }
-            },
-            "ValidTransmute" => {
-                if !Self::check_arg_length(exprs.len(), 2, "ValidTransmute") {
-                    return Self::new_simple(PropertyKind::Unknown);
-                }
-                let Some(src_ty) = Self::parse_type(tcx, def_id, &exprs[0], "ValidTransmute")
-                else {
-                    return Self::new_simple(PropertyKind::Unknown);
-                };
-                let Some(dst_ty) = Self::parse_type(tcx, def_id, &exprs[1], "ValidTransmute")
-                else {
-                    return Self::new_simple(PropertyKind::Unknown);
-                };
-                Self::new_with_args(
-                    PropertyKind::ValidTransmute,
-                    vec![PropertyArg::Ty(src_ty), PropertyArg::Ty(dst_ty)],
-                )
-            }
             "SplitTransmute" => {
                 if !Self::check_arg_length(exprs.len(), 2, "SplitTransmute") {
                     return Self::new_simple(PropertyKind::Unknown);

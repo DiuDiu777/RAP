@@ -226,7 +226,7 @@ fn invariant_kind_implies<'tcx>(
     required: &PropertyKind,
     required_ty: Option<Ty<'tcx>>,
 ) -> bool {
-    if crate::verify::contract::decomp::kind_implies(declared, required) {
+    if declared.kind_implies(required) {
         // For ValidPtr ⇒ Allocated|InBound, ZST types are vacuously valid
         // without allocation — the implication only holds for non-ZST.
         if matches!(declared, PropertyKind::ValidPtr)
@@ -294,7 +294,7 @@ pub(super) fn discharge_from_contract_fact<'tcx>(
         let StateFact::Contract(contract) = fact else {
             continue;
         };
-        if !crate::verify::contract::decomp::kind_implies(&contract.kind, &property.kind) {
+        if !contract.kind.kind_implies(&property.kind) {
             continue;
         }
         let Some(contract_key) = contract_property_key(contract) else {
@@ -375,7 +375,7 @@ pub(super) fn discharge_from_contract_fact_with_checkpoint<'tcx>(
         let StateFact::Contract(contract) = fact else {
             continue;
         };
-        if !crate::verify::contract::decomp::kind_implies(&contract.kind, &property.kind) {
+        if !contract.kind.kind_implies(&property.kind) {
             continue;
         }
         let Some(contract_key) = contract_property_key(contract) else {

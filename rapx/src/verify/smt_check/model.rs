@@ -3692,7 +3692,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 base: PlaceBaseKey::Local(local.as_usize()),
                 fields: Vec::new(),
             })?;
-            if let Some(param) = array_const_len_param(ty) {
+            if let Some(param) = array_const_len_param(self.tcx, ty) {
                 return Some(param);
             }
         }
@@ -4237,10 +4237,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             let StateFact::Contract(property) = fact else {
                 return false;
             };
-            if !crate::verify::contract::decomp::kind_implies(
-                &property.kind,
-                &PropertyKind::Allocated,
-            ) {
+            if !property.kind.kind_implies(&PropertyKind::Allocated) {
                 return false;
             }
             property.args.first().is_some_and(|arg| {

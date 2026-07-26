@@ -38,7 +38,7 @@ pub(crate) fn check<'tcx>(
             SmtCheckResult::proved(format!("ValidPtr proved by Size({required_ty:?}, 0)"))
         }
         TypeSizeClass::NonZero => {
-            let deref_property = contract::decomp::with_kind(property, PropertyKind::Deref);
+            let deref_property = contract::with_kind(property, PropertyKind::Deref);
             let deref = checker.check(checkpoint, &deref_property, forward);
             match &deref.result {
                 CheckResult::Proved => {
@@ -74,7 +74,7 @@ pub(crate) fn check<'tcx>(
             .with_note(format!("primitive Deref via SMT: {:?}", deref.result))
         }
         TypeSizeClass::Unknown => {
-            let deref_property = contract::decomp::with_kind(property, PropertyKind::Deref);
+            let deref_property = contract::with_kind(property, PropertyKind::Deref);
             let deref = checker.check(checkpoint, &deref_property, forward);
             match &deref.result {
                 CheckResult::Proved => SmtCheckResult::proved(

@@ -15,7 +15,7 @@ use rustc_middle::{
         AggregateKind, BasicBlock, BinOp, Body, Local, Operand, Place, ProjectionElem, Rvalue,
         Statement, StatementKind, Terminator, TerminatorKind, UnOp,
     },
-    ty::{GenericArgKind, Ty, TyCtxt, TyKind},
+    ty::{ConstKind, GenericArgKind, Ty, TyCtxt, TyKind},
 };
 
 use super::{
@@ -1243,7 +1243,11 @@ impl<'tcx> ForwardVerifier<'tcx> {
         let base = source_place.local()?;
         let body = self.tcx.optimized_mir(caller);
         let base_ty = body.local_decls[base].ty;
-        if !format!("{base_ty:?}").contains("Box<") {
+        let TyKind::Adt(adt_def, _) = base_ty.kind() else {
+            return None;
+        };
+        let did = adt_def.did();
+        if !tcx_is_box_or_vec(self.tcx, did) {
             return None;
         }
         let TyKind::RawPtr(pointee, _) = cast_ty.kind() else {
@@ -1251,6 +1255,11 @@ impl<'tcx> ForwardVerifier<'tcx> {
         };
         Some((format!("{pointee:?}"), 1))
     }
+}
+
+fn tcx_is_box_or_vec(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    let name = tcx.def_path_str(did);
+    name.ends_with("::Box") || name == "Box" || name.ends_with("::Vec") || name == "Vec"
 }
 
 /// Result produced by visiting relevant MIR items forward.
@@ -1503,47 +1512,6 @@ pub struct CallSummary<'tcx> {
     pub unsupported: bool,
 }
 
-fn extract_const_param_name(text: &str) -> Option<String> {
-    if let Some(start) = text.find("kind: Param(") {
-        let rest = &text[start + "kind: Param(".len()..];
-        if let Some(end) = rest.find(')') {
-            let inner = &rest[..end];
-            if let Some(name_start) = inner.find("name: ") {
-                let name_part = &inner[name_start + "name: ".len()..];
-                if let Some(name_end) = name_part.find(',') {
-                    return Some(name_part[..name_end].trim().to_string());
-                }
-                return Some(name_part.trim().to_string());
-            }
-        }
-    }
-    // Newer rustc prints a const parameter as e.g. `Ty(usize, N/#1)`, where the
-    // trailing `N/#1` is the parameter `N` with its index.  Recognize this so a
-    // const generic resolves to the same `ConstParam(N)` term everywhere it is
-    // used (call arguments, binary ops, and type strides), rather than an opaque
-    // per-spelling `Const(...)` symbol.
-    if let Some(open) = text.find('(')
-        && let Some(close) = text.rfind(')')
-        && open < close
-    {
-        let inner = &text[open + 1..close];
-        let last = inner.rsplit(',').next()?.trim();
-        if let Some((name, index)) = last.split_once("/#")
-            && !index.is_empty()
-            && index.bytes().all(|b| b.is_ascii_digit())
-            && !name.is_empty()
-            && name
-                .bytes()
-                .next()
-                .is_some_and(|b| b.is_ascii_alphabetic() || b == b'_')
-            && name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
-        {
-            return Some(name.to_string());
-        }
-    }
-    None
-}
-
 /// Convert a MIR operand to an abstract value.
 fn value_from_operand<'tcx>(operand: &Operand<'tcx>) -> AbstractValue<'tcx> {
     match operand {
@@ -1551,10 +1519,12 @@ fn value_from_operand<'tcx>(operand: &Operand<'tcx>) -> AbstractValue<'tcx> {
             AbstractValue::Place(PlaceKey::from_mir_place(place))
         }
         Operand::Constant(constant) => {
-            let text = format!("{:?}", constant.const_);
-            if let Some(name) = extract_const_param_name(&text) {
-                return AbstractValue::ConstParam(name);
+            if let rustc_middle::mir::Const::Ty(_, ty_const) = constant.const_ {
+                if let ConstKind::Param(param) = ty_const.kind() {
+                    return AbstractValue::ConstParam(param.name.to_string());
+                }
             }
+            let text = format!("{:?}", constant.const_);
             const_int_from_debug(&text)
                 .map(AbstractValue::ConstInt)
                 .unwrap_or(AbstractValue::Const(text))
@@ -1700,23 +1670,21 @@ fn resolve_value_chain<'tcx>(
     result: &ForwardVisitResult<'tcx>,
 ) -> AbstractValue<'tcx> {
     let mut cur = value.clone();
-    let mut seen = HashSet::new();
+    let mut visited_locals = HashSet::new();
     loop {
-        if !seen.insert(format!("{cur:?}")) {
-            return cur;
-        }
-        cur = match &cur {
-            AbstractValue::Place(p) => {
-                if let PlaceBaseKey::Local(ix) = &p.base {
-                    match result.values.get(&Local::from_usize(*ix)) {
-                        Some(v) => v.clone(),
-                        None => return cur,
-                    }
-                } else {
-                    return cur;
-                }
+        let local = match &cur {
+            AbstractValue::Place(p) if matches!(p.base, PlaceBaseKey::Local(_)) => {
+                let PlaceBaseKey::Local(ix) = p.base else { unreachable!() };
+                ix
             }
             _ => return cur,
+        };
+        if !visited_locals.insert(local) {
+            return cur;
+        }
+        cur = match result.values.get(&Local::from_usize(local)) {
+            Some(v) => v.clone(),
+            None => return cur,
         };
     }
 }
@@ -1855,11 +1823,8 @@ fn for_each_place_in_chain<'tcx, T>(
     mut on_place: impl FnMut(&PlaceKey) -> Option<T>,
 ) -> Option<T> {
     let mut cur = value.clone();
-    let mut seen = HashSet::new();
+    let mut visited_locals = HashSet::new();
     loop {
-        if !seen.insert(format!("{cur:?}")) {
-            return None;
-        }
         if let AbstractValue::Place(ref p) = cur {
             if let Some(r) = on_place(p) {
                 return Some(r);
@@ -1867,13 +1832,15 @@ fn for_each_place_in_chain<'tcx, T>(
         }
         cur = match &cur {
             AbstractValue::Place(p) => {
-                if let PlaceBaseKey::Local(ix) = &p.base {
-                    match result.values.get(&Local::from_usize(*ix)) {
-                        Some(v) => v.clone(),
-                        None => return None,
-                    }
-                } else {
+                let PlaceBaseKey::Local(ix) = p.base else {
                     return None;
+                };
+                if !visited_locals.insert(ix) {
+                    return None;
+                }
+                match result.values.get(&Local::from_usize(ix)) {
+                    Some(v) => v.clone(),
+                    None => return None,
                 }
             }
             AbstractValue::Cast(inner, _) => (**inner).clone(),

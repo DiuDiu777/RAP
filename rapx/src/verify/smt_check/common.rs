@@ -26,6 +26,7 @@
 
 use std::collections::HashSet;
 
+use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
         BasicBlock, BinOp, Local, Operand, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
@@ -140,11 +141,11 @@ impl<'tcx> SmtChecker<'tcx> {
         property: &Property<'tcx>,
         forward: &ForwardVisitResult<'tcx>,
     ) -> SmtCheckResult {
-        let primitives = contract::decomp::primitive_components(&property.kind).unwrap_or(&[]);
+        let primitives = property.kind.primitive_components().unwrap_or(&[]);
 
         let mut results: Vec<SmtCheckResult> = Vec::new();
         for &kind in primitives {
-            let primitive = contract::decomp::with_kind(property, kind);
+            let primitive = contract::with_kind(property, kind);
             let result = self.check(checkpoint, &primitive, forward);
             results.push(result);
         }
@@ -3407,22 +3408,32 @@ pub(crate) fn is_len_carrying_ty(ty: Ty<'_>) -> bool {
 /// The name of the const-generic length parameter of a fixed array `[E; N]`,
 /// looking through references and a `MaybeUninit` wrapper.  Returns `None` for
 /// concrete lengths or non-array types.
-pub(crate) fn array_const_len_param(ty: Ty<'_>) -> Option<String> {
+pub(crate) fn array_const_len_param(tcx: TyCtxt<'_>, ty: Ty<'_>) -> Option<String> {
     match ty.kind() {
         TyKind::Array(_, len) => match len.kind() {
             ConstKind::Param(param) => Some(param.name.to_string()),
             _ => None,
         },
-        TyKind::Ref(_, inner, _) => array_const_len_param(*inner),
-        TyKind::Adt(_, args) if format!("{ty:?}").contains("MaybeUninit") => args
-            .first()
-            .and_then(|arg| match arg.kind() {
-                GenericArgKind::Type(ty) => Some(ty),
-                _ => None,
-            })
-            .and_then(array_const_len_param),
+        TyKind::Ref(_, inner, _) => array_const_len_param(tcx, *inner),
+        TyKind::Adt(adt_def, args) => {
+            if !is_maybe_uninit_adt(tcx, adt_def.did()) {
+                return None;
+            }
+            args.first()
+                .and_then(|arg| match arg.kind() {
+                    GenericArgKind::Type(ty) => Some(ty),
+                    _ => None,
+                })
+                .and_then(|ty| array_const_len_param(tcx, ty))
+        }
         _ => None,
     }
+}
+
+fn is_maybe_uninit_adt(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    tcx.def_path_str(did).contains("::mem::MaybeUninit")
+        || tcx.def_path_str(did).ends_with("::MaybeUninit")
+        || tcx.def_path_str(did) == "MaybeUninit"
 }
 
 /// Follow `local = move/copy other` (no projections) to the root local.
