@@ -70,6 +70,8 @@ pub(crate) struct PathCursorCutoff {
 }
 
 /// SMT backend for verifier properties.
+// ── SMT Engine ────────────────────────────────────────────────────────
+
 pub struct SmtChecker<'tcx> {
     pub(crate) tcx: TyCtxt<'tcx>,
 }
@@ -709,10 +711,10 @@ impl<'tcx> SmtChecker<'tcx> {
                             .with_note("caller contract provides InBound for raw pointer parameter")
                         } else {
                             SmtCheckResult::unknown("solver returned unknown").with_query(query)
-                        }
-                    }
-                }
             }
+        }
+    }
+}
             SmtObligation::PointerRangeInBounds {
                 place,
                 ty_name,
@@ -2859,6 +2861,8 @@ impl<'tcx> SmtChecker<'tcx> {
     }
 }
 
+// ── SMT Data Types ─────────────────────────────────────────────────────
+
 /// Trivalent size classification for type-dependent composite SPs.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum TypeSizeClass {
@@ -3155,6 +3159,8 @@ impl SmtPredicate {
     }
 }
 
+// ── SMT Query + Result Types ───────────────────────────────────────────
+
 /// Solver query built from path facts plus one negated obligation.
 #[derive(Clone, Debug)]
 pub struct SmtQuery {
@@ -3223,6 +3229,15 @@ impl SmtCheckResult {
         self
     }
 
+    /// When `self` is `Unknown` or `Failed`, try the given fallback.
+    /// Returns the original result if already `Proved`.
+    pub fn or_try(self, f: impl FnOnce() -> SmtCheckResult) -> SmtCheckResult {
+        match self.result {
+            CheckResult::Proved => self,
+            _ => f(),
+        }
+    }
+
     /// Render this SMT result as a diagnostic block.
     pub fn describe(&self) -> String {
         let mut lines = vec![format!("      smt check: {:?}", self.result)];
@@ -3252,6 +3267,8 @@ impl SmtCheckResult {
         lines.join("\n")
     }
 }
+
+// ── MIR / Type / Label Helpers ─────────────────────────────────────────
 
 pub(crate) fn failed_smt(note: impl Into<String>) -> SmtCheckResult {
     SmtCheckResult {
@@ -3437,31 +3454,8 @@ fn is_maybe_uninit_adt(tcx: TyCtxt<'_>, did: DefId) -> bool {
 }
 
 /// Follow `local = move/copy other` (no projections) to the root local.
-pub(crate) fn mir_copy_root<'tcx>(body: &rustc_middle::mir::Body<'tcx>, mut local: Local) -> Local {
-    for _ in 0..16 {
-        let mut next = None;
-        for bb in body.basic_blocks.iter() {
-            for stmt in &bb.statements {
-                let StatementKind::Assign(assign) = &stmt.kind else {
-                    continue;
-                };
-                let (dest, rvalue) = assign.as_ref();
-                if dest.local != local || !dest.projection.is_empty() {
-                    continue;
-                }
-                if let Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) = rvalue
-                    && src.projection.is_empty()
-                {
-                    next = Some(src.local);
-                }
-            }
-        }
-        match next {
-            Some(n) if n != local => local = n,
-            _ => return local,
-        }
-    }
-    local
+pub(crate) fn mir_copy_root<'tcx>(body: &rustc_middle::mir::Body<'tcx>, local: Local) -> Local {
+    crate::verify::def_use::trace_local_origin(body, local)
 }
 
 /// Find the destination of `MaybeUninit::as_mut_ptr(&mut arr)` for `arr_local`.
@@ -4516,4 +4510,61 @@ pub(crate) fn mir_is_tuple_field_of<'tcx>(
         }
     }
     false
+}
+
+/// Per-body provenance parents: copies, casts, refs, and pointer-extraction
+/// calls collapse to the underlying source local.
+pub(crate) fn body_parents<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &rustc_middle::mir::Body<'tcx>,
+) -> crate::compat::FxHashMap<rustc_middle::mir::Local, rustc_middle::mir::Local> {
+    use rustc_middle::mir::Local;
+    use rustc_middle::mir::{Operand, Rvalue, StatementKind, TerminatorKind};
+
+    let mut parents: crate::compat::FxHashMap<Local, Local> = Default::default();
+    for data in body.basic_blocks.iter() {
+        for statement in &data.statements {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (target, rvalue) = assign.as_ref();
+            let source = match rvalue {
+                Rvalue::Use(Operand::Copy(place) | Operand::Move(place), ..)
+                | Rvalue::Cast(_, Operand::Copy(place) | Operand::Move(place), _)
+                | Rvalue::Ref(_, _, place)
+                | Rvalue::RawPtr(_, place)
+                | Rvalue::CopyForDeref(place) => Some(place.local),
+                _ => None,
+            };
+            if let Some(source) = source {
+                parents.entry(target.local).or_insert(source);
+            }
+        }
+        let Some(terminator) = &data.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &terminator.kind
+        else {
+            continue;
+        };
+        let name = crate::verify::call_summary::call_name(tcx, func);
+        if !crate::verify::primitive::PrimitiveCall::classify(&name)
+            .is_some_and(|p| p.is_as_ptr_like())
+        {
+            continue;
+        }
+        let Some(source) = args.first().and_then(|arg| match &arg.node {
+            Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+            _ => None,
+        }) else {
+            continue;
+        };
+        parents.entry(destination.local).or_insert(source);
+    }
+    parents
 }

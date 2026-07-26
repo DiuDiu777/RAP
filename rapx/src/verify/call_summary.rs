@@ -10,7 +10,8 @@
 //! dataflow graph to approximate which arguments flow into the return value.
 
 use std::collections::HashSet;
-use std::panic::{AssertUnwindSafe, catch_unwind};
+
+use crate::compat::FxHashMap;
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
@@ -1110,7 +1111,7 @@ fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize
     if !tcx.is_mir_available(callee) {
         return None;
     }
-    catch_unwind(AssertUnwindSafe(|| {
+    super::helpers::catch_panic(|| {
         let mut analyzer = DataflowAnalyzer::new(tcx, false);
         analyzer.build_graph(callee);
         let deps = analyzer.get_fn_arg2ret(callee);
@@ -1123,7 +1124,7 @@ fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize
                 }
             })
             .collect()
-    }))
+    })
     .ok()
 }
 
@@ -1135,7 +1136,7 @@ fn local_must_write_args(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
         return None;
     }
 
-    catch_unwind(AssertUnwindSafe(|| {
+    super::helpers::catch_panic(|| {
         let body = tcx.optimized_mir(callee);
         let mut graph = PathGraph::new(tcx, callee);
         graph.find_scc();
@@ -1158,7 +1159,7 @@ fn local_must_write_args(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
             .unwrap_or_default()
             .into_iter()
             .collect::<Vec<_>>()
-    }))
+    })
     .ok()
 }
 
@@ -1210,7 +1211,7 @@ fn detect_index_disjoint_validator(tcx: TyCtxt<'_>, callee: DefId) -> Option<(us
     if !tcx.is_mir_available(callee) {
         return None;
     }
-    catch_unwind(AssertUnwindSafe(|| {
+    super::helpers::catch_panic(|| {
         let body = tcx.optimized_mir(callee);
         let arg_count = body.arg_count;
         let mut elem_load_arg: HashSet<(Local, usize)> = HashSet::new();
@@ -1305,7 +1306,7 @@ fn detect_index_disjoint_validator(tcx: TyCtxt<'_>, callee: DefId) -> Option<(us
             (Some((idx, len)), Some(dj)) if dj == idx && idx != len => Some((idx, len)),
             _ => None,
         }
-    }))
+    })
     .ok()
     .flatten()
 }

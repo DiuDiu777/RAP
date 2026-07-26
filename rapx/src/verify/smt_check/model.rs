@@ -265,6 +265,60 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
+    fn assert_call_fact(&mut self, solver: &Solver<'ctx>, call: &CallSummary<'tcx>) {
+        if is_as_ptr_call(&call.func) {
+            let place = PlaceKey { base: PlaceBaseKey::Local(call.destination.as_usize()), fields: Vec::new() };
+            self.assert_place_non_zero(solver, &place, "returned by as_ptr");
+            self.assert_place_alignment(solver, &place);
+        }
+        self.record_call_effect_assumptions(solver, call);
+        self.bridge_tuple_field_lengths(solver, call);
+        if call.func.contains("exact_div") {
+            let dest = PlaceKey { base: PlaceBaseKey::Local(call.destination.as_usize()), fields: Vec::new() };
+            if let Some(dest_term) = self.term_for_place(&dest)
+                && let Some(arg0) = call.args.get(0)
+            {
+                let cursor = self.call_definition_cursor(call);
+                if let Some(arg0_term) = self.term_for_value_at(arg0, cursor, &mut TraceSeen::new()) {
+                    solver.assert(&dest_term.le(&arg0_term));
+                    self.place_terms.insert(dest.clone(), dest_term);
+                    self.assumptions.push(SmtPredicate::Le(SmtTerm::Place(dest), SmtTerm::Value(value_label(arg0))));
+                }
+            }
+        }
+        if call.func.contains("::cmp::min") {
+            let dest = PlaceKey { base: PlaceBaseKey::Local(call.destination.as_usize()), fields: Vec::new() };
+            let cursor = self.call_definition_cursor(call);
+            if let Some(dest_term) = self.term_for_place(&dest) {
+                if let Some(arg0) = call.args.get(0)
+                    && let Some(arg0_term) = self.term_for_value_at(arg0, cursor, &mut TraceSeen::new())
+                {
+                    solver.assert(&dest_term.le(&arg0_term));
+                    self.place_terms.insert(dest.clone(), dest_term.clone());
+                    self.assumptions.push(SmtPredicate::Le(SmtTerm::Place(dest.clone()), SmtTerm::Value(value_label(arg0))));
+                }
+                if let Some(arg1) = call.args.get(1)
+                    && let Some(arg1_term) = self.term_for_value_at(arg1, cursor, &mut TraceSeen::new())
+                {
+                    solver.assert(&dest_term.le(&arg1_term));
+                    self.assumptions.push(SmtPredicate::Le(SmtTerm::Place(dest), SmtTerm::Value(value_label(arg1))));
+                }
+            }
+        }
+        if let Some(bounds_arg) = call.effects.iter().find_map(|e| match e {
+            crate::verify::call_summary::CallEffect::ReturnBoundedRange { bounds_arg } => Some(*bounds_arg),
+            _ => None,
+        }) {
+            self.assert_bounded_range(solver, call, bounds_arg);
+        }
+        if let Some(recv_arg) = call.effects.iter().find_map(|e| match e {
+            crate::verify::call_summary::CallEffect::ReturnLcmSplit { receiver_arg } => Some(*receiver_arg),
+            _ => None,
+        }) {
+            self.assert_lcm_split_bounds(solver, call, recv_arg);
+        }
+    }
+
     /// Assert facts collected by the forward visitor.
     pub(crate) fn assert_forward_facts(&mut self, solver: &Solver<'ctx>) {
         // Two-pass processing: non-Contract facts first (establish value chain),
@@ -295,114 +349,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     self.assert_place_alignment(solver, source);
                     self.assert_length_alias(solver, pointer, source);
                 }
-                StateFact::Call(call) => {
-                    if is_as_ptr_call(&call.func) {
-                        let place = PlaceKey {
-                            base: PlaceBaseKey::Local(call.destination.as_usize()),
-                            fields: Vec::new(),
-                        };
-                        self.assert_place_non_zero(solver, &place, "returned by as_ptr");
-                        self.assert_place_alignment(solver, &place);
-                    }
-                    self.record_call_effect_assumptions(solver, call);
-                    // `split_at`-style calls expose the length of the returned
-                    // prefix slice (field 0) as `mid`.  Bridge that length into
-                    // the `len(...)` namespace so that downstream `len(self)`
-                    // contracts on the destructured prefix (e.g.
-                    // `as_chunks_unchecked_ext` requiring `len(self) % N == 0`)
-                    // can see `len(prefix) == mid` instead of a free symbol.
-                    self.bridge_tuple_field_lengths(solver, call);
-                    // exact_div(x, y) returns x / y.  Assert result <= x
-                    // so that downstream bounds checks (e.g.
-                    // from_raw_parts(ptr, exact_div(len, N))) can infer
-                    // chunk_count <= len.
-                    if call.func.contains("exact_div") {
-                        let dest = PlaceKey {
-                            base: PlaceBaseKey::Local(call.destination.as_usize()),
-                            fields: Vec::new(),
-                        };
-                        if let Some(dest_term) = self.term_for_place(&dest)
-                            && let Some(arg0) = call.args.get(0)
-                        {
-                            let cursor = self.call_definition_cursor(call);
-                            if let Some(arg0_term) =
-                                self.term_for_value_at(arg0, cursor, &mut TraceSeen::new())
-                            {
-                                solver.assert(&dest_term.le(&arg0_term));
-                                // Cache the term so subsequent uses of this
-                                // local (e.g. Allocated check) get the same
-                                // Z3 variable.
-                                self.place_terms.insert(dest.clone(), dest_term);
-                                self.assumptions.push(SmtPredicate::Le(
-                                    SmtTerm::Place(dest),
-                                    SmtTerm::Value(value_label(arg0)),
-                                ));
-                            }
-                        }
-                    }
-                    // cmp::min(a, b) => result <= a && result <= b
-                    if call.func.contains("::cmp::min") {
-                        let dest = PlaceKey {
-                            base: PlaceBaseKey::Local(call.destination.as_usize()),
-                            fields: Vec::new(),
-                        };
-                        let cursor = self.call_definition_cursor(call);
-                        if let Some(dest_term) = self.term_for_place(&dest) {
-                            if let Some(arg0) = call.args.get(0)
-                                && let Some(arg0_term) =
-                                    self.term_for_value_at(arg0, cursor, &mut TraceSeen::new())
-                            {
-                                solver.assert(&dest_term.le(&arg0_term));
-                                self.place_terms.insert(dest.clone(), dest_term.clone());
-                                self.assumptions.push(SmtPredicate::Le(
-                                    SmtTerm::Place(dest.clone()),
-                                    SmtTerm::Value(value_label(arg0)),
-                                ));
-                            }
-                            if let Some(arg1) = call.args.get(1)
-                                && let Some(arg1_term) =
-                                    self.term_for_value_at(arg1, cursor, &mut TraceSeen::new())
-                            {
-                                solver.assert(&dest_term.le(&arg1_term));
-                                self.assumptions.push(SmtPredicate::Le(
-                                    SmtTerm::Place(dest),
-                                    SmtTerm::Value(value_label(arg1)),
-                                ));
-                            }
-                        }
-                    }
-                    // `a.unchecked_mul(b)` and friends are pure arithmetic; the
-                    // exact value is reconstructed on demand in
-                    // `term_for_numeric_arith_call`, so no fact is needed here.
-
-                    // `core::slice::range` returns `Range { start, end }` with
-                    // `0 <= start <= end <= bounds.end`.  Assert this so callers
-                    // that derive subslice pointers from the result (e.g.
-                    // `slice::copy_within`) can prove the offsets are in bounds.
-                    if let Some(bounds_arg) = call.effects.iter().find_map(|effect| match effect {
-                        crate::verify::call_summary::CallEffect::ReturnBoundedRange {
-                            bounds_arg,
-                        } => Some(*bounds_arg),
-                        _ => None,
-                    }) {
-                        self.assert_bounded_range(solver, call, bounds_arg);
-                    }
-
-                    // `align_to_offsets` returns `(us_len, ts_len)` where `ts_len
-                    // <= receiver.len()` and `us_len * size_of::<U>() <=
-                    // receiver.len() * size_of::<T>()` (the byte count does not
-                    // exceed the receiver).  The weaker `field_1 <= len(receiver)`
-                    // is enough for the tail `ptr.add(receiver.len() - field_1)`
-                    // to remain in bounds.
-                    if let Some(recv_arg) = call.effects.iter().find_map(|effect| match effect {
-                        crate::verify::call_summary::CallEffect::ReturnLcmSplit {
-                            receiver_arg,
-                        } => Some(*receiver_arg),
-                        _ => None,
-                    }) {
-                        self.assert_lcm_split_bounds(solver, call, recv_arg);
-                    }
-                }
+                StateFact::Call(call) => self.assert_call_fact(solver, call),
                 StateFact::KnownNonZero { place, reason } => {
                     self.assert_place_non_zero(solver, place, reason);
                 }

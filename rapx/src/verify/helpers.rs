@@ -270,3 +270,14 @@ pub(crate) fn ty_has_param_const(ty: Ty<'_>) -> bool {
     }
     false
 }
+
+/// Run `f` inside `catch_unwind`, returning either the result or the
+/// downcasted panic message.
+pub(crate) fn catch_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).map_err(|e| {
+        e.downcast_ref::<String>()
+            .cloned()
+            .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_else(|| "<rustc ICE>".to_string())
+    })
+}

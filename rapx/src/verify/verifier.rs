@@ -455,31 +455,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         source: source_val.clone(),
                         ty: op_ty,
                     });
-                    if let Some(align) = known_alignment_of(&source_val, result) {
-                        result.facts.push(StateFact::KnownAligned {
-                            place: field_place.clone(),
-                            align,
-                            ty_name: format!("cast-{align}"),
-                            reason: format!("cast preserves {align}-byte alignment"),
-                        });
-                    }
-                    if known_nonzero_of(&source_val, result) {
-                        result.facts.push(StateFact::KnownNonZero {
-                            place: field_place.clone(),
-                            reason: "cast preserves non-nullness".to_string(),
-                        });
-                    }
-                    if let Some((ty_name, elements, object)) =
-                        known_allocated_for(&source_val, result)
-                    {
-                        result.facts.push(StateFact::KnownAllocated {
-                            place: field_place.clone(),
-                            object,
-                            ty_name,
-                            elements,
-                            reason: "cast preserves allocation provenance".to_string(),
-                        });
-                    }
+                    propagate_value_facts(&source_val, &field_place, "cast", result);
                 }
             }
             Rvalue::Cast(_, operand, ty) => {
@@ -489,14 +465,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     source: source_val.clone(),
                     ty: *ty,
                 });
-                if let Some(align) = known_alignment_of(&source_val, result) {
-                    result.facts.push(StateFact::KnownAligned {
-                        place: target.clone(),
-                        align,
-                        ty_name: format!("cast-{align}"),
-                        reason: format!("cast preserves {align}-byte alignment"),
-                    });
-                }
+                propagate_value_facts(&source_val, &target, "cast", result);
                 if let AbstractValue::Place(source_place) = &source_val
                     && let Some((ty_name, elements)) =
                         self.box_projection_allocation(result.checkpoint.caller, source_place, *ty)
@@ -509,31 +478,11 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         reason: "cast from Box-owned pointer field".to_string(),
                     });
                 }
-                if known_nonzero_of(&source_val, result) {
-                    result.facts.push(StateFact::KnownNonZero {
-                        place: target.clone(),
-                        reason: "cast preserves non-nullness".to_string(),
-                    });
-                }
-                if let Some((ty_name, elements, object)) = known_allocated_for(&source_val, result)
-                {
-                    result.facts.push(StateFact::KnownAllocated {
-                        place: target.clone(),
-                        object,
-                        ty_name,
-                        elements,
-                        reason: "cast preserves allocation provenance".to_string(),
-                    });
-                }
             }
             #[cfg(not(rapx_rustc_ge_198))]
-            Rvalue::Use(operand) => {
-                Self::record_use_rvalue_facts(self.tcx, place, operand, body, result);
-            }
+            Rvalue::Use(operand) => Self::handle_use_rvalue(self.tcx, place, operand, body, result),
             #[cfg(rapx_rustc_ge_198)]
-            Rvalue::Use(operand, _retag) => {
-                Self::record_use_rvalue_facts(self.tcx, place, operand, body, result);
-            }
+            Rvalue::Use(operand, _retag) => Self::handle_use_rvalue(self.tcx, place, operand, body, result),
             Rvalue::CopyForDeref(place) => {
                 let source_place = PlaceKey::from_mir_place(place);
                 let source_val = AbstractValue::Place(source_place.clone());
@@ -542,22 +491,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     source: source_val.clone(),
                     ty: self.tcx.types.usize,
                 });
-                if known_nonzero_of(&source_val, result) {
-                    result.facts.push(StateFact::KnownNonZero {
-                        place: target.clone(),
-                        reason: "copy preserves non-nullness".to_string(),
-                    });
-                }
-                if let Some((ty_name, elements, object)) = known_allocated_for(&source_val, result)
-                {
-                    result.facts.push(StateFact::KnownAllocated {
-                        place: target.clone(),
-                        object,
-                        ty_name,
-                        elements,
-                        reason: "copy preserves allocation provenance".to_string(),
-                    });
-                }
+                propagate_value_facts(&source_val, &target, "copy", result);
             }
             Rvalue::BinaryOp(op, pair) => {
                 let (lhs, rhs) = &**pair;
@@ -620,8 +554,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
         }
     }
 
-    /// Record facts for Rvalue::Use assignments (extracted to avoid cfg duplication).
-    fn record_use_rvalue_facts(
+    fn handle_use_rvalue(
         tcx: TyCtxt<'tcx>,
         place: &Place<'tcx>,
         operand: &Operand<'tcx>,
@@ -629,27 +562,15 @@ impl<'tcx> ForwardVerifier<'tcx> {
         result: &mut ForwardVisitResult<'tcx>,
     ) {
         let source_place = match operand {
-            Operand::Copy(source) | Operand::Move(source) => Some(source),
-            _ => None,
+            Operand::Copy(source) | Operand::Move(source) => source,
+            _ => return,
         };
-        let Some(source_place) = source_place else {
-            return;
+        let has_proj = |p: &Place<'_>| {
+            p.projection.iter().any(|proj| {
+                matches!(proj, ProjectionElem::Deref | ProjectionElem::Field(..))
+            })
         };
-        let source_has_projection = source_place.projection.iter().any(|p| {
-            matches!(
-                p,
-                rustc_middle::mir::ProjectionElem::Deref
-                    | rustc_middle::mir::ProjectionElem::Field(..)
-            )
-        });
-        let target_has_projection = place.projection.iter().any(|p| {
-            matches!(
-                p,
-                rustc_middle::mir::ProjectionElem::Deref
-                    | rustc_middle::mir::ProjectionElem::Field(..)
-            )
-        });
-        if !source_has_projection && !target_has_projection {
+        if !has_proj(source_place) && !has_proj(place) {
             return;
         }
         let target = PlaceKey::from_mir_place(place);
@@ -660,29 +581,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             source: source_val.clone(),
             ty: op_ty,
         });
-        if let Some(align) = known_alignment_of(&source_val, result) {
-            result.facts.push(StateFact::KnownAligned {
-                place: target.clone(),
-                align,
-                ty_name: format!("cast-{align}"),
-                reason: format!("cast preserves {align}-byte alignment"),
-            });
-        }
-        if known_nonzero_of(&source_val, result) {
-            result.facts.push(StateFact::KnownNonZero {
-                place: target.clone(),
-                reason: "cast preserves non-nullness".to_string(),
-            });
-        }
-        if let Some((ty_name, elements, object)) = known_allocated_for(&source_val, result) {
-            result.facts.push(StateFact::KnownAllocated {
-                place: target,
-                object,
-                ty_name,
-                elements,
-                reason: "cast preserves allocation provenance".to_string(),
-            });
-        }
+        propagate_value_facts(&source_val, &target, "cast", result);
     }
 
     /// Apply a summarized call effect to the path-local abstract state.
@@ -706,105 +605,20 @@ impl<'tcx> ForwardVerifier<'tcx> {
         for effect in &summary.effects {
             match effect {
                 CallEffect::ReturnAliasArg { arg } | CallEffect::ReturnPointerFromArg { arg } => {
-                    if let Some(source) = args.get(*arg).and_then(|arg| operand_place(&arg.node)) {
-                        let object = allocation_object_for_source(&source, result);
-                        result.facts.push(StateFact::PointsTo {
-                            pointer: destination_place.clone(),
-                            source: source.clone(),
-                        });
-                        if let Some((ty_name, elements)) =
-                            self.allocated_element_summary(result.checkpoint.caller, object.local())
-                        {
-                            result.facts.push(StateFact::KnownAllocated {
-                                place: destination_place.clone(),
-                                object,
-                                ty_name,
-                                elements,
-                                reason: format!("returned by {}", summary.name),
-                            });
-                        }
-                        result.facts.push(StateFact::KnownNonZero {
-                            place: destination_place.clone(),
-                            reason: format!("returned by {}", summary.name),
-                        });
-                        // Forward any KnownInit from the source Box's inner
-                        // field so that Typed propagates through into_raw.
-                        if summary.name.contains("::into_raw") {
-                            let mut candidates = copy_chain_places(&source, result);
-                            if !candidates.contains(&source) {
-                                candidates.push(source.clone());
-                            }
-                            let init_forwarded = candidates.iter().any(|candidate| {
-                                let mut inner = candidate.clone();
-                                inner.fields.extend_from_slice(&[0, 0]);
-                                result.facts.iter().any(|fact| {
-                                    let StateFact::KnownInit {
-                                        place: init_place, ..
-                                    } = fact
-                                    else {
-                                        return false;
-                                    };
-                                    *init_place == inner
-                                })
-                            });
-                            if init_forwarded {
-                                let ty_name = self
-                                    .pointee_ty_name(result.checkpoint.caller, &destination_place)
-                                    .or_else(|| {
-                                        self.pointee_ty_name(result.checkpoint.caller, &source)
-                                    });
-                                if let Some(ty_name) = ty_name {
-                                    result.facts.push(StateFact::KnownInit {
-                                        place: destination_place.clone(),
-                                        ty_name,
-                                        elements: 1,
-                                        reason: format!(
-                                            "into_raw preserves initialization from Box"
-                                        ),
-                                    });
-                                }
-                            }
-                        }
-                    }
+                    self.apply_alias_arg_effect(
+                        *arg, &destination_place, args, &summary.name, result,
+                    );
                 }
-                CallEffect::ReturnPointerAdd { base_arg, .. }
-                | CallEffect::ReturnPointerSub { base_arg, .. } => {
-                    if let Some(source) =
-                        args.get(*base_arg).and_then(|arg| operand_place(&arg.node))
-                    {
-                        let base_val = AbstractValue::Place(source.clone());
-                        result.facts.push(StateFact::PointsTo {
-                            pointer: destination_place.clone(),
-                            source,
-                        });
-                        if known_nonzero_of(&base_val, result) {
-                            result.facts.push(StateFact::KnownNonZero {
-                                place: destination_place.clone(),
-                                reason: "pointer arithmetic preserves non-nullness from base"
-                                    .to_string(),
-                            });
-                        }
-                    }
+                CallEffect::ReturnPointerAdd { .. }
+                | CallEffect::ReturnPointerSub { .. } => {
+                    self.apply_pointer_arith_effect(effect, &destination_place, args, result);
                 }
                 CallEffect::ReturnNonZero => result.facts.push(StateFact::KnownNonZero {
                     place: destination_place.clone(),
                     reason: format!("returned by {}", summary.name),
                 }),
                 CallEffect::OwnsInitMemory { arg } => {
-                    if let Some(source) = args.get(*arg).and_then(|arg| operand_place(&arg.node)) {
-                        if let Some(init_ty_name) =
-                            self.pointee_ty_name(result.checkpoint.caller, &source)
-                        {
-                            let mut inner = destination_place.clone();
-                            inner.fields.extend_from_slice(&[0, 0]);
-                            result.facts.push(StateFact::KnownInit {
-                                place: inner,
-                                ty_name: init_ty_name,
-                                elements: 1,
-                                reason: format!("Box owns initialized memory by {}", summary.name),
-                            });
-                        }
-                    }
+                    self.apply_owns_init_effect(*arg, &destination_place, &summary.name, args, result);
                 }
                 CallEffect::ReturnAligned { align, ty_name } => {
                     result.facts.push(StateFact::KnownAligned {
@@ -816,9 +630,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 }
                 CallEffect::ReturnConst { value, label } => {
                     result.record_value_definition(
-                        block,
-                        None,
-                        destination,
+                        block, None, destination,
                         AbstractValue::ConstInt(u128::from(*value)),
                     );
                     result.facts.push(StateFact::KnownConst {
@@ -829,35 +641,13 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 }
                 CallEffect::ReadMemory { .. } => {}
                 CallEffect::WriteMemory { pointer_arg } => {
-                    if let Some(pointer) = args
-                        .get(*pointer_arg)
-                        .and_then(|arg| operand_place(&arg.node))
-                    {
-                        let mut init_places = copy_chain_places(&pointer, result);
-                        if init_places.is_empty() {
-                            init_places.push(pointer);
-                        }
-
-                        for place in init_places {
-                            let ty_name =
-                                self.init_write_ty_name(summary, result.checkpoint.caller, &place);
-                            result.facts.push(StateFact::KnownInit {
-                                place,
-                                ty_name,
-                                elements: 1,
-                                reason: format!("written by {}", summary.name),
-                            });
-                        }
-                    }
+                    self.apply_write_memory_effect(*pointer_arg, summary, args, result);
                 }
                 CallEffect::ReturnLengthOfArg { .. }
                 | CallEffect::ReturnIsEmptyOfArg { .. }
                 | CallEffect::ReturnMin { .. }
                 | CallEffect::ReturnTupleFieldLength { .. } => {}
-                // Consumed by the InBound / NonOverlap checkers, which read the
-                // effect off the retained `StateFact::Call`.
                 CallEffect::ChecksIndexBoundsDisjoint { .. } => {}
-                // Postcondition asserted directly from the retained `StateFact::Call`.
                 CallEffect::ReturnBoundedRange { .. } => {}
                 CallEffect::ReturnLcmSplit { .. } => {}
                 CallEffect::ForgetArgFacts { reason, .. } => {
@@ -866,48 +656,151 @@ impl<'tcx> ForwardVerifier<'tcx> {
             }
         }
 
-        // as_ptr_range / as_mut_ptr_range return a Range<*const T> /
-        // Range<*mut T> where both fields (start, end) are non-null pointers
-        // derived from the receiver reference.  Record KnownNonZero for each
-        // field individually so that downstream pointer arithmetic (e.g. sub)
-        // can also propagate the non-null fact.
-        if let Some(destination) = summary.destination {
-            let prim = PrimitiveCall::classify(&summary.name);
-            if prim == Some(PrimitiveCall::AsPtrRange) || prim == Some(PrimitiveCall::AsMutPtrRange)
-            {
-                for field in 0..2 {
-                    let mut field_place = PlaceKey {
-                        base: PlaceBaseKey::Local(destination.as_usize()),
-                        fields: vec![],
-                    };
-                    field_place.fields.push(field);
-                    result.facts.push(StateFact::KnownNonZero {
-                        place: field_place,
-                        reason: "as_ptr_range/as_mut_ptr_range field is non-null (derived from reference)"
-                            .to_string(),
-                    });
-                }
-            }
-        }
+        // Post-loop: per-call-name special cases.
+        self.apply_ptr_range_post(destination, &summary.name, result);
+        self.apply_nonnull_post(args, &summary.name, result);
+        self.apply_unsupported_post(is_target_checkpoint, summary, args, result);
+    }
 
-        // NonNull::from, NonNull::as_ref, NonNull::as_mut: the receiver
-        // (arg 0) is a NonNull value whose inner pointer is guaranteed
-        // non-null by construction.  Record KnownNonZero so that Ptr2Ref
-        // (NonNull + Align) obligations can discharge the NonNull half.
-        if summary.name.contains("ptr::non_null::NonNull")
-            && (summary.name.ends_with("::from")
-                || summary.name.ends_with("::as_ref")
-                || summary.name.ends_with("::as_mut"))
+    fn apply_pointer_arith_effect(
+        &self,
+        effect: &CallEffect,
+        destination_place: &PlaceKey,
+        args: &[Spanned<Operand<'tcx>>],
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        let base_arg = match effect {
+            CallEffect::ReturnPointerAdd { base_arg, .. }
+            | CallEffect::ReturnPointerSub { base_arg, .. } => *base_arg,
+            _ => return,
+        };
+        let Some(source) = args.get(base_arg).and_then(|a| operand_place(&a.node)) else {
+            return;
+        };
+        let base_val = AbstractValue::Place(source.clone());
+        result.facts.push(StateFact::PointsTo {
+            pointer: destination_place.clone(),
+            source,
+        });
+        if known_nonzero_of(&base_val, result) {
+            result.facts.push(StateFact::KnownNonZero {
+                place: destination_place.clone(),
+                reason: "pointer arithmetic preserves non-nullness from base".to_string(),
+            });
+        }
+    }
+
+    fn apply_owns_init_effect(
+        &self,
+        arg: usize,
+        destination_place: &PlaceKey,
+        callee_name: &str,
+        args: &[Spanned<Operand<'tcx>>],
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        let Some(source) = args.get(arg).and_then(|a| operand_place(&a.node)) else {
+            return;
+        };
+        let Some(init_ty_name) = self.pointee_ty_name(result.checkpoint.caller, &source) else {
+            return;
+        };
+        let mut inner = destination_place.clone();
+        inner.fields.extend_from_slice(&[0, 0]);
+        result.facts.push(StateFact::KnownInit {
+            place: inner,
+            ty_name: init_ty_name,
+            elements: 1,
+            reason: format!("Box owns initialized memory by {callee_name}"),
+        });
+    }
+
+    fn apply_write_memory_effect(
+        &self,
+        pointer_arg: usize,
+        summary: &CallEffectSummary,
+        args: &[Spanned<Operand<'tcx>>],
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        let Some(pointer) = args
+            .get(pointer_arg)
+            .and_then(|a| operand_place(&a.node))
+        else {
+            return;
+        };
+        let mut init_places = copy_chain_places(&pointer, result);
+        if init_places.is_empty() {
+            init_places.push(pointer);
+        }
+        for place in init_places {
+            let ty_name = self.init_write_ty_name(summary, result.checkpoint.caller, &place);
+            result.facts.push(StateFact::KnownInit {
+                place,
+                ty_name,
+                elements: 1,
+                reason: format!("written by {}", summary.name),
+            });
+        }
+    }
+
+    fn apply_ptr_range_post(
+        &self,
+        destination: Local,
+        callee_name: &str,
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        let prim = PrimitiveCall::classify(callee_name);
+        if prim != Some(PrimitiveCall::AsPtrRange)
+            && prim != Some(PrimitiveCall::AsMutPtrRange)
         {
-            if let Some(receiver) = args.first().and_then(|arg| operand_place(&arg.node)) {
-                result.facts.push(StateFact::KnownNonZero {
-                    place: receiver,
-                    reason: "NonNull is always non-null by construction".to_string(),
-                });
-            }
+            return;
         }
+        for field in 0..2 {
+            let mut field_place = PlaceKey {
+                base: PlaceBaseKey::Local(destination.as_usize()),
+                fields: vec![field],
+            };
+            result.facts.push(StateFact::KnownNonZero {
+                place: field_place,
+                reason: "as_ptr_range/as_mut_ptr_range field is non-null (derived from reference)"
+                    .to_string(),
+            });
+        }
+    }
 
-        if summary.unsupported && !is_target_checkpoint {
+    fn apply_nonnull_post(
+        &self,
+        args: &[Spanned<Operand<'tcx>>],
+        callee_name: &str,
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        if !callee_name.contains("ptr::non_null::NonNull") {
+            return;
+        }
+        if !callee_name.ends_with("::from")
+            && !callee_name.ends_with("::as_ref")
+            && !callee_name.ends_with("::as_mut")
+        {
+            return;
+        }
+        if let Some(receiver) = args.first().and_then(|a| operand_place(&a.node)) {
+            result.facts.push(StateFact::KnownNonZero {
+                place: receiver,
+                reason: "NonNull is always non-null by construction".to_string(),
+            });
+        }
+    }
+
+    fn apply_unsupported_post(
+        &self,
+        is_target_checkpoint: bool,
+        summary: &CallEffectSummary,
+        args: &[Spanned<Operand<'tcx>>],
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        if !summary.unsupported {
+            return;
+        }
+        if !is_target_checkpoint {
             let body = self.tcx.optimized_mir(result.checkpoint.caller);
             let preserves_layout = call_summary::call_args_preserve_layout(
                 args.iter()
@@ -919,14 +812,75 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 ForgetReason::UnknownCall
             };
             result.forgets.push(reason);
-            result
-                .notes
-                .push(format!("unsupported call effect: {}", summary.name));
-        } else if summary.unsupported {
+            result.notes.push(format!(
+                "unsupported call effect: {}", summary.name
+            ));
+        } else {
             result.notes.push(format!(
                 "unsupported target call effect ignored for precondition proof: {}",
                 summary.name
             ));
+        }
+    }
+
+    fn apply_alias_arg_effect(
+        &self,
+        arg: usize,
+        destination_place: &PlaceKey,
+        args: &[Spanned<Operand<'tcx>>],
+        callee_name: &str,
+        result: &mut ForwardVisitResult<'tcx>,
+    ) {
+        let Some(source) = args.get(arg).and_then(|a| operand_place(&a.node)) else {
+            return;
+        };
+        let object = allocation_object_for_source(&source, result);
+        result.facts.push(StateFact::PointsTo {
+            pointer: destination_place.clone(),
+            source: source.clone(),
+        });
+        if let Some((ty_name, elements)) =
+            self.allocated_element_summary(result.checkpoint.caller, object.local())
+        {
+            result.facts.push(StateFact::KnownAllocated {
+                place: destination_place.clone(),
+                object,
+                ty_name,
+                elements,
+                reason: format!("returned by {callee_name}"),
+            });
+        }
+        result.facts.push(StateFact::KnownNonZero {
+            place: destination_place.clone(),
+            reason: format!("returned by {callee_name}"),
+        });
+        // Forward KnownInit from Box's inner field for into_raw.
+        if !callee_name.contains("::into_raw") {
+            return;
+        }
+        let mut candidates = copy_chain_places(&source, result);
+        if !candidates.contains(&source) {
+            candidates.push(source.clone());
+        }
+        let init_forwarded = candidates.iter().any(|candidate| {
+            let mut inner = candidate.clone();
+            inner.fields.extend_from_slice(&[0, 0]);
+            result.facts.iter().any(|fact| {
+                matches!(fact, StateFact::KnownInit { place, .. } if *place == inner)
+            })
+        });
+        if init_forwarded {
+            let ty_name = self
+                .pointee_ty_name(result.checkpoint.caller, destination_place)
+                .or_else(|| self.pointee_ty_name(result.checkpoint.caller, &source));
+            if let Some(ty_name) = ty_name {
+                result.facts.push(StateFact::KnownInit {
+                    place: destination_place.clone(),
+                    ty_name,
+                    elements: 1,
+                    reason: "into_raw preserves initialization from Box".to_string(),
+                });
+            }
         }
     }
 
@@ -1610,6 +1564,39 @@ fn is_const_zero(val: &AbstractValue<'_>) -> bool {
     matches!(val, AbstractValue::ConstInt(0))
 }
 
+/// Propagate NonNull / Aligned / Allocated facts from a source value to a
+/// target place. Used by Cast, Aggregate, CopyForDeref, and Use handlers.
+fn propagate_value_facts<'tcx>(
+    source_val: &AbstractValue<'tcx>,
+    target: &PlaceKey,
+    reason: &str,
+    result: &mut ForwardVisitResult<'tcx>,
+) {
+    if let Some(align) = known_alignment_of(source_val, result) {
+        result.facts.push(StateFact::KnownAligned {
+            place: target.clone(),
+            align,
+            ty_name: format!("{reason}-{align}"),
+            reason: format!("{reason} preserves {align}-byte alignment"),
+        });
+    }
+    if known_nonzero_of(source_val, result) {
+        result.facts.push(StateFact::KnownNonZero {
+            place: target.clone(),
+            reason: format!("{reason} preserves non-nullness"),
+        });
+    }
+    if let Some((ty_name, elements, object)) = known_allocated_for(source_val, result) {
+        result.facts.push(StateFact::KnownAllocated {
+            place: target.clone(),
+            object,
+            ty_name,
+            elements,
+            reason: format!("{reason} preserves allocation provenance"),
+        });
+    }
+}
+
 fn align_guard_value<'tcx>(
     value: &AbstractValue<'tcx>,
     equals: u128,
@@ -1813,31 +1800,54 @@ fn maybe_uninit_inner_ty_name(ty_name: &str) -> Option<String> {
     None
 }
 
-/// Walk an abstract-value chain (Place → values → Cast → inner) calling
-/// `on_place` for each MIR-place node encountered along the chain.
-/// Returns the first `Some` result from `on_place`, or `None` when the
-/// chain terminates.
-fn for_each_place_in_chain<'tcx, T>(
-    value: &AbstractValue<'tcx>,
-    result: &ForwardVisitResult<'tcx>,
-    mut on_place: impl FnMut(&PlaceKey) -> Option<T>,
-) -> Option<T> {
+fn known_nonzero_of<'tcx>(value: &AbstractValue<'tcx>, result: &ForwardVisitResult<'tcx>) -> bool {
     let mut cur = value.clone();
     let mut visited_locals = HashSet::new();
     loop {
         if let AbstractValue::Place(ref p) = cur {
-            if let Some(r) = on_place(p) {
-                return Some(r);
+            if result.facts.iter().any(|f| {
+                matches!(f, StateFact::KnownNonZero { place, .. } if place == p)
+            }) {
+                return true;
             }
         }
         cur = match &cur {
             AbstractValue::Place(p) => {
-                let PlaceBaseKey::Local(ix) = p.base else {
-                    return None;
-                };
-                if !visited_locals.insert(ix) {
-                    return None;
+                let PlaceBaseKey::Local(ix) = p.base else { return false; };
+                if !visited_locals.insert(ix) { return false; }
+                match result.values.get(&Local::from_usize(ix)) {
+                    Some(v) => v.clone(),
+                    None => return false,
                 }
+            }
+            AbstractValue::Cast(inner, _) => (**inner).clone(),
+            _ => return false,
+        };
+    }
+}
+
+fn known_allocated_for<'tcx>(
+    value: &AbstractValue<'tcx>,
+    result: &ForwardVisitResult<'tcx>,
+) -> Option<(String, u64, PlaceKey)> {
+    let mut cur = value.clone();
+    let mut visited_locals = HashSet::new();
+    loop {
+        if let AbstractValue::Place(ref p) = cur {
+            for f in &result.facts {
+                if let StateFact::KnownAllocated { place, object, ty_name, elements, .. } = f {
+                    if place == p
+                        || (place.fields.is_empty() && p.fields.is_empty() && place.base == p.base)
+                    {
+                        return Some((ty_name.clone(), *elements, object.clone()));
+                    }
+                }
+            }
+        }
+        cur = match &cur {
+            AbstractValue::Place(p) => {
+                let PlaceBaseKey::Local(ix) = p.base else { return None; };
+                if !visited_locals.insert(ix) { return None; }
                 match result.values.get(&Local::from_usize(ix)) {
                     Some(v) => v.clone(),
                     None => return None,
@@ -1849,62 +1859,38 @@ fn for_each_place_in_chain<'tcx, T>(
     }
 }
 
-fn known_nonzero_of<'tcx>(value: &AbstractValue<'tcx>, result: &ForwardVisitResult<'tcx>) -> bool {
-    for_each_place_in_chain(value, result, |p| {
-        result
-            .facts
-            .iter()
-            .any(|f| matches!(f, StateFact::KnownNonZero { place, .. } if place == p))
-            .then_some(())
-    })
-    .is_some()
-}
-
-fn known_allocated_for<'tcx>(
-    value: &AbstractValue<'tcx>,
-    result: &ForwardVisitResult<'tcx>,
-) -> Option<(String, u64, PlaceKey)> {
-    for_each_place_in_chain(value, result, |p| {
-        for f in &result.facts {
-            if let StateFact::KnownAllocated {
-                place,
-                object,
-                ty_name,
-                elements,
-                ..
-            } = f
-            {
-                if place == p {
-                    return Some((ty_name.clone(), *elements, object.clone()));
-                }
-                if place.fields.is_empty() && p.fields.is_empty() && place.base == p.base {
-                    return Some((ty_name.clone(), *elements, object.clone()));
-                }
-            }
-        }
-        None
-    })
-}
-
 fn known_alignment_of<'tcx>(
     value: &AbstractValue<'tcx>,
     result: &ForwardVisitResult<'tcx>,
 ) -> Option<u64> {
+    let mut cur = value.clone();
+    let mut visited_locals = HashSet::new();
     let mut best: Option<u64> = None;
-    for_each_place_in_chain(value, result, |p| {
-        for f in &result.facts {
-            if let StateFact::KnownAligned { place, align, .. } = f {
-                if place == p {
-                    best = best.map_or(Some(*align), |b| Some(b.max(*align)));
-                }
-                if place.fields.is_empty() != p.fields.is_empty() && place.base == p.base {
-                    best = best.map_or(Some(*align), |b| Some(b.max(*align)));
+    loop {
+        if let AbstractValue::Place(ref p) = cur {
+            for f in &result.facts {
+                if let StateFact::KnownAligned { place, align, .. } = f {
+                    if place == p
+                        || (place.fields.is_empty() != p.fields.is_empty() && place.base == p.base)
+                    {
+                        best = best.map_or(Some(*align), |b| Some(b.max(*align)));
+                    }
                 }
             }
         }
-        None::<()>
-    });
-    best
+        cur = match &cur {
+            AbstractValue::Place(p) => {
+                let PlaceBaseKey::Local(ix) = p.base else { return best; };
+                if !visited_locals.insert(ix) { return best; }
+                match result.values.get(&Local::from_usize(ix)) {
+                    Some(v) => v.clone(),
+                    None => return best,
+                }
+            }
+            AbstractValue::Cast(inner, _) => (**inner).clone(),
+            _ => return best,
+        };
+    }
 }
 
 fn find_cmp_source<'tcx>(

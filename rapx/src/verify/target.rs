@@ -1066,13 +1066,7 @@ fn get_contract_from_entry<'tcx>(
         }
 
         let mut property = Property::new(tcx, def_id, entry.tag.as_str(), &exprs);
-        if let Some(ref kind_str) = entry.kind {
-            if kind_str == "hazard" {
-                property.contract_kind = crate::verify::contract::ContractKind::Hazard;
-            } else if kind_str == "option" {
-                property.contract_kind = crate::verify::contract::ContractKind::Option_;
-            }
-        }
+        property.apply_kind(entry.kind.as_deref());
         if matches!(property.kind, PropertyKind::Unknown) {
             rap_debug!(
                 "skip unsupported std safety contract tag '{}' for callee {:?}",
@@ -1252,18 +1246,10 @@ fn collect_properties_from_named_attrs<'tcx>(
         };
 
         results.extend(parsed.properties.into_iter().flat_map(|property| {
-            let is_hazard = property
-                .kind
-                .as_deref()
-                .is_some_and(|kind_str| kind_str == "hazard");
+            let is_hazard = property.kind.as_deref().is_some_and(|k| k == "hazard");
             Property::parse_list(tcx, property_def_id, property.tag.as_str(), &property.args)
                 .into_iter()
-                .map(move |mut p| {
-                    if is_hazard {
-                        p.contract_kind = crate::verify::contract::ContractKind::Hazard;
-                    }
-                    p
-                })
+                .map(move |mut p| { p.apply_kind(property.kind.as_deref()); p })
         }));
     }
 
@@ -1638,13 +1624,7 @@ fn instantiate_type_invariant<'tcx>(
         return None;
     }
     let mut property = Property::new(tcx, def_id, &entry.tag, &exprs);
-    if let Some(ref kind) = entry.kind {
-        if kind == "hazard" {
-            property.contract_kind = crate::verify::contract::ContractKind::Hazard;
-        } else if kind == "option" {
-            property.contract_kind = crate::verify::contract::ContractKind::Option_;
-        }
-    }
+    property.apply_kind(entry.kind.as_deref());
     if !matches!(
         property.kind,
         crate::verify::contract::PropertyKind::Unknown

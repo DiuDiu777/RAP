@@ -130,7 +130,7 @@ fn field_pedigree_proof<'tcx>(
     let mut store_count = 0usize;
     for def_id in crate_fn_ids(tcx) {
         let body = tcx.optimized_mir(def_id);
-        let parents = body_parents(tcx, body);
+        let parents = super::common::body_parents(tcx, body);
 
         for data in body.basic_blocks.iter() {
             for statement in &data.statements {
@@ -229,7 +229,7 @@ fn param_pedigree_proof<'tcx>(
     }
     for site in &sites {
         let body = tcx.optimized_mir(site.caller);
-        let parents = body_parents(tcx, body);
+        let parents = super::common::body_parents(tcx, body);
         let ptr_operand = site.args.get(ptr_param)?.clone();
         if !operand_is_ref_rooted(tcx, body, &parents, &ptr_operand, count) {
             return None;
@@ -266,7 +266,7 @@ pub(super) fn vec_from_raw_parts_roundtrip<'tcx>(
         return None;
     }
     let body = tcx.optimized_mir(checkpoint.caller);
-    let parents = body_parents(tcx, body);
+    let parents = super::common::body_parents(tcx, body);
 
     let arg_local = |index: usize| -> Option<Local> {
         match checkpoint.args.get(index)? {
@@ -358,58 +358,6 @@ fn crate_fn_ids(tcx: TyCtxt<'_>) -> Vec<DefId> {
                 && tcx.is_mir_available(*def_id)
         })
         .collect()
-}
-
-/// Per-body provenance parents: copies, casts, refs, and pointer-extraction
-/// calls collapse to the underlying source local.
-fn body_parents<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &Body<'tcx>,
-) -> crate::compat::FxHashMap<Local, Local> {
-    let mut parents: crate::compat::FxHashMap<Local, Local> = Default::default();
-    for data in body.basic_blocks.iter() {
-        for statement in &data.statements {
-            let StatementKind::Assign(assign) = &statement.kind else {
-                continue;
-            };
-            let (target, rvalue) = assign.as_ref();
-            let source = match rvalue {
-                Rvalue::Use(Operand::Copy(place) | Operand::Move(place), ..)
-                | Rvalue::Cast(_, Operand::Copy(place) | Operand::Move(place), _)
-                | Rvalue::Ref(_, _, place)
-                | Rvalue::RawPtr(_, place)
-                | Rvalue::CopyForDeref(place) => Some(place.local),
-                _ => None,
-            };
-            if let Some(source) = source {
-                parents.entry(target.local).or_insert(source);
-            }
-        }
-        let Some(terminator) = &data.terminator else {
-            continue;
-        };
-        let TerminatorKind::Call {
-            func,
-            args,
-            destination,
-            ..
-        } = &terminator.kind
-        else {
-            continue;
-        };
-        let name = crate::verify::call_summary::call_name(tcx, func);
-        if !PrimitiveCall::classify(&name).is_some_and(|p| p.is_as_ptr_like()) {
-            continue;
-        }
-        let Some(source) = args.first().and_then(|arg| match &arg.node {
-            Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-            _ => None,
-        }) else {
-            continue;
-        };
-        parents.entry(destination.local).or_insert(source);
-    }
-    parents
 }
 
 fn follow_parents(parents: &crate::compat::FxHashMap<Local, Local>, start: Local) -> Local {

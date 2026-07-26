@@ -71,14 +71,11 @@ pub(crate) fn check<'tcx>(
         },
         property.null_guard.as_ref(),
     );
-    if result.result == crate::verify::report::CheckResult::Unknown {
-        if let Some(reason) =
-            super::provenance::pedigree_proof(checker, checkpoint, property, forward, true)
-        {
-            return SmtCheckResult::proved(format!("Init proved: {reason}"));
-        }
-    }
-    result
+    result.or_try(|| {
+        super::provenance::pedigree_proof(checker, checkpoint, property, forward, true)
+            .map(|reason| SmtCheckResult::proved(format!("Init proved: {reason}")))
+            .unwrap_or_else(|| SmtCheckResult::unknown("Init: pedigree proof inconclusive"))
+    })
 }
 
 fn compute_elem_size<'tcx>(

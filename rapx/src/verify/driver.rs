@@ -20,7 +20,6 @@ use crate::compat::{FxHashMap, FxHashSet};
 use indexmap::IndexMap;
 use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::TyCtxt;
-use std::panic::{AssertUnwindSafe, catch_unwind};
 
 use super::{
     contract::Property,
@@ -655,14 +654,12 @@ impl<'tcx> VerifyRun<'tcx> {
         let (_, repeat_rounds) = self.repeat_rounds_for_target(con_target);
         for repeat in repeat_rounds {
             let driver = VerifyDriver::new_with_repeat(self.tcx, con_target, repeat);
-            let result = catch_unwind(AssertUnwindSafe(|| driver.verify_function()));
-            match result {
+            match crate::verify::helpers::catch_panic(|| driver.verify_function()) {
                 Ok(report) => {
                     rap_debug!("{}", report.describe());
                     all_results.extend(report.results);
                 }
-                Err(e) => {
-                    let msg = panic_downcast_msg(e);
+                Err(msg) => {
                     rap_warn!(
                         "Skipping constructor {} (repeat {}): {msg}",
                         self.tcx.def_path_str(con_id),
@@ -771,14 +768,12 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             // Phase 1: unsafe checkpoint verification
             for repeat in repeat_rounds {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
-                let result = catch_unwind(AssertUnwindSafe(|| driver.verify_function()));
-                match result {
+                match crate::verify::helpers::catch_panic(|| driver.verify_function()) {
                     Ok(report) => {
                         rap_debug!("{}", report.describe());
                         all_results.extend(report.results);
                     }
-                    Err(e) => {
-                        let msg = panic_downcast_msg(e);
+                    Err(msg) => {
                         rap_warn!(
                             "Skipping function {} (repeat {}): {msg}",
                             target_path,
@@ -1192,11 +1187,4 @@ fn remap_constructor_contract<'tcx>(
         args: new_args,
         ..property
     }
-}
-
-fn panic_downcast_msg(e: Box<dyn std::any::Any + Send>) -> String {
-    e.downcast_ref::<String>()
-        .map(|s| s.clone())
-        .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
-        .unwrap_or_else(|| "<rustc ICE>".to_string())
 }

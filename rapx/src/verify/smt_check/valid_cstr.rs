@@ -37,7 +37,7 @@ pub(crate) fn check<'tcx>(
     };
 
     let body = tcx.optimized_mir(checkpoint.caller);
-    let parents = body_parents(tcx, body);
+    let parents = super::common::body_parents(tcx, body);
     let root = follow_parents(&parents, target_local);
 
     if let Some(bytes) = const_bytes_for_local(tcx, body, root) {
@@ -58,59 +58,6 @@ pub(crate) fn check<'tcx>(
     }
 
     SmtCheckResult::unknown("ValidCStr: could not prove nul-termination of the source bytes")
-}
-
-/// Per-body provenance parents (copies, casts, refs, as_ptr-style calls).
-fn body_parents<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &Body<'tcx>,
-) -> crate::compat::FxHashMap<Local, Local> {
-    use rustc_middle::mir::TerminatorKind;
-
-    let mut parents: crate::compat::FxHashMap<Local, Local> = Default::default();
-    for data in body.basic_blocks.iter() {
-        for statement in &data.statements {
-            let StatementKind::Assign(assign) = &statement.kind else {
-                continue;
-            };
-            let (target, rvalue) = assign.as_ref();
-            let source = match rvalue {
-                Rvalue::Use(Operand::Copy(place) | Operand::Move(place), ..)
-                | Rvalue::Cast(_, Operand::Copy(place) | Operand::Move(place), _)
-                | Rvalue::Ref(_, _, place)
-                | Rvalue::RawPtr(_, place)
-                | Rvalue::CopyForDeref(place) => Some(place.local),
-                _ => None,
-            };
-            if let Some(source) = source {
-                parents.entry(target.local).or_insert(source);
-            }
-        }
-        let Some(terminator) = &data.terminator else {
-            continue;
-        };
-        let TerminatorKind::Call {
-            func,
-            args,
-            destination,
-            ..
-        } = &terminator.kind
-        else {
-            continue;
-        };
-        let name = crate::verify::call_summary::call_name(tcx, func);
-        if !PrimitiveCall::classify(&name).is_some_and(|p| p.is_as_ptr_like()) {
-            continue;
-        }
-        let Some(source) = args.first().and_then(|arg| match &arg.node {
-            Operand::Copy(place) | Operand::Move(place) => Some(place.local),
-            _ => None,
-        }) else {
-            continue;
-        };
-        parents.entry(destination.local).or_insert(source);
-    }
-    parents
 }
 
 fn follow_parents(parents: &crate::compat::FxHashMap<Local, Local>, start: Local) -> Local {

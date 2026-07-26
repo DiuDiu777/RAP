@@ -106,12 +106,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
         };
         let body = self.tcx.optimized_mir(caller);
         let flow = build_dataflow_graph(self.tcx, caller);
-        let keep_alloc = matches!(
-            property.kind,
-            contract::PropertyKind::Allocated
-                | contract::PropertyKind::Deref
-                | contract::PropertyKind::ValidPtr
-        );
 
         let leaf_results = Self::build_leaf_items(
             self,
@@ -122,7 +116,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
             property,
             &body,
             &flow,
-            keep_alloc,
         );
 
         let mut results = Vec::new();
@@ -160,9 +153,9 @@ impl<'tcx> BackwardSlicer<'tcx> {
         property: &contract::Property<'tcx>,
         body: &'tcx rustc_middle::mir::Body<'tcx>,
         flow: &DataflowGraph,
-        keep_alloc: bool,
     ) -> Vec<(Vec<usize>, Vec<BackwardItem<'tcx>>, RelevantPlaces)> {
         let block = BasicBlock::from(node.block);
+        let keep_inv = needs_invalidation_tracking(&property.kind);
         let block_data = &body.basic_blocks[block];
         let mut results = Vec::new();
 
@@ -187,41 +180,12 @@ impl<'tcx> BackwardSlicer<'tcx> {
                     body,
                     &mut relevant,
                     &mut items,
-                    keep_alloc,
+                    keep_inv,
                 );
             }
-            // Pass 2: re-visit definitions that became relevant
-            // only during pass 1 (e.g. `_17 = _4` adds `_4` which
-            // enables `_4 = _8` to match on the second pass).
-            let newly_added = std::mem::take(&mut relevant.just_added);
-            if !newly_added.is_empty() {
-                for (si, stmt) in block_data.statements.iter().enumerate().rev() {
-                    let defs = match &stmt.kind {
-                        rustc_middle::mir::StatementKind::Assign(assign) => {
-                            let mut d = crate::verify::def_use::RelevantPlaces::new();
-                            d.insert_mir_place(&assign.0);
-                            d
-                        }
-                        _ => continue,
-                    };
-                    let any_new_match = defs
-                        .places
-                        .iter()
-                        .any(|dp| newly_added.iter().any(|np| dp.local() == np.local()));
-                    if any_new_match {
-                        visitor.visit_statement(
-                            checkpoint_block,
-                            si,
-                            stmt,
-                            flow,
-                            body,
-                            &mut relevant,
-                            &mut items,
-                            keep_alloc,
-                        );
-                    }
-                }
-            }
+            // Pass 2: re-visit definitions that became relevant only
+            // during pass 1.
+            Self::re_visit_newly_added(visitor, checkpoint_block, block_data, flow, body, &mut relevant, &mut items, keep_inv);
             (items, relevant)
         } else {
             (Vec::new(), RelevantPlaces::new())
@@ -239,7 +203,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
                 property,
                 body,
                 flow,
-                keep_alloc,
             );
             for (mut child_path, child_items, child_relevant) in child_results {
                 let mut relevant = child_relevant;
@@ -254,7 +217,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
                     body,
                     &mut relevant,
                     &mut items,
-                    keep_alloc,
+                    keep_inv,
                 );
                 let block_stmt_count = block_data.statements.len();
                 for (si, stmt) in block_data.statements.iter().enumerate().rev() {
@@ -266,7 +229,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
                         body,
                         &mut relevant,
                         &mut items,
-                        keep_alloc,
+                        keep_inv,
                     );
                 }
                 // For ancestors of the checkpoint block, do a second
@@ -277,35 +240,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
                 // checkpoint to avoid spurious matches in deep trees.
                 let dist_to_target = child_path.iter().position(|&b| b == target_block);
                 if block_stmt_count > 0 && dist_to_target.map_or(false, |d| d <= 2) {
-                    let newly_added = std::mem::take(&mut relevant.just_added);
-                    if !newly_added.is_empty() {
-                        for (si, stmt) in block_data.statements.iter().enumerate().rev() {
-                            let defs = match &stmt.kind {
-                                rustc_middle::mir::StatementKind::Assign(assign) => {
-                                    let mut d = crate::verify::def_use::RelevantPlaces::new();
-                                    d.insert_mir_place(&assign.0);
-                                    d
-                                }
-                                _ => continue,
-                            };
-                            let any_new_match = defs
-                                .places
-                                .iter()
-                                .any(|dp| newly_added.iter().any(|np| dp.local() == np.local()));
-                            if any_new_match {
-                                visitor.visit_statement(
-                                    block,
-                                    si,
-                                    stmt,
-                                    flow,
-                                    body,
-                                    &mut relevant,
-                                    &mut items,
-                                    keep_alloc,
-                                );
-                            }
-                        }
-                    }
+                    Self::re_visit_newly_added(visitor, block, block_data, flow, body, &mut relevant, &mut items, keep_inv);
                 }
                 child_path.insert(0, node.block);
                 results.push((child_path, items, relevant));
@@ -330,6 +265,50 @@ impl<'tcx> BackwardSlicer<'tcx> {
         results
     }
 
+    /// After the first backward pass, re-visit statements whose defs
+    /// became relevant because of discoveries made during that pass
+    /// (tracked in `RelevantPlaces::just_added`).
+    fn re_visit_newly_added(
+        visitor: &Self,
+        block: BasicBlock,
+        block_data: &'tcx rustc_middle::mir::BasicBlockData<'tcx>,
+        flow: &DataflowGraph,
+        body: &'tcx rustc_middle::mir::Body<'tcx>,
+        relevant: &mut RelevantPlaces,
+        items: &mut Vec<BackwardItem<'tcx>>,
+        keep_inv: bool,
+    ) {
+        let newly_added = std::mem::take(&mut relevant.just_added);
+        if newly_added.is_empty() {
+            return;
+        }
+        for (si, stmt) in block_data.statements.iter().enumerate().rev() {
+            let defs = match &stmt.kind {
+                rustc_middle::mir::StatementKind::Assign(assign) => {
+                    let mut d = crate::verify::def_use::RelevantPlaces::new();
+                    d.insert_mir_place(&assign.0);
+                    d
+                }
+                _ => continue,
+            };
+            let any_new = defs.places.iter().any(|dp| {
+                newly_added.iter().any(|np| dp.local() == np.local())
+            });
+            if any_new {
+                visitor.visit_statement(
+                    block,
+                    si,
+                    stmt,
+                    flow,
+                    body,
+                    relevant,
+                    items,
+                    keep_inv,
+                );
+            }
+        }
+    }
+
     /// Visit one MIR statement against the current relevance frontier.
     fn visit_statement(
         &self,
@@ -340,9 +319,9 @@ impl<'tcx> BackwardSlicer<'tcx> {
         body: &Body<'tcx>,
         relevant: &mut RelevantPlaces,
         items: &mut Vec<BackwardItem<'tcx>>,
-        keep_allocation_invalidations: bool,
+        keep_invalidations: bool,
     ) {
-        if keep_allocation_invalidations && matches!(statement.kind, StatementKind::StorageDead(_))
+        if keep_invalidations && matches!(statement.kind, StatementKind::StorageDead(_))
         {
             items.push(BackwardItem::Statement {
                 block,
@@ -434,9 +413,9 @@ impl<'tcx> BackwardSlicer<'tcx> {
         body: &Body<'tcx>,
         relevant: &mut RelevantPlaces,
         items: &mut Vec<BackwardItem<'tcx>>,
-        keep_allocation_invalidations: bool,
+        keep_invalidations: bool,
     ) {
-        if keep_allocation_invalidations && matches!(terminator.kind, TerminatorKind::Drop { .. }) {
+        if keep_invalidations && matches!(terminator.kind, TerminatorKind::Drop { .. }) {
             items.push(BackwardItem::Terminator {
                 block,
                 kind: KeepReason::Invalidation,
@@ -502,6 +481,17 @@ impl<'tcx> BackwardSlicer<'tcx> {
             });
         }
     }
+}
+
+// ── property helpers ──────────────────────────────────────────────────
+
+fn needs_invalidation_tracking(kind: &contract::PropertyKind) -> bool {
+    matches!(
+        kind,
+        contract::PropertyKind::Allocated
+            | contract::PropertyKind::Deref
+            | contract::PropertyKind::ValidPtr
+    )
 }
 
 // ── classification helpers ──────────────────────────────────────────────
@@ -622,56 +612,11 @@ fn collect_statement_uses<'tcx>(
         // enumeration.
         if let rustc_middle::mir::Rvalue::Ref(_, _, place)
         | rustc_middle::mir::Rvalue::RawPtr(_, place) = rvalue
-            && local_from_tuple_field_projection(body, place.local)
+            && crate::verify::def_use::is_from_tuple_field(body, place.local)
         {
             uses.extend(super::super::def_use::place_uses(place));
         }
     }
 
     uses
-}
-
-/// Return true when `local` is defined (directly or through copy/move chains)
-/// by a projection out of another local's field — the shape produced when a
-/// tuple returned by a call (e.g. `split_at`) is destructured into its slice
-/// components.
-fn local_from_tuple_field_projection<'tcx>(
-    body: &Body<'tcx>,
-    local: rustc_middle::mir::Local,
-) -> bool {
-    use rustc_middle::mir::{Operand, Rvalue};
-    let mut current = local;
-    let mut seen = std::collections::HashSet::new();
-    for _ in 0..8 {
-        if !seen.insert(current) {
-            return false;
-        }
-        let mut next = None;
-        for block in body.basic_blocks.iter() {
-            for stmt in &block.statements {
-                let StatementKind::Assign(assign) = &stmt.kind else {
-                    continue;
-                };
-                let (dest, rvalue) = &**assign;
-                if dest.local != current || !dest.projection.is_empty() {
-                    continue;
-                }
-                if let Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) = rvalue {
-                    if src
-                        .projection
-                        .iter()
-                        .any(|p| matches!(p, rustc_middle::mir::ProjectionElem::Field(..)))
-                    {
-                        return true;
-                    }
-                    next = Some(src.local);
-                }
-            }
-        }
-        match next {
-            Some(src) if src != current => current = src,
-            _ => return false,
-        }
-    }
-    false
 }

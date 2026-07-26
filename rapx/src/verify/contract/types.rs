@@ -545,6 +545,15 @@ impl<'tcx> Property<'tcx> {
             _ => None,
         })
     }
+
+    /// Apply contract kind metadata from a JSON entry or attribute.
+    pub fn apply_kind(&mut self, kind: Option<&str>) {
+        match kind {
+            Some("hazard") => self.contract_kind = ContractKind::Hazard,
+            Some("option") => self.contract_kind = ContractKind::Option_,
+            _ => {}
+        }
+    }
 }
 
 /// Reuse a property's arg structure while replacing its kind.
