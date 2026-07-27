@@ -16,6 +16,7 @@ pub enum PlaceBase {
 pub enum ContractProjection<'tcx> {
     Field { index: usize, ty: Option<Ty<'tcx>> },
     Downcast { variant_index: usize },
+    IterElements,
 }
 
 #[derive(Clone, Debug)]
@@ -119,6 +120,9 @@ impl<'tcx> ContractPlace<'tcx> {
                 }
                 ContractProjection::Downcast { .. } => {
                     result.push_str(".unwrap_some()");
+                }
+                ContractProjection::IterElements => {
+                    result.push_str(".iter()");
                 }
             }
         }
@@ -476,6 +480,11 @@ pub struct Property<'tcx> {
     /// Each inner `Vec` is a conjunction (all must hold); at least one group
     /// must hold in a disjunction.
     pub or_alternatives: Vec<Vec<Box<Property<'tcx>>>>,
+    /// When set, this property must hold for every element of this
+    /// container (e.g. `Owning(buckets.iter())`).  The target place
+    /// in `args` is already stripped of the `IterElements` projection
+    /// and refers to a single element slot.
+    pub for_each: Option<ContractPlace<'tcx>>,
 }
 
 impl PropertyKind {
@@ -565,5 +574,6 @@ pub fn with_kind<'tcx>(property: &Property<'tcx>, kind: PropertyKind) -> Propert
         contract_kind: property.contract_kind,
         null_guard: None,
         or_alternatives: Vec::new(),
+        for_each: property.for_each.clone(),
     }
 }

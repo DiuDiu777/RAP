@@ -387,146 +387,7 @@ fn collect_all_const_bytes_worklist<'tcx>(
             }
         }
     }
-
-    results
-}
-
-fn all_const_bytes_for_local<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &Body<'tcx>,
-    root: Local,
-) -> Vec<Vec<u8>> {
-    let parents = super::common::body_parents(tcx, body);
-    let mut results = Vec::new();
-    // Scan statements for direct constant assignments.
-    for data in body.basic_blocks.iter() {
-        for statement in &data.statements {
-            let StatementKind::Assign(assign) = &statement.kind else {
-                continue;
-            };
-            let (target, rvalue) = assign.as_ref();
-            if target.local != root || !target.projection.is_empty() {
-                continue;
-            }
-
-            if let Rvalue::Ref(_, _, place) = rvalue {
-                if let Some(bytes) = const_bytes_for_local(tcx, body, place.local) {
-                    results.push(bytes);
-                }
-                continue;
-            }
-
-            // Handle Copy/Move of a deref'd place (e.g. _9 = copy (*_3))
-            if let Rvalue::Use(operand, ..) = rvalue {
-                match operand {
-                    Operand::Copy(p) | Operand::Move(p) => {
-                        if let Some(bytes) = const_bytes_for_local(tcx, body, p.local) {
-                            results.push(bytes);
-                        }
-                        // Also collect ALL bytes from call destinations that
-                        // define this local (handles multi-def locals like
-                        // after branch joins).
-                        results.extend(all_const_bytes_from_call_dest(tcx, body, p.local));
-                        continue;
-                    }
-                    Operand::Constant(_) => {}
-                    _ => continue,
-                }
-            }
-
-            let constant = match rvalue {
-                Rvalue::Use(Operand::Constant(constant), ..)
-                | Rvalue::Cast(_, Operand::Constant(constant), _) => constant,
-                _ => continue,
-            };
-            let Ok(value) = constant.const_.eval(
-                tcx,
-                rustc_middle::ty::TypingEnv::fully_monomorphized(),
-                rustc_span::DUMMY_SP,
-            ) else {
-                continue;
-            };
-            if let Some(bytes) = const_value_bytes(tcx, value, 0) {
-                results.push(bytes);
-            }
-        }
-    }
-    // Also scan terminators for Call destinations that define our root
-    // (e.g. ptr = STATIC.as_ptr()).
-    for data in body.basic_blocks.iter() {
-        if let Some(terminator) = &data.terminator {
-            if let TerminatorKind::Call { destination, func, args, .. } = &terminator.kind {
-                let name = crate::verify::call_summary::call_name(tcx, func);
-                if follow_parents(&parents, destination.local) == root
-                    && destination.projection.is_empty()
-                {
-                    if name.contains("as_ptr") || name.contains("::as_") {
-                        for arg in args {
-                            if let Some(bytes) = const_bytes_from_operand(tcx, body, &arg.node) {
-                                results.push(bytes);
-                            }
-                        }
-                    }
-                    if name.contains("::add") {
-                        if let Some(offset) = args.get(1).and_then(|a| scalar_constant(&a.node)) {
-                            if let Some(base) = args.first() {
-                                if let Some(bytes) = const_bytes_from_operand(tcx, body, &base.node) {
-                                    let start = offset as usize;
-                                    if start < bytes.len() {
-                                        results.push(bytes[start..].to_vec());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    // Also scan ALL ::add calls globally for constant bytes extraction
-    // (catches cases where root resolution doesn't reach the call destination).
-    for data in body.basic_blocks.iter() {
-        if let Some(terminator) = &data.terminator {
-            if let TerminatorKind::Call { func, args, .. } = &terminator.kind {
-                let name = crate::verify::call_summary::call_name(tcx, func);
-                    if name.contains("::add") {
-                        if let Some(offset) = args.get(1).and_then(|a| scalar_constant(&a.node)) {
-                            if let Some(base) = args.first() {
-                                if let Some(bytes) = const_bytes_from_operand(tcx, body, &base.node) {
-                                    let start = offset as usize;
-                                    if start < bytes.len() {
-                                        results.push(bytes[start..].to_vec());
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    if name.contains("box_assume_init_into_vec_unsafe") {
-                        eprintln!("RAPX_DEBUG worklist: matched box_assume_init, arg0={:?}", args.first().map(|a| &a.node));
-                        // Trace back through the Box to find the aggregate store
-                        // and verify trailing nul + non-zero interior.
-                        if let Some(box_op) = args.first() {
-                            match &box_op.node {
-                                Operand::Copy(p) | Operand::Move(p)
-                                    if p.projection.is_empty() =>
-                                {
-                                    eprintln!("RAPX_DEBUG worklist: resolved box local={:?}", p.local);
-                                    if let Some(bytes) = resolve_box_aggregate_bytes(tcx, body, p.local) {
-                                        eprintln!("RAPX_DEBUG worklist: got {} bytes from box_aggregate", bytes.len());
-                                        results.push(bytes);
-                                    } else {
-                                        eprintln!("RAPX_DEBUG worklist: resolve_box_aggregate_bytes returned None");
-                                    }
-                                }
-                                _ => {
-                                    eprintln!("RAPX_DEBUG worklist: box_op didn't match Copy/Move");
-                                }
-                            }
-                        }
-                    }
-            }
-        }
-    }
+    
     results
 }
 
@@ -572,32 +433,6 @@ fn const_bytes_from_call_dest<'tcx>(
         }
     }
     None
-}
-
-fn all_const_bytes_from_call_dest<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &Body<'tcx>,
-    local: Local,
-) -> Vec<Vec<u8>> {
-    let mut results = Vec::new();
-    for data in body.basic_blocks.iter() {
-        if let Some(terminator) = &data.terminator {
-            if let TerminatorKind::Call { destination, func, args, .. } = &terminator.kind {
-                if destination.local != local || !destination.projection.is_empty() {
-                    continue;
-                }
-                let name = crate::verify::call_summary::call_name(tcx, func);
-                if name.contains("as_ptr") || name.contains("::as_") {
-                    for arg in args {
-                        if let Some(bytes) = const_bytes_from_operand(tcx, body, &arg.node) {
-                            results.push(bytes);
-                        }
-                    }
-                }
-            }
-        }
-    }
-    results
 }
 
 /// If the root local is defined by a constant reference, return the bytes of
@@ -716,8 +551,8 @@ fn alloc_id_bytes<'tcx>(
 /// the executed path before the checkpoint block.
 fn nul_store_before_checkpoint<'tcx>(
     body: &Body<'tcx>,
-    checkpoint: &Checkpoint<'tcx>,
-    forward: &ForwardVisitResult<'tcx>,
+    _checkpoint: &Checkpoint<'tcx>,
+    _forward: &ForwardVisitResult<'tcx>,
     parents: &crate::compat::FxHashMap<Local, Local>,
     root: Local,
 ) -> bool {
@@ -780,59 +615,6 @@ fn nul_store_before_checkpoint<'tcx>(
         }
     }
     nul_store_count == 1
-}
-
-/// Resolve the content bytes of a box that is turned into a Vec via
-/// `box_assume_init_into_vec_unsafe`.  Scans the body for an aggregate store
-/// through a raw pointer derived from the box local, and verifies it ends with
-/// a `0_u8` constant and all preceding elements are non-zero providers.
-fn resolve_box_aggregate_bytes<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &Body<'tcx>,
-    _box_local: Local,
-) -> Option<Vec<u8>> {
-    eprintln!("RAPX_DEBUG resolve_box: scanning for aggregates");
-    for data in body.basic_blocks.iter() {
-        for statement in &data.statements {
-            let StatementKind::Assign(assign) = &statement.kind else {
-                continue;
-            };
-            let (target, rvalue) = assign.as_ref();
-            let Rvalue::Aggregate(_, operands) = rvalue else {
-                continue;
-            };
-            eprintln!("RAPX_DEBUG resolve_box: found Aggregate, n_ops={}, target={:?}", operands.len(), target);
-            if operands.len() < 2 {
-                continue;
-            }
-            // Check that the last element is a constant 0_u8.
-            let last_op = operands.iter().last().unwrap();
-            let is_last_zero = is_constant_zero_u8(last_op);
-            eprintln!("RAPX_DEBUG resolve_box: last_is_zero={is_last_zero}");
-            if !is_last_zero {
-                continue;
-            }
-            // Verify that other elements are non-zero (or can be traced to
-            // non-zero providers).
-            for (i, op) in operands.iter().take(operands.len() - 1).enumerate() {
-                let is_nz = aggregate_op_is_nonzero(tcx, body, op);
-                eprintln!("RAPX_DEBUG resolve_box: op[{i}] is_nonzero={is_nz} op={:?}", op);
-                if !is_nz {
-                    return None;
-                }
-            }
-            // Build the byte representation: we don't need the exact values,
-            // just that the last byte is 0 and no interior bytes are 0.
-            let len = operands.len();
-            let mut bytes = Vec::with_capacity(len);
-            for _ in 0..len - 1 {
-                bytes.push(b'x'); // placeholder non-zero
-            }
-            bytes.push(0);
-            return Some(bytes);
-        }
-    }
-    None
 }
 
 /// Return true if an aggregate operand is known to be non-zero.

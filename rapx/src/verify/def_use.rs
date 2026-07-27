@@ -72,6 +72,7 @@ impl PlaceKey {
                 .filter_map(|projection| match projection {
                     ContractProjection::Field { index, .. } => Some(*index),
                     ContractProjection::Downcast { .. } => Some(0),
+                    ContractProjection::IterElements => None,
                 })
                 .collect(),
         }

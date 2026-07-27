@@ -1401,6 +1401,7 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     Property {
                         null_guard: None,
                         or_alternatives: Vec::new(),
+                        for_each: None,
                         contract_kind: crate::verify::contract::ContractKind::Precond,
                         kind: PropertyKind::NonNull,
                         args: vec![target.clone()],
@@ -1408,6 +1409,7 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     Property {
                         null_guard: None,
                         or_alternatives: Vec::new(),
+                        for_each: None,
                         contract_kind: crate::verify::contract::ContractKind::Precond,
                         kind: PropertyKind::Align,
                         args: vec![target.clone(), ty.clone()],
@@ -1418,6 +1420,7 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     Property {
                         null_guard: None,
                         or_alternatives: Vec::new(),
+                        for_each: None,
                         contract_kind: crate::verify::contract::ContractKind::Precond,
                         kind: PropertyKind::ValidPtr,
                         args: vec![target.clone(), ty.clone(), count.clone()],
@@ -1425,6 +1428,7 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     Property {
                         null_guard: None,
                         or_alternatives: Vec::new(),
+                        for_each: None,
                         contract_kind: crate::verify::contract::ContractKind::Precond,
                         kind: PropertyKind::Align,
                         args: vec![target.clone(), ty.clone()],
@@ -1436,6 +1440,7 @@ fn build_raw_ptr_deref_checks<'tcx>(
                 properties.push(Property {
                     null_guard: None,
                     or_alternatives: Vec::new(),
+                    for_each: None,
                     contract_kind: crate::verify::contract::ContractKind::Precond,
                     kind: PropertyKind::Typed,
                     args: vec![target, ty],
@@ -1483,6 +1488,7 @@ fn build_static_mut_checks<'tcx>(
                 Property {
                     null_guard: None,
                     or_alternatives: Vec::new(),
+                    for_each: None,
                     contract_kind: crate::verify::contract::ContractKind::Precond,
                     kind: PropertyKind::ValidPtr,
                     args: vec![target.clone(), ty.clone(), count.clone()],
@@ -1490,6 +1496,7 @@ fn build_static_mut_checks<'tcx>(
                 Property {
                     null_guard: None,
                     or_alternatives: Vec::new(),
+                    for_each: None,
                     contract_kind: crate::verify::contract::ContractKind::Precond,
                     kind: PropertyKind::Align,
                     args: vec![target.clone(), ty.clone()],
@@ -1497,6 +1504,7 @@ fn build_static_mut_checks<'tcx>(
                 Property {
                     null_guard: None,
                     or_alternatives: Vec::new(),
+                    for_each: None,
                     contract_kind: crate::verify::contract::ContractKind::Precond,
                     kind: PropertyKind::Init,
                     args: vec![target, ty, count],

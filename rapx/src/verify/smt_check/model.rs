@@ -473,6 +473,14 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         }
                         BinOp::Div => SmtTerm::Div(Box::new(lhs_term), Box::new(rhs_term)),
                         BinOp::Rem => SmtTerm::Rem(Box::new(lhs_term), Box::new(rhs_term)),
+                        BinOp::BitAnd => {
+                            let result_int = Int::new_const(
+                                self.ctx,
+                                place_label(&target),
+                            );
+                            self.place_terms.insert(target.clone(), result_int.clone());
+                            SmtTerm::Place(target.clone())
+                        }
                         _ => SmtTerm::Value(format!(
                             "({} {} {})",
                             value_label(lhs),
@@ -856,7 +864,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 StateFact::PathCondition(_)
                 | StateFact::Drop(_)
                 | StateFact::LocalDead(_)
-                | StateFact::CallEffect(_) => {}
+                | StateFact::CallEffect(_)
+                | StateFact::ElementOf { .. } => {}
             }
         }
 
@@ -3807,11 +3816,30 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         })
     }
 
+    /// Extract every PlaceKey leaf from an AbstractValue by unwrapping
+    /// Cast wrappers.  E.g. `Cast(Cast(Place(p), _), _)` yields `[p]`.
+    fn extract_place_keys(value: &AbstractValue<'_>) -> Vec<PlaceKey> {
+        let mut result = Vec::new();
+        let mut worklist = vec![value];
+        while let Some(v) = worklist.pop() {
+            match v {
+                AbstractValue::Place(p) | AbstractValue::Ref(p) | AbstractValue::RawPtr(p) => {
+                    result.push(p.clone());
+                }
+                AbstractValue::Cast(inner, _) => {
+                    worklist.push(inner.as_ref());
+                }
+                _ => {}
+            }
+        }
+        result
+    }
+
     /// When a KnownAllocated fact directly or transitively covers the target
     /// place, return the fact's type name so the caller can short-circuit
     /// the full SMT bounds proof.  The trace never crosses pointer-arithmetic
     /// results (they may point past the object base) and skips facts whose
-    /// allocation object has been dropped or gone out of scope.
+    /// allocation object has been invalidated on the current path.
     pub(crate) fn allocated_ty_via_known_fact(
         &self,
         place: &PlaceKey,
@@ -3841,18 +3869,15 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                             match cursor {
                                 AbstractValue::Place(p)
                                 | AbstractValue::Ref(p)
-                                | AbstractValue::RawPtr(p) => break p.clone(),
+                                | AbstractValue::RawPtr(p) => break Some(p.clone()),
                                 AbstractValue::Cast(inner, _) => cursor = inner.as_ref(),
-                                _ => {
-                                    break PlaceKey {
-                                        base: crate::verify::def_use::PlaceBaseKey::Local(0),
-                                        fields: Vec::new(),
-                                    };
-                                }
+                                _ => break None,
                             }
                         };
-                        if root.local().is_some() {
-                            queue.push(root);
+                        if let Some(r) = root
+                            && r.local().is_some()
+                        {
+                            queue.push(r);
                         }
                     }
                 }
@@ -3897,8 +3922,27 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     continue;
                 };
                 if *target == cur {
-                    if let AbstractValue::Place(p) = source {
-                        queue.push(p.clone());
+                    for p in Self::extract_place_keys(source) {
+                        queue.push(p);
+                    }
+                }
+            }
+            for fact in &self.forward.facts {
+                let StateFact::Binary {
+                    target: bin_target,
+                    lhs,
+                    rhs,
+                    ..
+                } = fact
+                else {
+                    continue;
+                };
+                if *bin_target == cur {
+                    for p in Self::extract_place_keys(lhs) {
+                        queue.push(p);
+                    }
+                    for p in Self::extract_place_keys(rhs) {
+                        queue.push(p);
                     }
                 }
             }
@@ -4116,8 +4160,27 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     continue;
                 };
                 if *target == cur {
-                    if let AbstractValue::Place(p) = source {
-                        queue.push(p.clone());
+                    for p in Self::extract_place_keys(source) {
+                        queue.push(p);
+                    }
+                }
+            }
+            for fact in &self.forward.facts {
+                let StateFact::Binary {
+                    target: bin_target,
+                    lhs,
+                    rhs,
+                    ..
+                } = fact
+                else {
+                    continue;
+                };
+                if *bin_target == cur {
+                    for p in Self::extract_place_keys(lhs) {
+                        queue.push(p);
+                    }
+                    for p in Self::extract_place_keys(rhs) {
+                        queue.push(p);
                     }
                 }
             }

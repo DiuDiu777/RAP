@@ -29,6 +29,13 @@ pub(crate) fn check<'tcx>(
     if checkpoint.is_ref {
         return SmtCheckResult::proved("Align trivially holds for ref-derived pointer");
     }
+    if let Some(reason) =
+        super::field_invariant::discharge_from_contract_fact_with_checkpoint(
+            property, forward, checkpoint,
+        )
+    {
+        return SmtCheckResult::proved(format!("Align proved: {reason}"));
+    }
     let Some((target, align, ty_name)) =
         resolve(checker, checkpoint.caller, property, Some(checkpoint))
     else {
@@ -44,6 +51,9 @@ pub(crate) fn check_for_checkpoint<'tcx>(
     property: &Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
+    if let Some(reason) = super::field_invariant::discharge_from_contract_fact(property, forward) {
+        return SmtCheckResult::proved(format!("Align proved: {reason}"));
+    }
     let Some((target, align, ty_name)) = resolve(checker, caller, property, None) else {
         return SmtCheckResult::unknown("SMT Align target/type could not be resolved");
     };

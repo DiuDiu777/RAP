@@ -296,7 +296,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "self.each_element()",
+        "self.iter()",
         "[0, 127]"
       ]
     }
@@ -414,11 +414,12 @@
       ]
     },
     {
-      "tag": "ValidPtr",
+      "tag": "Allocated",
       "args": [
-        "ptr",
-        "c_char",
-        "1"
+        "raw",
+        "T",
+        "1",
+        "global"
       ]
     },
     {
@@ -3629,7 +3630,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "self.each_element()",
+        "self.iter()",
         "[0, 127]"
       ]
     }
@@ -4573,11 +4574,26 @@
   ],
   "alloc::boxed::from_raw": [
     {
+      "tag": "Align",
+      "args": [
+        "raw",
+        "T"
+      ]
+    },
+    {
       "tag": "Allocated",
       "args": [
         "raw",
         "T",
-        "1"
+        "1",
+        "global"
+      ]
+    },
+    {
+      "tag": "Typed",
+      "args": [
+        "raw",
+        "T"
       ]
     },
     {
@@ -4597,11 +4613,26 @@
   ],
   "alloc::boxed::from_non_null": [
     {
+      "tag": "Align",
+      "args": [
+        "ptr",
+        "T"
+      ]
+    },
+    {
       "tag": "Allocated",
       "args": [
         "ptr",
         "T",
-        "1"
+        "1",
+        "global"
+      ]
+    },
+    {
+      "tag": "Typed",
+      "args": [
+        "ptr",
+        "T"
       ]
     },
     {
@@ -4621,11 +4652,26 @@
   ],
   "alloc::boxed::from_raw_in": [
     {
+      "tag": "Align",
+      "args": [
+        "raw",
+        "T"
+      ]
+    },
+    {
       "tag": "Allocated",
       "args": [
         "raw",
         "T",
-        "1"
+        "1",
+        "alloc"
+      ]
+    },
+    {
+      "tag": "Typed",
+      "args": [
+        "raw",
+        "T"
       ]
     },
     {
@@ -4645,11 +4691,26 @@
   ],
   "alloc::boxed::from_non_null_in": [
     {
+      "tag": "Align",
+      "args": [
+        "raw",
+        "T"
+      ]
+    },
+    {
       "tag": "Allocated",
       "args": [
         "raw",
         "T",
-        "1"
+        "1",
+        "alloc"
+      ]
+    },
+    {
+      "tag": "Typed",
+      "args": [
+        "raw",
+        "T"
       ]
     },
     {
@@ -4972,15 +5033,16 @@
     {
       "tag": "Allocated",
       "args": [
-        "buf",
+        "ptr",
         "T",
-        "length"
+        "1",
+        "global"
       ]
     },
     {
-      "tag": "Align",
+      "tag": "Typed",
       "args": [
-        "buf",
+        "ptr",
         "T"
       ]
     },

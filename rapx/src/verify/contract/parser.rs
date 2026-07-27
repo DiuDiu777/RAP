@@ -47,6 +47,7 @@ impl<'tcx> Property<'tcx> {
             contract_kind: spec.contract_kind,
             null_guard: None,
             or_alternatives: Vec::new(),
+            for_each: None,
         }
     }
 
@@ -302,6 +303,7 @@ impl<'tcx> Property<'tcx> {
             contract_kind: ContractKind::Precond,
             null_guard: None,
             or_alternatives: Vec::new(),
+            for_each: None,
         }
     }
 
@@ -310,10 +312,22 @@ impl<'tcx> Property<'tcx> {
     /// Plain entries (`Align(p, T)`, `Owning(p)`, ...) yield one property.
     /// The `any(...)` combinator may expand to several: see [`Self::parse_any`].
     pub fn parse_list(tcx: TyCtxt<'tcx>, def_id: DefId, name: &str, exprs: &[Expr]) -> Vec<Self> {
-        if name == "any" {
-            return Self::parse_any(tcx, def_id, exprs);
+        let mut props = if name == "any" {
+            Self::parse_any(tcx, def_id, exprs)
+        } else {
+            vec![Self::new(tcx, def_id, name, exprs)]
+        };
+        for prop in &mut props {
+            if prop.for_each.is_none() {
+                for arg in &mut prop.args {
+                    prop.for_each = strip_iter_elements(arg);
+                    if prop.for_each.is_some() {
+                        break;
+                    }
+                }
+            }
         }
-        vec![Self::new(tcx, def_id, name, exprs)]
+        props
     }
 
     /// Parse the disjunctive combinator `any(D1, D2, ...)` written in DNF:
@@ -454,6 +468,7 @@ impl<'tcx> Property<'tcx> {
             contract_kind: ContractKind::Precond,
             null_guard: None,
             or_alternatives: Vec::new(),
+            for_each: None,
         }
     }
 
@@ -463,17 +478,38 @@ impl<'tcx> Property<'tcx> {
         def_id: DefId,
         exprs: &[Expr],
     ) -> Self {
-        let args = exprs
-            .iter()
-            .map(|expr| Self::parse_target_arg(tcx, def_id, expr))
-            .collect();
+        let (args, for_each) = Self::parse_target_args_with_for_each(tcx, def_id, exprs);
         Self {
             kind,
             args,
             contract_kind: ContractKind::Precond,
             null_guard: None,
             or_alternatives: Vec::new(),
+            for_each,
         }
+    }
+
+    fn parse_target_args_with_for_each(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        exprs: &[Expr],
+    ) -> (Vec<PropertyArg<'tcx>>, Option<ContractPlace<'tcx>>) {
+        let raw_args: Vec<_> = exprs
+            .iter()
+            .map(|expr| Self::parse_target_arg(tcx, def_id, expr))
+            .collect();
+        let mut for_each = None;
+        let mut clean_args = Vec::with_capacity(raw_args.len());
+        for arg in raw_args {
+            let mut clean = arg;
+            if for_each.is_none() {
+                if let Some(container) = strip_iter_elements(&mut clean) {
+                    for_each = Some(container);
+                }
+            }
+            clean_args.push(clean);
+        }
+        (clean_args, for_each)
     }
 
     fn check_arg_length(expr_len: usize, required_len: usize, sp: &str) -> bool {
@@ -895,6 +931,18 @@ impl<'tcx> Property<'tcx> {
         def_id: DefId,
         expr: &Expr,
     ) -> Option<ContractPlace<'tcx>> {
+        // Handle .iter() / .each_element() — iterate over slice elements.
+        if let Expr::MethodCall(expr_method) = expr {
+            if (expr_method.method == "iter" || expr_method.method == "each_element")
+                && expr_method.args.is_empty()
+            {
+                let mut place =
+                    Self::parse_contract_place(tcx, def_id, &expr_method.receiver)?;
+                place.projections.push(ContractProjection::IterElements);
+                return Some(place);
+            }
+        }
+
         // Handle .unwrap_some() method call — downcast to the Some variant.
         if let Expr::MethodCall(expr_method) = expr {
             if expr_method.method == "unwrap_some" && expr_method.args.is_empty() {
@@ -1122,6 +1170,20 @@ impl<'tcx> Property<'tcx> {
             ),
         ]
     }
+}
+
+/// Strip `IterElements` from a property arg and return the container place
+/// (without the projection) if `IterElements` was present.
+fn strip_iter_elements<'tcx>(arg: &mut PropertyArg<'tcx>) -> Option<ContractPlace<'tcx>> {
+    if let PropertyArg::Place(place) = arg {
+        if place.projections.iter().any(|p| matches!(p, ContractProjection::IterElements)) {
+            let mut container = place.clone();
+            container.projections.retain(|p| !matches!(p, ContractProjection::IterElements));
+            place.projections.retain(|p| !matches!(p, ContractProjection::IterElements));
+            return Some(container);
+        }
+    }
+    None
 }
 
 /// True when `ty` denotes a slice `[T]`, possibly behind references.

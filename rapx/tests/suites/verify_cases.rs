@@ -94,3 +94,35 @@ fn std_challenge_18() {
         "unexpected UNSOUND in std-challenge-18"
     );
 }
+
+#[test]
+fn hashmap() {
+    let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_TARGETED);
+    assert_contain(&output, "result: SOUND");
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
+fn hashmap_skip_invariant() {
+    let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_SKIP_INVARIANT);
+    assert_contain(&output, "result: SOUND");
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
+fn bump_allocator() {
+    let output = run_with_args("verify_cases/bump_allocator", CMD_VERIFY);
+    assert_function_result(&output, "BumpAllocator::new", "SOUND");
+    assert_function_result(&output, "BumpAllocator::alloc", "SOUND");
+    assert_function_result(&output, "BumpAllocator::reset", "SOUND");
+}
+
+#[test]
+fn free_list_allocator() {
+    let output = run_with_args("verify_cases/free_list_allocator", CMD_VERIFY);
+    assert_function_result(&output, "FreeListAllocator::new", "SOUND");
+    assert_function_result(&output, "FreeListAllocator::alloc", "SOUND");
+    assert_unproved_exclusive(&output, "FreeListAllocator::alloc_unsound", &["Align"]);
+    assert_function_result(&output, "FreeListAllocator::dealloc", "SOUND");
+    assert_function_result(&output, "FreeListAllocator::merge", "SOUND");
+}

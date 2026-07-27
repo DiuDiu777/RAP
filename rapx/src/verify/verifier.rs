@@ -549,6 +549,20 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         }
                     }
                 }
+                if *op == BinOp::BitAnd {
+                    let lhs_resolved = resolve_value_chain_deep(&lhs_val, result);
+                    let rhs_resolved = resolve_value_chain_deep(&rhs_val, result);
+                    if let Some((align_val, ty_name)) = detect_align_round_up(&lhs_resolved, &rhs_resolved)
+                        .or_else(|| detect_align_round_up(&rhs_resolved, &lhs_resolved))
+                    {
+                        result.facts.push(StateFact::KnownAligned {
+                            place: target_key.clone(),
+                            align: align_val,
+                            ty_name,
+                            reason: "round-up alignment (x+k) & !k".into(),
+                        });
+                    }
+                }
             }
             _ => {}
         }
@@ -570,6 +584,23 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 matches!(proj, ProjectionElem::Deref | ProjectionElem::Field(..))
             })
         };
+        // When reading from a slice/array via Index projection (e.g. (*ptr)[idx]),
+        // record that the result is an element of the container pointer.
+        let has_index = source_place
+            .projection
+            .iter()
+            .any(|proj| matches!(proj, ProjectionElem::Index(_)));
+        if has_index {
+            let target_key = PlaceKey::from_mir_place(place);
+            let container_key = PlaceKey {
+                base: super::def_use::PlaceBaseKey::Local(source_place.local.as_usize()),
+                fields: vec![],
+            };
+            result.facts.push(StateFact::ElementOf {
+                place: target_key,
+                container: container_key,
+            });
+        }
         if !has_proj(source_place) && !has_proj(place) {
             return;
         }
@@ -854,31 +885,17 @@ impl<'tcx> ForwardVerifier<'tcx> {
             place: destination_place.clone(),
             reason: format!("returned by {callee_name}"),
         });
-        // Forward KnownInit from Box's inner field for into_raw.
-        if !callee_name.contains("::into_raw") {
-            return;
-        }
-        let mut candidates = copy_chain_places(&source, result);
-        if !candidates.contains(&source) {
-            candidates.push(source.clone());
-        }
-        let init_forwarded = candidates.iter().any(|candidate| {
-            let mut inner = candidate.clone();
-            inner.fields.extend_from_slice(&[0, 0]);
-            result.facts.iter().any(|fact| {
-                matches!(fact, StateFact::KnownInit { place, .. } if *place == inner)
-            })
-        });
-        if init_forwarded {
-            let ty_name = self
-                .pointee_ty_name(result.checkpoint.caller, destination_place)
-                .or_else(|| self.pointee_ty_name(result.checkpoint.caller, &source));
-            if let Some(ty_name) = ty_name {
+        // Forward KnownInit for into_raw: the wrapper type guarantees the pointee
+        // memory is initialized, so the returned raw pointer carries Typed.
+        if callee_name.contains("::into_raw") {
+            if let Some(ty_name) =
+                self.pointee_ty_name(result.checkpoint.caller, destination_place)
+            {
                 result.facts.push(StateFact::KnownInit {
                     place: destination_place.clone(),
                     ty_name,
                     elements: 1,
-                    reason: "into_raw preserves initialization from Box".to_string(),
+                    reason: "into_raw preserves initialized memory".to_string(),
                 });
             }
         }
@@ -1453,6 +1470,13 @@ pub enum StateFact<'tcx> {
         value: u64,
         reason: String,
     },
+    /// The value at `place` was loaded from an element of `container`
+    /// (e.g. via slice indexing).  This bridges `for_each` invariants
+    /// on containers to individual element accesses.
+    ElementOf {
+        place: PlaceKey,
+        container: PlaceKey,
+    },
 }
 
 /// Summary for a retained call terminator.
@@ -1597,6 +1621,78 @@ fn propagate_value_facts<'tcx>(
     }
 }
 
+fn resolve_value_chain_deep<'tcx>(
+    value: &AbstractValue<'tcx>,
+    result: &ForwardVisitResult<'tcx>,
+) -> AbstractValue<'tcx> {
+    let resolved = resolve_value_chain(value, result);
+    match resolved {
+        AbstractValue::Unary(op, inner) => {
+            AbstractValue::Unary(op, Box::new(resolve_value_chain_deep(&inner, result)))
+        }
+        AbstractValue::Binary(op, lhs, rhs) => {
+            AbstractValue::Binary(
+                op,
+                Box::new(resolve_value_chain_deep(&lhs, result)),
+                Box::new(resolve_value_chain_deep(&rhs, result)),
+            )
+        }
+        other => other,
+    }
+}
+
+fn detect_align_round_up<'tcx>(
+    lhs: &AbstractValue<'tcx>,
+    rhs: &AbstractValue<'tcx>,
+) -> Option<(u64, String)> {
+    let (add_align, mask_align) = match (lhs, rhs) {
+        (AbstractValue::Binary(BinOp::Sub, inner, sub_rhs), AbstractValue::Unary(UnOp::Not, not_inner))
+            if matches!(const_int_value(sub_rhs), Some(1)) =>
+        {
+            let add_rhs = match inner.as_ref() {
+                AbstractValue::Binary(BinOp::Add, _, a) => a,
+                _ => return None,
+            };
+            let sub_lhs = match not_inner.as_ref() {
+                AbstractValue::Binary(BinOp::Sub, s, s_rhs)
+                    if matches!(const_int_value(s_rhs), Some(1)) => s,
+                _ => return None,
+            };
+            (add_rhs, sub_lhs)
+        }
+        _ => return None,
+    };
+    if !abstract_value_eq(add_align.as_ref(), mask_align.as_ref()) {
+        return None;
+    }
+    let ty_name = match add_align.as_ref() {
+        AbstractValue::CallResult(c) if c.func.contains("align_of") => "T".to_string(),
+        _ => format!("{:?}", add_align),
+    };
+    if let Some(align) = const_int_value(add_align.as_ref()) {
+        if align > 0 && is_power_of_two(align) {
+            return Some((align as u64, ty_name));
+        }
+    }
+    Some((0, ty_name))
+}
+
+fn abstract_value_eq(a: &AbstractValue<'_>, b: &AbstractValue<'_>) -> bool {
+    match (a, b) {
+        (AbstractValue::Place(p1), AbstractValue::Place(p2)) => p1 == p2,
+        (AbstractValue::ConstInt(v1), AbstractValue::ConstInt(v2)) => v1 == v2,
+        (AbstractValue::Const(s1), AbstractValue::Const(s2)) => s1 == s2,
+        (AbstractValue::CallResult(c1), AbstractValue::CallResult(c2)) => c1.func == c2.func,
+        (AbstractValue::Unary(op1, inner1), AbstractValue::Unary(op2, inner2)) => {
+            op1 == op2 && abstract_value_eq(inner1, inner2)
+        }
+        (AbstractValue::Binary(op1, l1, r1), AbstractValue::Binary(op2, l2, r2)) => {
+            op1 == op2 && abstract_value_eq(l1, l2) && abstract_value_eq(r1, r2)
+        }
+        _ => false,
+    }
+}
+
 fn align_guard_value<'tcx>(
     value: &AbstractValue<'tcx>,
     equals: u128,
@@ -1659,10 +1755,10 @@ fn resolve_value_chain<'tcx>(
     let mut cur = value.clone();
     let mut visited_locals = HashSet::new();
     loop {
-        let local = match &cur {
+        let (local, fields) = match &cur {
             AbstractValue::Place(p) if matches!(p.base, PlaceBaseKey::Local(_)) => {
                 let PlaceBaseKey::Local(ix) = p.base else { unreachable!() };
-                ix
+                (ix, p.fields.clone())
             }
             _ => return cur,
         };
@@ -1670,7 +1766,24 @@ fn resolve_value_chain<'tcx>(
             return cur;
         }
         cur = match result.values.get(&Local::from_usize(local)) {
-            Some(v) => v.clone(),
+            Some(v) => {
+                if fields.as_slice() == [0usize] {
+                    match v {
+                        AbstractValue::Binary(BinOp::SubWithOverflow, l, r) => {
+                            AbstractValue::Binary(BinOp::Sub, l.clone(), r.clone())
+                        }
+                        AbstractValue::Binary(BinOp::AddWithOverflow, l, r) => {
+                            AbstractValue::Binary(BinOp::Add, l.clone(), r.clone())
+                        }
+                        AbstractValue::Binary(BinOp::MulWithOverflow, l, r) => {
+                            AbstractValue::Binary(BinOp::Mul, l.clone(), r.clone())
+                        }
+                        _ => v.clone(),
+                    }
+                } else {
+                    v.clone()
+                }
+            }
             None => return cur,
         };
     }
@@ -1733,11 +1846,11 @@ fn allocation_object_for_source<'tcx>(
                     {
                         cur = next.clone();
                         continue;
-                    }
                 }
-                _ => {}
             }
+            _ => {}
         }
+    }
         let Some(next) = result.facts.iter().find_map(|fact| match fact {
             StateFact::PointsTo { pointer, source } if pointer == &cur => Some(source.clone()),
             _ => None,
@@ -1830,33 +1943,56 @@ fn known_allocated_for<'tcx>(
     value: &AbstractValue<'tcx>,
     result: &ForwardVisitResult<'tcx>,
 ) -> Option<(String, u64, PlaceKey)> {
-    let mut cur = value.clone();
-    let mut visited_locals = HashSet::new();
-    loop {
-        if let AbstractValue::Place(ref p) = cur {
-            for f in &result.facts {
-                if let StateFact::KnownAllocated { place, object, ty_name, elements, .. } = f {
-                    if place == p
-                        || (place.fields.is_empty() && p.fields.is_empty() && place.base == p.base)
-                    {
-                        return Some((ty_name.clone(), *elements, object.clone()));
+    let mut worklist = vec![(value, 0)];
+    let mut visited = HashSet::new();
+    while let Some((v, depth)) = worklist.pop() {
+        if depth > 32 || !visited.insert(v as *const _) {
+            continue;
+        }
+        let mut cur = v;
+        let mut locals_seen = HashSet::new();
+        loop {
+            if let AbstractValue::Place(p) | AbstractValue::Ref(p) | AbstractValue::RawPtr(p) = cur {
+                for f in &result.facts {
+                    if let StateFact::KnownAllocated { place, object, ty_name, elements, .. } = f {
+                        if place == p
+                            || (place.fields.is_empty() && p.fields.is_empty() && place.base == p.base)
+                        {
+                            return Some((ty_name.clone(), *elements, object.clone()));
+                        }
                     }
                 }
             }
-        }
-        cur = match &cur {
-            AbstractValue::Place(p) => {
-                let PlaceBaseKey::Local(ix) = p.base else { return None; };
-                if !visited_locals.insert(ix) { return None; }
-                match result.values.get(&Local::from_usize(ix)) {
-                    Some(v) => v.clone(),
-                    None => return None,
-                }
+            if let AbstractValue::Binary(_, lhs, rhs) = cur {
+                worklist.push((rhs, depth + 1));
+                worklist.push((lhs, depth + 1));
+                break;
             }
-            AbstractValue::Cast(inner, _) => (**inner).clone(),
-            _ => return None,
-        };
+            if let AbstractValue::CallResult(call) = cur {
+                for effect in &call.effects {
+                    if let crate::verify::call_summary::CallEffect::ReturnAliasArg { arg: arg_idx } = effect {
+                        if let Some(arg_val) = call.args.get(*arg_idx) {
+                            worklist.push((arg_val, depth + 1));
+                        }
+                    }
+                }
+                break;
+            }
+            match cur {
+                AbstractValue::Place(p) => {
+                    let PlaceBaseKey::Local(ix) = p.base else { break };
+                    if !locals_seen.insert(ix) { break };
+                    match result.values.get(&Local::from_usize(ix)) {
+                        Some(next) => cur = next,
+                        None => break,
+                    }
+                }
+                AbstractValue::Cast(inner, _) => cur = inner,
+                _ => break,
+            }
+        }
     }
+    None
 }
 
 fn known_alignment_of<'tcx>(

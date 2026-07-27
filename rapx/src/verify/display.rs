@@ -373,6 +373,9 @@ pub fn fmt_place_plain(
                 crate::verify::contract::ContractProjection::Downcast { .. } => {
                     "unwrap_some()".to_string()
                 }
+                crate::verify::contract::ContractProjection::IterElements => {
+                    ".iter()".to_string()
+                }
             })
             .collect();
         if base.is_empty() {
