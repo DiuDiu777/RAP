@@ -110,6 +110,30 @@ fn hashmap_skip_invariant() {
 }
 
 #[test]
+fn std_challenge_02() {
+    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_TARGETED);
+
+    let functions = [
+        "copy_nonoverlapping",
+        "copy",
+        "swap",
+        "swap_nonoverlapping",
+        "mem_swap",
+        "zeroed",
+        "copy_from_slice",
+        "size_of_val",
+        "align_of_val",
+        "min_align_of_val",
+    ];
+
+    for fn_name in &functions {
+        assert_contain(&output, fn_name);
+    }
+
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
 fn bump_allocator() {
     let output = run_with_args("verify_cases/bump_allocator", CMD_VERIFY);
     assert_function_result(&output, "BumpAllocator::new", "SOUND");
