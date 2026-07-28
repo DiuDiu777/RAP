@@ -2,6 +2,7 @@
 
 use super::graph::TyWrapper;
 use super::utils::{self, fn_sig_with_generic_args};
+use crate::compat;
 use crate::helpers::def_path::path_str_def_id;
 use crate::{rap_debug, rap_trace};
 use rand::Rng;
@@ -244,15 +245,19 @@ fn is_args_fit_trait_bound<'tcx>(
         ty::GenericArgs::identity_for_item(tcx, fn_did)
     );
     let infcx = tcx.infer_ctxt().build(ty::TypingMode::PostAnalysis);
-    let pred = tcx.predicates_of(fn_did);
-    let inst_pred = pred.instantiate(tcx, args);
     let param_env = tcx.param_env(fn_did);
+    let pred = crate::compat::predicates_of(tcx, fn_did);
+    let inst_pred = pred.instantiate(tcx, args);
     rap_trace!(
         "[trait bound] check {}",
         tcx.def_path_str_with_args(fn_did, args)
     );
 
-    for pred in inst_pred.predicates.iter() {
+    #[cfg(not(rapx_rustc_ge_199))]
+    let iter = inst_pred.predicates.iter();
+    #[cfg(rapx_rustc_ge_199)]
+    let iter = inst_pred.clauses.iter();
+    for pred in iter {
         #[cfg(rapx_rustc_ge_198)]
         let pred = pred.skip_norm_wip();
         let obligation = Obligation::new(
@@ -282,10 +287,16 @@ fn is_args_fit_trait_bound<'tcx>(
 }
 
 fn is_fn_solvable<'tcx>(fn_did: DefId, tcx: TyCtxt<'tcx>) -> bool {
-    for pred in tcx
-        .predicates_of(fn_did)
+    let predicates = crate::compat::predicates_of(tcx, fn_did);
+    #[cfg(not(rapx_rustc_ge_199))]
+    let iter = predicates
         .instantiate_identity(tcx)
-        .predicates
+        .predicates;
+    #[cfg(rapx_rustc_ge_199)]
+    let iter = predicates
+        .instantiate_identity(tcx)
+        .clauses;
+    for pred in iter
     {
         #[cfg(rapx_rustc_ge_198)]
         let pred = pred.skip_norm_wip();
@@ -416,10 +427,15 @@ fn solve_unbound_type_generics<'tcx>(
         return;
     }
     let args = tcx.mk_args(&mono.value);
-    let preds = tcx.predicates_of(did).instantiate(tcx, args);
+    let preds = crate::compat::predicates_of(tcx, did);
+    let preds = preds.instantiate(tcx, args);
     let mut mset = MonoSet::all(args);
     rap_debug!("[solve_unbound] did = {did:?}, mset={mset:?}");
-    for pred in preds.predicates.iter() {
+    #[cfg(not(rapx_rustc_ge_199))]
+    let pred_iter = preds.predicates.iter();
+    #[cfg(rapx_rustc_ge_199)]
+    let pred_iter = preds.clauses.iter();
+    for pred in pred_iter {
         rap_debug!("[solve_unbound] pred = {:?}", pred);
         #[cfg(rapx_rustc_ge_198)]
         let pred = pred.skip_norm_wip();
@@ -602,7 +618,8 @@ pub fn get_impls<'tcx>(
         args
     );
     let mut impls = HashSet::new();
-    let preds = tcx.predicates_of(fn_did).instantiate(tcx, args);
+    let preds = crate::compat::predicates_of(tcx, fn_did);
+    let preds = preds.instantiate(tcx, args);
     for (pred, _) in preds {
         #[cfg(rapx_rustc_ge_198)]
         let pred = pred.skip_norm_wip();

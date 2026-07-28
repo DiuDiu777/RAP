@@ -17,8 +17,8 @@ use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 use crate::verify::def_use::PlaceKey;
 use crate::verify::{
     contract::{ContractExpr, Property, PropertyArg},
+    fn_simulator,
     helpers::Checkpoint,
-    primitive::PrimitiveCall,
     verifier::ForwardVisitResult,
 };
 
@@ -184,17 +184,16 @@ fn pointer_arithmetic_obligation<'tcx>(
     count: SmtTerm,
 ) -> Option<SmtObligation> {
     let callee_name = checker.tcx.def_path_str(checkpoint.callee?);
-    let primitive = PrimitiveCall::classify(&callee_name)?;
-    if !primitive.is_pointer_arithmetic() {
+    if !fn_simulator::is_pointer_arithmetic(&callee_name) {
         return None;
     }
 
     let base = checker.callsite_arg_place(checkpoint, 0)?;
     let zero = SmtTerm::Const(0);
     let negative_count = SmtTerm::Sub(Box::new(zero.clone()), Box::new(count.clone()));
-    let (lower_delta, upper_delta) = if primitive.is_pointer_sub_like() {
+    let (lower_delta, upper_delta) = if fn_simulator::is_pointer_sub(&callee_name) {
         (negative_count, zero)
-    } else if primitive.is_signed_pointer_arithmetic() {
+    } else if fn_simulator::is_signed_ptr_arith(&callee_name) {
         (count.clone(), count)
     } else {
         (zero, count)

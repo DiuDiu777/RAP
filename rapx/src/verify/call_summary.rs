@@ -14,15 +14,14 @@ use std::collections::HashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{BasicBlock, Local, Operand, Rvalue, StatementKind, TerminatorKind},
-    ty::{GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind},
+    ty::{Ty, TyCtxt, TyKind},
 };
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::analysis::path_analysis::graph::{PathEnumerator, PathGraph};
 
 use super::{
-    helpers::ty_has_param_const, primitive::PrimitiveCall, slicer::ForgetReason,
-    smt_check::common::pointee_ty,
+    fn_simulator, slicer::ForgetReason,
 };
 
 /// Dependency summary consumed by the backward visitor.
@@ -154,193 +153,12 @@ pub fn dependency_summary<'tcx>(
     let callee = callee_def_id(func);
     let name = call_name(tcx, func);
 
-    let primitive = PrimitiveCall::classify(&name);
-
-    if name.ends_with("mem::forget") || name.ends_with("::capacity") {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
+    if let Some(summary) = fn_simulator::lookup_dependency(callee, &name, arg_count) {
+        return summary;
     }
 
-    if name.contains("::transmute") || name.contains("intrinsics::transmute") {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if is_ownership_reconstruction(&name) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_as_ptr_like) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::AsPtrRange)
-        || primitive == Some(PrimitiveCall::AsMutPtrRange)
-    {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_pointer_arithmetic) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0, 1],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::PtrRead) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::PtrWrite) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: Vec::new(),
-            may_write_args: vec![0],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::Len) || primitive == Some(PrimitiveCall::IsEmpty) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::MaybeUninitUninit) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: Vec::new(),
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::NumericArith)
-        || primitive == Some(PrimitiveCall::CmpMin)
-        || primitive == Some(PrimitiveCall::SaturatingSub)
-    {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: (0..arg_count).collect(),
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if is_slice_range_fn(&name) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0, 1],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if is_align_to_offsets_fn(&name) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: (0..arg_count).collect(),
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::OptionUnwrap) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_layout_constant) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: Vec::new(),
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if let Some(prim) = primitive
-        && matches!(prim, PrimitiveCall::SplitAt | PrimitiveCall::SplitAtMut)
-    {
-        // The returned prefix/suffix slices depend both on the source buffer
-        // (arg 0) and on the split point `mid` (arg 1); the prefix length is
-        // exactly `mid`.  Keep both so the backward slice retains the `mid`
-        // computation for downstream `len(prefix)` obligations.
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0, 1],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if is_from_trait_call(&name) {
-        return CallDependencySummary {
-            callee,
-            name,
-            return_depends_on_args: vec![0],
-            may_write_args: Vec::new(),
-            unsupported: false,
-        };
-    }
-
+    // Interprocedural fallback for local callees.
     if let Some(callee) = callee {
-        // Skip interprocedural analysis for intrinsics and
-        // compiler-generated functions — their MIR can trigger
-        // worker-thread stack overflows during `optimized_mir`.
         if name.contains("::intrinsics::")
             || name.starts_with("intrinsics::")
             || name.ends_with("::drop_in_place")
@@ -380,14 +198,7 @@ pub fn dependency_summary<'tcx>(
 
 /// Ownership-reconstructing conversions (`Box::from_raw`, `CString::from_raw`)
 /// whose return value wraps the same allocation as the raw pointer argument.
-pub fn is_ownership_reconstruction(name: &str) -> bool {
-    name.contains("from_raw")
-        && !name.contains("from_raw_parts")
-        && (name.contains("boxed")
-            || name.contains("Box")
-            || name.contains("CString")
-            || name.contains("ffi::c_str"))
-}
+pub use super::fn_simulator::is_ownership_reconstruction;
 
 /// Return effect information for a MIR call terminator.
 pub fn effect_summary<'tcx>(
@@ -398,290 +209,18 @@ pub fn effect_summary<'tcx>(
 ) -> CallEffectSummary {
     let callee = callee_def_id(func);
     let name = call_name(tcx, func);
-    let destination = Some(destination);
 
-    let primitive = PrimitiveCall::classify(&name);
-
-    if name.ends_with("mem::forget") || name.ends_with("::capacity") {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: Vec::new(),
-            unsupported: false,
-        };
+    if let Some(summary) = fn_simulator::lookup_effect(tcx, caller, callee, &name, func, destination) {
+        return summary;
     }
 
-    if is_ownership_reconstruction(&name) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![
-                CallEffect::ReturnAliasArg { arg: 0 },
-                CallEffect::ReturnNonZero,
-                CallEffect::OwnsInitMemory { arg: 0 },
-            ],
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_as_ptr_like) {
-        let mut effects = vec![
-            CallEffect::ReturnPointerFromArg { arg: 0 },
-            CallEffect::ReturnNonZero,
-        ];
-        if let Some((align, ty_name)) = destination_pointee_alignment(tcx, caller, destination) {
-            effects.push(CallEffect::ReturnAligned { align, ty_name });
-        }
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects,
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::AsPtrRange)
-        || primitive == Some(PrimitiveCall::AsMutPtrRange)
-    {
-        let effects = vec![CallEffect::ReturnAliasArg { arg: 0 }];
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects,
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_pointer_add_like) {
-        let stride = if primitive.is_some_and(PrimitiveCall::is_byte_pointer_arithmetic) {
-            Some(1)
-        } else {
-            destination_stride(tcx, caller, destination)
-        };
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnPointerAdd {
-                base_arg: 0,
-                offset_arg: 1,
-                stride,
-            }],
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_pointer_sub_like) {
-        let stride = if primitive.is_some_and(PrimitiveCall::is_byte_pointer_arithmetic) {
-            Some(1)
-        } else {
-            destination_stride(tcx, caller, destination)
-        };
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnPointerSub {
-                base_arg: 0,
-                offset_arg: 1,
-                stride,
-            }],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::PtrRead) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReadMemory { arg: 0 }],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::PtrWrite) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::WriteMemory { pointer_arg: 0 }],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::Len) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnLengthOfArg { arg: 0 }],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::IsEmpty) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnIsEmptyOfArg { arg: 0 }],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::MaybeUninitUninit) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::CmpMin) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnMin {
-                lhs_arg: 0,
-                rhs_arg: 1,
-            }],
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::NumericArith)
-        || primitive == Some(PrimitiveCall::SaturatingSub)
-    {
-        // Pure arithmetic: no memory effect and never precision-losing.  The
-        // SMT model reconstructs the exact product/sum from the operands (see
-        // the `unchecked_mul` handling in `assert_forward_facts`).
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if primitive == Some(PrimitiveCall::OptionUnwrap) {
-        // `expect`/`unwrap` extract the wrapped payload with no memory effect;
-        // the value is recovered from the receiver in `term_for_value_at`.
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: Vec::new(),
-            unsupported: false,
-        };
-    }
-
-    if is_slice_range_fn(&name) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnBoundedRange { bounds_arg: 1 }],
-            unsupported: false,
-        };
-    }
-
-    if is_align_to_offsets_fn(&name) {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![CallEffect::ReturnLcmSplit { receiver_arg: 0 }],
-            unsupported: false,
-        };
-    }
-
-    if primitive.is_some_and(PrimitiveCall::is_layout_constant) {
-        let effects = layout_constant_effect(tcx, caller, func, &name)
-            .into_iter()
-            .collect();
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects,
-            unsupported: false,
-        };
-    }
-
-    if let Some(prim) = primitive
-        && matches!(prim, PrimitiveCall::SplitAt | PrimitiveCall::SplitAtMut)
-    {
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects: vec![
-                CallEffect::ReturnAliasArg { arg: 0 },
-                CallEffect::ReturnTupleFieldLength {
-                    field: 0,
-                    from_arg: 1,
-                },
-            ],
-            unsupported: false,
-        };
-    }
-
-    if let Some(prim) = primitive
-        && matches!(
-            prim,
-            PrimitiveCall::FromRawParts | PrimitiveCall::FromRawPartsMut
-        )
-    {
-        let mut effects = vec![
-            CallEffect::ReturnAliasArg { arg: 0 },
-            CallEffect::ReturnNonZero,
-        ];
-        if let Some((align, ty_name)) = destination_pointee_alignment(tcx, caller, destination) {
-            effects.push(CallEffect::ReturnAligned { align, ty_name });
-        }
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects,
-            unsupported: false,
-        };
-    }
-
-    if is_from_trait_call(&name) && is_nonnull_destination(tcx, caller, destination) {
-        let mut effects = vec![
-            CallEffect::ReturnPointerFromArg { arg: 0 },
-            CallEffect::ReturnNonZero,
-        ];
-        if let Some((align, ty_name)) = destination_nonnull_alignment(tcx, caller, destination) {
-            effects.push(CallEffect::ReturnAligned { align, ty_name });
-        }
-        return CallEffectSummary {
-            callee,
-            name,
-            destination,
-            effects,
-            unsupported: false,
-        };
-    }
-
+    // Interprocedural fallback for local callees.
     if let Some(callee) = callee {
-        // Skip interprocedural analysis for intrinsics and
-        // compiler-generated functions.
         if name.contains("::intrinsics::")
             || name.starts_with("intrinsics::")
             || name.ends_with("::drop_in_place")
         {
-            return CallEffectSummary::unknown(Some(callee), name, destination);
+            return CallEffectSummary::unknown(Some(callee), name, Some(destination));
         }
         if let Some(must_write_args) = local_must_write_args(tcx, callee) {
             let effects: Vec<_> = must_write_args
@@ -692,17 +231,17 @@ pub fn effect_summary<'tcx>(
                 return CallEffectSummary {
                     callee: Some(callee),
                     name,
-                    destination,
+                    destination: Some(destination),
                     effects,
                     unsupported: false,
                 };
             }
         }
-        if let Some(effect) = try_pointer_arith_wrapper_effect(tcx, callee, destination) {
+        if let Some(effect) = try_pointer_arith_wrapper_effect(tcx, callee, Some(destination)) {
             return CallEffectSummary {
                 callee: Some(callee),
                 name,
-                destination,
+                destination: Some(destination),
                 effects: vec![effect],
                 unsupported: false,
             };
@@ -713,7 +252,7 @@ pub fn effect_summary<'tcx>(
             return CallEffectSummary {
                 callee: Some(callee),
                 name,
-                destination,
+                destination: Some(destination),
                 effects: vec![CallEffect::ChecksIndexBoundsDisjoint {
                     indices_arg,
                     len_arg,
@@ -725,7 +264,7 @@ pub fn effect_summary<'tcx>(
             return CallEffectSummary {
                 callee: Some(callee),
                 name,
-                destination,
+                destination: Some(destination),
                 effects: return_deps
                     .into_iter()
                     .map(|arg| CallEffect::ReturnAliasArg { arg })
@@ -735,18 +274,12 @@ pub fn effect_summary<'tcx>(
         }
     }
 
-    CallEffectSummary::unknown(callee, name, destination)
+    CallEffectSummary::unknown(callee, name, Some(destination))
 }
 
 /// Return the static callee definition for a MIR call operand.
 pub fn callee_def_id(func: &Operand<'_>) -> Option<DefId> {
-    let Operand::Constant(func_constant) = func else {
-        return None;
-    };
-    let TyKind::FnDef(def_id, _) = func_constant.const_.ty().kind() else {
-        return None;
-    };
-    Some(*def_id)
+    fn_simulator::registry::dep_callee_def_id(func)
 }
 
 /// Return true when every argument type is *layout-safe*: passing such a value
@@ -806,51 +339,7 @@ pub fn call_name(tcx: TyCtxt<'_>, func: &Operand<'_>) -> String {
 
 /// Return true for `MaybeUninit::<T>::uninit`.
 pub fn is_maybe_uninit_uninit_call(name: &str) -> bool {
-    PrimitiveCall::classify(name) == Some(PrimitiveCall::MaybeUninitUninit)
-}
-
-fn is_from_trait_call(name: &str) -> bool {
-    name == "std::convert::From::from" || name == "core::convert::From::from"
-}
-
-/// Return a concrete layout constant effect for `align_of::<T>()` or `size_of::<T>()`.
-fn layout_constant_effect<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    func: &Operand<'tcx>,
-    name: &str,
-) -> Option<CallEffect> {
-    let ty = layout_call_ty(func)?;
-    let (align, size) = type_layout(tcx, caller, ty)?;
-    match PrimitiveCall::classify(name)? {
-        PrimitiveCall::AlignOf => Some(CallEffect::ReturnConst {
-            value: align,
-            label: format!("align_of::<{ty:?}>()"),
-        }),
-        PrimitiveCall::SizeOf => Some(CallEffect::ReturnConst {
-            value: size,
-            label: format!("size_of::<{ty:?}>()"),
-        }),
-        _ => None,
-    }
-}
-
-/// Return the type argument for a layout-producing call.
-fn layout_call_ty<'tcx>(func: &Operand<'tcx>) -> Option<Ty<'tcx>> {
-    let Operand::Constant(func_constant) = func else {
-        return None;
-    };
-    let TyKind::FnDef(_, args) = func_constant.const_.ty().kind() else {
-        return None;
-    };
-    args.iter().find_map(|arg| {
-        #[cfg(rapx_rustc_ge_199)]
-        let arg = arg.skip_binder();
-        match arg.kind() {
-            GenericArgKind::Type(ty) => Some(ty),
-            _ => None,
-        }
-    })
+    fn_simulator::is_maybe_uninit_uninit(name)
 }
 
 /// Trace backward from an operand (inner call arg) through Copy/Move/Cast
@@ -916,8 +405,8 @@ fn trace_to_callee_arg<'tcx>(
             if destination.local != current {
                 continue;
             }
-            let primitive = PrimitiveCall::classify(&call_name(tcx, func));
-            if !primitive.is_some_and(PrimitiveCall::is_as_ptr_like) {
+            let name = call_name(tcx, func);
+            if !fn_simulator::is_as_ptr(&name) {
                 continue;
             }
             let Some(source) = args.first().and_then(|arg| match &arg.node {
@@ -974,9 +463,8 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
         };
 
         let name = call_name(tcx, func);
-        let primitive = PrimitiveCall::classify(&name);
-        let is_add = primitive.is_some_and(PrimitiveCall::is_pointer_add_like);
-        let is_sub = primitive.is_some_and(PrimitiveCall::is_pointer_sub_like);
+        let is_add = fn_simulator::is_pointer_add(&name);
+        let is_sub = fn_simulator::is_pointer_sub(&name);
 
         // Also check if the inner callee is itself a pointer-arithmetic wrapper.
         let inner_effect = if !is_add && !is_sub {
@@ -1079,10 +567,10 @@ fn try_pointer_arith_wrapper_effect<'tcx>(
         let offset_arg = trace_to_callee_arg(tcx, body, &args[1].node)?;
         // Use the inner call's destination to compute the byte stride,
         // not the wrapper's return type (which may differ after a cast).
-        let stride = if primitive.is_some_and(PrimitiveCall::is_byte_pointer_arithmetic) {
+        let stride = if fn_simulator::is_byte_ptr_arith(&name) {
             Some(1)
         } else {
-            destination_stride(tcx, callee, Some(call_dest.local))
+            fn_simulator::registry::destination_stride(tcx, callee, Some(call_dest.local))
         };
 
         return if is_sub {
@@ -1161,13 +649,6 @@ fn local_must_write_args(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
     .ok()
 }
 
-/// Recognize `core::slice::range` (re-exported as `slice::range`), whose result
-/// `Range { start, end }` satisfies `0 <= start <= end <= bounds.end`.
-fn is_slice_range_fn(name: &str) -> bool {
-    let base = name.split('<').next().unwrap_or(name);
-    base.ends_with("slice::range") || base.contains("slice::index::range")
-}
-
 /// Recognize the standard-library `get_disjoint_check_valid` helper as a
 /// trusted index-disjoint validator by name.
 ///
@@ -1187,10 +668,6 @@ fn named_index_disjoint_validator(name: &str) -> Option<(usize, usize)> {
     } else {
         None
     }
-}
-
-fn is_align_to_offsets_fn(name: &str) -> bool {
-    name.contains("::align_to_offsets")
 }
 
 /// Detect an "index disjoint validator": a function whose body loads elements
@@ -1345,7 +822,7 @@ fn write_args_on_path<'tcx>(
             continue;
         };
         let name = call_name(tcx, func);
-        if PrimitiveCall::classify(&name) != Some(PrimitiveCall::PtrWrite) {
+        if !fn_simulator::is_ptr_write(&name) {
             continue;
         }
         if let Some(pointer_arg) = args
@@ -1357,93 +834,3 @@ fn write_args_on_path<'tcx>(
     }
     writes
 }
-
-/// Return the byte stride for a pointer returned into `destination`.
-fn destination_stride<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    destination: Option<Local>,
-) -> Option<u64> {
-    let destination = destination?;
-    let ty = tcx.optimized_mir(caller).local_decls[destination].ty;
-    let pointee = pointee_ty(ty)?;
-    type_layout(tcx, caller, pointee).map(|(_, size)| size)
-}
-
-/// Return pointee alignment for a pointer returned into `destination`.
-fn destination_pointee_alignment<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    destination: Option<Local>,
-) -> Option<(u64, String)> {
-    let destination = destination?;
-    let ty = tcx.optimized_mir(caller).local_decls[destination].ty;
-    let pointee = pointee_ty(ty).or(Some(ty))?;
-    if let Some((align, _)) = type_layout(tcx, caller, pointee) {
-        return Some((align, format!("{pointee:?}")));
-    }
-    if let TyKind::Array(elem, _) = pointee.kind()
-        && let Some((align, _)) = type_layout(tcx, caller, *elem)
-    {
-        return Some((align, format!("{pointee:?}")));
-    }
-    Some((0, format!("{pointee:?}")))
-}
-
-/// Return pointee alignment when the destination is `NonNull<T>`.
-fn destination_nonnull_alignment<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    destination: Option<Local>,
-) -> Option<(u64, String)> {
-    let destination = destination?;
-    let ty = tcx.optimized_mir(caller).local_decls[destination].ty;
-    let pointee = nonnull_inner_ty(tcx, ty)?;
-    type_layout(tcx, caller, pointee).map(|(align, _)| (align, format!("{pointee:?}")))
-}
-
-fn is_nonnull_destination<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    destination: Option<Local>,
-) -> bool {
-    let Some(destination) = destination else {
-        return false;
-    };
-    let ty = tcx.optimized_mir(caller).local_decls[destination].ty;
-    nonnull_inner_ty(tcx, ty).is_some()
-}
-
-// pointee_ty imported from smt_check::common.
-
-fn nonnull_inner_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
-    let TyKind::Adt(def, args) = ty.kind() else {
-        return None;
-    };
-    let path = tcx.def_path_str(def.did());
-    if !path.contains("ptr::non_null::NonNull") {
-        return None;
-    }
-    args.iter().find_map(|arg| match arg.kind() {
-        GenericArgKind::Type(ty) => Some(ty),
-        _ => None,
-    })
-}
-
-fn type_layout<'tcx>(tcx: TyCtxt<'tcx>, caller: DefId, ty: Ty<'tcx>) -> Option<(u64, u64)> {
-    if ty_has_param_const(ty) {
-        return None;
-    }
-    let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, caller);
-    let input = PseudoCanonicalInput {
-        typing_env,
-        value: ty,
-    };
-    match tcx.layout_of(input) {
-        Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
-        Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
-        Err(_) => None,
-    }
-}
-
-// ty_has_param_const imported from helpers.

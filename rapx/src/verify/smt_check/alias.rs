@@ -23,8 +23,8 @@ use crate::{
     helpers::mir_scan::check_safety,
     verify::{
         def_use::{PlaceBaseKey, PlaceKey},
+        fn_simulator,
         helpers::Checkpoint,
-        primitive::PrimitiveCall,
         verifier::{AbstractValue, ForwardVisitResult, StateFact},
     },
 };
@@ -377,7 +377,7 @@ pub(super) fn as_ptr_provenance_origins<'tcx>(
             continue;
         };
         let name = crate::verify::call_summary::call_name(tcx, func);
-        if !PrimitiveCall::classify(&name).is_some_and(|primitive| primitive.is_as_ptr_like()) {
+        if !fn_simulator::is_as_ptr(&name) {
             continue;
         }
         let destination_key = PlaceKey {
@@ -469,8 +469,7 @@ pub(super) fn resolve_forward_place<'tcx>(
                 _ => return place,
             },
             AbstractValue::CallResult(call)
-                if PrimitiveCall::classify(&call.func)
-                    .is_some_and(PrimitiveCall::is_as_ptr_like) =>
+                if fn_simulator::is_as_ptr(&call.func) =>
             {
                 let Some(source) = forward.facts.iter().find_map(|fact| match fact {
                     StateFact::PointsTo { pointer, source } if pointer.overlaps(&place) => {
@@ -483,8 +482,7 @@ pub(super) fn resolve_forward_place<'tcx>(
                 place = resolve_forward_place(source, forward);
             }
             AbstractValue::CallResult(call)
-                if PrimitiveCall::classify(&call.func)
-                    .is_some_and(PrimitiveCall::is_pointer_arithmetic) =>
+                if fn_simulator::is_pointer_arithmetic(&call.func) =>
             {
                 // ptr::add/sub/offset create a new pointer from the base;
                 // follow PointsTo (ReturnPointerAdd effect) to the base.
@@ -709,7 +707,7 @@ fn terminator_is_benign_origin_use<'tcx>(
         return true;
     };
     let name = crate::verify::call_summary::call_name(tcx, func);
-    PrimitiveCall::classify(&name).is_some_and(|primitive| primitive.is_as_ptr_like())
+    fn_simulator::is_as_ptr(&name)
         || name.ends_with("::len")
         || name.ends_with("::is_empty")
         || name.ends_with("::is_null")
@@ -949,7 +947,7 @@ fn places_holding_transferred_pointer<'tcx>(
                 && holders.iter().any(|h| destination_key.overlaps(h))
             {
                 let name = crate::verify::call_summary::call_name(tcx, func);
-                if PrimitiveCall::classify(&name).is_some_and(PrimitiveCall::is_as_ptr_like)
+                if fn_simulator::is_as_ptr(&name)
                     && let Some(arg) = args.first()
                     && let Operand::Copy(place) | Operand::Move(place) = &arg.node
                     && !killed.contains(&place.local)
@@ -1658,7 +1656,7 @@ fn terminator_writes_origin<'tcx>(
         return false;
     };
     let name = crate::verify::call_summary::call_name(tcx, func);
-    if PrimitiveCall::classify(&name) != Some(PrimitiveCall::PtrWrite) {
+    if !fn_simulator::is_ptr_write(&name) {
         return false;
     }
     let Some(arg0) = args.first() else {
@@ -1749,7 +1747,7 @@ fn vec_owners_for_origins<'tcx>(
             continue;
         };
         let name = crate::verify::call_summary::call_name(tcx, func);
-        if !PrimitiveCall::classify(&name).is_some_and(|primitive| primitive.is_as_ptr_like()) {
+        if !fn_simulator::is_as_ptr(&name) {
             continue;
         }
         let destination_key = PlaceKey {

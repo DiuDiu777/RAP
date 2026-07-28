@@ -127,7 +127,8 @@ fn resolve_through_casts<'tcx>(body: &Body<'tcx>, local: Local) -> Local {
                     return false;
                 }
                 if let Rvalue::Cast(_, operand, _) = rvalue {
-                    match operand {
+                    #[allow(unreachable_patterns)]
+                match operand {
                         Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => {
                             current = p.local;
                             return true;
@@ -194,16 +195,17 @@ fn collect_all_const_bytes_worklist<'tcx>(
                 }
 
                 if let Rvalue::Use(operand, ..) = rvalue {
-                    match operand {
-                        Operand::Copy(p) | Operand::Move(p) => {
-                            worklist.push(p.local);
-                            if let Some(bytes) = const_bytes_for_local(tcx, body, p.local) {
-                                results.push(bytes);
-                            }
-                            continue;
+                    #[allow(unreachable_patterns)]
+                match operand {
+                    Operand::Copy(p) | Operand::Move(p) => {
+                        worklist.push(p.local);
+                        if let Some(bytes) = const_bytes_for_local(tcx, body, p.local) {
+                            results.push(bytes);
                         }
-                        Operand::Constant(_) => {}
-                        _ => continue,
+                        continue;
+                    }
+                    Operand::Constant(_) => {}
+                    _ => continue,
                     }
                 }
 
@@ -460,18 +462,19 @@ pub(crate) fn const_bytes_for_local<'tcx>(
                 continue;
             }
             if let Rvalue::Use(operand, ..) = rvalue {
+                #[allow(unreachable_patterns)]
                 match operand {
-                    Operand::Copy(p) | Operand::Move(p) => {
-                        if let Some(bytes) = const_bytes_for_local(tcx, body, p.local) {
-                            return Some(bytes);
-                        }
-                        if let Some(bytes) = const_bytes_from_call_dest(tcx, body, p.local) {
-                            return Some(bytes);
-                        }
-                        continue;
+                Operand::Copy(p) | Operand::Move(p) => {
+                    if let Some(bytes) = const_bytes_for_local(tcx, body, p.local) {
+                        return Some(bytes);
                     }
-                    Operand::Constant(_) => {}
-                    _ => continue,
+                    if let Some(bytes) = const_bytes_from_call_dest(tcx, body, p.local) {
+                        return Some(bytes);
+                    }
+                    continue;
+                }
+                Operand::Constant(_) => {}
+                _ => continue,
                 }
             }
             if let Rvalue::Cast(_, operand, _) = rvalue {

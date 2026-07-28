@@ -15,8 +15,8 @@ use rustc_middle::{
 
 use crate::verify::{
     contract::{ContractExpr, Property},
+    fn_simulator,
     helpers::Checkpoint,
-    primitive::PrimitiveCall,
     verifier::ForwardVisitResult,
 };
 
@@ -285,10 +285,10 @@ pub(super) fn vec_from_raw_parts_roundtrip<'tcx>(
     }
 
     let len_receiver =
-        call_receiver_root(tcx, body, &parents, arg_local(1)?, |primitive, name| {
-            primitive == Some(PrimitiveCall::Len) || name.ends_with("::len")
+        call_receiver_root(tcx, body, &parents, arg_local(1)?, |name| {
+            fn_simulator::is_len(name) || name.ends_with("::len")
         })?;
-    let cap_receiver = call_receiver_root(tcx, body, &parents, arg_local(2)?, |_, name| {
+    let cap_receiver = call_receiver_root(tcx, body, &parents, arg_local(2)?, |name| {
         name.ends_with("::capacity")
     })?;
 
@@ -307,7 +307,7 @@ fn call_receiver_root<'tcx>(
     body: &Body<'tcx>,
     parents: &crate::compat::FxHashMap<Local, Local>,
     start: Local,
-    matches: impl Fn(Option<PrimitiveCall>, &str) -> bool,
+    matches: impl Fn(&str) -> bool,
 ) -> Option<Local> {
     let mut current = start;
     let mut seen = std::collections::HashSet::new();
@@ -329,7 +329,7 @@ fn call_receiver_root<'tcx>(
                 continue;
             }
             let name = crate::verify::call_summary::call_name(tcx, func);
-            if !matches(PrimitiveCall::classify(&name), &name) {
+            if !matches(&name) {
                 return None;
             }
             let receiver = args.first().and_then(|arg| match &arg.node {
@@ -464,7 +464,7 @@ fn len_call_receiver<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, local: Local) -
             continue;
         }
         let name = crate::verify::call_summary::call_name(tcx, func);
-        if PrimitiveCall::classify(&name) != Some(PrimitiveCall::Len) {
+        if !fn_simulator::is_len(&name) {
             return None;
         }
         return args.first().and_then(|arg| match &arg.node {

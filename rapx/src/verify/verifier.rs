@@ -22,9 +22,9 @@ use super::{
     call_summary::{self, CallEffect, CallEffectSummary},
     contract::Property,
     def_use::{PlaceBaseKey, PlaceKey},
+    fn_simulator,
     helpers::CheckpointLocation,
     path_extractor::{Path, PathStep},
-    primitive::PrimitiveCall,
     slicer::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
     smt_check::common::{const_int_from_debug, operand_place},
 };
@@ -779,9 +779,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
         callee_name: &str,
         result: &mut ForwardVisitResult<'tcx>,
     ) {
-        let prim = PrimitiveCall::classify(callee_name);
-        if prim != Some(PrimitiveCall::AsPtrRange)
-            && prim != Some(PrimitiveCall::AsMutPtrRange)
+        if !fn_simulator::is_as_ptr_range(callee_name) && !fn_simulator::is_as_mut_ptr_range(callee_name)
         {
             return;
         }

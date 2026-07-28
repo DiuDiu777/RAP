@@ -18,10 +18,10 @@ use z3::{
 use crate::verify::{
     contract::{ContractExpr, NumericOp, NumericPredicate, PropertyArg, PropertyKind, RelOp},
     def_use::{PlaceBaseKey, PlaceKey},
+    fn_simulator,
     generic::GenericTypeCandidates,
     helpers::Checkpoint,
     path_extractor::PathStep,
-    primitive::PrimitiveCall,
     verifier::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
 };
 
@@ -992,7 +992,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 // `AbstractValue::Cast`: the receiver is the source pointer and the
                 // call destination's type is the cast target.
                 AbstractValue::CallResult(call)
-                    if PrimitiveCall::classify(&call.func) == Some(PrimitiveCall::PtrCast) =>
+                    if fn_simulator::is_ptr_cast(&call.func) =>
                 {
                     let inner = call.args.first()?.clone();
                     let ty = self
@@ -1108,8 +1108,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 result_index_smt = SmtTerm::Value(value_label(index));
             }
 
-            let is_signed = PrimitiveCall::classify(&call.func)
-                .is_some_and(|p| p.is_signed_pointer_arithmetic());
+            let is_signed = fn_simulator::is_signed_ptr_arith(&call.func);
 
             return Some(PointerBounds {
                 index: result_index_val,
@@ -1253,9 +1252,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     {
                         let is_range = match &definition.value {
                             AbstractValue::CallResult(call) => {
-                                let prim = PrimitiveCall::classify(&call.func);
-                                prim == Some(PrimitiveCall::AsPtrRange)
-                                    || prim == Some(PrimitiveCall::AsMutPtrRange)
+                                fn_simulator::is_as_ptr_range(&call.func)
+                                    || fn_simulator::is_as_mut_ptr_range(&call.func)
                             }
                             AbstractValue::Aggregate(_, _) => true,
                             _ => false,
@@ -1290,15 +1288,11 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                                                     if let AbstractValue::CallResult(inner_call) =
                                                         &inner_def.value
                                                     {
-                                                        let inner_prim = PrimitiveCall::classify(
+                                                        if fn_simulator::is_as_ptr_range(
                                                             &inner_call.func,
-                                                        );
-                                                        if inner_prim
-                                                            == Some(PrimitiveCall::AsPtrRange)
-                                                            || inner_prim
-                                                                == Some(
-                                                                    PrimitiveCall::AsMutPtrRange,
-                                                                )
+                                                        ) || fn_simulator::is_as_mut_ptr_range(
+                                                            &inner_call.func,
+                                                        )
                                                         {
                                                             let len_key =
                                                                 format!("len({})", origin_key);
@@ -2135,8 +2129,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         // Field 0 is the start pointer (== arg0's address).
         // Field 1 is the end pointer (== arg0's address + len of arg0).
         if let AbstractValue::CallResult(call) = value {
-            let prim = PrimitiveCall::classify(&call.func);
-            if prim == Some(PrimitiveCall::AsPtrRange) || prim == Some(PrimitiveCall::AsMutPtrRange)
+            if fn_simulator::is_as_ptr_range(&call.func) || fn_simulator::is_as_mut_ptr_range(&call.func)
             {
                 let arg_index = if place.fields.as_slice() == [0] {
                     0 // field 0 = start = arg0.as_ptr()
@@ -2421,7 +2414,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 // `Option/Result::expect/unwrap` yields the wrapped payload; the
                 // error case diverges before any later checkpoint, so the value
                 // is the inner term of the receiver on all reachable paths.
-                if PrimitiveCall::classify(&call.func) == Some(PrimitiveCall::OptionUnwrap)
+                if fn_simulator::is_option_unwrap(&call.func)
                     && let Some(inner) = call.args.first()
                 {
                     return self.term_for_value_at(inner, cursor, seen);
@@ -2849,7 +2842,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         cursor: ValueCursor,
         seen: &mut TraceSeen,
     ) -> Option<Int<'ctx>> {
-        if PrimitiveCall::classify(&call.func) != Some(PrimitiveCall::NumericArith) {
+        if !fn_simulator::is_numeric_arith(&call.func) {
             return None;
         }
         let lhs = self.term_for_value_at(call.args.first()?, cursor, seen)?;
@@ -3036,8 +3029,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 .map(|s| normalize_init_ty_name(&s));
             return got.as_deref() == Some(normalize_init_ty_name(ty_name).as_str());
         }
-        if PrimitiveCall::classify(&call.func)
-            .is_some_and(PrimitiveCall::is_element_pointer_arithmetic)
+        if fn_simulator::is_element_ptr_arith(&call.func)
         {
             // The offset must be measured in `ty_name`-sized elements for the
             // result to keep `ty_name` alignment.  A pointer of a different
@@ -3090,9 +3082,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             if let Some(definition) = self.forward.latest_value_definition_before(local, cursor) {
                 // Handle as_ptr_range / as_mut_ptr_range (call result)
                 if let AbstractValue::CallResult(call) = &definition.value {
-                    let prim = PrimitiveCall::classify(&call.func);
-                    if prim == Some(PrimitiveCall::AsPtrRange)
-                        || prim == Some(PrimitiveCall::AsMutPtrRange)
+                    if fn_simulator::is_as_ptr_range(&call.func)
+                        || fn_simulator::is_as_mut_ptr_range(&call.func)
                     {
                         if let Some(source_arg) =
                             call.effects.iter().find_map(|effect| match effect {
@@ -3665,9 +3656,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 return false;
             };
             let is_ptr_like = is_as_ptr_call(&call.func);
-            let is_ptr_range = PrimitiveCall::classify(&call.func).is_some_and(|p| {
-                matches!(p, PrimitiveCall::AsPtrRange | PrimitiveCall::AsMutPtrRange)
-            });
+            let is_ptr_range = fn_simulator::is_as_ptr_range(&call.func)
+                || fn_simulator::is_as_mut_ptr_range(&call.func);
             (is_ptr_like || is_ptr_range)
                 && call.effects.iter().any(|effect| {
                     matches!(
@@ -4028,8 +4018,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                 return false;
             };
             call.destination == local
-                && crate::verify::primitive::PrimitiveCall::classify(&call.func)
-                    .is_some_and(|p| p.is_pointer_arithmetic())
+                && fn_simulator::is_pointer_arithmetic(&call.func)
         })
     }
 

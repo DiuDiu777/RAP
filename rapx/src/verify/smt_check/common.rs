@@ -50,9 +50,9 @@ use crate::verify::{
         PlaceBase, Property, PropertyArg, PropertyKind, RelOp,
     },
     def_use::{PlaceBaseKey, PlaceKey},
+    fn_simulator,
     generic::GenericTypeCandidates,
     helpers::{Checkpoint, callee_param_index_for_local, ty_has_param_const},
-    primitive::PrimitiveCall,
     report::CheckResult,
     slicer::ForgetReason,
     verifier::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
@@ -2490,7 +2490,7 @@ impl<'tcx> SmtChecker<'tcx> {
                 return false;
             };
             resolve_root_local_mir(self.tcx, caller, call.destination) == target_root
-                && PrimitiveCall::classify(&call.func) == Some(PrimitiveCall::AlignOf)
+                && fn_simulator::is_align_of(&call.func)
         })
     }
 
@@ -2555,12 +2555,7 @@ impl<'tcx> SmtChecker<'tcx> {
         // the slice length by definition, regardless of how it is computed.
         if let Some(callee) = checkpoint.callee {
             let callee_name = self.tcx.def_path_str(callee);
-            if PrimitiveCall::classify(&callee_name).is_some_and(|p| {
-                matches!(
-                    p,
-                    PrimitiveCall::FromRawParts | PrimitiveCall::FromRawPartsMut
-                )
-            }) {
+            if fn_simulator::is_from_raw_parts(&callee_name) {
                 return true;
             }
             // For `copy_nonoverlapping`, the count is an explicit argument that
@@ -2648,9 +2643,7 @@ impl<'tcx> SmtChecker<'tcx> {
         let TyKind::FnDef(_, args) = func_constant.const_.ty().kind() else {
             return ty;
         };
-        #[cfg(rapx_rustc_ge_199)]
-        let args = args.skip_binder();
-        let Some(arg) = args.get(param.index as usize) else {
+        let Some(arg) = crate::compat::args_get(args, param.index as usize) else {
             return ty;
         };
         match arg.kind() {
@@ -2676,9 +2669,7 @@ impl<'tcx> SmtChecker<'tcx> {
         let TyKind::FnDef(_, args) = func_constant.const_.ty().kind() else {
             return None;
         };
-        #[cfg(rapx_rustc_ge_199)]
-        let args = args.skip_binder();
-        let arg = args.get(index as usize)?;
+        let arg = crate::compat::args_get(args, index as usize)?;
         match arg.kind() {
             GenericArgKind::Const(actual_const) => actual_const
                 .try_to_target_usize(self.tcx)
@@ -2845,8 +2836,12 @@ impl<'tcx> SmtChecker<'tcx> {
             _ => return None,
         };
 
-        let predicates = self.tcx.predicates_of(checkpoint.caller);
-        for (predicate, _span) in predicates.predicates.iter() {
+        let predicates = crate::compat::predicates_of(self.tcx, checkpoint.caller);
+        #[cfg(not(rapx_rustc_ge_199))]
+        let pred_iter = predicates.predicates.iter();
+        #[cfg(rapx_rustc_ge_199)]
+        let pred_iter = predicates.clauses.iter();
+        for (predicate, _span) in pred_iter {
             if let ClauseKind::Trait(trait_ref) = predicate.kind().skip_binder() {
                 if trait_ref.self_ty() == ty {
                     let def_path = self.tcx.def_path_str(trait_ref.def_id());
@@ -3830,17 +3825,17 @@ pub(crate) fn is_unsigned_integral_ty(ty: Ty<'_>) -> bool {
 
 /// Return true when a call summary is a typed pointer addition.
 pub(crate) fn is_pointer_add_call(func: &str) -> bool {
-    PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_pointer_add_like)
+    fn_simulator::is_pointer_add(func)
 }
 
 /// Return true when a call summary is a typed pointer subtraction.
 pub(crate) fn is_pointer_sub_call(func: &str) -> bool {
-    PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_pointer_sub_like)
+    fn_simulator::is_pointer_sub(func)
 }
 
 /// Return true when a call summary extracts a pointer from a slice-like object.
 pub(crate) fn is_as_ptr_call(func: &str) -> bool {
-    PrimitiveCall::classify(func).is_some_and(PrimitiveCall::is_as_ptr_like)
+    fn_simulator::is_as_ptr(func)
 }
 
 /// Return true when a call summary carries pointer-add semantics.
@@ -4329,7 +4324,7 @@ pub(crate) fn body_value_parents<'tcx>(
         let name = crate::verify::call_summary::call_name(tcx, func);
         let transfers = name.contains("into_raw")
             || crate::verify::call_summary::is_ownership_reconstruction(&name)
-            || PrimitiveCall::classify(&name).is_some_and(|p| p.is_as_ptr_like());
+            || fn_simulator::is_as_ptr(&name);
         if !transfers {
             continue;
         }
@@ -4553,8 +4548,7 @@ pub(crate) fn body_parents<'tcx>(
             continue;
         };
         let name = crate::verify::call_summary::call_name(tcx, func);
-        if !crate::verify::primitive::PrimitiveCall::classify(&name)
-            .is_some_and(|p| p.is_as_ptr_like())
+        if !fn_simulator::is_as_ptr(&name)
         {
             continue;
         }

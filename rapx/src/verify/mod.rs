@@ -8,7 +8,7 @@ pub mod generic;
 mod helpers;
 pub mod loop_sensitivity;
 pub mod path_extractor;
-pub mod primitive;
+pub mod fn_simulator;
 pub mod report;
 pub mod slicer;
 pub mod smt_check;
