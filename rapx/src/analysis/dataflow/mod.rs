@@ -4,7 +4,7 @@ pub mod graph;
 
 use std::{
     collections::{HashMap, HashSet},
-    fmt::{self, Display},
+    fmt::{self},
 };
 
 pub mod types;

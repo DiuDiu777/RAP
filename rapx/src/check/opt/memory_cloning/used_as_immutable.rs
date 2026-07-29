@@ -16,7 +16,6 @@ use std::collections::HashSet;
 
 crate::def_paths! {
     clone: "std::clone::Clone::clone",
-    to_string: "std::string::ToString::to_string",
     to_owned: "std::borrow::ToOwned::to_owned",
     deref: "std::ops::Deref::deref",
 }

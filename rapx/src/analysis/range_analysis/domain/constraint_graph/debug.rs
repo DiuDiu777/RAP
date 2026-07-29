@@ -1,9 +1,7 @@
-use crate::rap_info;
-use crate::rap_trace;
 
 use super::ConstraintGraph;
 use crate::analysis::range_analysis::domain::domain::BasicOpKind;
-use crate::analysis::range_analysis::domain::domain::{ConstConvert, IntervalArithmetic, VarNode};
+use crate::analysis::range_analysis::domain::domain::{ConstConvert, IntervalArithmetic};
 use crate::analysis::range_analysis::domain::symbolic_expr::IntervalTypeTrait;
 use rustc_middle::mir::Place;
 use std::collections::{HashMap, HashSet};

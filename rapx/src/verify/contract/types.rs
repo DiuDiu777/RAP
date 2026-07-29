@@ -1,6 +1,6 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::BinOp as MirBinOp;
-use rustc_middle::ty::{Ty, TyCtxt, TyKind};
+use rustc_middle::ty::{Ty, TyCtxt};
 use safety_parser::syn::{BinOp as SynBinOp, UnOp};
 
 use crate::verify::def_use::PlaceKey;

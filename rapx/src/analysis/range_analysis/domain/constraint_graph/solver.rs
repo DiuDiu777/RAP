@@ -1,11 +1,8 @@
 
 use crate::analysis::range_analysis::domain::domain::*;
-use crate::analysis::range_analysis::{Range, RangeType};
+use crate::analysis::range_analysis::Range;
 
 use crate::analysis::range_analysis::domain::symbolic_expr::*;
-use crate::rap_debug;
-use crate::rap_trace;
-use num_traits::Bounded;
 use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::*;
@@ -146,7 +143,7 @@ where
                 }
                 essaop.mark_resolved();
             }
-            if (!self.vars[place].get_range().is_unknown()) {
+            if !self.vars[place].get_range().is_unknown() {
                 entry_points.insert(place);
             }
         }
@@ -398,8 +395,8 @@ where
                 self.visit(name, stack);
             }
 
-            if (!self.in_component.contains(name)
-                && self.dfs[self.root[place]] >= self.dfs[self.root[name]])
+            if !self.in_component.contains(name)
+                && self.dfs[self.root[place]] >= self.dfs[self.root[name]]
             {
                 *self.root.get_mut(place).unwrap() = self.root.get(name).copied().unwrap();
 

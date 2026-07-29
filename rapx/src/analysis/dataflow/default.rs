@@ -98,7 +98,7 @@ impl<'tcx> DataflowAnalyzer<'tcx> {
             return;
         }
         let body: &Body = self.tcx.optimized_mir(def_id);
-        let mut graph = build_dataflow_graph_from_body(def_id, body);
+        let graph = build_dataflow_graph_from_body(def_id, body);
         for closure_id in graph.closures.iter() {
             self.build_graph(*closure_id);
         }

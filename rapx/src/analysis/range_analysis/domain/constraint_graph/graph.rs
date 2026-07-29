@@ -3,32 +3,18 @@ use crate::analysis::range_analysis::domain::domain::*;
 use crate::analysis::range_analysis::{Range, RangeType};
 
 use crate::analysis::range_analysis::domain::symbolic_expr::*;
-use crate::rap_debug;
-use crate::rap_info;
-use crate::rap_trace;
-use num_traits::Bounded;
-use once_cell::sync::{Lazy, OnceCell};
-use crate::analysis::path_analysis::PathTree;
-use crate::compat::FxHashMap;
 use crate::compat::Spanned;
 use rustc_abi::FieldIdx;
 use rustc_hir::def_id::LOCAL_CRATE;
-use rustc_hir::{def, def_id::DefId};
+use rustc_hir::def_id::DefId;
 use rustc_index::IndexVec;
-use rustc_middle::mir::visit::{PlaceContext, Visitor};
 use rustc_middle::{
     mir::*,
-    ty::{self, ScalarInt, TyCtxt, print},
+    ty::{self},
 };
-use rustc_span::sym::var;
 
-use core::borrow;
-use std::cell::RefCell;
-use std::fmt::Write;
-use std::rc::Rc;
 use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    default,
+    collections::{HashMap, HashSet},
     fmt::Debug,
 };
 
@@ -95,7 +81,7 @@ where
         rvalue: &'tcx Rvalue<'tcx>,
     ) -> &mut VarNode<'tcx, T> {
         if !self.vars.contains_key(v) {
-            let mut place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
+            let place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
             let node = VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()));
             rap_debug!("use node:{:?}", node);
 
@@ -135,7 +121,7 @@ where
         v: &'tcx Place<'tcx>,
         rvalue: &'tcx Rvalue<'tcx>,
     ) -> &mut VarNode<'tcx, T> {
-        let mut place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
+        let place_ctx: Vec<&Place<'tcx>> = self.vars.keys().map(|p| *p).collect();
 
         let local_decls = &self.body.local_decls;
         let node = VarNode::new_symb(v, SymbExpr::from_rvalue(rvalue, place_ctx.clone()));
@@ -483,8 +469,8 @@ where
                 if let Rvalue::BinaryOp(bin_op, pair) = rvalue {
                     let (op1, op2) = &**pair;
                     if lhs == place {
-                        let mut return_op1: &Operand<'tcx> = &op1;
-                        let mut return_op2: &Operand<'tcx> = &op2;
+                        let return_op1: &Operand<'tcx> = &op1;
+                        let return_op2: &Operand<'tcx> = &op2;
 
                         return Some((return_op1, return_op2, *bin_op));
                     }
@@ -872,7 +858,7 @@ where
         rap_trace!("use_op{:?}\n", inst);
 
         let BI: BasicInterval<T> = BasicInterval::default();
-        let mut source: Option<&'tcx Place<'tcx>> = None;
+        let source: Option<&'tcx Place<'tcx>> = None;
 
         match op {
             Operand::Copy(place) | Operand::Move(place) => {

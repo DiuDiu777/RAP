@@ -3,12 +3,10 @@ use crate::analysis::range_analysis::domain::domain::CallOp;
 use crate::analysis::range_analysis::domain::domain::{ConstConvert, IntervalArithmetic, VarNodes};
 use crate::analysis::range_analysis::{Range, RangeType};
 use crate::compat::FxHashMap;
-use crate::{rap_debug, rap_trace};
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Operand;
 use rustc_middle::mir::Place;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::fmt::Debug;
 use std::rc::Rc;
 
@@ -213,12 +211,11 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 // 5. Retrieve the return value.
                 //    The return value is stored in `_0` (RETURN_PLACE).
                 let return_place_local = 0 as usize; // `_0` is typically the first local.
-                let mut return_range = Range::bottom();
 
                 // Find all variables that contribute to the return value.
                 // The `rerurn_places` set in the callee's graph tracks these.
                 if let Some(return_node) = callee_cg.vars.get_mut(&Place::return_place()) {
-                    return_range = return_node.get_range().clone();
+                    let return_range = return_node.get_range().clone();
                     rap_debug!(" final return range {:?} ", return_range);
                     return return_range;
                 }
