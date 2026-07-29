@@ -103,8 +103,6 @@ pub struct DataflowGraph {
     pub edges: GraphEdges,
     pub n_locals: usize,
     pub closures: HashSet<DefId>,
-    pub block: usize,
-    pub statement_index: usize,
 }
 
 impl DataflowGraph {
@@ -117,8 +115,6 @@ impl DataflowGraph {
             edges: GraphEdges::new(),
             n_locals,
             closures: HashSet::new(),
-            block: 0,
-            statement_index: 0,
         }
     }
 
@@ -138,15 +134,22 @@ impl DataflowGraph {
         idx >= Local::from_usize(self.n_locals)
     }
 
-    pub fn add_node_edge(&mut self, src: Local, dst: Local, op: EdgeOp) -> EdgeIdx {
+    pub fn add_node_edge(
+        &mut self,
+        src: Local,
+        dst: Local,
+        op: EdgeOp,
+        block: usize,
+        statement_index: usize,
+    ) -> EdgeIdx {
         let seq = self.nodes[dst].seq;
         let edge_idx = self.edges.push(DataflowEdge {
             src,
             dst,
             op,
             seq,
-            block: self.block,
-            statement_index: self.statement_index,
+            block,
+            statement_index,
         });
         self.nodes[dst].in_edges.push(edge_idx);
         self.nodes[src].out_edges.push(edge_idx);
@@ -159,6 +162,8 @@ impl DataflowGraph {
         src_ty: String,
         dst: Local,
         op: EdgeOp,
+        block: usize,
+        statement_index: usize,
     ) -> EdgeIdx {
         let seq = self.nodes[dst].seq;
         let mut const_node = DataflowNode::new();
@@ -169,8 +174,8 @@ impl DataflowGraph {
             dst,
             op,
             seq,
-            block: self.block,
-            statement_index: self.statement_index,
+            block,
+            statement_index,
         });
         self.nodes[dst].in_edges.push(edge_idx);
         edge_idx
@@ -384,7 +389,12 @@ impl DataflowGraph {
         set
     }
 
-    pub fn collect_ancestor_locals(&self, local: Local, self_included: bool) -> HashSet<Local> {
+    fn collect_by_direction(
+        &self,
+        local: Local,
+        self_included: bool,
+        direction: Direction,
+    ) -> HashSet<Local> {
         let mut ret = HashSet::new();
         let mut node_operator = |_: &DataflowGraph, idx: Local| -> DFSStatus {
             ret.insert(idx);
@@ -393,7 +403,7 @@ impl DataflowGraph {
         let mut seen = HashSet::new();
         self.dfs(
             local,
-            Direction::Upside,
+            direction,
             &mut node_operator,
             &mut DataflowGraph::always_true_edge_validator,
             true,
@@ -405,25 +415,12 @@ impl DataflowGraph {
         ret
     }
 
+    pub fn collect_ancestor_locals(&self, local: Local, self_included: bool) -> HashSet<Local> {
+        self.collect_by_direction(local, self_included, Direction::Upside)
+    }
+
     pub fn collect_descending_locals(&self, local: Local, self_included: bool) -> HashSet<Local> {
-        let mut ret = HashSet::new();
-        let mut node_operator = |_: &DataflowGraph, idx: Local| -> DFSStatus {
-            ret.insert(idx);
-            DFSStatus::Continue
-        };
-        let mut seen = HashSet::new();
-        self.dfs(
-            local,
-            Direction::Downside,
-            &mut node_operator,
-            &mut DataflowGraph::always_true_edge_validator,
-            true,
-            &mut seen,
-        );
-        if !self_included {
-            ret.remove(&local);
-        }
-        ret
+        self.collect_by_direction(local, self_included, Direction::Downside)
     }
 
     pub fn get_field_sequence(&self, local: Local) -> Option<(Local, Vec<usize>)> {

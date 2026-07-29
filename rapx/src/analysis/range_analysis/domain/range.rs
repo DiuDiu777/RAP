@@ -187,113 +187,67 @@ where
     }
 }
 
-// Implement the comparison operators
-pub struct Meet;
+pub trait Lattice {
+    fn widen(&self, other: &Self) -> Self;
+    fn narrow(&self, other: &Self) -> Self;
+}
 
-impl Meet {
-    pub fn widen<'tcx, T: IntervalArithmetic + ConstConvert>(
-        op: &mut BasicOpKind<'tcx, T>,
-        constant_vector: &[T],
-        vars: &mut VarNodes<'tcx, T>,
-    ) -> bool {
-        // use crate::range_util::{get_first_less_from_vector, get_first_greater_from_vector};
+impl<T> Range<T>
+where
+    T: IntervalArithmetic,
+{
+    pub fn widen(&self, other: &Range<T>) -> Range<T> {
+        if self.is_unknown() {
+            return other.clone();
+        }
+        let a_lower = self.get_lower();
+        let a_upper = self.get_upper();
+        let b_lower = other.get_lower();
+        let b_upper = other.get_upper();
 
-        // assert!(!constant_vector.is_empty(), "Invalid constant vector");
-
-        let old_interval = op.get_intersect().get_range().clone();
-        let new_interval = op.eval(vars);
-        let old_lower = old_interval.get_lower();
-        let old_upper = old_interval.get_upper();
-        let new_lower = new_interval.get_lower();
-        let new_upper = new_interval.get_upper();
-        let nlconstant = new_lower.clone();
-        let nuconstant = new_upper.clone();
-        let updated = if old_interval.is_unknown() {
-            new_interval
-        } else if new_lower < old_lower && new_upper > old_upper {
-            Range::new(nlconstant, nuconstant, RangeType::Regular)
-        } else if new_lower < old_lower {
-            Range::new(nlconstant, old_upper.clone(), RangeType::Regular)
-        } else if new_upper > old_upper {
-            Range::new(old_lower.clone(), nuconstant, RangeType::Regular)
+        if b_lower < a_lower && b_upper > a_upper {
+            Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+        } else if b_lower < a_lower {
+            Range::new(T::min_value(), a_upper.clone(), RangeType::Regular)
+        } else if b_upper > a_upper {
+            Range::new(a_lower.clone(), T::max_value(), RangeType::Regular)
         } else {
-            old_interval.clone()
+            self.clone()
+        }
+    }
+
+    pub fn narrow(&self, other: &Range<T>) -> Range<T> {
+        let a_lower = self.get_lower();
+        let a_upper = self.get_upper();
+        let b_lower = other.get_lower();
+        let b_upper = other.get_upper();
+
+        let final_lower = if a_lower == T::min_value() && b_lower > T::min_value() {
+            b_lower.clone()
+        } else if a_lower <= b_lower {
+            b_lower.clone()
+        } else {
+            a_lower.clone()
         };
 
-        op.set_intersect(updated.clone());
-        let sink = op.get_sink();
-        let new_sink_interval = op.get_intersect().get_range().clone();
-        vars.get_mut(sink)
-            .unwrap()
-            .set_range(new_sink_interval.clone());
-        rap_trace!(
-            "WIDEN::{:?}: {:?} -> {:?}",
-            sink,
-            old_interval.range,
-            new_sink_interval
-        );
-        old_interval.range != new_sink_interval.range
+        let final_upper = if a_upper == T::max_value() && b_upper < T::max_value() {
+            b_upper.clone()
+        } else if a_upper >= b_upper {
+            b_upper.clone()
+        } else {
+            a_upper.clone()
+        };
+
+        Range::new(final_lower, final_upper, RangeType::Regular)
     }
-    pub fn narrow<'tcx, T: IntervalArithmetic + ConstConvert>(
-        op: &mut BasicOpKind<'tcx, T>,
-        vars: &mut VarNodes<'tcx, T>,
-    ) -> bool {
-        let old_range = vars[op.get_sink()].get_range();
-        let o_lower = old_range.get_lower().clone();
-        let o_upper = old_range.get_upper().clone();
+}
 
-        let new_range = op.eval(vars);
-        let n_lower = new_range.get_lower().clone();
-        let n_upper = new_range.get_upper().clone();
+impl<T: IntervalArithmetic> Lattice for Range<T> {
+    fn widen(&self, other: &Range<T>) -> Range<T> {
+        Range::widen(self, other)
+    }
 
-        let mut has_changed = false;
-        let min = T::min_value();
-        let max = T::max_value();
-
-        let mut result_lower = o_lower.clone();
-        let mut result_upper = o_upper.clone();
-
-        if o_lower == min && n_lower != min {
-            result_lower = n_lower;
-            has_changed = true;
-        } else {
-            // let smin = o_lower.clone().min(n_lower.clone());
-            let smin = T::min_value();
-            if o_lower != smin {
-                result_lower = smin;
-                has_changed = true;
-            }
-        }
-
-        if o_upper == max && n_upper != max {
-            result_upper = n_upper;
-            has_changed = true;
-        } else {
-            // let smax = o_upper.clone().max(n_upper.clone());
-            let smax = T::max_value();
-            if o_upper != smax {
-                result_upper = smax;
-                has_changed = true;
-            }
-        }
-
-        if has_changed {
-            let new_sink_range = Range::new(
-                result_lower.clone(),
-                result_upper.clone(),
-                RangeType::Regular,
-            );
-            let sink_node = vars.get_mut(op.get_sink()).unwrap();
-            sink_node.set_range(new_sink_range.clone());
-
-            // println!(
-            //     "NARROW::{}: {:?} -> {:?}",
-            // ,
-            //     Range::new(o_lower, o_upper),
-            //     new_sink_range
-            // );
-        }
-
-        has_changed
+    fn narrow(&self, other: &Range<T>) -> Range<T> {
+        Range::narrow(self, other)
     }
 }

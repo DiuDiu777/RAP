@@ -8,7 +8,7 @@ use crate::{
         range_analysis::{
             Range, RangeAnalysis,
             domain::{
-                ConstraintGraph::ConstraintGraph,
+                ConstraintGraph,
                 domain::{ConstConvert, IntervalArithmetic, VarNodes},
             },
         },
@@ -52,7 +52,6 @@ pub struct RangeAnalyzer<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
     // Mapping from original places to SSA-renamed places
     pub ssa_places_mapping: FxHashMap<DefId, HashMap<Place<'tcx>, HashSet<Place<'tcx>>>>,
 
-    pub fn_constraintgraph_mapping: FxHashMap<DefId, ConstraintGraph<'tcx, T>>,
     pub callgraph: CallGraph<'tcx>,
     pub body_map: FxHashMap<DefId, Body<'tcx>>,
     pub cg_map: FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
@@ -159,7 +158,6 @@ where
             essa_def_id: essa_id,
             final_vars: FxHashMap::default(),
             ssa_places_mapping: FxHashMap::default(),
-            fn_constraintgraph_mapping: FxHashMap::default(),
             callgraph: CallGraph::new(tcx),
             body_map: FxHashMap::default(),
             cg_map: FxHashMap::default(),
@@ -169,6 +167,16 @@ where
         }
     }
 
+    fn collect_fn_def_ids(&self) -> Vec<DefId> {
+        self.tcx.iter_local_def_id().filter_map(|local_def_id| {
+            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
+                Some(local_def_id.to_def_id())
+            } else {
+                None
+            }
+        }).collect()
+    }
+
     fn only_caller_range_analysis(&mut self) {
         let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
         let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
@@ -176,11 +184,8 @@ where
         // PHASE 1: Build all ConstraintGraphs and the complete CallGraph first.
         // ====================================================================
         rap_debug!("PHASE 1: Building all ConstraintGraphs and the CallGraph...");
-        for local_def_id in self.tcx.iter_local_def_id() {
-            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
-                let def_id = local_def_id.to_def_id();
-
-                if self.tcx.is_mir_available(def_id) {
+        for def_id in self.collect_fn_def_ids() {
+            if self.tcx.is_mir_available(def_id) {
                     rap_info!("Processing function: {}", self.tcx.def_path_str(def_id));
                     let mut body = self.tcx.optimized_mir(def_id).clone();
                     let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
@@ -226,8 +231,7 @@ where
                     rap_trace!("Successfully generated graph.dot");
                 }
             }
-        }
-        rap_debug!("PHASE 1 Complete. ConstraintGraphs & CallGraphs built.");
+            rap_debug!("PHASE 1 Complete. ConstraintGraphs & CallGraphs built.");
         // self.callgraph.print_call_graph(); // Optional: for debugging
 
         // ====================================================================
@@ -342,40 +346,8 @@ where
         }
     }
     pub fn start_path_constraints_analysis(&mut self) {
-        let mut path_analyzer = PathAnalyzer::new(self.tcx, self.debug);
-        for local_def_id in self.tcx.iter_local_def_id() {
-            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
-                let def_id = local_def_id.to_def_id();
-
-                if self.tcx.is_mir_available(def_id) {
-                    let mut body = self.tcx.optimized_mir(def_id).clone();
-                    let body_mut_ref = unsafe { &mut *(&mut body as *mut Body<'tcx>) };
-
-                    let mut cg: ConstraintGraph<'tcx, T> =
-                        ConstraintGraph::new_without_ssa(body_mut_ref, self.tcx, def_id);
-                    let Some(paths) = path_analyzer.analyze(def_id) else {
-                        continue;
-                    };
-                    let result = cg.start_analyze_path_constraints(body_mut_ref, &paths);
-                    rap_debug!(
-                        "Paths for function {}: {:?}",
-                        self.tcx.def_path_str(def_id),
-                        paths
-                    );
-                    let switchbbs = cg.switchbbs.clone();
-                    rap_debug!(
-                        "Switch basicblocks for function {}: {:?}",
-                        self.tcx.def_path_str(def_id),
-                        switchbbs
-                    );
-                    rap_debug!(
-                        "Path Constraints Analysis Result for function {}: {:?}",
-                        self.tcx.def_path_str(def_id),
-                        result
-                    );
-                    self.path_constraints.insert(def_id, result);
-                }
-            }
+        for def_id in self.collect_fn_def_ids() {
+            self.start_path_constraints_analysis_for_defid(def_id);
         }
     }
 }

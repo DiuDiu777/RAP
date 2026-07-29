@@ -1,12 +1,5 @@
-#![allow(unused_imports)]
-#![allow(unused_variables)]
-#![allow(dead_code)]
-#![allow(unused_assignments)]
-#![allow(unused_parens)]
-#![allow(non_snake_case)]
-#![allow(unused)]
 
-use super::domain::*;
+use crate::analysis::range_analysis::domain::domain::*;
 use crate::analysis::range_analysis::{Range, RangeType};
 
 use crate::analysis::range_analysis::domain::SymbolicExpr::*;
@@ -39,255 +32,13 @@ use std::{
     fmt::Debug,
 };
 
-#[derive(Clone)]
-
-pub struct ConstraintGraph<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
-    pub tcx: TyCtxt<'tcx>,
-    pub body: &'tcx Body<'tcx>,
-    // Protected fields
-    pub self_def_id: DefId,      // The DefId of the function being analyzed
-    pub vars: VarNodes<'tcx, T>, // The variables of the source program
-    pub local_inserted: HashSet<Local>,
-
-    pub array_vars: VarNodes<'tcx, T>, // The array variables of the source program
-    pub oprs: Vec<BasicOpKind<'tcx, T>>, // The operations of the source program
-
-    pub defmap: DefMap<'tcx>, // Map from variables to the operations that define them
-    pub usemap: UseMap<'tcx>, // Map from variables to operations where variables are used
-    pub symbmap: SymbMap<'tcx>, // Map from variables to operations where they appear as bounds
-    pub values_branchmap: HashMap<&'tcx Place<'tcx>, ValueBranchMap<'tcx, T>>, // Store intervals, basic blocks, and branches
-    constant_vector: Vec<T>, // Vector for constants from an SCC
-
-    pub inst_rand_place_set: Vec<Place<'tcx>>,
-    pub essa: DefId,
-    pub ssa: DefId,
-    pub index: i32,
-    pub dfs: HashMap<&'tcx Place<'tcx>, i32>,
-    pub root: HashMap<&'tcx Place<'tcx>, &'tcx Place<'tcx>>,
-    pub in_component: HashSet<&'tcx Place<'tcx>>,
-    pub components: HashMap<&'tcx Place<'tcx>, HashSet<&'tcx Place<'tcx>>>,
-    pub worklist: VecDeque<&'tcx Place<'tcx>>,
-    pub numAloneSCCs: usize,
-    pub numSCCs: usize, // Add a stub for pre_update to resolve the missing method error.
-    pub final_vars: VarNodes<'tcx, T>,
-    pub arg_count: usize,
-    pub rerurn_places: HashSet<&'tcx Place<'tcx>>,
-    pub switchbbs: HashMap<BasicBlock, (Place<'tcx>, Place<'tcx>)>,
-    pub const_func_place: HashMap<&'tcx Place<'tcx>, usize>,
-    pub func_without_mir: HashMap<DefId, String>,
-    pub unique_adt_path: HashMap<String, usize>,
-}
+use super::ConstraintGraph;
 
 impl<'tcx, T> ConstraintGraph<'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
-    pub fn convert_const(c: &Const) -> Option<T> {
-        T::from_const(c)
-    }
-    pub fn new(
-        body: &'tcx Body<'tcx>,
-        tcx: TyCtxt<'tcx>,
-        self_def_id: DefId,
-        essa: DefId,
-        ssa: DefId,
-    ) -> Self {
-        let mut unique_adt_path: HashMap<String, usize> = HashMap::new();
-        unique_adt_path.insert("std::ops::Range".to_string(), 1);
-
-        Self {
-            tcx,
-            body,
-            self_def_id,
-            vars: VarNodes::new(),
-            local_inserted: HashSet::new(),
-            array_vars: VarNodes::new(),
-            oprs: GenOprs::new(),
-            defmap: DefMap::new(),
-            usemap: UseMap::new(),
-            symbmap: SymbMap::new(),
-            values_branchmap: ValuesBranchMap::new(),
-            constant_vector: Vec::new(),
-            inst_rand_place_set: Vec::new(),
-            essa,
-            ssa,
-            index: 0,
-            dfs: HashMap::new(),
-            root: HashMap::new(),
-            in_component: HashSet::new(),
-            components: HashMap::new(),
-            worklist: VecDeque::new(),
-            numAloneSCCs: 0,
-            numSCCs: 0,
-            final_vars: VarNodes::new(),
-            arg_count: 0,
-            rerurn_places: HashSet::new(),
-            switchbbs: HashMap::new(),
-            const_func_place: HashMap::new(),
-            func_without_mir: HashMap::new(),
-            unique_adt_path: unique_adt_path,
-        }
-    }
-    pub fn new_without_ssa(body: &'tcx Body<'tcx>, tcx: TyCtxt<'tcx>, self_def_id: DefId) -> Self {
-        let mut unique_adt_path: HashMap<String, usize> = HashMap::new();
-        unique_adt_path.insert("std::ops::Range".to_string(), 1);
-        Self {
-            tcx,
-            body,
-            self_def_id,
-            vars: VarNodes::new(),
-            local_inserted: HashSet::new(),
-
-            array_vars: VarNodes::new(),
-            oprs: GenOprs::new(),
-            defmap: DefMap::new(),
-            usemap: UseMap::new(),
-            symbmap: SymbMap::new(),
-            values_branchmap: ValuesBranchMap::new(),
-            constant_vector: Vec::new(),
-            inst_rand_place_set: Vec::new(),
-            essa: self_def_id, // Assuming essa is the same as self_def_id
-            ssa: self_def_id,  // Assuming ssa is the same as self_def_id
-            index: 0,
-            dfs: HashMap::new(),
-            root: HashMap::new(),
-            in_component: HashSet::new(),
-            components: HashMap::new(),
-            worklist: VecDeque::new(),
-            numAloneSCCs: 0,
-            numSCCs: 0,
-            final_vars: VarNodes::new(),
-            arg_count: 0,
-            rerurn_places: HashSet::new(),
-            switchbbs: HashMap::new(),
-            const_func_place: HashMap::new(),
-            func_without_mir: HashMap::new(),
-            unique_adt_path: unique_adt_path,
-        }
-    }
-    pub fn to_dot(&self) -> String {
-        let mut dot = String::new();
-        writeln!(&mut dot, "digraph ConstraintGraph {{").unwrap();
-        writeln!(&mut dot, "    layout=neato;").unwrap();
-        writeln!(&mut dot, "    overlap=false;").unwrap();
-        writeln!(&mut dot, "    splines=true;").unwrap();
-        writeln!(&mut dot, "    sep=\"+1.0\";").unwrap();
-        writeln!(&mut dot, "    rankdir=TB;").unwrap();
-        writeln!(&mut dot, "    ranksep=1.8;").unwrap();
-        writeln!(&mut dot, "    nodesep=0.8;").unwrap();
-        writeln!(&mut dot, "    edge [len=2.0];").unwrap();
-        writeln!(&mut dot, "    node [fontname=\"Fira Code\"];").unwrap();
-        writeln!(&mut dot, "\n    // Variable Nodes").unwrap();
-        writeln!(&mut dot, "    subgraph cluster_vars {{").unwrap();
-        writeln!(&mut dot, "        rank=same;").unwrap();
-        for (place, var_node) in &self.vars {
-            let place_id = format!("{:?}", place);
-            let label = format!("{:?}", place);
-            writeln!(
-            &mut dot,
-            "        \"{}\" [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue, width=1.2, fixedsize=false];",
-            place_id, label
-        ).unwrap();
-        }
-        writeln!(&mut dot, "    }}").unwrap();
-
-        writeln!(&mut dot, "\n    // Operation Nodes").unwrap();
-        writeln!(&mut dot, "    subgraph cluster_ops {{").unwrap();
-        writeln!(&mut dot, "        rank=same;").unwrap();
-        for (op_idx, op) in self.oprs.iter().enumerate() {
-            let op_id = format!("op_{}", op_idx);
-            let label = match op {
-                BasicOpKind::Unary(o) => format!("Unary({:?})", o.op),
-                BasicOpKind::Binary(o) => format!("Binary({:?})", o.op),
-                BasicOpKind::Essa(_) => "Essa".to_string(),
-                BasicOpKind::ControlDep(_) => "ControlDep".to_string(),
-                BasicOpKind::Phi(_) => "Φ (Phi)".to_string(),
-                BasicOpKind::Use(_) => "Use".to_string(),
-                BasicOpKind::Call(c) => format!("Call({:?})", c.def_id),
-                BasicOpKind::Ref(r) => format!("Ref({:?})", r.borrowkind),
-                BasicOpKind::Aggregate(r) => format!("AggregateOp({:?})", r.unique_adt),
-            };
-            writeln!(
-            &mut dot,
-            "        \"{}\" [label=\"{}\", shape=box, style=filled, fillcolor=lightgrey, width=1.5, fixedsize=false];",
-            op_id, label
-        ).unwrap();
-        }
-        writeln!(&mut dot, "    }}").unwrap();
-
-        // Edges
-        writeln!(&mut dot, "\n    // Definition Edges (op -> var)").unwrap();
-        for (place, op_idx) in &self.defmap {
-            writeln!(&mut dot, "    \"op_{}\" -> \"{:?}\";", op_idx, place).unwrap();
-        }
-
-        writeln!(&mut dot, "\n    // Use Edges (var -> op)").unwrap();
-        for (place, op_indices) in &self.usemap {
-            for op_idx in op_indices {
-                writeln!(&mut dot, "    \"{:?}\" -> \"op_{}\";", place, op_idx).unwrap();
-            }
-        }
-
-        writeln!(&mut dot, "\n    // Symbolic Bound Edges (var -> op)").unwrap();
-        for (place, op_indices) in &self.symbmap {
-            for op_idx in op_indices {
-                writeln!(
-                    &mut dot,
-                    "    \"{:?}\" -> \"op_{}\" [color=blue, style=dashed];",
-                    place, op_idx
-                )
-                .unwrap();
-            }
-        }
-
-        writeln!(&mut dot, "}}").unwrap();
-        dot
-    }
-
-    pub fn build_final_vars(
-        &mut self,
-        places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
-    ) -> (VarNodes<'tcx, T>, Vec<Place<'tcx>>) {
-        let mut final_vars: VarNodes<'tcx, T> = HashMap::new();
-        let mut not_found: Vec<Place<'tcx>> = Vec::new();
-
-        for (&_key_place, place_set) in places_map {
-            for &place in place_set {
-                let found = self.vars.iter().find(|&(&p, _)| *p == place);
-
-                if let Some((&found_place, var_node)) = found {
-                    final_vars.insert(found_place, var_node.clone());
-                } else {
-                    not_found.push(place);
-                }
-            }
-        }
-        self.final_vars = final_vars.clone();
-        (final_vars, not_found)
-    }
-    pub fn filter_final_vars(
-        vars: &VarNodes<'tcx, T>,
-        places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
-    ) -> HashMap<Place<'tcx>, Range<T>> {
-        let mut final_vars = HashMap::new();
-
-        for (&_key_place, place_set) in places_map {
-            for &place in place_set {
-                if let Some(var_node) = vars.get(&place) {
-                    final_vars.insert(place, var_node.get_range().clone());
-                }
-            }
-        }
-        final_vars
-    }
-
-    pub fn print_vars(&self) {
-        for (&key, value) in &self.vars {
-            rap_trace!("Var: {:?}. {:?} ", key, value.get_range());
-        }
-    }
-
-    fn print_symbmap(&self) {
+    pub(crate) fn print_symbmap(&self) {
         for (&key, value) in &self.symbmap {
             for op in value.iter() {
                 if let Some(op) = self.oprs.get(*op) {
@@ -298,6 +49,7 @@ where
             }
         }
     }
+
     fn print_defmap(&self) {
         for (key, value) in self.defmap.clone() {
             rap_trace!(
@@ -308,6 +60,7 @@ where
             );
         }
     }
+
     fn print_compusemap(
         &self,
         component: &HashSet<&'tcx Place<'tcx>>,
@@ -326,6 +79,7 @@ where
             }
         }
     }
+
     fn print_usemap(&self) {
         for (key, value) in self.usemap.clone() {
             for v in value {
@@ -338,6 +92,7 @@ where
             }
         }
     }
+
     fn print_symbexpr(&self) {
         let mut vars: Vec<_> = self.vars.iter().collect();
 
@@ -352,41 +107,7 @@ where
             );
         }
     }
-    pub fn get_vars(&self) -> &VarNodes<'tcx, T> {
-        &self.vars
-    }
-    pub fn get_field_place(&self, adt_place: Place<'tcx>, field_index: FieldIdx) -> Place<'tcx> {
-        let adt_ty = adt_place.ty(&self.body.local_decls, self.tcx).ty;
-        let field_ty = match adt_ty.kind() {
-            ty::TyKind::Adt(adt_def, substs) => {
-                // Get the single variant of the struct using an iterator.
-                let variant_def = adt_def.variants().iter().next().unwrap();
 
-                // Get the field's definition from the variant.
-                let field_def = &variant_def.fields[field_index];
-
-                // Return the field's type as the result of this match arm.
-                // (The "let field_ty =" is removed from this line)
-                #[cfg(not(rapx_rustc_ge_198))]
-                let ft = field_def.ty(self.tcx, substs);
-                #[cfg(rapx_rustc_ge_198)]
-                let ft = field_def.ty(self.tcx, substs).skip_norm_wip();
-                ft
-            }
-            _ => {
-                panic!("get_field_place expected an ADT, but found {:?}", adt_ty);
-            }
-        };
-
-        let mut new_projection = adt_place.projection.to_vec();
-        new_projection.push(ProjectionElem::Field(field_index, field_ty));
-
-        let new_place = Place {
-            local: adt_place.local,
-            projection: self.tcx.mk_place_elems(&new_projection),
-        };
-        new_place
-    }
     pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'tcx, T> {
         let local_decls = &self.body.local_decls;
 
@@ -430,6 +151,7 @@ where
 
         node_ref
     }
+
     pub fn use_add_varnode_sym(
         &mut self,
         v: &'tcx Place<'tcx>,
@@ -520,6 +242,7 @@ where
         }
         node_ref
     }
+
     pub fn resolve_all_symexpr(&mut self) {
         let lookup_context = self.vars.clone();
         let mut nodes: Vec<&mut VarNode<'tcx, T>> = self.vars.values_mut().collect();
@@ -539,6 +262,7 @@ where
             }
         }
     }
+
     pub fn postprocess_defmap(&mut self) {
         for place in self.vars.keys() {
             if !place.projection.is_empty() {
@@ -556,7 +280,6 @@ where
     }
 
     pub fn build_graph(&mut self, body: &'tcx Body<'tcx>) {
-        self.arg_count = body.arg_count;
         self.build_value_maps(body);
         for block in body.basic_blocks.indices() {
             let block_data: &BasicBlockData<'tcx> = &body[block];
@@ -587,6 +310,7 @@ where
             }
         }
     }
+
     fn trace_operand_origin(
         &self,
         body: &'tcx Body<'tcx>,
@@ -770,6 +494,7 @@ where
             };
         }
     }
+
     pub fn flipped_binop(op: BinOp) -> Option<BinOp> {
         use BinOp::*;
         Some(match op {
@@ -789,6 +514,7 @@ where
             }
         })
     }
+
     fn reverse_binop(op: BinOp) -> Option<BinOp> {
         use BinOp::*;
         Some(match op {
@@ -808,6 +534,7 @@ where
             }
         })
     }
+
     fn extract_condition(
         &mut self,
         place: &'tcx Place<'tcx>,
@@ -882,8 +609,6 @@ where
         }
     }
 
-
-
     pub fn build_symbolic_intersect_map(&mut self) {
         for i in 0..self.oprs.len() {
             if let BasicOpKind::Essa(essaop) = &self.oprs[i] {
@@ -895,6 +620,7 @@ where
             }
         }
     }
+
     pub fn build_use_map(
         &mut self,
         component: &HashSet<&'tcx Place<'tcx>>,
@@ -918,6 +644,7 @@ where
         self.print_compusemap(component, &comp_use_map);
         comp_use_map
     }
+
     pub fn build_terminator(&mut self, block: BasicBlock, terminator: &'tcx Terminator<'tcx>) {
         match &terminator.kind {
             TerminatorKind::Call {
@@ -964,6 +691,7 @@ where
             }
         }
     }
+
     pub fn build_operations(
         &mut self,
         inst: &'tcx Statement<'tcx>,
@@ -1057,6 +785,7 @@ where
         0
     }
     /// Adds a function call operation to the graph.
+
     fn add_call_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1082,7 +811,6 @@ where
                 if def_id.krate != LOCAL_CRATE {
                     path = self.tcx.def_path_str(*def_id);
 
-                    self.func_without_mir.insert(*def_id, path.clone());
                     rap_debug!("called external/no-MIR fn: {:?} -> {}", def_id, path);
                 }
                 func_def_id = Some(def_id);
@@ -1131,7 +859,7 @@ where
             }
         }
         {
-            let bi = BasicInterval::new(Range::default(T::min_value()));
+            let bi = BasicInterval::default();
 
             let call_op = CallOp::new(
                 IntervalType::Basic(bi),
@@ -1156,6 +884,7 @@ where
             }
         }
     }
+
     fn add_ssa_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1169,8 +898,8 @@ where
         let sink_node: &mut VarNode<'_, T> = self.def_add_varnode_sym(sink, rvalue);
         rap_trace!("addsink_in_ssa_op{:?}\n", sink_node);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
-        let mut phiop = PhiOp::new(IntervalType::Basic(BI), sink, inst, 0);
+        let BI: BasicInterval<T> = BasicInterval::default();
+        let mut phiop = PhiOp::new(IntervalType::Basic(BI), sink, inst);
         let bop_index = self.oprs.len();
         for i in 0..operands.len() {
             let source = match &operands[FieldIdx::from_usize(i)] {
@@ -1195,6 +924,7 @@ where
 
         self.defmap.insert(sink, bop_index);
     }
+
     fn add_use_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1204,7 +934,7 @@ where
     ) {
         rap_trace!("use_op{:?}\n", inst);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::default();
         let mut source: Option<&'tcx Place<'tcx>> = None;
 
         match op {
@@ -1261,6 +991,7 @@ where
             Operand::RuntimeChecks(_) => {}
         }
     }
+
     fn add_essa_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1299,7 +1030,7 @@ where
                 .or_default()
                 .insert(bop_index);
 
-            let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), 0, false);
+            let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), false);
             rap_trace!(
                 "addvar_in_essa_op {:?} from const {:?}\n",
                 essaop,
@@ -1332,7 +1063,7 @@ where
                 .entry(source1.unwrap())
                 .or_default()
                 .insert(bop_index);
-            let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), 0, true);
+            let essaop = EssaOp::new(BI, sink, inst, source1.unwrap(), true);
             // Insert the operation in the graph.
             rap_trace!(
                 "addvar_in_essa_op {:?} from {:?}\n",
@@ -1356,7 +1087,7 @@ where
     ) {
         rap_trace!("aggregate_op {:?}\n", inst);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::default();
         let mut agg_operands: Vec<AggregateOperand<'tcx>> = Vec::with_capacity(operands.len());
 
         for operand in operands {
@@ -1432,7 +1163,7 @@ where
         let sink_node = self.def_add_varnode_sym(sink, rvalue);
         rap_trace!("addsink_in_unary_op{:?}\n", sink_node);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::default();
         let loc_1: usize = 0;
 
         let source = match operand {
@@ -1455,6 +1186,7 @@ where
 
         self.defmap.insert(sink, bop_index);
     }
+
     fn add_binary_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1471,7 +1203,7 @@ where
         rap_trace!("addsink_in_binary_op{:?}\n", sink_node);
 
         let bop_index = self.oprs.len();
-        let bi: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let bi: BasicInterval<T> = BasicInterval::default();
 
         // Match both operands simultaneously to handle all combinations.
         // Goal: Ensure source1 is always a Place if at least one Place exists.
@@ -1540,6 +1272,7 @@ where
             self.usemap.entry(place).or_default().insert(bop_index);
         }
     }
+
     fn add_ref_op(
         &mut self,
         sink: &'tcx Place<'tcx>,
@@ -1550,7 +1283,7 @@ where
     ) {
         rap_trace!("ref_op {:?}\n", inst);
 
-        let BI: BasicInterval<T> = BasicInterval::new(Range::default(T::min_value()));
+        let BI: BasicInterval<T> = BasicInterval::default();
 
         let source_node = self.use_add_varnode_sym(place, rvalue);
 
@@ -1571,568 +1304,4 @@ where
             inst
         );
     }
-
-    fn fix_intersects(&mut self, component: &HashSet<&'tcx Place<'tcx>>) {
-        for &place in component.iter() {
-
-            if let Some(sit) = self.symbmap.get_mut(place) {
-                let node = self.vars.get(place).unwrap();
-
-                for &op in sit.iter() {
-                    let op = &mut self.oprs[op];
-                    let sinknode = self.vars.get(op.get_sink()).unwrap();
-
-                    op.op_fix_intersects(node, sinknode);
-                }
-            }
-        }
-    }
-    pub fn widen(
-        &mut self,
-        op: usize,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) -> bool {
-
-
-        let op_kind = &self.oprs[op];
-        let sink = op_kind.get_sink();
-        let old_interval = self.vars.get(sink).unwrap().get_range().clone();
-
-        // HERE IS THE SPECIALIZATION:
-        // We check the operation type and call the appropriate eval function.
-        let estimated_interval = match op_kind {
-            BasicOpKind::Call(call_op) => {
-                // For a call, use the special inter-procedural eval.
-                call_op.eval_call(&self.vars, cg_map, vars_map)
-            }
-            _ => {
-                // For all other operations, use the simple, generic eval.
-                op_kind.eval(&self.vars)
-            }
-        };
-        let old_lower = old_interval.get_lower();
-        let old_upper = old_interval.get_upper();
-        let new_lower = estimated_interval.get_lower();
-        let new_upper = estimated_interval.get_upper();
-
-
-
-
-
-        let updated = if old_interval.is_unknown() {
-            estimated_interval.clone()
-        } else if new_lower < old_lower && new_upper > old_upper {
-            Range::new(T::min_value(), T::max_value(), RangeType::Regular)
-        } else if new_lower < old_lower {
-            Range::new(T::min_value(), old_upper.clone(), RangeType::Regular)
-        } else if new_upper > old_upper {
-            Range::new(old_lower.clone(), T::max_value(), RangeType::Regular)
-        } else {
-            old_interval.clone()
-        };
-
-        self.vars.get_mut(sink).unwrap().set_range(updated.clone());
-        rap_trace!(
-            "WIDEN in {} set {:?}: E {:?} U {:?} {:?} -> {:?}",
-            op,
-            sink,
-            estimated_interval,
-            updated,
-            old_interval,
-            updated
-        );
-
-        old_interval != updated
-    }
-    pub fn narrow(
-        &mut self,
-        op: usize,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) -> bool {
-        let op_kind = &self.oprs[op];
-        let sink = op_kind.get_sink();
-        let old_interval = self.vars.get(sink).unwrap().get_range().clone();
-
-        // SPECIALIZATION for narrow:
-        let estimated_interval = match op_kind {
-            BasicOpKind::Call(call_op) => {
-                // For a call, use the special inter-procedural eval.
-                call_op.eval_call(&self.vars, cg_map, vars_map)
-            }
-            _ => {
-                // For all other operations, use the simple, generic eval.
-                op_kind.eval(&self.vars)
-            }
-        };
-        let old_lower = old_interval.get_lower();
-        let old_upper = old_interval.get_upper();
-        let new_lower = estimated_interval.get_lower();
-        let new_upper = estimated_interval.get_upper();
-
-
-        let mut final_lower = old_lower.clone();
-        let mut final_upper = old_upper.clone();
-        if old_lower.clone() == T::min_value() && new_lower.clone() > T::min_value() {
-            final_lower = new_lower.clone();
-        } else if old_lower.clone() <= new_lower.clone() {
-            final_lower = new_lower.clone();
-        };
-        if old_upper.clone() == T::max_value() && new_upper.clone() < T::max_value() {
-            final_upper = new_upper.clone();
-        } else if old_upper.clone() >= new_upper.clone() {
-            final_upper = new_upper.clone();
-        }
-        let tightened = Range::new(final_lower, final_upper, RangeType::Regular);
-
-        self.vars
-            .get_mut(sink)
-            .unwrap()
-            .set_range(tightened.clone());
-        rap_trace!(
-            "NARROW in {} set {:?}: E {:?} U {:?} {:?} -> {:?}",
-            op,
-            sink,
-            estimated_interval,
-            tightened,
-            old_interval,
-            tightened
-        );
-        let hasChanged = old_interval != tightened;
-
-        hasChanged
-    }
-
-    fn pre_update(
-        &mut self,
-        comp_use_map: &HashMap<&'tcx Place<'tcx>, HashSet<usize>>,
-        entry_points: &HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-        let mut worklist: Vec<&'tcx Place<'tcx>> = entry_points.iter().cloned().collect();
-
-        while let Some(place) = worklist.pop() {
-            if let Some(op_set) = comp_use_map.get(place) {
-                for &op in op_set {
-                    if self.widen(op, cg_map, vars_map) {
-                        let sink = self.oprs[op].get_sink();
-                        rap_trace!("W {:?}\n", sink);
-                        worklist.push(sink);
-                    }
-                }
-            }
-        }
-    }
-
-    fn pos_update(
-        &mut self,
-        comp_use_map: &HashMap<&'tcx Place<'tcx>, HashSet<usize>>,
-        entry_points: &HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-        let mut worklist: Vec<&'tcx Place<'tcx>> = entry_points.iter().cloned().collect();
-        let mut iteration = 0;
-        while let Some(place) = worklist.pop() {
-            iteration += 1;
-            if (iteration > 1000) {
-                rap_trace!("Iteration limit reached, breaking out of pos_update\n");
-                break;
-            }
-
-            if let Some(op_set) = comp_use_map.get(place) {
-                for &op in op_set {
-                    if self.narrow(op, cg_map, vars_map) {
-                        let sink = self.oprs[op].get_sink();
-                        rap_trace!("N {:?}\n", sink);
-
-                        worklist.push(sink);
-                    }
-                }
-            }
-        }
-        rap_trace!("pos_update finished after {} iterations\n", iteration);
-    }
-
-    fn generate_entry_points(
-        &mut self,
-        component: &HashSet<&'tcx Place<'tcx>>,
-        entry_points: &mut HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-        for &place in component {
-            let op = self.defmap.get(place).unwrap();
-            if let BasicOpKind::Essa(essaop) = &mut self.oprs[*op] {
-                if essaop.is_unresolved() {
-                    let source = essaop.get_source();
-                    let new_range = essaop.eval(&self.vars);
-                    let sink_node = self.vars.get_mut(source).unwrap();
-                    sink_node.set_range(new_range);
-                }
-                essaop.mark_resolved();
-            }
-            if (!self.vars[place].get_range().is_unknown()) {
-                entry_points.insert(place);
-            }
-        }
-    }
-    fn propagate_to_next_scc(
-        &mut self,
-        component: &HashSet<&'tcx Place<'tcx>>,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-        for &place in component.iter() {
-            let node = self.vars.get_mut(place).unwrap();
-            for &op in self.usemap.get(place).unwrap().iter() {
-                let op_kind = &mut self.oprs[op];
-                let sink = op_kind.get_sink();
-                if !component.contains(sink) {
-                    let new_range = op_kind.eval(&self.vars);
-                    let new_range = match op_kind {
-                        BasicOpKind::Call(call_op) => {
-                            call_op.eval_call(&self.vars, cg_map, vars_map)
-                        }
-                        _ => {
-                            // For all other operations, use the simple, generic eval.
-                            op_kind.eval(&self.vars)
-                        }
-                    };
-                    let sink_node = self.vars.get_mut(sink).unwrap();
-                    rap_trace!(
-                        "prop component {:?} set {:?} to {:?} through {:?}\n",
-                        component,
-                        new_range,
-                        sink,
-                        op_kind.get_instruction()
-                    );
-                    sink_node.set_range(new_range);
-
-                    if let BasicOpKind::Essa(essaop) = op_kind {
-                        if essaop.get_intersect().get_range().is_unknown() {
-                            essaop.mark_unresolved();
-                        }
-                    }
-                }
-            }
-        }
-    }
-    pub fn solve_const_func_call(
-        &mut self,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-        for (&sink, op) in &self.const_func_place {
-            rap_trace!(
-                "solve_const_func_call for sink {:?} with opset {:?}\n",
-                sink,
-                op
-            );
-            if let BasicOpKind::Call(call_op) = &self.oprs[*op] {
-                let new_range = call_op.eval_call(&self.vars, cg_map, vars_map);
-                rap_trace!("Setting range for {:?} to {:?}\n", sink, new_range);
-                self.vars.get_mut(sink).unwrap().set_range(new_range);
-            }
-        }
-    }
-    pub fn store_vars(&mut self, varnodes_vec: &mut Vec<RefCell<VarNodes<'tcx, T>>>) {
-        rap_trace!("Storing vars\n");
-        let old_vars = self.vars.clone();
-        varnodes_vec.push(RefCell::new(old_vars));
-    }
-    pub fn reset_vars(&mut self, varnodes_vec: &mut Vec<RefCell<VarNodes<'tcx, T>>>) {
-        rap_trace!("Resetting vars\n");
-        self.vars = varnodes_vec[0].borrow_mut().clone();
-    }
-    pub fn find_intervals(
-        &mut self,
-        cg_map: &FxHashMap<DefId, Rc<RefCell<ConstraintGraph<'tcx, T>>>>,
-        vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
-    ) {
-
-
-
-        self.solve_const_func_call(cg_map, vars_map);
-        self.numSCCs = self.worklist.len();
-        let mut seen = HashSet::new();
-        let mut components = Vec::new();
-
-        for &place in self.worklist.iter().rev() {
-            if seen.contains(place) {
-                continue;
-            }
-
-            if let Some(component) = self.components.get(place) {
-                for &p in component {
-                    seen.insert(p);
-                }
-
-                components.push(component.clone());
-            }
-        }
-        rap_trace!("TOLO:{:?}\n", components);
-
-        for component in components {
-            rap_trace!("===start component {:?}===\n", component);
-            if component.len() == 1 {
-                self.numAloneSCCs += 1;
-
-                self.fix_intersects(&component);
-
-                let variable: &Place<'tcx> = *component.iter().next().unwrap();
-                let varnode = self.vars.get_mut(variable).unwrap();
-                if varnode.get_range().is_unknown() {
-                    varnode.set_default();
-                }
-            } else {
-
-                let comp_use_map = self.build_use_map(&component);
-
-                let mut entry_points = HashSet::new();
-
-
-                self.generate_entry_points(&component, &mut entry_points, cg_map, vars_map);
-                rap_trace!("entry_points {:?}  \n", entry_points);
-
-                self.pre_update(&comp_use_map, &entry_points, cg_map, vars_map);
-                self.fix_intersects(&component);
-                self.pos_update(&comp_use_map, &entry_points, cg_map, vars_map);
-            }
-            self.propagate_to_next_scc(&component, cg_map, vars_map);
-        }
-        self.merge_return_places();
-        let Some(varnodes_vec) = vars_map.get_mut(&self.self_def_id) else {
-            rap_trace!(
-                "No variable map entry for this function {:?}, skipping Nuutila\n",
-                self.self_def_id
-            );
-            return;
-        };
-        self.store_vars(varnodes_vec);
-    }
-    pub fn merge_return_places(&mut self) {
-        rap_trace!("====Merging return places====\n");
-        for &place in self.rerurn_places.iter() {
-            rap_debug!("merging return place {:?}\n", place);
-            let mut merged_range = Range::default(T::min_value());
-            if let Some(opset) = self.vars.get(place) {
-                merged_range = merged_range.unionwith(opset.get_range());
-            }
-            if let Some(return_node) = self.vars.get_mut(&Place::return_place()) {
-                rap_debug!("Assigning final merged range {:?} to _0", merged_range);
-                return_node.set_range(merged_range);
-            } else {
-                // This case is unlikely for functions that return a value, as `_0`
-                // should have been created during the initial graph build.
-                // We add a trace message for robustness.
-                rap_trace!(
-                    "Warning: RETURN_PLACE (_0) not found in self.vars. Cannot assign merged return range."
-                );
-            }
-        }
-    }
-
-    pub fn add_control_dependence_edges(&mut self) {
-        rap_trace!("====Add control dependence edges====\n");
-        self.print_symbmap();
-        for (&place, opset) in self.symbmap.iter() {
-            for &op in opset.iter() {
-                let bop_index = self.oprs.len();
-                let opkind = &self.oprs[op];
-                let control_edge = ControlDep::new(
-                    IntervalType::Basic(BasicInterval::default()),
-                    opkind.get_sink(),
-                    opkind.get_instruction().unwrap(),
-                    place,
-                );
-                rap_trace!(
-                    "Adding control_edge {:?} for place {:?} at index {}\n",
-                    control_edge,
-                    place,
-                    bop_index
-                );
-                self.oprs.push(BasicOpKind::ControlDep(control_edge));
-                self.usemap.entry(place).or_default().insert(bop_index);
-            }
-        }
-    }
-    pub fn del_control_dependence_edges(&mut self) {
-        rap_trace!("====Delete control dependence edges====\n");
-
-        let mut remove_from = self.oprs.len();
-        while remove_from > 0 {
-            match &self.oprs[remove_from - 1] {
-                BasicOpKind::ControlDep(dep) => {
-                    let place = dep.source;
-                    rap_trace!(
-                        "removing control_edge at idx {}: {:?}\n",
-                        remove_from - 1,
-                        dep
-                    );
-                    if let Some(set) = self.usemap.get_mut(&place) {
-                        set.remove(&(remove_from - 1));
-                        if set.is_empty() {
-                            self.usemap.remove(&place);
-                        }
-                    }
-                    remove_from -= 1;
-                }
-                _ => break,
-            }
-        }
-
-        self.oprs.truncate(remove_from);
-    }
-
-    pub fn build_nuutila(&mut self, single: bool) {
-        rap_trace!("====Building Nuutila====\n");
-        self.build_symbolic_intersect_map();
-
-        if single {
-        } else {
-            for place in self.vars.keys().copied() {
-                self.dfs.insert(place, -1);
-            }
-
-            self.add_control_dependence_edges();
-
-            let places: Vec<_> = self.vars.keys().copied().collect();
-            rap_trace!("places{:?}\n", places);
-            for place in places {
-                if self.dfs[&place] < 0 {
-                    rap_trace!("start place{:?}\n", place);
-                    let mut stack = Vec::new();
-                    self.visit(place, &mut stack);
-                }
-            }
-
-            self.del_control_dependence_edges();
-        }
-        rap_trace!("components{:?}\n", self.components);
-        rap_trace!("worklist{:?}\n", self.worklist);
-        rap_trace!("dfs{:?}\n", self.dfs);
-    }
-    pub fn visit(&mut self, place: &'tcx Place<'tcx>, stack: &mut Vec<&'tcx Place<'tcx>>) {
-        self.dfs.entry(place).and_modify(|v| *v = self.index);
-        self.index += 1;
-        self.root.insert(place, place);
-        let uses = self.usemap.get(place).unwrap().clone();
-        for op in uses {
-            let name = self.oprs[op].get_sink();
-            rap_trace!("place {:?} get name{:?}\n", place, name);
-            if self.dfs.get(name).copied().unwrap_or(-1) < 0 {
-                self.visit(name, stack);
-            }
-
-            if (!self.in_component.contains(name)
-                && self.dfs[self.root[place]] >= self.dfs[self.root[name]])
-            {
-                *self.root.get_mut(place).unwrap() = self.root.get(name).copied().unwrap();
-
-
-
-            }
-        }
-
-        if self.root.get(place).copied().unwrap() == place {
-            self.worklist.push_back(place);
-
-            let mut scc = HashSet::new();
-            scc.insert(place);
-
-            self.in_component.insert(place);
-
-            while let Some(top) = stack.last() {
-                if self.dfs.get(top).copied().unwrap_or(-1) > self.dfs.get(place).copied().unwrap()
-                {
-                    let node = stack.pop().unwrap();
-                    self.in_component.insert(node);
-
-                    scc.insert(node);
-                } else {
-                    break;
-                }
-            }
-
-            self.components.insert(place, scc);
-        } else {
-            stack.push(place);
-        }
-    }
-
-    pub fn start_analyze_path_constraints(
-        &mut self,
-        body: &'tcx Body<'tcx>,
-        tree: &PathTree,
-    ) -> HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> {
-        self.build_value_maps(body);
-        let result = self.analyze_path_constraints(body, tree);
-        result
-    }
-
-    pub fn analyze_path_constraints(
-        &self,
-        body: &'tcx Body<'tcx>,
-        tree: &PathTree,
-    ) -> HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> {
-        let mut all_path_results: HashMap<Vec<usize>, Vec<(Place<'tcx>, Place<'tcx>, BinOp)>> =
-            HashMap::with_capacity(tree.len());
-
-        for path_indices in tree.iter() {
-            let mut current_path_constraints: Vec<(Place<'tcx>, Place<'tcx>, BinOp)> = Vec::new();
-
-            let path_bbs: Vec<BasicBlock> = path_indices
-                .iter()
-                .map(|&idx| BasicBlock::from_usize(idx))
-                .collect();
-
-            for window in path_bbs.windows(2) {
-                let current_bb = window[0];
-
-                if self.switchbbs.contains_key(&current_bb) {
-                    let next_bb = window[1];
-                    let current_bb_data = &body[current_bb];
-
-                    if let Some(Terminator {
-                        kind: TerminatorKind::SwitchInt { discr, .. },
-                        ..
-                    }) = &current_bb_data.terminator
-                    {
-                        let (constraint_place_1, constraint_place_2) =
-                            self.switchbbs.get(&current_bb).unwrap();
-                        if let Some(vbm) = self.values_branchmap.get(constraint_place_1) {
-                            let relevant_interval_opt = if next_bb == *vbm.get_bb_true() {
-                                Some(vbm.get_itv_t())
-                            } else if next_bb == *vbm.get_bb_false() {
-                                Some(vbm.get_itv_f())
-                            } else {
-                                None
-                            };
-
-                            if let Some(relevant_interval) = relevant_interval_opt {
-                                match relevant_interval {
-                                    IntervalType::Basic(basic_interval) => {}
-                                    IntervalType::Symb(symb_interval) => {
-                                        current_path_constraints.push((
-                                            constraint_place_1.clone(),
-                                            constraint_place_2.clone(),
-                                            symb_interval.get_operation().clone(),
-                                        ));
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            all_path_results.insert(path_indices, current_path_constraints);
-        }
-
-        all_path_results
-    }
 }
-

@@ -6,7 +6,7 @@
 #![allow(non_snake_case)]
 use rust_intervals::NothingBetween;
 
-use crate::analysis::range_analysis::domain::ConstraintGraph::ConstraintGraph;
+use crate::analysis::range_analysis::domain::ConstraintGraph;
 use crate::analysis::range_analysis::domain::domain::{
     ConstConvert, IntervalArithmetic, VarNode, VarNodes,
 };
