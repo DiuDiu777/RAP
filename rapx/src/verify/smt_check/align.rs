@@ -3,7 +3,8 @@
 //! Reduces `Align(p, T)` to `SmtObligation::Aligned { place: p, align: align_of(T) }`.
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
-use crate::verify::{contract::Property, helpers::Checkpoint, verifier::ForwardVisitResult};
+use crate::verify::{contract::Property, verifier::ForwardVisitResult};
+use crate::helpers::mir_scan::Checkpoint;
 
 fn resolve<'tcx>(
     checker: &SmtChecker<'tcx>,

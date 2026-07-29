@@ -1,25 +1,14 @@
-use rustc_abi::FieldIdx;
 use rustc_hir::{
     ItemKind,
     def_id::{DefId, LocalDefId},
 };
 use rustc_middle::{
-    mir::{BasicBlock, TerminatorKind},
+    mir::{BasicBlock, Local, Operand, TerminatorKind},
     ty::{ConstKind, GenericArgKind, Ty, TyCtxt, TyKind},
 };
 use rustc_span::Symbol;
-use syn::Expr;
 
-use crate::helpers::fn_info::{FnKind, get_type};
-
-pub use crate::helpers::fn_info::parse_expr_into_number;
-pub use crate::helpers::mir_scan::{
-    Checkpoint, CheckpointKind, CheckpointLocation, collect_unsafe_callsites,
-};
-pub use crate::helpers::name::{
-    access_ident_recursive, get_cleaned_def_path_name, get_struct_self_ty, match_ty_with_ident,
-    parse_signature,
-};
+use super::call_summary::fn_simulator;
 
 /// Collect all return basic block indices for a function body.
 pub fn collect_return_block_indices(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<BasicBlock> {
@@ -36,44 +25,12 @@ pub fn collect_return_block_indices(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<Basic
     blocks
 }
 
-pub fn parse_expr_into_local_and_ty<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-    expr: &Expr,
-) -> Option<(usize, Vec<(usize, Ty<'tcx>)>, Ty<'tcx>)> {
-    if let Some((base_ident, fields)) = access_ident_recursive(expr) {
-        let (param_names, param_tys) = parse_signature(tcx, def_id);
-        if param_names[0] != "0" {
-            if let Some(param_index) = param_names.iter().position(|name| name == &base_ident) {
-                return resolve_projection_from_base_ident(
-                    tcx,
-                    base_ident,
-                    fields,
-                    param_index + 1,
-                    param_tys[param_index],
-                );
-            }
-        }
-
-        if let Some(struct_ty) = get_struct_self_ty(tcx, def_id) {
-            return resolve_projection_from_struct_ident(
-                tcx, def_id, base_ident, fields, struct_ty,
-            );
-        }
-    }
-    None
-}
-
 /// Return the callee argument index represented by a MIR local.
 ///
 /// Contract annotations written with parameter names are parsed in the callee's
 /// local namespace.  MIR local `_0` is the return place and argument locals are
 /// `_1..=_arg_count`, so callee local `_1` denotes checkpoint argument `0`.
 pub fn callee_param_index_for_local(tcx: TyCtxt<'_>, callee: DefId, local: usize) -> Option<usize> {
-    if local == 0 {
-        return None;
-    }
-
     let arg_count = if tcx.is_mir_available(callee) {
         tcx.optimized_mir(callee).arg_count
     } else {
@@ -83,8 +40,7 @@ pub fn callee_param_index_for_local(tcx: TyCtxt<'_>, callee: DefId, local: usize
             .skip_binder()
             .len()
     };
-
-    (local <= arg_count).then_some(local - 1)
+    arg_of_local(Local::from_usize(local), arg_count)
 }
 
 pub fn is_std_crate_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
@@ -165,97 +121,6 @@ pub fn get_owner_struct_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> Option<DefId> 
     }
 }
 
-fn resolve_projection_from_base_ident<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    _base_ident: String,
-    fields: Vec<String>,
-    base_local: usize,
-    base_ty: Ty<'tcx>,
-) -> Option<(usize, Vec<(usize, Ty<'tcx>)>, Ty<'tcx>)> {
-    let mut current_ty = base_ty;
-    let mut field_indices = Vec::new();
-    for field_name in fields {
-        let Some((field_idx, field_ty)) = resolve_next_field(tcx, current_ty, &field_name) else {
-            return None;
-        };
-        current_ty = field_ty;
-        field_indices.push((field_idx, current_ty));
-    }
-    Some((base_local, field_indices, current_ty))
-}
-
-fn resolve_projection_from_struct_ident<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-    base_ident: String,
-    fields: Vec<String>,
-    struct_ty: Ty<'tcx>,
-) -> Option<(usize, Vec<(usize, Ty<'tcx>)>, Ty<'tcx>)> {
-    let Some((field_idx, field_ty)) = resolve_next_field(tcx, struct_ty, &base_ident) else {
-        return None;
-    };
-
-    let mut current_ty = field_ty;
-    let mut field_indices = vec![(field_idx, current_ty)];
-    for field_name in fields {
-        let Some((next_field_idx, next_field_ty)) =
-            resolve_next_field(tcx, current_ty, &field_name)
-        else {
-            return None;
-        };
-        current_ty = next_field_ty;
-        field_indices.push((next_field_idx, current_ty));
-    }
-
-    let base_local = if get_type(tcx, def_id) == FnKind::Constructor {
-        0
-    } else {
-        1
-    };
-
-    Some((base_local, field_indices, current_ty))
-}
-
-fn resolve_next_field<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    base_ty: Ty<'tcx>,
-    field_name: &str,
-) -> Option<(usize, Ty<'tcx>)> {
-    let peeled_ty = base_ty.peel_refs();
-    if let TyKind::Adt(adt_def, arg_list) = *peeled_ty.kind() {
-        if !adt_def.is_struct() && !adt_def.is_union() {
-            return None;
-        }
-        let variant = adt_def.non_enum_variant();
-        if let Ok(field_idx) = field_name.parse::<usize>() {
-            if field_idx < variant.fields.len() {
-                #[cfg(not(rapx_rustc_ge_198))]
-                let field_ty = variant.fields[FieldIdx::from_usize(field_idx)].ty(tcx, arg_list);
-                #[cfg(rapx_rustc_ge_198)]
-                let field_ty = variant.fields[FieldIdx::from_usize(field_idx)]
-                    .ty(tcx, arg_list)
-                    .skip_norm_wip();
-                return Some((field_idx, field_ty));
-            }
-        }
-        if let Some((idx, _)) = variant
-            .fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.ident(tcx).name.to_string() == field_name)
-        {
-            #[cfg(not(rapx_rustc_ge_198))]
-            let field_ty = variant.fields[FieldIdx::from_usize(idx)].ty(tcx, arg_list);
-            #[cfg(rapx_rustc_ge_198)]
-            let field_ty = variant.fields[FieldIdx::from_usize(idx)]
-                .ty(tcx, arg_list)
-                .skip_norm_wip();
-            return Some((idx, field_ty));
-        }
-    }
-    None
-}
-
 /// True when a type transitively contains a const-generic parameter or
 /// an associated type alias (which may be layout-ambiguous).
 pub(crate) fn ty_has_param_const(ty: Ty<'_>) -> bool {
@@ -280,4 +145,23 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
             .or_else(|| e.downcast_ref::<&str>().map(|s| s.to_string()))
             .unwrap_or_else(|| "<rustc ICE>".to_string())
     })
+}
+
+/// Return a stable, human-readable name for a MIR call operand.
+pub fn call_name(tcx: TyCtxt<'_>, func: &Operand<'_>) -> String {
+    fn_simulator::dep_callee_def_id(func)
+        .map(|def_id| tcx.def_path_str(def_id))
+        .unwrap_or_else(|| format!("{func:?}"))
+}
+
+/// Return the zero-based argument index of `local`, if it is a MIR argument.
+///
+/// MIR local `_0` is the return place; argument locals start at `_1`.
+pub fn arg_of_local(local: Local, arg_count: usize) -> Option<usize> {
+    let i = local.as_usize();
+    if i >= 1 && i <= arg_count {
+        Some(i - 1)
+    } else {
+        None
+    }
 }

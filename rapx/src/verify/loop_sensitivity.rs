@@ -46,9 +46,9 @@ use rustc_middle::{
 use super::{
     contract::{ContractExpr, NumericPredicate, Property, PropertyArg, PropertyKind, RelOp},
     def_use::{RelevantPlaces, bind_callsite_roots},
-    helpers::{Checkpoint, CheckpointKind},
     target::FunctionTarget,
 };
+use crate::helpers::mir_scan::{Checkpoint, CheckpointKind};
 
 /// Upper bound for repeat selected by auto mode.
 pub(crate) const MAX_AUTO_REPEAT: usize = 16;

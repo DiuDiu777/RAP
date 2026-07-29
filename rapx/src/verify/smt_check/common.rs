@@ -50,13 +50,15 @@ use crate::verify::{
         PlaceBase, Property, PropertyArg, PropertyKind, RelOp,
     },
     def_use::{PlaceBaseKey, PlaceKey},
-    fn_simulator,
+    call_summary::fn_simulator,
     generic::GenericTypeCandidates,
-    helpers::{Checkpoint, callee_param_index_for_local, ty_has_param_const},
+    helpers::{callee_param_index_for_local, ty_has_param_const},
     report::CheckResult,
     slicer::ForgetReason,
     verifier::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 use super::model::SmtModel;
 
@@ -2315,7 +2317,7 @@ impl<'tcx> SmtChecker<'tcx> {
             let TerminatorKind::Call { func, args, .. } = &term.kind else {
                 continue;
             };
-            if !crate::verify::call_summary::call_name(self.tcx, func).contains("::write") {
+            if !crate::verify::helpers::call_name(self.tcx, func).contains("::write") {
                 continue;
             }
             let Some((idx_local, base_of_add)) = args
@@ -3472,7 +3474,7 @@ pub(crate) fn find_as_mut_ptr_of<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         if !name.contains("as_mut_ptr") {
             continue;
         }
@@ -3543,7 +3545,7 @@ pub(crate) fn pointer_add_index_and_base<'tcx>(
         if destination.local != ptr_local {
             continue;
         }
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         // Element-stride add only (byte variants change alignment/stride).
         if !(name.ends_with("::add") || name.contains("::add::")) {
             return None;
@@ -3580,7 +3582,7 @@ pub(crate) fn mir_ptr_cast_root<'tcx>(
             if destination.local != root {
                 continue;
             }
-            if crate::verify::call_summary::call_name(tcx, func).contains("::cast")
+            if crate::verify::helpers::call_name(tcx, func).contains("::cast")
                 && let Some(src) = args.first().and_then(|a| a.node.place())
             {
                 next = Some(src.local);
@@ -3647,7 +3649,7 @@ pub(crate) fn mir_range_next_call<'tcx>(
         if destination.local != opt_local {
             continue;
         }
-        if !crate::verify::call_summary::call_name(tcx, func).contains("::next") {
+        if !crate::verify::helpers::call_name(tcx, func).contains("::next") {
             return None;
         }
         let arg_local = args.first().and_then(|a| a.node.place())?.local;
@@ -3715,7 +3717,7 @@ pub(crate) fn mir_range_end_param<'tcx>(
                     ..
                 } = &term.kind
                 && destination.local == local
-                && crate::verify::call_summary::call_name(tcx, func).contains("into_iter")
+                && crate::verify::helpers::call_name(tcx, func).contains("into_iter")
                 && let Some(src) = args.first().and_then(|a| a.node.place())
             {
                 next = Some(src.local);
@@ -4321,9 +4323,9 @@ pub(crate) fn body_value_parents<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         let transfers = name.contains("into_raw")
-            || crate::verify::call_summary::is_ownership_reconstruction(&name)
+            || fn_simulator::is_ownership_reconstruction(&name)
             || fn_simulator::is_as_ptr(&name);
         if !transfers {
             continue;
@@ -4547,7 +4549,7 @@ pub(crate) fn body_parents<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         if !fn_simulator::is_as_ptr(&name)
         {
             continue;

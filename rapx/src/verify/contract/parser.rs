@@ -1,13 +1,15 @@
+use rustc_abi::FieldIdx;
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{GenericParamDefKind, Ty, TyCtxt, TyKind};
 use safety_parser::syn::{Expr, GenericArgument, Lit, PathArguments, Type};
 
+use crate::helpers::fn_info::{FnKind, get_type, parse_expr_into_number};
+use crate::helpers::name::{
+    access_ident_recursive, get_struct_self_ty, match_ty_with_ident, parse_signature,
+};
+
 use super::types::*;
 use super::spec;
-use crate::verify::helpers::{
-    access_ident_recursive, match_ty_with_ident, parse_expr_into_local_and_ty,
-    parse_expr_into_number,
-};
 
 impl<'tcx> Property<'tcx> {
     /// Parse a property using the fixed-arity declaration table.
@@ -693,7 +695,7 @@ impl<'tcx> Property<'tcx> {
             let sig = tcx.fn_sig(def_id).skip_binder();
             return sig.inputs().skip_binder().first().copied();
         }
-        crate::verify::helpers::match_ty_with_ident(tcx, def_id, name.to_string())
+        match_ty_with_ident(tcx, def_id, name.to_string())
     }
 
     fn int_type_min_max(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<(u128, u128)> {
@@ -1195,5 +1197,124 @@ fn unwrap_array_expr<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, expr: &Expr) -> Opt
     {
         return Property::parse_type(tcx, def_id, &arr.elems[0], "SplitTransmute");
     }
-    Property::parse_type(tcx, def_id, expr, "SplitTransmute")
+    return Property::parse_type(tcx, def_id, expr, "SplitTransmute");
+}
+
+pub(crate) fn parse_expr_into_local_and_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    expr: &Expr,
+) -> Option<(usize, Vec<(usize, Ty<'tcx>)>, Ty<'tcx>)> {
+    if let Some((base_ident, fields)) = access_ident_recursive(expr) {
+        let (param_names, param_tys) = parse_signature(tcx, def_id);
+        if param_names[0] != "0" {
+            if let Some(param_index) = param_names.iter().position(|name| name == &base_ident) {
+                return resolve_projection_from_base_ident(
+                    tcx,
+                    base_ident,
+                    fields,
+                    param_index + 1,
+                    param_tys[param_index],
+                );
+            }
+        }
+
+        if let Some(struct_ty) = get_struct_self_ty(tcx, def_id) {
+            return resolve_projection_from_struct_ident(
+                tcx, def_id, base_ident, fields, struct_ty,
+            );
+        }
+    }
+    None
+}
+
+fn resolve_projection_from_base_ident<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    _base_ident: String,
+    fields: Vec<String>,
+    base_local: usize,
+    base_ty: Ty<'tcx>,
+) -> Option<(usize, Vec<(usize, Ty<'tcx>)>, Ty<'tcx>)> {
+    let mut current_ty = base_ty;
+    let mut field_indices = Vec::new();
+    for field_name in fields {
+        let Some((field_idx, field_ty)) = resolve_next_field(tcx, current_ty, &field_name) else {
+            return None;
+        };
+        current_ty = field_ty;
+        field_indices.push((field_idx, current_ty));
+    }
+    Some((base_local, field_indices, current_ty))
+}
+
+fn resolve_projection_from_struct_ident<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    base_ident: String,
+    fields: Vec<String>,
+    struct_ty: Ty<'tcx>,
+) -> Option<(usize, Vec<(usize, Ty<'tcx>)>, Ty<'tcx>)> {
+    let Some((field_idx, field_ty)) = resolve_next_field(tcx, struct_ty, &base_ident) else {
+        return None;
+    };
+
+    let mut current_ty = field_ty;
+    let mut field_indices = vec![(field_idx, current_ty)];
+    for field_name in fields {
+        let Some((next_field_idx, next_field_ty)) =
+            resolve_next_field(tcx, current_ty, &field_name)
+        else {
+            return None;
+        };
+        current_ty = next_field_ty;
+        field_indices.push((next_field_idx, current_ty));
+    }
+
+    let base_local = if get_type(tcx, def_id) == FnKind::Constructor {
+        0
+    } else {
+        1
+    };
+
+    Some((base_local, field_indices, current_ty))
+}
+
+fn resolve_next_field<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    base_ty: Ty<'tcx>,
+    field_name: &str,
+) -> Option<(usize, Ty<'tcx>)> {
+    let peeled_ty = base_ty.peel_refs();
+    if let TyKind::Adt(adt_def, arg_list) = *peeled_ty.kind() {
+        if !adt_def.is_struct() && !adt_def.is_union() {
+            return None;
+        }
+        let variant = adt_def.non_enum_variant();
+        if let Ok(field_idx) = field_name.parse::<usize>() {
+            if field_idx < variant.fields.len() {
+                #[cfg(not(rapx_rustc_ge_198))]
+                let field_ty = variant.fields[FieldIdx::from_usize(field_idx)].ty(tcx, arg_list);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = variant.fields[FieldIdx::from_usize(field_idx)]
+                    .ty(tcx, arg_list)
+                    .skip_norm_wip();
+                return Some((field_idx, field_ty));
+            }
+        }
+        if let Some((idx, _)) = variant
+            .fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.ident(tcx).name.to_string() == field_name)
+        {
+            #[cfg(not(rapx_rustc_ge_198))]
+            let field_ty = variant.fields[FieldIdx::from_usize(idx)].ty(tcx, arg_list);
+            #[cfg(rapx_rustc_ge_198)]
+            let field_ty = variant.fields[FieldIdx::from_usize(idx)]
+                .ty(tcx, arg_list)
+                .skip_norm_wip();
+            return Some((idx, field_ty));
+        }
+    }
+    None
 }

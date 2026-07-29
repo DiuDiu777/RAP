@@ -10,6 +10,8 @@ use rustc_middle::{
     mir::{BinOp, Local, Operand, UnOp},
     ty::{Ty, TyCtxt, TyKind},
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 use z3::{
     Context, Solver,
     ast::{Ast, Bool, Int},
@@ -18,9 +20,8 @@ use z3::{
 use crate::verify::{
     contract::{ContractExpr, NumericOp, NumericPredicate, PropertyArg, PropertyKind, RelOp},
     def_use::{PlaceBaseKey, PlaceKey},
-    fn_simulator,
+    call_summary::fn_simulator,
     generic::GenericTypeCandidates,
-    helpers::Checkpoint,
     path_extractor::PathStep,
     verifier::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
 };
@@ -3978,7 +3979,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             let dropped_local = match &terminator.kind {
                 TerminatorKind::Drop { place, .. } => Some(place.local),
                 TerminatorKind::Call { func, args, .. } => {
-                    let name = crate::verify::call_summary::call_name(self.tcx, func);
+                    let name = crate::verify::helpers::call_name(self.tcx, func);
                     if name.ends_with("mem::drop")
                         || name == "std::mem::drop"
                         || name.contains("drop_in_place")

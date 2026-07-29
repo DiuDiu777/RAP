@@ -23,11 +23,11 @@ use crate::{
     helpers::mir_scan::check_safety,
     verify::{
         def_use::{PlaceBaseKey, PlaceKey},
-        fn_simulator,
-        helpers::Checkpoint,
+        call_summary::fn_simulator,
         verifier::{AbstractValue, ForwardVisitResult, StateFact},
     },
 };
+use crate::helpers::mir_scan::Checkpoint;
 
 use super::common::{
     SmtCheckResult, SmtChecker, call_destination, failed_smt, operand_place, rvalue_source_place,
@@ -376,7 +376,7 @@ pub(super) fn as_ptr_provenance_origins<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         if !fn_simulator::is_as_ptr(&name) {
             continue;
         }
@@ -706,7 +706,7 @@ fn terminator_is_benign_origin_use<'tcx>(
     let TerminatorKind::Call { func, .. } = terminator else {
         return true;
     };
-    let name = crate::verify::call_summary::call_name(tcx, func);
+    let name = crate::verify::helpers::call_name(tcx, func);
     fn_simulator::is_as_ptr(&name)
         || name.ends_with("::len")
         || name.ends_with("::is_empty")
@@ -946,7 +946,7 @@ fn places_holding_transferred_pointer<'tcx>(
             if !killed.contains(&call_destination.local)
                 && holders.iter().any(|h| destination_key.overlaps(h))
             {
-                let name = crate::verify::call_summary::call_name(tcx, func);
+                let name = crate::verify::helpers::call_name(tcx, func);
                 if fn_simulator::is_as_ptr(&name)
                     && let Some(arg) = args.first()
                     && let Operand::Copy(place) | Operand::Move(place) = &arg.node
@@ -1655,7 +1655,7 @@ fn terminator_writes_origin<'tcx>(
     let TerminatorKind::Call { func, args, .. } = terminator else {
         return false;
     };
-    let name = crate::verify::call_summary::call_name(tcx, func);
+    let name = crate::verify::helpers::call_name(tcx, func);
     if !fn_simulator::is_ptr_write(&name) {
         return false;
     }
@@ -1704,7 +1704,7 @@ fn terminator_returns_ownership<'tcx>(
     let TerminatorKind::Call { func, args, .. } = terminator else {
         return false;
     };
-    let name = crate::verify::call_summary::call_name(tcx, func);
+    let name = crate::verify::helpers::call_name(tcx, func);
     if !is_ownership_return_api(&name) {
         return false;
     }
@@ -1746,7 +1746,7 @@ fn vec_owners_for_origins<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         if !fn_simulator::is_as_ptr(&name) {
             continue;
         }
@@ -1792,7 +1792,7 @@ fn terminator_invalidates_vec_owner<'tcx>(
     let TerminatorKind::Call { func, args, .. } = terminator else {
         return false;
     };
-    let name = crate::verify::call_summary::call_name(tcx, func);
+    let name = crate::verify::helpers::call_name(tcx, func);
     if !is_vec_invalidating_method(&name) {
         return false;
     }

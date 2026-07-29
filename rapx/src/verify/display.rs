@@ -4,7 +4,7 @@ use crate::compat::FxHashMap;
 use crate::helpers::fn_info::get_cons;
 use indexmap::IndexMap;
 
-use super::helpers::CheckpointLocation;
+use crate::helpers::mir_scan::CheckpointLocation;
 use super::report::PropertyCheckResult;
 pub fn fmt_fn_with_params(path: &str, arg_names: &[String], ret_ty: Option<&str>) -> String {
     let args = arg_names.join(", ");

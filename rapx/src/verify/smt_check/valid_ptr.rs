@@ -17,10 +17,11 @@
 use super::common::{SmtCheckResult, SmtChecker, TypeSizeClass};
 use crate::verify::{
     contract::{self, Property, PropertyKind},
-    helpers::Checkpoint,
     report::CheckResult,
     verifier::ForwardVisitResult,
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 /// Check `ValidPtr` using `Size(T,0) || (!Size(T,0) && Deref(p,T,n))`.
 pub(crate) fn check<'tcx>(

@@ -18,8 +18,9 @@ use super::{
         ContractExpr, ContractPlace, ContractProjection, NumericPredicate, PlaceBase, Property,
         PropertyArg, PropertyKind,
     },
-    helpers::{Checkpoint, callee_param_index_for_local},
+    helpers::callee_param_index_for_local,
 };
+use crate::helpers::mir_scan::Checkpoint;
 
 /// Definitions and uses collected from one MIR item.
 #[derive(Clone, Debug, Default)]

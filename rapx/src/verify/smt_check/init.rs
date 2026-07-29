@@ -14,7 +14,8 @@
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 
-use crate::verify::{contract::Property, helpers::Checkpoint, verifier::ForwardVisitResult};
+use crate::verify::{contract::Property, verifier::ForwardVisitResult};
+use crate::helpers::mir_scan::Checkpoint;
 use rustc_middle::ty::{Ty, TyKind};
 
 /// Check `Init` by lowering it to a common initialized-memory obligation.

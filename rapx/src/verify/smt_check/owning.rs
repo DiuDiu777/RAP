@@ -21,9 +21,10 @@ use rustc_middle::mir::Local;
 use super::common::{SmtCheckResult, SmtChecker, place_label};
 use crate::verify::{
     contract::Property,
-    helpers::Checkpoint,
     verifier::{AbstractValue, ForwardVisitResult, StateFact},
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,

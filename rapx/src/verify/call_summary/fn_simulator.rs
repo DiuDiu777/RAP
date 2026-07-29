@@ -1,4 +1,4 @@
-//! API semantic registry for the staged verifier.
+//! Function simulation: API behaviour modelling when MIR is unavailable.
 //!
 //! Each recognised standard-library API is described by a single table
 //! row: a **name matcher**, **argument dependency**, and **effect
@@ -17,8 +17,8 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Operand;
 use rustc_middle::ty::{GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind};
 
+use super::{CallDependencySummary, CallEffect, CallEffectSummary};
 use crate::verify::{
-    call_summary::{CallDependencySummary, CallEffect, CallEffectSummary},
     helpers::ty_has_param_const,
     smt_check::common::pointee_ty,
 };

@@ -6,7 +6,8 @@
 //! even when their addresses happen to be close.
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
-use crate::verify::{contract::Property, helpers::Checkpoint, verifier::ForwardVisitResult};
+use crate::verify::{contract::Property, verifier::ForwardVisitResult};
+use crate::helpers::mir_scan::Checkpoint;
 
 /// Check `Allocated` by lowering it to a common allocation obligation.
 pub(crate) fn check<'tcx>(

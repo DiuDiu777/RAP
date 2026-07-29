@@ -17,9 +17,10 @@ use crate::verify::{
     call_summary::CallEffect,
     contract::Property,
     def_use::PlaceKey,
-    helpers::Checkpoint,
     verifier::{AbstractValue, ForwardVisitResult, StateFact},
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 const MAX_TYPED_TRACE_DEPTH: usize = 32;
 

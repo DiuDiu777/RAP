@@ -7,9 +7,10 @@ use rustc_middle::ty::{TyCtxt, TyKind};
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation};
 use crate::verify::{
     contract::{ContractPlace, PlaceBase, Property, PropertyArg},
-    helpers::Checkpoint,
     verifier::ForwardVisitResult,
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 fn is_nonnull_param_ty(tcx: TyCtxt<'_>, ty: rustc_middle::ty::Ty<'_>) -> bool {
     let peeled = ty.peel_refs();

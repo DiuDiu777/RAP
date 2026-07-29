@@ -16,9 +16,9 @@ use crate::analysis::dataflow::types::DataflowGraph;
 use super::super::{
     contract,
     def_use::{RelevantPlaces, bind_callsite_roots, operand_uses, terminator_use_def},
-    helpers::{Checkpoint, CheckpointLocation},
     path_extractor::{Path, PathStep},
 };
+use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
 
 use crate::analysis::path_analysis::{PathNode, PathTree};
 

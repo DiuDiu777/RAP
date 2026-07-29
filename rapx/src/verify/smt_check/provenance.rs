@@ -15,10 +15,10 @@ use rustc_middle::{
 
 use crate::verify::{
     contract::{ContractExpr, Property},
-    fn_simulator,
-    helpers::Checkpoint,
+    call_summary::fn_simulator,
     verifier::ForwardVisitResult,
 };
+use crate::helpers::mir_scan::Checkpoint;
 
 use super::{alias, common::SmtChecker};
 
@@ -328,7 +328,7 @@ fn call_receiver_root<'tcx>(
             if destination.local != current {
                 continue;
             }
-            let name = crate::verify::call_summary::call_name(tcx, func);
+            let name = crate::verify::helpers::call_name(tcx, func);
             if !matches(&name) {
                 return None;
             }
@@ -463,7 +463,7 @@ fn len_call_receiver<'tcx>(tcx: TyCtxt<'tcx>, body: &Body<'tcx>, local: Local) -
         if destination.local != local {
             continue;
         }
-        let name = crate::verify::call_summary::call_name(tcx, func);
+        let name = crate::verify::helpers::call_name(tcx, func);
         if !fn_simulator::is_len(&name) {
             return None;
         }

@@ -12,8 +12,9 @@
 
 use super::common::{SmtCheckResult, SmtChecker, SmtObligation, place_label};
 use crate::verify::{
-    contract::Property, helpers::Checkpoint, report::CheckResult, verifier::ForwardVisitResult,
+    contract::Property, report::CheckResult, verifier::ForwardVisitResult,
 };
+use crate::helpers::mir_scan::Checkpoint;
 
 pub(crate) fn check<'tcx>(
     checker: &SmtChecker<'tcx>,

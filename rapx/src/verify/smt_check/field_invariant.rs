@@ -31,10 +31,11 @@ use rustc_abi::FieldIdx;
 use crate::verify::{
     contract::{ContractExpr, ContractPlace, Property, PropertyArg, PropertyKind},
     def_use::{PlaceBaseKey, PlaceKey},
-    helpers::Checkpoint,
     target::get_struct_invariants_for_adt,
     verifier::{AbstractValue, ForwardVisitResult, StateFact},
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 /// Maximum substitution steps while tracing the pointer back to a field.
 const MAX_TRACE_STEPS: usize = 32;

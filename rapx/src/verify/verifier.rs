@@ -22,12 +22,14 @@ use super::{
     call_summary::{self, CallEffect, CallEffectSummary},
     contract::Property,
     def_use::{PlaceBaseKey, PlaceKey},
-    fn_simulator,
-    helpers::CheckpointLocation,
+    call_summary::fn_simulator,
+    helpers::call_name,
     path_extractor::{Path, PathStep},
     slicer::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
     smt_check::common::{const_int_from_debug, operand_place},
 };
+
+use crate::helpers::mir_scan::CheckpointLocation;
 
 /// Visits relevant MIR items forward and builds an abstract state.
 pub struct ForwardVerifier<'tcx> {
@@ -184,7 +186,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                 );
                 let call = CallSummary {
                     destination: destination.local,
-                    func: call_summary::call_name(self.tcx, func),
+                    func: call_name(self.tcx, func),
                     arg_count: args.len(),
                     args: arg_values,
                     effects: effect_summary.effects.clone(),
@@ -204,8 +206,8 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     reason == KeepReason::Checkpoint,
                     result,
                 );
-                let is_uninit = call_summary::is_maybe_uninit_uninit_call(
-                    &call_summary::call_name(self.tcx, func),
+                let is_uninit = fn_simulator::is_maybe_uninit_uninit(
+                    &call_name(self.tcx, func),
                 );
                 if is_uninit
                     && let Some((_elem_ty_name, elements)) = self.allocated_element_summary(
@@ -1013,7 +1015,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         ..
                     } = &term.kind
                     && destination.local == local
-                    && call_summary::call_name(self.tcx, func).contains("into_iter")
+                    && call_name(self.tcx, func).contains("into_iter")
                     && let Some(src) = args.first().and_then(|a| a.node.place())
                 {
                     next = Some(src.local);
@@ -1044,7 +1046,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             if destination.local != opt_local {
                 continue;
             }
-            let name = call_summary::call_name(self.tcx, func);
+            let name = call_name(self.tcx, func);
             if !name.contains("::next") {
                 return None;
             }

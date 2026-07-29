@@ -17,10 +17,11 @@ use super::common::{SmtCheckResult, SmtChecker, SmtObligation, SmtTerm};
 use crate::verify::def_use::PlaceKey;
 use crate::verify::{
     contract::{ContractExpr, Property, PropertyArg},
-    fn_simulator,
-    helpers::Checkpoint,
+    call_summary::fn_simulator,
     verifier::ForwardVisitResult,
 };
+
+use crate::helpers::mir_scan::Checkpoint;
 
 /// Check `InBound` by lowering it to a common bounds obligation.
 pub(crate) fn check<'tcx>(

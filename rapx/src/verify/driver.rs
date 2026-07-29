@@ -28,13 +28,15 @@ use super::{
         fmt_fn_path_with_generics, fmt_fn_with_params,
     },
     engine::VerifyEngine,
-    helpers::{Checkpoint, CheckpointKind, CheckpointLocation, collect_return_block_indices},
+    helpers::{collect_return_block_indices},
     loop_sensitivity::{LoopSensitivityAnalyzer, RepeatStrategy},
     path_extractor::{CallGroup, PATH_LIMIT, PathExtractor},
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     slicer::BackwardItem,
     target::{FunctionTarget, VerifyTargetCollector},
 };
+
+use crate::helpers::mir_scan::{Checkpoint, CheckpointKind, CheckpointLocation};
 
 /// Orchestrates the three-stage verification pipeline (backward data-dependency
 /// analysis → forward state simulation → SMT checking) for a single function

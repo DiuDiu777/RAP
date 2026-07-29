@@ -12,7 +12,7 @@ use rustc_middle::ty::TyCtxt;
 use crate::analysis::dataflow::types::DataflowGraph;
 
 use super::super::{
-    call_summary,
+    call_summary, helpers,
     def_use::{PlaceKey, RelevantPlaces, call_args_uses_at, operand_uses},
 };
 
@@ -103,7 +103,7 @@ pub(crate) fn visit<'tcx>(
     // same origin, add the destination to relevance so the length term
     // is available for the contract obligation.
     if !relevant.need_len.is_empty() {
-        let name = call_summary::call_name(tcx, func);
+        let name = helpers::call_name(tcx, func);
         if name.ends_with("::len") || name.contains("::len(") {
             if let Some(first) = args.first() {
                 let arg_place = match &first.node {
