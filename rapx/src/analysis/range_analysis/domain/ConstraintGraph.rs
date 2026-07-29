@@ -560,8 +560,6 @@ where
         self.build_value_maps(body);
         for block in body.basic_blocks.indices() {
             let block_data: &BasicBlockData<'tcx> = &body[block];
-            // Traverse statements
-
             for statement in block_data.statements.iter() {
                 self.build_operations(statement, block, body);
             }
@@ -584,51 +582,33 @@ where
                             self.build_value_branch_map(body, discr, targets, bb, block_data);
                         }
                     }
-                    TerminatorKind::Goto { target } => {
-                    }
-                    _ => {
-                    }
+                    _ => {}
                 }
             }
         }
     }
-    fn trace_operand_source(
+    fn trace_operand_origin(
         &self,
         body: &'tcx Body<'tcx>,
         mut current_block: BasicBlock,
         target_place: Place<'tcx>,
-    ) -> Option<&'tcx Operand<'tcx>> {
+        original: &'tcx Operand<'tcx>,
+    ) -> &'tcx Operand<'tcx> {
         let mut visited = HashSet::new();
         let target_local = target_place.local;
-
         while visited.insert(current_block) {
             let data = &body.basic_blocks[current_block];
-
-            // Scan the current block in reverse order
             for stmt in data.statements.iter().rev() {
                 if let StatementKind::Assign(assign) = &stmt.kind {
                     let (lhs, rvalue) = &**assign;
-                    // Once we find an assignment to the target variable
                     if lhs.local == target_local {
-                        rap_debug!(
-                            "Tracing source for {:?} in block {:?} {:?}\n",
-                            target_place,
-                            current_block,
-                            rvalue
-                        );
                         return match rvalue {
-                            // If the rvalue is an Operand (e.g. _2 = _1 or _2 = const 5)
-                            // return a reference to this Operand; stop tracing _1's source
-                            Rvalue::Use(op, ..) => Some(op),
-                            // If the rvalue is a computed result (e.g. _2 = Add(_3, _4))
-                            // _2's source is here but it's not an Operand; return None
-                            _ => None,
+                            Rvalue::Use(op, ..) => op,
+                            _ => original,
                         };
                     }
                 }
             }
-
-            // Not found in current block, try tracing back through the unique predecessor
             let preds = &body.basic_blocks.predecessors()[current_block];
             if preds.len() == 1 {
                 current_block = preds[0];
@@ -636,9 +616,9 @@ where
                 break;
             }
         }
-
-        None
+        original
     }
+
     pub fn build_value_branch_map(
         &mut self,
         body: &'tcx Body<'tcx>,
@@ -647,9 +627,6 @@ where
         switch_block: BasicBlock,
         block_data: &'tcx BasicBlockData<'tcx>,
     ) {
-        let first_target = targets.all_targets()[0];
-        let target_data = &body.basic_blocks[first_target];
-
         if let Operand::Copy(place) | Operand::Move(place) = discr {
             if let Some((op1, op2, cmp_op)) = self.extract_condition(place, block_data) {
                 rap_debug!(
@@ -659,15 +636,13 @@ where
                     cmp_op
                 );
                 let op1 = if let Some(p1) = op1.place() {
-                    self.trace_operand_source(body, switch_block, p1)
-                        .unwrap_or(op1)
+                    self.trace_operand_origin(body, switch_block, p1, op1)
                 } else {
                     op1
                 };
 
                 let op2 = if let Some(p2) = op2.place() {
-                    self.trace_operand_source(body, switch_block, p2)
-                        .unwrap_or(op2)
+                    self.trace_operand_origin(body, switch_block, p2, op2)
                 } else {
                     op2
                 };
@@ -680,7 +655,7 @@ where
                 let const_op1 = op1.constant();
                 let const_op2 = op2.constant();
                 match (const_op1, const_op2) {
-                    (Some(c1), Some(c2)) => {}
+                    (Some(_), Some(_)) => {}
                     (Some(c), None) | (None, Some(c)) => {
                         let const_in_left: bool;
                         let variable;

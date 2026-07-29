@@ -177,7 +177,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
                     si,
                     stmt,
                     flow,
-                    body,
                     &mut relevant,
                     &mut items,
                     keep_inv,
@@ -185,7 +184,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
             }
             // Pass 2: re-visit definitions that became relevant only
             // during pass 1.
-            Self::re_visit_newly_added(visitor, checkpoint_block, block_data, flow, body, &mut relevant, &mut items, keep_inv);
+            Self::re_visit_newly_added(visitor, checkpoint_block, block_data, flow, &mut relevant, &mut items, keep_inv);
             (items, relevant)
         } else {
             (Vec::new(), RelevantPlaces::new())
@@ -226,7 +225,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
                         si,
                         stmt,
                         flow,
-                        body,
                         &mut relevant,
                         &mut items,
                         keep_inv,
@@ -240,7 +238,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
                 // checkpoint to avoid spurious matches in deep trees.
                 let dist_to_target = child_path.iter().position(|&b| b == target_block);
                 if block_stmt_count > 0 && dist_to_target.map_or(false, |d| d <= 2) {
-                    Self::re_visit_newly_added(visitor, block, block_data, flow, body, &mut relevant, &mut items, keep_inv);
+                    Self::re_visit_newly_added(visitor, block, block_data, flow, &mut relevant, &mut items, keep_inv);
                 }
                 child_path.insert(0, node.block);
                 results.push((child_path, items, relevant));
@@ -273,7 +271,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
         block: BasicBlock,
         block_data: &'tcx rustc_middle::mir::BasicBlockData<'tcx>,
         flow: &DataflowGraph,
-        body: &'tcx rustc_middle::mir::Body<'tcx>,
         relevant: &mut RelevantPlaces,
         items: &mut Vec<BackwardItem<'tcx>>,
         keep_inv: bool,
@@ -300,7 +297,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
                     si,
                     stmt,
                     flow,
-                    body,
                     relevant,
                     items,
                     keep_inv,
@@ -316,7 +312,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
         statement_index: usize,
         statement: &'tcx rustc_middle::mir::Statement<'tcx>,
         flow: &DataflowGraph,
-        body: &Body<'tcx>,
         relevant: &mut RelevantPlaces,
         items: &mut Vec<BackwardItem<'tcx>>,
         keep_invalidations: bool,
@@ -344,7 +339,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
         }
 
         if defs.intersects(relevant) {
-            let mut uses = collect_statement_uses(statement, block, statement_index, flow, body);
+            let mut uses = collect_statement_uses(statement, block, statement_index, flow);
             items.push(BackwardItem::Statement {
                 block,
                 statement_index,
@@ -571,7 +566,6 @@ fn collect_statement_uses<'tcx>(
     block: BasicBlock,
     statement_index: usize,
     flow: &DataflowGraph,
-    body: &Body<'tcx>,
 ) -> RelevantPlaces {
     let mut uses = RelevantPlaces::new();
 
@@ -612,7 +606,7 @@ fn collect_statement_uses<'tcx>(
         // enumeration.
         if let rustc_middle::mir::Rvalue::Ref(_, _, place)
         | rustc_middle::mir::Rvalue::RawPtr(_, place) = rvalue
-            && crate::verify::def_use::is_from_tuple_field(body, place.local)
+            && crate::verify::def_use::is_from_tuple_field(flow, place.local)
         {
             uses.extend(super::super::def_use::place_uses(place));
         }

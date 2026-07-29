@@ -3253,7 +3253,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             .get(1)
             .and_then(operand_place)
             .and_then(|p| p.local())
-            .map(|l| mir_copy_root(&body, Local::from_usize(l.as_usize())));
+            .map(|l| mir_copy_root(body, Local::from_usize(l.as_usize())));
 
         for fact in &self.forward.facts {
             let StateFact::Call(call) = fact else {
@@ -3979,7 +3979,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             let dropped_local = match &terminator.kind {
                 TerminatorKind::Drop { place, .. } => Some(place.local),
                 TerminatorKind::Call { func, args, .. } => {
-                    let name = crate::verify::helpers::call_name(self.tcx, func);
+                    let name = crate::helpers::mir_utils::call_name(self.tcx, func);
                     if name.ends_with("mem::drop")
                         || name == "std::mem::drop"
                         || name.contains("drop_in_place")

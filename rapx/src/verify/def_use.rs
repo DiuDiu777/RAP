@@ -6,10 +6,11 @@
 //! finite verification path; keeping it separate lets the core visit logic stay
 //! focused on path-level decisions (calls, SCC exits, path conditions).
 
+use crate::analysis::dataflow::types::DataflowGraph;
 use crate::compat::FxHashSet;
 use crate::compat::Spanned;
 use rustc_middle::mir::{
-    Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, Terminator, TerminatorKind,
+    Local, Operand, Place, ProjectionElem, Rvalue, Terminator, TerminatorKind,
 };
 use rustc_middle::ty::TyCtxt;
 
@@ -18,8 +19,8 @@ use super::{
         ContractExpr, ContractPlace, ContractProjection, NumericPredicate, PlaceBase, Property,
         PropertyArg, PropertyKind,
     },
-    helpers::callee_param_index_for_local,
 };
+use crate::helpers::mir_utils::callee_param_index_for_local;
 use crate::helpers::mir_scan::Checkpoint;
 
 /// Definitions and uses collected from one MIR item.
@@ -524,78 +525,25 @@ pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'t
 
 // ── chain-tracing helpers ────────────────────────────────────────────
 
-/// Follow `local = move/copy other` (no projection) to the root local.
-pub fn trace_local_origin(body: &Body<'_>, mut local: Local) -> Local {
-    let mut seen = FxHashSet::default();
-    for _ in 0..16 {
-        if !seen.insert(local) {
-            break;
-        }
-        let mut next = None;
-        for data in body.basic_blocks.iter() {
-            for stmt in &data.statements {
-                let StatementKind::Assign(assign) = &stmt.kind else { continue };
-                let (dest, rvalue) = &**assign;
-                if dest.local != local || !dest.projection.is_empty() {
-                    continue;
-                }
-                if let Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) = rvalue {
-                    if src.projection.is_empty() {
-                        next = Some(src.local);
-                    }
-                }
-            }
-        }
-        match next {
-            Some(src) if src != local => local = src,
-            _ => break,
-        }
-    }
-    local
+/// Follow Copy/Move edges in the dataflow graph upward to find the
+/// root real local behind any copy chains (no projections).
+pub fn trace_local_origin(flow: &DataflowGraph, local: Local) -> Local {
+    flow.trace_origin(local)
 }
 
 /// Like [`trace_local_origin`] but on a [`PlaceKey`].
-pub fn trace_place_origin(body: &Body<'_>, key: &PlaceKey) -> PlaceKey {
+pub fn trace_place_origin(flow: &DataflowGraph, key: &PlaceKey) -> PlaceKey {
     let Some(local) = key.local() else {
         return key.clone();
     };
     PlaceKey {
-        base: PlaceBaseKey::Local(trace_local_origin(body, local).as_usize()),
+        base: PlaceBaseKey::Local(flow.trace_origin(local).as_usize()),
         fields: key.fields.clone(),
     }
 }
 
 /// True when a local's origin was destructured from a tuple field
 /// (e.g. `(tuple.0, tuple.1)` after a call returning a tuple).
-pub fn is_from_tuple_field(body: &Body<'_>, local: Local) -> bool {
-    let mut current = local;
-    let mut seen = FxHashSet::default();
-    for _ in 0..8 {
-        if !seen.insert(current) {
-            return false;
-        }
-        let mut next = None;
-        for data in body.basic_blocks.iter() {
-            for stmt in &data.statements {
-                let StatementKind::Assign(assign) = &stmt.kind else { continue };
-                let (dest, rvalue) = &**assign;
-                if dest.local != current || !dest.projection.is_empty() {
-                    continue;
-                }
-                if let Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) = rvalue {
-                    if src.projection.iter().any(|p| {
-                        matches!(p, ProjectionElem::Field(..))
-                    }) {
-                        return true;
-                    }
-                    next = Some(src.local);
-                }
-            }
-        }
-        match next {
-            Some(src) if src != current => current = src,
-            _ => return false,
-        }
-    }
-    false
+pub fn is_from_tuple_field(flow: &DataflowGraph, local: Local) -> bool {
+    flow.is_from_tuple_field(local)
 }

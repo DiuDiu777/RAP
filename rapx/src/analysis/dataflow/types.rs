@@ -460,6 +460,108 @@ impl DataflowGraph {
             Some((var.get(), fields))
         }
     }
+
+    /// Follow Copy/Move edges upward to find the root real local behind any
+    /// copy chains (no projections). Stops at 16 hops to bound cycles.
+    pub fn trace_origin(&self, local: Local) -> Local {
+        let mut current = local;
+        let mut seen = HashSet::new();
+        for _ in 0..16 {
+            if !seen.insert(current) {
+                break;
+            }
+            let next = self.nodes[current]
+                .in_edges
+                .iter()
+                .find_map(|&ei| {
+                    let e = &self.edges[ei];
+                    if matches!(e.op, EdgeOp::Copy | EdgeOp::Move)
+                        && !self.is_marker(e.src)
+                    {
+                        Some(e.src)
+                    } else {
+                        None
+                    }
+                });
+            match next {
+                Some(src) if src != current => current = src,
+                _ => break,
+            }
+        }
+        current
+    }
+
+    /// Return `true` when `local` originates from a tuple field destructuring
+    /// (e.g. `(tuple.0, tuple.1)` after a call returning a tuple).
+    /// Follows Copy/Move chains upward through marker nodes and checks for
+    /// any `Field` edge along the projection chain.
+    pub fn is_from_tuple_field(&self, local: Local) -> bool {
+        let mut current = local;
+        let mut seen = HashSet::new();
+        for _ in 0..8 {
+            if !seen.insert(current) {
+                return false;
+            }
+            let mut next_local = None;
+            for &ei in &self.nodes[current].in_edges {
+                let e = &self.edges[ei];
+                if !matches!(e.op, EdgeOp::Copy | EdgeOp::Move) {
+                    continue;
+                }
+                if self.is_marker(e.src) {
+                    if self.marker_chain_has_field(e.src) {
+                        return true;
+                    }
+                    if let Some(real) = self.marker_to_real(e.src) {
+                        next_local = Some(real);
+                        break;
+                    }
+                } else {
+                    next_local = Some(e.src);
+                    break;
+                }
+            }
+            match next_local {
+                Some(src) if src != current => current = src,
+                _ => return false,
+            }
+        }
+        false
+    }
+
+    /// Walk up a projection-marker chain to find the underlying real local.
+    fn marker_to_real(&self, marker: Local) -> Option<Local> {
+        let mut current = marker;
+        for _ in 0..8 {
+            if !self.is_marker(current) {
+                return Some(current);
+            }
+            current = self.nodes[current]
+                .in_edges
+                .first()
+                .map(|&ei| self.edges[ei].src)?;
+        }
+        None
+    }
+
+    /// Check whether a projection-marker chain contains a `Field` edge.
+    fn marker_chain_has_field(&self, marker: Local) -> bool {
+        let mut current = marker;
+        for _ in 0..8 {
+            if !self.is_marker(current) {
+                return false;
+            }
+            let ei = match self.nodes[current].in_edges.first() {
+                Some(&ei) => ei,
+                None => return false,
+            };
+            if matches!(self.edges[ei].op, EdgeOp::Field(_)) {
+                return true;
+            }
+            current = self.edges[ei].src;
+        }
+        false
+    }
 }
 
 #[derive(Clone, Copy)]

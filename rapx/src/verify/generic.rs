@@ -5,7 +5,7 @@
 //! types, so SMT lowering can reason about layout requirements that mention
 //! generic parameters.
 
-use super::helpers::ty_has_param_const;
+use crate::helpers::mir_utils::ty_has_param_const;
 use std::collections::{HashMap, HashSet};
 
 use if_chain::if_chain;

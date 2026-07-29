@@ -5,7 +5,6 @@ pub mod display;
 pub mod driver;
 pub mod engine;
 pub mod generic;
-pub(crate) mod helpers;
 pub mod loop_sensitivity;
 pub mod path_extractor;
 pub mod report;

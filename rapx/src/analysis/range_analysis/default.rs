@@ -169,40 +169,6 @@ where
         }
     }
 
-    fn build_constraintgraph(&mut self, body_mut_ref: &'tcx Body<'tcx>, def_id: DefId) {
-        rap_debug!(
-            "Building ConstraintGraph for function: {}",
-            self.tcx.def_path_str(def_id)
-        );
-        let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
-        let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
-        let mut cg: ConstraintGraph<'tcx, T> =
-            ConstraintGraph::new(body_mut_ref, self.tcx, def_id, essa_def_id, ssa_def_id);
-        cg.build_graph(body_mut_ref);
-        cg.build_nuutila(false);
-        // cg.rap_print_vars();
-        // cg.rap_print_final_vars();
-        let dot_output = cg.to_dot();
-        let vars_map = cg.get_vars().clone();
-
-        self.cg_map.insert(def_id, Rc::new(RefCell::new(cg)));
-        let mut vec = Vec::new();
-        vec.push(RefCell::new(vars_map));
-        self.vars_map.insert(def_id, vec);
-        let function_name = self.tcx.def_path_str(def_id);
-
-        let dir_path = PathBuf::from("cg_dot");
-        fs::create_dir_all(dir_path.clone()).unwrap();
-        let safe_filename = format!("{}_cg.dot", function_name);
-        let output_path = dir_path.join(format!("{}", safe_filename));
-
-        let mut file = File::create(&output_path).expect("cannot create file");
-        file.write_all(dot_output.as_bytes())
-            .expect("Could not write to file");
-
-        rap_trace!("Successfully generated graph.dot");
-    }
-
     fn only_caller_range_analysis(&mut self) {
         let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
         let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
@@ -221,7 +187,6 @@ where
                     // Run SSA/ESSA passes
                     let mut passrunner = PassRunner::new(self.tcx);
                     passrunner.run_pass(body_mut_ref, ssa_def_id, essa_def_id);
-                    self.body_map.insert(def_id, body);
                     // Print the MIR after SSA/ESSA passes
                     if self.debug {
                         print_diff(self.tcx, body_mut_ref, def_id.into());
@@ -230,13 +195,35 @@ where
 
                     self.ssa_places_mapping
                         .insert(def_id, passrunner.places_map.clone());
-                    // rap_debug!("ssa_places_mapping: {:?}", self.ssa_places_mapping);
-                    // Build and store the constraint graph
-                    self.build_constraintgraph(body_mut_ref, def_id);
-                    // Visit for call graph construction
+
+                    // Build ConstraintGraph locally (avoids self-referential borrows)
+                    let mut cg: ConstraintGraph<'tcx, T> =
+                        ConstraintGraph::new(body_mut_ref, self.tcx, def_id, essa_def_id, ssa_def_id);
+                    cg.build_graph(body_mut_ref);
+                    cg.build_nuutila(false);
+                    let vars_map = cg.get_vars().clone();
+                    let dot_output = cg.to_dot();
+
+                    // Visit for call graph construction (before body is moved)
                     let mut call_graph_visitor =
                         CallGraphVisitor::new(self.tcx, def_id, body_mut_ref, &mut self.callgraph);
                     call_graph_visitor.visit();
+
+                    // Now move body into map (all local references are done)
+                    self.body_map.insert(def_id, body);
+                    self.cg_map.insert(def_id, Rc::new(RefCell::new(cg)));
+                    self.vars_map.entry(def_id).or_default().push(RefCell::new(vars_map));
+
+                    // Write dot file
+                    let function_name = self.tcx.def_path_str(def_id);
+                    let dir_path = PathBuf::from("cg_dot");
+                    fs::create_dir_all(dir_path.clone()).unwrap();
+                    let safe_filename = format!("{}_cg.dot", function_name);
+                    let output_path = dir_path.join(format!("{}", safe_filename));
+                    let mut file = File::create(&output_path).expect("cannot create file");
+                    file.write_all(dot_output.as_bytes())
+                        .expect("Could not write to file");
+                    rap_trace!("Successfully generated graph.dot");
                 }
             }
         }

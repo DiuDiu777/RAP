@@ -13,6 +13,14 @@ use super::types::*;
 /// Build a `DataflowGraph` for a single function identified by `def_id`.
 pub fn build_dataflow_graph(tcx: TyCtxt<'_>, def_id: DefId) -> DataflowGraph {
     let body = tcx.optimized_mir(def_id);
+    build_dataflow_graph_from_body(def_id, body)
+}
+
+/// Build a `DataflowGraph` from a pre-existing MIR body (e.g. after SSA transformation).
+pub fn build_dataflow_graph_from_body(
+    def_id: DefId,
+    body: &rustc_middle::mir::Body<'_>,
+) -> DataflowGraph {
     let mut graph = DataflowGraph::new(def_id, body.span, body.arg_count, body.local_decls.len());
     for (block_idx, bb) in body.basic_blocks.iter().enumerate() {
         graph.block = block_idx;

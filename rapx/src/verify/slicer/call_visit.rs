@@ -12,7 +12,7 @@ use rustc_middle::ty::TyCtxt;
 use crate::analysis::dataflow::types::DataflowGraph;
 
 use super::super::{
-    call_summary, helpers,
+    call_summary,
     def_use::{PlaceKey, RelevantPlaces, call_args_uses_at, operand_uses},
 };
 
@@ -103,7 +103,7 @@ pub(crate) fn visit<'tcx>(
     // same origin, add the destination to relevance so the length term
     // is available for the contract obligation.
     if !relevant.need_len.is_empty() {
-        let name = helpers::call_name(tcx, func);
+        let name = crate::helpers::mir_utils::call_name(tcx, func);
         if name.ends_with("::len") || name.contains("::len(") {
             if let Some(first) = args.first() {
                 let arg_place = match &first.node {
@@ -116,8 +116,8 @@ pub(crate) fn visit<'tcx>(
                             .need_len
                             .iter()
                             .any(|nl| {
-                                crate::verify::def_use::trace_place_origin(body, nl)
-                                    == crate::verify::def_use::trace_place_origin(body, &arg_key)
+                                crate::verify::def_use::trace_place_origin(flow, nl)
+                                    == crate::verify::def_use::trace_place_origin(flow, &arg_key)
                             });
                     if matches {
                         let dest_key = PlaceKey::from_mir_place(destination);

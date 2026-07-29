@@ -17,7 +17,8 @@ use rustc_middle::{
     ty::{Ty, TyCtxt, TyKind},
 };
 
-use super::{helpers, slicer::ForgetReason};
+use super::slicer::ForgetReason;
+use crate::helpers::mir_utils;
 
 /// Dependency summary consumed by the backward visitor.
 #[derive(Clone, Debug)]
@@ -145,8 +146,8 @@ pub fn dependency_summary<'tcx>(
     func: &Operand<'tcx>,
     arg_count: usize,
 ) -> CallDependencySummary {
-    let callee = fn_simulator::dep_callee_def_id(func);
-    let name = helpers::call_name(tcx, func);
+    let callee = mir_utils::dep_callee_def_id(func);
+    let name = mir_utils::call_name(tcx, func);
 
     if let Some(summary) = fn_simulator::lookup_dependency(callee, &name, arg_count) {
         return summary;
@@ -198,8 +199,8 @@ pub fn effect_summary<'tcx>(
     func: &Operand<'tcx>,
     destination: Local,
 ) -> CallEffectSummary {
-    let callee = fn_simulator::dep_callee_def_id(func);
-    let name = helpers::call_name(tcx, func);
+    let callee = mir_utils::dep_callee_def_id(func);
+    let name = mir_utils::call_name(tcx, func);
 
     if let Some(summary) = fn_simulator::lookup_effect(tcx, caller, callee, &name, func, destination) {
         return summary;

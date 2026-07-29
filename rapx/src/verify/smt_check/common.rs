@@ -44,6 +44,7 @@ use super::{
     valid_ptr,
 };
 
+use crate::helpers::mir_utils::{callee_param_index_for_local, ty_has_param_const};
 use crate::verify::{
     contract::{
         self, ContractExpr, ContractPlace, ContractProjection, NumericOp, NumericPredicate,
@@ -52,7 +53,6 @@ use crate::verify::{
     def_use::{PlaceBaseKey, PlaceKey},
     call_summary::fn_simulator,
     generic::GenericTypeCandidates,
-    helpers::{callee_param_index_for_local, ty_has_param_const},
     report::CheckResult,
     slicer::ForgetReason,
     verifier::{AbstractValue, CallSummary, ForwardVisitResult, StateFact},
@@ -2317,7 +2317,7 @@ impl<'tcx> SmtChecker<'tcx> {
             let TerminatorKind::Call { func, args, .. } = &term.kind else {
                 continue;
             };
-            if !crate::verify::helpers::call_name(self.tcx, func).contains("::write") {
+            if !crate::helpers::mir_utils::call_name(self.tcx, func).contains("::write") {
                 continue;
             }
             let Some((idx_local, base_of_add)) = args
@@ -2354,7 +2354,6 @@ impl<'tcx> SmtChecker<'tcx> {
         body: &rustc_middle::mir::Body<'tcx>,
         idx_local: Local,
     ) -> Option<(BasicBlock, String)> {
-        // idx_local = copy ((opt as Some).0), possibly through copies.
         let idx_local = mir_copy_root(body, idx_local);
         let opt_local = mir_some_payload_source(body, idx_local)?;
         // opt = Iterator::next(&mut range); header = the block with that call.
@@ -3450,9 +3449,33 @@ fn is_maybe_uninit_adt(tcx: TyCtxt<'_>, did: DefId) -> bool {
         || tcx.def_path_str(did) == "MaybeUninit"
 }
 
-/// Follow `local = move/copy other` (no projections) to the root local.
-pub(crate) fn mir_copy_root<'tcx>(body: &rustc_middle::mir::Body<'tcx>, local: Local) -> Local {
-    crate::verify::def_use::trace_local_origin(body, local)
+/// Follow Copy/Move edges upward in the dataflow graph to find the
+/// root real local behind any copy chains (no projections).
+pub(crate) fn mir_copy_root<'tcx>(body: &rustc_middle::mir::Body<'tcx>, mut local: Local) -> Local {
+    for _ in 0..16 {
+        let mut next = None;
+        for bb in body.basic_blocks.iter() {
+            for stmt in &bb.statements {
+                let StatementKind::Assign(assign) = &stmt.kind else {
+                    continue;
+                };
+                let (dest, rvalue) = assign.as_ref();
+                if dest.local != local || !dest.projection.is_empty() {
+                    continue;
+                }
+                if let Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) = rvalue
+                    && src.projection.is_empty()
+                {
+                    next = Some(src.local);
+                }
+            }
+        }
+        match next {
+            Some(n) if n != local => local = n,
+            _ => return local,
+        }
+    }
+    local
 }
 
 /// Find the destination of `MaybeUninit::as_mut_ptr(&mut arr)` for `arr_local`.
@@ -3474,7 +3497,7 @@ pub(crate) fn find_as_mut_ptr_of<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::helpers::call_name(tcx, func);
+        let name = crate::helpers::mir_utils::call_name(tcx, func);
         if !name.contains("as_mut_ptr") {
             continue;
         }
@@ -3545,7 +3568,7 @@ pub(crate) fn pointer_add_index_and_base<'tcx>(
         if destination.local != ptr_local {
             continue;
         }
-        let name = crate::verify::helpers::call_name(tcx, func);
+        let name = crate::helpers::mir_utils::call_name(tcx, func);
         // Element-stride add only (byte variants change alignment/stride).
         if !(name.ends_with("::add") || name.contains("::add::")) {
             return None;
@@ -3582,7 +3605,7 @@ pub(crate) fn mir_ptr_cast_root<'tcx>(
             if destination.local != root {
                 continue;
             }
-            if crate::verify::helpers::call_name(tcx, func).contains("::cast")
+            if crate::helpers::mir_utils::call_name(tcx, func).contains("::cast")
                 && let Some(src) = args.first().and_then(|a| a.node.place())
             {
                 next = Some(src.local);
@@ -3649,7 +3672,7 @@ pub(crate) fn mir_range_next_call<'tcx>(
         if destination.local != opt_local {
             continue;
         }
-        if !crate::verify::helpers::call_name(tcx, func).contains("::next") {
+        if !crate::helpers::mir_utils::call_name(tcx, func).contains("::next") {
             return None;
         }
         let arg_local = args.first().and_then(|a| a.node.place())?.local;
@@ -3717,7 +3740,7 @@ pub(crate) fn mir_range_end_param<'tcx>(
                     ..
                 } = &term.kind
                 && destination.local == local
-                && crate::verify::helpers::call_name(tcx, func).contains("into_iter")
+                && crate::helpers::mir_utils::call_name(tcx, func).contains("into_iter")
                 && let Some(src) = args.first().and_then(|a| a.node.place())
             {
                 next = Some(src.local);
@@ -4323,7 +4346,7 @@ pub(crate) fn body_value_parents<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::helpers::call_name(tcx, func);
+        let name = crate::helpers::mir_utils::call_name(tcx, func);
         let transfers = name.contains("into_raw")
             || fn_simulator::is_ownership_reconstruction(&name)
             || fn_simulator::is_as_ptr(&name);
@@ -4549,7 +4572,7 @@ pub(crate) fn body_parents<'tcx>(
         else {
             continue;
         };
-        let name = crate::verify::helpers::call_name(tcx, func);
+        let name = crate::helpers::mir_utils::call_name(tcx, func);
         if !fn_simulator::is_as_ptr(&name)
         {
             continue;

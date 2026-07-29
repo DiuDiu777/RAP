@@ -16,7 +16,7 @@ use rustc_middle::ty::TyCtxt;
 
 use super::common::{SmtCheckResult, SmtChecker};
 use crate::verify::{
-    contract::Property, call_summary::fn_simulator, path_extractor::PathStep,
+    contract::Property, path_extractor::PathStep,
     verifier::ForwardVisitResult,
 };
 use crate::helpers::mir_scan::Checkpoint;
@@ -240,7 +240,7 @@ fn collect_all_const_bytes_worklist<'tcx>(
                     if !destination.projection.is_empty() {
                         continue;
                     }
-                    let name = crate::verify::helpers::call_name(tcx, func);
+                    let name = crate::helpers::mir_utils::call_name(tcx, func);
                     if name.contains("as_ptr") || name.contains("::as_") {
                         for arg in args {
                             if let Some(bytes) = const_bytes_from_operand(tcx, body, &arg.node) {
@@ -314,7 +314,7 @@ fn collect_all_const_bytes_worklist<'tcx>(
                         if destination.local == local
                             && destination.projection.is_empty()
                         {
-                            let name = crate::verify::helpers::call_name(tcx, func);
+                            let name = crate::helpers::mir_utils::call_name(tcx, func);
                             if name.contains("box_assume_init_into_vec_unsafe") {
                                 if let Some(box_op) = args.first() {
                                     if let Operand::Copy(p) | Operand::Move(p) = &box_op.node {
@@ -373,7 +373,7 @@ fn collect_all_const_bytes_worklist<'tcx>(
     for data in body.basic_blocks.iter() {
         if let Some(terminator) = &data.terminator {
             if let TerminatorKind::Call { func, args, .. } = &terminator.kind {
-                let name = crate::verify::helpers::call_name(tcx, func);
+                let name = crate::helpers::mir_utils::call_name(tcx, func);
                 if name.contains("as_ptr") || name.contains("::as_") {
                     for arg in args {
                         if let Some(bytes) = operand_const_bytes(tcx, &arg.node) {
@@ -424,7 +424,7 @@ fn const_bytes_from_call_dest<'tcx>(
                 if destination.local != local || !destination.projection.is_empty() {
                     continue;
                 }
-                let name = crate::verify::helpers::call_name(tcx, func);
+                let name = crate::helpers::mir_utils::call_name(tcx, func);
                 if name.contains("as_ptr") || name.contains("::as_") {
                     for arg in args {
                         if let Some(bytes) = const_bytes_from_operand(tcx, body, &arg.node) {
@@ -700,7 +700,7 @@ fn equality_guard_bytes<'tcx>(
     let cmp_terminator = body.basic_blocks[cmp_bb].terminator.as_ref()?;
 
     if let TerminatorKind::Call { func, args, .. } = &cmp_terminator.kind {
-        let name = crate::verify::helpers::call_name(tcx, func);
+        let name = crate::helpers::mir_utils::call_name(tcx, func);
         if name.contains("eq") || name.contains("PartialEq") {
             for arg in args {
                 let operand = &arg.node;
@@ -870,7 +870,7 @@ fn fn_always_returns_nonzero<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &Operand<'tcx>,
 ) -> bool {
-    let Some(fn_def_id) = fn_simulator::dep_callee_def_id(func) else { return false };
+    let Some(fn_def_id) = crate::helpers::mir_utils::dep_callee_def_id(func) else { return false };
     let callee_body = tcx.optimized_mir(fn_def_id);
 
     // Scan all blocks for assignments to _0 (the return value).

@@ -18,8 +18,8 @@ use rustc_middle::mir::Operand;
 use rustc_middle::ty::{GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind};
 
 use super::{CallDependencySummary, CallEffect, CallEffectSummary};
+use crate::helpers::mir_utils::ty_has_param_const;
 use crate::verify::{
-    helpers::ty_has_param_const,
     smt_check::common::pointee_ty,
 };
 
@@ -102,14 +102,6 @@ static REGISTRY: &[Entry] = &[
     // ── Layout constants ────────────────────────────────────────────
     E!(is_layout_constant,    none!(),  false,  none!(),  eff_layout_const),
 ];
-
-// ── Lookup ─────────────────────────────────────────────────────────────
-
-pub(crate) fn dep_callee_def_id(func: &Operand<'_>) -> Option<DefId> {
-    let Operand::Constant(func_constant) = func else { return None };
-    let TyKind::FnDef(def_id, _) = func_constant.const_.ty().kind() else { return None };
-    Some(*def_id)
-}
 
 pub fn lookup_dependency(
     callee: Option<DefId>,

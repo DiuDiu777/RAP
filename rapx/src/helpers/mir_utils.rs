@@ -8,7 +8,11 @@ use rustc_middle::{
 };
 use rustc_span::Symbol;
 
-use super::call_summary::fn_simulator;
+pub(crate) fn dep_callee_def_id(func: &Operand<'_>) -> Option<DefId> {
+    let Operand::Constant(func_constant) = func else { return None };
+    let TyKind::FnDef(def_id, _) = func_constant.const_.ty().kind() else { return None };
+    Some(*def_id)
+}
 
 /// Collect all return basic block indices for a function body.
 pub fn collect_return_block_indices(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<BasicBlock> {
@@ -149,7 +153,7 @@ pub(crate) fn catch_panic<T>(f: impl FnOnce() -> T) -> Result<T, String> {
 
 /// Return a stable, human-readable name for a MIR call operand.
 pub fn call_name(tcx: TyCtxt<'_>, func: &Operand<'_>) -> String {
-    fn_simulator::dep_callee_def_id(func)
+    dep_callee_def_id(func)
         .map(|def_id| tcx.def_path_str(def_id))
         .unwrap_or_else(|| format!("{func:?}"))
 }

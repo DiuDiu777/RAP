@@ -17,13 +17,13 @@ use syn::Expr;
 
 use super::{
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
-    helpers::{
-        collect_return_block_indices, get_owner_struct_def_id, has_rapx_verify_attr,
-        is_std_crate_def_id, is_trait_unsafe, resolve_impl_self_ty_def_id,
-    },
     path_extractor::PathExtractor,
     source::assets::*,
     source::attr::parse_rapx_attr,
+};
+use crate::helpers::mir_utils::{
+    collect_return_block_indices, get_owner_struct_def_id, has_rapx_verify_attr,
+    is_std_crate_def_id, is_trait_unsafe, resolve_impl_self_ty_def_id,
 };
 use crate::helpers::mir_scan::{Checkpoint, collect_unsafe_callsites};
 

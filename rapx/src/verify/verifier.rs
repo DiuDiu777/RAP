@@ -23,11 +23,11 @@ use super::{
     contract::Property,
     def_use::{PlaceBaseKey, PlaceKey},
     call_summary::fn_simulator,
-    helpers::call_name,
     path_extractor::{Path, PathStep},
     slicer::{BackwardItem, ForgetReason, KeepReason, RelevantMirItems},
     smt_check::common::{const_int_from_debug, operand_place},
 };
+use crate::helpers::mir_utils::call_name;
 
 use crate::helpers::mir_scan::CheckpointLocation;
 

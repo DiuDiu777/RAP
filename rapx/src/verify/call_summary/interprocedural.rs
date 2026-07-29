@@ -8,7 +8,7 @@ use rustc_middle::{
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::analysis::path_analysis::graph::{PathEnumerator, PathGraph};
-use crate::verify::helpers;
+use crate::helpers::mir_utils as helpers;
 
 use super::fn_simulator;
 
@@ -132,7 +132,7 @@ pub(super) fn try_pointer_arith_wrapper_effect<'tcx>(
         let is_sub = fn_simulator::is_pointer_sub(&name);
 
         let inner_effect = if !is_add && !is_sub {
-            fn_simulator::dep_callee_def_id(func).and_then(|inner_callee| {
+            helpers::dep_callee_def_id(func).and_then(|inner_callee| {
                 let inner_name = helpers::call_name(tcx, func);
                 if inner_name.contains("::intrinsics::")
                     || inner_name.starts_with("intrinsics::")

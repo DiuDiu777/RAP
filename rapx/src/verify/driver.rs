@@ -28,13 +28,13 @@ use super::{
         fmt_fn_path_with_generics, fmt_fn_with_params,
     },
     engine::VerifyEngine,
-    helpers::{collect_return_block_indices},
     loop_sensitivity::{LoopSensitivityAnalyzer, RepeatStrategy},
     path_extractor::{CallGroup, PATH_LIMIT, PathExtractor},
     report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
     slicer::BackwardItem,
     target::{FunctionTarget, VerifyTargetCollector},
 };
+use crate::helpers::mir_utils::collect_return_block_indices;
 
 use crate::helpers::mir_scan::{Checkpoint, CheckpointKind, CheckpointLocation};
 
@@ -656,7 +656,7 @@ impl<'tcx> VerifyRun<'tcx> {
         let (_, repeat_rounds) = self.repeat_rounds_for_target(con_target);
         for repeat in repeat_rounds {
             let driver = VerifyDriver::new_with_repeat(self.tcx, con_target, repeat);
-            match crate::verify::helpers::catch_panic(|| driver.verify_function()) {
+            match crate::helpers::mir_utils::catch_panic(|| driver.verify_function()) {
                 Ok(report) => {
                     rap_debug!("{}", report.describe());
                     all_results.extend(report.results);
@@ -770,7 +770,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             // Phase 1: unsafe checkpoint verification
             for repeat in repeat_rounds {
                 let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
-                match crate::verify::helpers::catch_panic(|| driver.verify_function()) {
+                match crate::helpers::mir_utils::catch_panic(|| driver.verify_function()) {
                     Ok(report) => {
                         rap_debug!("{}", report.describe());
                         all_results.extend(report.results);
