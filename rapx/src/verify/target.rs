@@ -60,7 +60,7 @@ pub type StructInvariants<'tcx> = Vec<Property<'tcx>>;
 /// to route each unsafe operation to the verifier engine along reachability paths
 /// extracted from the MIR CFG.  The target is the primary data carrier between
 /// the *target collection* stage and the *path extraction / verification* stage.
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct FunctionTarget<'tcx> {
     /// The function being verified.
     pub def_id: DefId,
@@ -120,6 +120,47 @@ pub struct FunctionTarget<'tcx> {
     /// [`Align`](PropertyKind::Align), and [`Init`](PropertyKind::Init)
     /// (conservatively checked for both reads and writes).
     pub static_mut_checks: Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)>,
+}
+
+impl<'tcx> FunctionTarget<'tcx> {
+    pub fn all_checkpoints(&self) -> Vec<&Checkpoint<'tcx>> {
+        self.checkpoints
+            .iter()
+            .chain(
+                self.raw_ptr_deref_checks
+                    .iter()
+                    .map(|(checkpoint, _)| checkpoint),
+            )
+            .chain(
+                self.static_mut_checks
+                    .iter()
+                    .map(|(checkpoint, _)| checkpoint),
+            )
+            .collect()
+    }
+
+    pub fn properties_for_callsite(&self, checkpoint: &Checkpoint<'tcx>) -> &[Property<'tcx>] {
+        let loc = checkpoint.location();
+        match checkpoint.kind {
+            crate::helpers::mir_scan::CheckpointKind::RawPtrDeref => self
+                .raw_ptr_deref_checks
+                .iter()
+                .find(|(candidate, _)| candidate.location() == loc)
+                .map(|(_, properties)| properties.as_slice())
+                .unwrap_or(&[]),
+            crate::helpers::mir_scan::CheckpointKind::StaticMutAccess => self
+                .static_mut_checks
+                .iter()
+                .find(|(candidate, _)| candidate.location() == loc)
+                .map(|(_, properties)| properties.as_slice())
+                .unwrap_or(&[]),
+            crate::helpers::mir_scan::CheckpointKind::UnsafeCall => checkpoint
+                .callee
+                .and_then(|callee| self.callee_requires.get(&callee))
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+        }
+    }
 }
 
 /// Collected verification data for a struct that owns methods marked with `#[rapx::verify]`.
@@ -709,10 +750,6 @@ pub struct PrepareTargets<'tcx> {
 }
 
 impl<'tcx> Analysis for PrepareTargets<'tcx> {
-    fn name(&self) -> &'static str {
-        "Verify Identify Targets Analysis"
-    }
-
     fn run(&mut self) {
         let mut collector = VerifyTargetCollector::new(
             self.tcx,
@@ -813,7 +850,6 @@ impl<'tcx> Analysis for PrepareTargets<'tcx> {
         rap_info!("============================================================");
     }
 
-    fn reset(&mut self) {}
 }
 
 impl<'tcx> PrepareTargets<'tcx> {

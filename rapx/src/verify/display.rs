@@ -355,20 +355,7 @@ pub fn fmt_place_plain(
             .iter()
             .map(|p| match p {
                 crate::verify::contract::ContractProjection::Field { index, .. } => {
-                    if let Some(struct_def_id) = struct_def_id
-                        && let rustc_middle::ty::TyKind::Adt(adt_def, _) =
-                            tcx.type_of(struct_def_id).skip_binder().kind()
-                    {
-                        let variant = adt_def.non_enum_variant();
-                        let field_idx = rustc_abi::FieldIdx::from_usize(*index);
-                        if field_idx.as_usize() < variant.fields.len() {
-                            variant.fields[field_idx].name.to_string()
-                        } else {
-                            index.to_string()
-                        }
-                    } else {
-                        index.to_string()
-                    }
+                    crate::verify::contract::types::resolve_field_name(tcx, index, struct_def_id)
                 }
                 crate::verify::contract::ContractProjection::Downcast { .. } => {
                     "unwrap_some()".to_string()

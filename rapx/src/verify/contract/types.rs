@@ -25,6 +25,24 @@ pub struct ContractPlace<'tcx> {
     pub projections: Vec<ContractProjection<'tcx>>,
 }
 
+pub fn resolve_field_name(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    index: &usize,
+    struct_def_id: Option<rustc_span::def_id::DefId>,
+) -> String {
+    if let Some(struct_def_id) = struct_def_id
+        && let rustc_middle::ty::TyKind::Adt(adt_def, _) =
+            tcx.type_of(struct_def_id).skip_binder().kind()
+    {
+        let variant = adt_def.non_enum_variant();
+        let field_idx = rustc_abi::FieldIdx::from_usize(*index);
+        if field_idx.as_usize() < variant.fields.len() {
+            return variant.fields[field_idx].name.to_string();
+        }
+    }
+    index.to_string()
+}
+
 impl<'tcx> ContractPlace<'tcx> {
     pub fn display_user_friendly(
         &self,
@@ -98,20 +116,7 @@ impl<'tcx> ContractPlace<'tcx> {
         for projection in &self.projections {
             match projection {
                 ContractProjection::Field { index, ty: _ } => {
-                    let field_name = if let Some(struct_def_id) = struct_def_id
-                        && let TyKind::Adt(adt_def, _) =
-                            tcx.type_of(struct_def_id).skip_binder().kind()
-                    {
-                        let variant = adt_def.non_enum_variant();
-                        let field_idx = rustc_abi::FieldIdx::from_usize(*index);
-                        if field_idx.as_usize() < variant.fields.len() {
-                            variant.fields[field_idx].name.to_string()
-                        } else {
-                            index.to_string()
-                        }
-                    } else {
-                        index.to_string()
-                    };
+                    let field_name = resolve_field_name(tcx, index, struct_def_id);
                     if result.is_empty() {
                         result = field_name;
                     } else {

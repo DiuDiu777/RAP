@@ -2,7 +2,7 @@
 use crate::analysis::range_analysis::domain::domain::*;
 use crate::analysis::range_analysis::{Range, RangeType};
 
-use crate::analysis::range_analysis::domain::SymbolicExpr::*;
+use crate::analysis::range_analysis::domain::symbolic_expr::*;
 use crate::rap_debug;
 use crate::rap_info;
 use crate::rap_trace;
@@ -38,74 +38,11 @@ impl<'tcx, T> ConstraintGraph<'tcx, T>
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
-    pub(crate) fn print_symbmap(&self) {
-        for (&key, value) in &self.symbmap {
-            for op in value.iter() {
-                if let Some(op) = self.oprs.get(*op) {
-                    rap_trace!("symbmap op: {:?}. {:?}\n ", key, op);
-                } else {
-                    rap_trace!("symbmap op: {:?} not found\n ", op);
-                }
-            }
-        }
-    }
-
-    fn print_defmap(&self) {
-        for (key, value) in self.defmap.clone() {
-            rap_trace!(
-                "place: {:?} def in stmt:{:?} {:?}",
-                key,
-                self.oprs[value].get_type_name(),
-                self.oprs[value].get_instruction()
-            );
-        }
-    }
-
-    fn print_compusemap(
-        &self,
-        component: &HashSet<&'tcx Place<'tcx>>,
-        comp_use_map: &HashMap<&'tcx Place<'tcx>, HashSet<usize>>,
-    ) {
-        for (key, value) in comp_use_map.clone() {
-            if component.contains(key) {
-                for v in value {
-                    rap_trace!(
-                        "compusemap place: {:?} use in stmt:{:?} {:?}",
-                        key,
-                        self.oprs[v].get_type_name(),
-                        self.oprs[v].get_instruction()
-                    );
-                }
-            }
-        }
-    }
-
-    fn print_usemap(&self) {
-        for (key, value) in self.usemap.clone() {
-            for v in value {
-                rap_trace!(
-                    "place: {:?} use in stmt:{:?} {:?}",
-                    key,
-                    self.oprs[v].get_type_name(),
-                    self.oprs[v].get_instruction()
-                );
-            }
-        }
-    }
-
-    fn print_symbexpr(&self) {
-        let mut vars: Vec<_> = self.vars.iter().collect();
-
-        vars.sort_by_key(|(local, _)| local.local.index());
-
-        for (&local, value) in vars {
-            rap_info!(
-                "Var: {:?}. [ {:?} , {:?} ]",
-                local,
-                value.interval.get_lower_expr(),
-                value.interval.get_upper_expr()
-            );
-        }
+    fn register_op(&mut self, op: BasicOpKind<'tcx, T>, sink: &'tcx Place<'tcx>) -> usize {
+        let idx = self.oprs.len();
+        self.oprs.push(op);
+        self.defmap.insert(sink, idx);
+        idx
     }
 
     pub fn add_varnode(&mut self, v: &'tcx Place<'tcx>) -> &mut VarNode<'tcx, T> {
@@ -399,7 +336,7 @@ where
                         self.add_varnode(variable);
                         rap_trace!("add_vbm_varnode{:?}\n", variable.clone());
 
-                        let value = Self::convert_const(&c.const_).unwrap();
+                        let value = T::from_const(&c.const_).unwrap();
                         let const_range =
                             Range::new(value.clone(), value.clone(), RangeType::Unknown);
                         rap_trace!("cmp_op {:?}\n", cmp_op);
@@ -976,7 +913,7 @@ where
                 self.defmap.insert(sink, bop_index);
                 let sink_node = self.def_add_varnode_sym(sink, rvalue);
 
-                if let Some(value) = Self::convert_const(&c.const_) {
+                if let Some(value) = T::from_const(&c.const_) {
                     sink_node.set_range(Range::new(
                         value.clone(),
                         value.clone(),
@@ -984,7 +921,7 @@ where
                     ));
                     rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
                 } else {
-                    sink_node.set_range(Range::default(T::min_value()));
+                    sink_node.set_range(Range::bottom());
                 };
             }
             #[cfg(rapx_rustc_ge_196)]
@@ -1108,7 +1045,7 @@ where
                     agg_operands.push(AggregateOperand::Const(c.const_));
 
                     let sink_node = self.def_add_varnode_sym(sink, rvalue);
-                    if let Some(value) = Self::convert_const(&c.const_) {
+                    if let Some(value) = T::from_const(&c.const_) {
                         sink_node.set_range(Range::new(
                             value.clone(),
                             value.clone(),
@@ -1116,7 +1053,7 @@ where
                         ));
                         rap_trace!("set_const {:?} value: {:?}\n", sink_node, value);
                     } else {
-                        sink_node.set_range(Range::default(T::min_value()));
+                        sink_node.set_range(Range::bottom());
                     }
                 }
                 #[cfg(rapx_rustc_ge_196)]

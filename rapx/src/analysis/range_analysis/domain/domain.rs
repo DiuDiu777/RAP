@@ -7,7 +7,7 @@
 use rust_intervals::NothingBetween;
 
 use crate::analysis::range_analysis::domain::ConstraintGraph;
-use crate::analysis::range_analysis::domain::SymbolicExpr::{
+use crate::analysis::range_analysis::domain::symbolic_expr::{
     BasicInterval, IntervalType, IntervalTypeTrait, SymbExpr,
 };
 use crate::analysis::range_analysis::{Range, RangeType};
@@ -306,9 +306,6 @@ pub struct CallOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
-    pub fn convert_const(c: &Const) -> Option<T> {
-        T::from_const(c)
-    }
     pub fn new(
         intersect: IntervalType<'tcx, T>,
         sink: &'tcx Place<'tcx>,
@@ -330,7 +327,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
     }
 
     pub fn eval(&self, caller_vars: &VarNodes<'tcx, T>) -> Range<T> {
-        return Range::default(T::min_value());
+        return Range::bottom();
     }
 }
 #[derive(Debug, Clone)]
@@ -370,7 +367,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> AggregateOp<'tcx, T> {
             return self.intersect.get_range().clone();
         }
 
-        let mut result: Range<T> = Range::default(T::min_value());
+        let mut result: Range<T> = Range::bottom();
         match self.unique_adt {
             0 => {
                 // If unique_adt is 0, we assume it's a regular array or slice.
@@ -450,7 +447,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> UseOp<'tcx, T> {
     pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
         if let Some(source) = self.source {
             let range = vars[source].get_range().clone();
-            let mut result = Range::default(T::min_value());
+            let mut result = Range::bottom();
             if range.is_regular() {
                 result = range
             } else {
@@ -489,7 +486,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> UnaryOp<'tcx, T> {
     }
 
     pub fn eval(&self) -> Range<T> {
-        Range::default(T::min_value())
+        Range::bottom()
     }
 }
 #[derive(Debug, Clone)]
@@ -567,9 +564,6 @@ pub struct BinaryOp<'tcx, T: IntervalArithmetic + ConstConvert + Debug> {
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
-    pub fn convert_const(c: &Const) -> Option<T> {
-        T::from_const(c)
-    }
     pub fn new(
         intersect: IntervalType<'tcx, T>,
         sink: &'tcx Place<'tcx>,
@@ -593,15 +587,15 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BinaryOp<'tcx, T> {
 
     pub fn eval(&self, vars: &VarNodes<'tcx, T>) -> Range<T> {
         let op1 = vars[self.source1.unwrap()].get_range().clone();
-        let mut op2 = Range::default(T::min_value());
+        let mut op2 = Range::bottom();
         if let Some(const_value) = &self.const_value {
             // If const_value is provided, use it as the second operand
-            let value = Self::convert_const(const_value).unwrap();
+            let value = T::from_const(const_value).unwrap();
             op2 = Range::new(value, value, RangeType::Regular);
         } else {
             op2 = vars[self.source2.unwrap()].get_range().clone();
         }
-        let mut result = Range::default(T::min_value());
+        let mut result = Range::bottom();
         match &self.inst.kind {
             StatementKind::Assign(assign) => {
                 let (place, rvalue) = &**assign;
@@ -749,7 +743,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> ControlDep<'tcx, T> {
     }
 
     pub fn eval(&self) -> Range<T> {
-        Range::default(T::min_value())
+        Range::bottom()
     }
 }
 
@@ -769,7 +763,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> VarNode<'tcx, T> {
         Self {
             v,
             interval: IntervalType::Basic(BasicInterval::new_symb(
-                Range::default(T::min_value()),
+                Range::bottom(),
                 symb_expr.clone(),
                 symb_expr.clone(),
             )),
@@ -792,7 +786,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> VarNode<'tcx, T> {
     }
 
     pub fn set_default(&mut self) {
-        let mut range = Range::default(T::min_value());
+        let mut range = Range::bottom();
         range.set_default();
         self.interval.set_range(range);
     }

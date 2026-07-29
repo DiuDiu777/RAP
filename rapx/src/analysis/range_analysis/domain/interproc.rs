@@ -57,12 +57,12 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 _ => {}
             },
             "core::slice::<impl [T]>::len" => {
-                let mut result = Range::default(T::min_value());
+                let mut result = Range::bottom();
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
                         let range = caller_vars[place].get_range().clone();
                         let len = range.get_upper().clone() - range.get_lower().clone();
-                        result = Range::new(len.clone(), len.clone(), RangeType::Regular);
+                        result = Range::exact(len.clone());
                     }
                     Some(Operand::Constant(c)) => {}
                     None => {}
@@ -77,7 +77,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 return result;
             }
             "std::ops::IndexMut::index_mut" => {
-                let mut result = Range::default(T::min_value());
+                let mut result = Range::bottom();
 
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
@@ -97,7 +97,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 return result;
             }
             "std::ops::Index::index" => {
-                let mut result = Range::default(T::min_value());
+                let mut result = Range::bottom();
 
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
@@ -173,7 +173,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                                 self.def_id
                             );
                             let callee_arg_local = rustc_middle::mir::Local::from_usize(i + 1);
-                            if let Some(const_value) = Self::convert_const(&const_operand.const_) {
+                            if let Some(const_value) = T::from_const(&const_operand.const_) {
                                 if let Some(callee_arg_node) =
                                     callee_cg.vars.values_mut().find(|v| {
                                         v.v.local == callee_arg_local && v.v.projection.is_empty()
@@ -213,7 +213,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 // 5. Retrieve the return value.
                 //    The return value is stored in `_0` (RETURN_PLACE).
                 let return_place_local = 0 as usize; // `_0` is typically the first local.
-                let mut return_range = Range::default(T::min_value());
+                let mut return_range = Range::bottom();
 
                 // Find all variables that contribute to the return value.
                 // The `rerurn_places` set in the callee's graph tracks these.
@@ -236,7 +236,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                     "Recursive call or existing borrow for {:?}, returning top.",
                     self.def_id
                 );
-                return Range::new(T::min_value(), T::max_value(), RangeType::Regular);
+                return Range::top();
             }
         }
 
@@ -246,6 +246,6 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
             "Callee ConstraintGraph for {:?} not found, returning top.",
             self.def_id
         );
-        Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+        Range::top()
 }
 }

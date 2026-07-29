@@ -1,10 +1,11 @@
+pub mod debug;
 pub mod graph;
 pub mod solver;
 
 use crate::analysis::range_analysis::domain::domain::*;
 use crate::analysis::range_analysis::{Range, RangeType};
 
-use crate::analysis::range_analysis::domain::SymbolicExpr::*;
+use crate::analysis::range_analysis::domain::symbolic_expr::*;
 use crate::rap_debug;
 use crate::rap_info;
 use crate::rap_trace;
@@ -150,85 +151,6 @@ where
         }
     }
 
-    pub fn to_dot(&self) -> String {
-        let mut dot = String::new();
-        writeln!(&mut dot, "digraph ConstraintGraph {{").unwrap();
-        writeln!(&mut dot, "    layout=neato;").unwrap();
-        writeln!(&mut dot, "    overlap=false;").unwrap();
-        writeln!(&mut dot, "    splines=true;").unwrap();
-        writeln!(&mut dot, "    sep=\"+1.0\";").unwrap();
-        writeln!(&mut dot, "    rankdir=TB;").unwrap();
-        writeln!(&mut dot, "    ranksep=1.8;").unwrap();
-        writeln!(&mut dot, "    nodesep=0.8;").unwrap();
-        writeln!(&mut dot, "    edge [len=2.0];").unwrap();
-        writeln!(&mut dot, "    node [fontname=\"Fira Code\"];").unwrap();
-        writeln!(&mut dot, "\n    // Variable Nodes").unwrap();
-        writeln!(&mut dot, "    subgraph cluster_vars {{").unwrap();
-        writeln!(&mut dot, "        rank=same;").unwrap();
-        for (place, var_node) in &self.vars {
-            let place_id = format!("{:?}", place);
-            let label = format!("{:?}", place);
-            writeln!(
-            &mut dot,
-            "        \"{}\" [label=\"{}\", shape=ellipse, style=filled, fillcolor=lightblue, width=1.2, fixedsize=false];",
-            place_id, label
-        ).unwrap();
-        }
-        writeln!(&mut dot, "    }}").unwrap();
-
-        writeln!(&mut dot, "\n    // Operation Nodes").unwrap();
-        writeln!(&mut dot, "    subgraph cluster_ops {{").unwrap();
-        writeln!(&mut dot, "        rank=same;").unwrap();
-        for (op_idx, op) in self.oprs.iter().enumerate() {
-            let op_id = format!("op_{}", op_idx);
-            let label = match op {
-                BasicOpKind::Unary(o) => format!("Unary({:?})", o.op),
-                BasicOpKind::Binary(o) => format!("Binary({:?})", o.op),
-                BasicOpKind::Essa(_) => "Essa".to_string(),
-                BasicOpKind::ControlDep(_) => "ControlDep".to_string(),
-                BasicOpKind::Phi(_) => "Φ (Phi)".to_string(),
-                BasicOpKind::Use(_) => "Use".to_string(),
-                BasicOpKind::Call(c) => format!("Call({:?})", c.def_id),
-                BasicOpKind::Ref(r) => format!("Ref({:?})", r.borrowkind),
-                BasicOpKind::Aggregate(r) => format!("AggregateOp({:?})", r.unique_adt),
-            };
-            writeln!(
-            &mut dot,
-            "        \"{}\" [label=\"{}\", shape=box, style=filled, fillcolor=lightgrey, width=1.5, fixedsize=false];",
-            op_id, label
-        ).unwrap();
-        }
-        writeln!(&mut dot, "    }}").unwrap();
-
-        // Edges
-        writeln!(&mut dot, "\n    // Definition Edges (op -> var)").unwrap();
-        for (place, op_idx) in &self.defmap {
-            writeln!(&mut dot, "    \"op_{}\" -> \"{:?}\";", op_idx, place).unwrap();
-        }
-
-        writeln!(&mut dot, "\n    // Use Edges (var -> op)").unwrap();
-        for (place, op_indices) in &self.usemap {
-            for op_idx in op_indices {
-                writeln!(&mut dot, "    \"{:?}\" -> \"op_{}\";", place, op_idx).unwrap();
-            }
-        }
-
-        writeln!(&mut dot, "\n    // Symbolic Bound Edges (var -> op)").unwrap();
-        for (place, op_indices) in &self.symbmap {
-            for op_idx in op_indices {
-                writeln!(
-                    &mut dot,
-                    "    \"{:?}\" -> \"op_{}\" [color=blue, style=dashed];",
-                    place, op_idx
-                )
-                .unwrap();
-            }
-        }
-
-        writeln!(&mut dot, "}}").unwrap();
-        dot
-    }
-
     pub fn build_final_vars(
         &mut self,
         places_map: &HashMap<Place<'tcx>, HashSet<Place<'tcx>>>,
@@ -265,12 +187,6 @@ where
             }
         }
         final_vars
-    }
-
-    pub fn print_vars(&self) {
-        for (&key, value) in &self.vars {
-            rap_trace!("Var: {:?}. {:?} ", key, value.get_range());
-        }
     }
 
     pub fn get_vars(&self) -> &VarNodes<'tcx, T> {

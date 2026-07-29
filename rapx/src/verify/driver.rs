@@ -36,7 +36,7 @@ use super::{
 };
 use crate::helpers::mir_utils::collect_return_block_indices;
 
-use crate::helpers::mir_scan::{Checkpoint, CheckpointKind, CheckpointLocation};
+use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
 
 /// Orchestrates the three-stage verification pipeline (backward data-dependency
 /// analysis → forward state simulation → SMT checking) for a single function
@@ -115,13 +115,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         target: &'target FunctionTarget<'tcx>,
         allow_repeat: usize,
     ) -> Self {
-        let mut all_checkpoints = target.checkpoints.clone();
-        for (checkpoint, _) in &target.raw_ptr_deref_checks {
-            all_checkpoints.push(checkpoint.clone());
-        }
-        for (checkpoint, _) in &target.static_mut_checks {
-            all_checkpoints.push(checkpoint.clone());
-        }
+        let all_checkpoints: Vec<_> = target.all_checkpoints().into_iter().cloned().collect();
         let path_info = PathExtractor::new(tcx, target.def_id, all_checkpoints, allow_repeat).run();
         let engine = VerifyEngine::new(tcx);
         Self {
@@ -291,36 +285,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         &self,
         checkpoint: &Checkpoint<'tcx>,
     ) -> &'target [Property<'tcx>] {
-        let loc = checkpoint.location();
-        match checkpoint.kind {
-            CheckpointKind::RawPtrDeref => {
-                for (cs, props) in &self.target.raw_ptr_deref_checks {
-                    if cs.location() == loc {
-                        return props.as_slice();
-                    }
-                }
-                &[]
-            }
-            CheckpointKind::StaticMutAccess => {
-                for (cs, props) in &self.target.static_mut_checks {
-                    if cs.location() == loc {
-                        return props.as_slice();
-                    }
-                }
-                &[]
-            }
-            CheckpointKind::UnsafeCall => {
-                if let Some(callee) = checkpoint.callee {
-                    self.target
-                        .callee_requires
-                        .get(&callee)
-                        .map(Vec::as_slice)
-                        .unwrap_or(&[])
-                } else {
-                    &[]
-                }
-            }
-        }
+        self.target.properties_for_callsite(checkpoint)
     }
 
     /// Iterate over checkpoints together with their shared path tree and properties.
@@ -735,10 +700,6 @@ impl<'tcx> VerifyRun<'tcx> {
 }
 
 impl<'tcx> Analysis for VerifyRun<'tcx> {
-    fn name(&self) -> &'static str {
-        "Verify Driver"
-    }
-
     /// Collect verify targets, run the staged driver, and emit a compact summary.
     ///
     /// For each target, extracts paths with increasing `postfix-repeat`
@@ -889,7 +850,6 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
         }
     }
 
-    fn reset(&mut self) {}
 }
 
 impl<'tcx> VerifyRun<'tcx> {

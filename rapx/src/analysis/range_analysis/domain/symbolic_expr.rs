@@ -346,7 +346,7 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> BasicInterval<'tcx, T> 
     }
     pub fn default() -> Self {
         Self {
-            range: Range::default(T::min_value()),
+            range: Range::bottom(),
             lower: SymbExpr::Unknown,
             upper: SymbExpr::Unknown,
         }
@@ -440,9 +440,9 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> SymbInterval<'tcx, T> {
                 }
             }
 
-            BinOp::Ne => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
+            BinOp::Ne => Range::top(),
 
-            _ => Range::new(T::min_value(), T::max_value(), RangeType::Regular),
+            _ => Range::top(),
         }
     }
 }

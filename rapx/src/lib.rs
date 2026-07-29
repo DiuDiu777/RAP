@@ -5,12 +5,12 @@ pub mod utils;
 pub mod analysis;
 pub mod check;
 pub mod cli;
-pub mod compat;
-pub mod def_id;
-pub mod graphs;
+pub(crate) mod compat;
+pub(crate) mod def_id;
+pub(crate) mod graphs;
 pub mod help;
-pub mod helpers;
-pub mod preprocess;
+pub(crate) mod helpers;
+pub(crate) mod preprocess;
 pub mod verify;
 
 extern crate rustc_abi;

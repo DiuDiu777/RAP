@@ -23,7 +23,6 @@ pub type Arg2Ret = IndexVec<Local, bool>;
 pub type Arg2RetMap = HashMap<DefId, IndexVec<Local, bool>>;
 pub type DataflowGraphMap = HashMap<DefId, DataflowGraph>;
 
-pub struct Arg2RetWrapper(pub Arg2Ret);
 pub struct Arg2RetMapWrapper(pub Arg2RetMap);
 
 /// This trait provides features related to dataflow analysis.
@@ -34,18 +33,6 @@ pub trait DataflowAnalysis: Analysis {
     fn collect_equivalent_locals(&self, def_id: DefId, local: Local) -> HashSet<Local>;
     fn get_fn_arg2ret(&self, def_id: DefId) -> Arg2Ret;
     fn get_all_arg2ret(&self) -> Arg2RetMap;
-}
-
-impl fmt::Display for Arg2RetWrapper {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let arg2ret: &Arg2Ret = &self.0;
-        for (local, depends) in arg2ret.iter_enumerated() {
-            if local.as_u32() > 0 && *depends {
-                writeln!(f, "Argument {:?} ---> Return value _0", local)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl fmt::Display for Arg2RetMapWrapper {

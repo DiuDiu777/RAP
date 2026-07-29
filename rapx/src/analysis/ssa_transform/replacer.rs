@@ -1,7 +1,7 @@
 #![allow(non_snake_case)]
 #![allow(unused_variables)]
 #![allow(dead_code)]
-use super::SSATransformer::SSATransformer;
+use super::ssa_transformer::SSATransformer;
 use rustc_abi::FieldIdx;
 use rustc_hir::def_id::DefIdMap;
 use rustc_index::IndexVec;
@@ -12,7 +12,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 pub struct Replacer<'tcx> {
     pub(crate) tcx: TyCtxt<'tcx>,
-    pub(crate) ssatransformer: super::SSATransformer::SSATransformer<'tcx>,
+    pub(crate) ssatransformer: super::ssa_transformer::SSATransformer<'tcx>,
     pub(crate) new_local_collection: HashSet<Local>,
     pub(crate) new_locals_to_declare: HashMap<Local, Local>,
 }

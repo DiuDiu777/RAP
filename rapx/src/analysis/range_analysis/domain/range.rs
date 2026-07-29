@@ -11,7 +11,7 @@ use rustc_middle::mir::{BinOp, UnOp};
 use std::ops::{Add, Mul, Sub};
 
 use crate::{
-    analysis::range_analysis::{Range, RangeType, domain::SymbolicExpr::IntervalTypeTrait},
+    analysis::range_analysis::{Range, RangeType, domain::symbolic_expr::IntervalTypeTrait},
     rap_trace,
 };
 
@@ -42,6 +42,19 @@ where
             range: r,
         }
     }
+
+    pub fn top() -> Self {
+        Self::new(T::min_value(), T::max_value(), RangeType::Regular)
+    }
+
+    pub fn bottom() -> Self {
+        Self::default(T::min_value())
+    }
+
+    pub fn exact(value: T) -> Self {
+        Self::new(value.clone(), value, RangeType::Regular)
+    }
+
     pub fn get_lower(&self) -> T {
         self.range.lower().unwrap().clone()
     }
@@ -151,7 +164,7 @@ where
             );
         } else {
             let result = self.range.clone().intersection(&other.range.clone());
-            let mut range = Range::default(T::min_value());
+            let mut range = Range::bottom();
 
             if let r = result {
                 range = Range::init(r);
@@ -206,7 +219,7 @@ where
         let b_upper = other.get_upper();
 
         if b_lower < a_lower && b_upper > a_upper {
-            Range::new(T::min_value(), T::max_value(), RangeType::Regular)
+            Range::top()
         } else if b_lower < a_lower {
             Range::new(T::min_value(), a_upper.clone(), RangeType::Regular)
         } else if b_upper > a_upper {

@@ -2,35 +2,17 @@
 use crate::analysis::range_analysis::domain::domain::*;
 use crate::analysis::range_analysis::{Range, RangeType};
 
-use crate::analysis::range_analysis::domain::SymbolicExpr::*;
+use crate::analysis::range_analysis::domain::symbolic_expr::*;
 use crate::rap_debug;
-use crate::rap_info;
 use crate::rap_trace;
 use num_traits::Bounded;
-use once_cell::sync::{Lazy, OnceCell};
-use crate::analysis::path_analysis::PathTree;
 use crate::compat::FxHashMap;
-use crate::compat::Spanned;
-use rustc_abi::FieldIdx;
-use rustc_hir::def_id::LOCAL_CRATE;
-use rustc_hir::{def, def_id::DefId};
-use rustc_index::IndexVec;
-use rustc_middle::mir::visit::{PlaceContext, Visitor};
-use rustc_middle::{
-    mir::*,
-    ty::{self, ScalarInt, TyCtxt, print},
-};
-use rustc_span::sym::var;
-
-use core::borrow;
+use rustc_hir::def_id::DefId;
+use rustc_middle::mir::*;
 use std::cell::RefCell;
-use std::fmt::Write;
+use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::rc::Rc;
-use std::{
-    collections::{HashMap, HashSet, VecDeque},
-    default,
-    fmt::Debug,
-};
 
 use super::ConstraintGraph;
 
@@ -304,7 +286,7 @@ where
         rap_trace!("====Merging return places====\n");
         for &place in self.rerurn_places.iter() {
             rap_debug!("merging return place {:?}\n", place);
-            let mut merged_range = Range::default(T::min_value());
+            let mut merged_range = Range::bottom();
             if let Some(opset) = self.vars.get(place) {
                 merged_range = merged_range.unionwith(opset.get_range());
             }

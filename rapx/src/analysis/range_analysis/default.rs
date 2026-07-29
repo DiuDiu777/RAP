@@ -68,10 +68,6 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> Analysis for RangeAnaly
 where
     T: IntervalArithmetic + ConstConvert + Debug,
 {
-    fn name(&self) -> &'static str {
-        "Range Analysis"
-    }
-
     /// Entry point of the analysis
     fn run(&mut self) {
         // self.start();
@@ -79,10 +75,6 @@ where
         self.start_path_constraints_analysis();
     }
 
-    fn reset(&mut self) {
-        self.final_vars.clear();
-        self.ssa_places_mapping.clear();
-    }
 }
 
 impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> RangeAnalysis<'tcx, T>

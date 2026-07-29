@@ -48,7 +48,7 @@ use super::{
     def_use::{RelevantPlaces, bind_callsite_roots},
     target::FunctionTarget,
 };
-use crate::helpers::mir_scan::{Checkpoint, CheckpointKind};
+use crate::helpers::mir_scan::Checkpoint;
 
 /// Upper bound for repeat selected by auto mode.
 pub(crate) const MAX_AUTO_REPEAT: usize = 16;
@@ -363,8 +363,8 @@ impl<'tcx> LoopSensitivityAnalyzer<'tcx> {
     ) -> Vec<SafetySink<'target, 'tcx>> {
         let mut sinks = Vec::new();
 
-        for checkpoint in all_checkpoints(target) {
-            let properties = properties_for_checkpoint(target, checkpoint);
+        for checkpoint in target.all_checkpoints() {
+            let properties = target.properties_for_callsite(checkpoint);
             if properties.is_empty() {
                 continue;
             }
@@ -384,62 +384,6 @@ impl<'tcx> LoopSensitivityAnalyzer<'tcx> {
         }
 
         sinks
-    }
-}
-
-/// Return every checkpoint that can carry safety properties.
-///
-/// Real unsafe calls live in `target.checkpoints`; raw pointer dereferences and
-/// static mut accesses are represented as synthetic checkpoints but participate
-/// in planning exactly the same way.
-fn all_checkpoints<'target, 'tcx>(
-    target: &'target FunctionTarget<'tcx>,
-) -> Vec<&'target Checkpoint<'tcx>> {
-    target
-        .checkpoints
-        .iter()
-        .chain(
-            target
-                .raw_ptr_deref_checks
-                .iter()
-                .map(|(checkpoint, _)| checkpoint),
-        )
-        .chain(
-            target
-                .static_mut_checks
-                .iter()
-                .map(|(checkpoint, _)| checkpoint),
-        )
-        .collect()
-}
-
-/// Look up the properties associated with a checkpoint.
-///
-/// The three checkpoint kinds store their properties in different fields on
-/// `FunctionTarget`, so this helper centralizes the dispatch for the planner.
-fn properties_for_checkpoint<'target, 'tcx>(
-    target: &'target FunctionTarget<'tcx>,
-    checkpoint: &'target Checkpoint<'tcx>,
-) -> &'target [Property<'tcx>] {
-    let loc = checkpoint.location();
-    match checkpoint.kind {
-        CheckpointKind::RawPtrDeref => target
-            .raw_ptr_deref_checks
-            .iter()
-            .find(|(candidate, _)| candidate.location() == loc)
-            .map(|(_, properties)| properties.as_slice())
-            .unwrap_or(&[]),
-        CheckpointKind::StaticMutAccess => target
-            .static_mut_checks
-            .iter()
-            .find(|(candidate, _)| candidate.location() == loc)
-            .map(|(_, properties)| properties.as_slice())
-            .unwrap_or(&[]),
-        CheckpointKind::UnsafeCall => checkpoint
-            .callee
-            .and_then(|callee| target.callee_requires.get(&callee))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
     }
 }
 

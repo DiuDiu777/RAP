@@ -53,20 +53,10 @@ impl<'tcx> DataflowAnalysis for DataflowAnalyzer<'tcx> {
 }
 
 impl<'tcx> Analysis for DataflowAnalyzer<'tcx> {
-    fn name(&self) -> &'static str {
-        "DataFlow Analysis"
-    }
-
     fn run(&mut self) {
-        self.build_graphs();
-        if self.draw {
-            self.draw_graphs();
-        }
+        self.start();
     }
 
-    fn reset(&mut self) {
-        self.graphs.clear();
-    }
 }
 
 impl<'tcx> DataflowAnalyzer<'tcx> {
