@@ -42,8 +42,23 @@ pub(crate) fn check<'tcx>(
     else {
         return SmtCheckResult::unknown("SMT Align target/type could not be resolved");
     };
-    let obligation = SmtObligation::Aligned { place: target, align, ty_name };
-    checker.prove_obligation(checkpoint, forward, obligation, property.null_guard.as_ref())
+    let obligation = SmtObligation::Aligned { place: target.clone(), align, ty_name };
+    let smt_result = checker.prove_obligation(checkpoint, forward, obligation, property.null_guard.as_ref());
+    if matches!(smt_result.result, crate::verify::report::CheckResult::Proved) {
+        return smt_result;
+    }
+    if let Some(reason) = super::field_invariant::discharge_from_field_invariant(
+        checker.tcx,
+        checkpoint.caller,
+        &target,
+        forward,
+        crate::verify::contract::PropertyKind::Align,
+        checker.property_required_ty(Some(checkpoint), property),
+        None,
+    ) {
+        return SmtCheckResult::proved(format!("Align proved: {reason}"));
+    }
+    smt_result
 }
 
 pub(crate) fn check_for_checkpoint<'tcx>(

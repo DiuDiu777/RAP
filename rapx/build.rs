@@ -11,6 +11,7 @@ fn main() {
     emit_check_cfg("rapx_rustc_ge_200");
     emit_check_cfg("rapx_has_attr_item_kind");
     emit_check_cfg("rapx_has_fielddef_extras");
+    emit_check_cfg("rapx_has_skip_norm_wip");
 
     emit_cfg("rustc_spanned_at_root", minor >= 96);
     emit_cfg("rapx_rustc_ge_193", minor >= 93);
@@ -25,6 +26,10 @@ fn main() {
     emit_cfg(
         "rapx_has_fielddef_extras",
         rustc_src_contains("pub struct FieldDefExtras"),
+    );
+    emit_cfg(
+        "rapx_has_skip_norm_wip",
+        rustc_src_contains_path("compiler/rustc_type_ir/src/unnormalized.rs", "fn skip_norm_wip"),
     );
 }
 
@@ -60,15 +65,7 @@ fn detect_rustc_version() -> (u32, u32, u32) {
 /// Check whether the rustc source tree contains a specific string (requires
 /// the `rust-src` component to be installed).
 fn rustc_src_contains(needle: &str) -> bool {
-    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
-    let sysroot = Command::new(&rustc)
-        .arg("--print")
-        .arg("sysroot")
-        .output()
-        .ok()
-        .and_then(|o| String::from_utf8(o.stdout).ok())
-        .map(|s| s.trim().to_string())
-        .unwrap_or_default();
+    let sysroot = get_sysroot();
     let ast = format!(
         "{}/lib/rustlib/rustc-src/rust/compiler/rustc_ast/src/ast.rs",
         sysroot
@@ -76,4 +73,28 @@ fn rustc_src_contains(needle: &str) -> bool {
     std::fs::read_to_string(ast)
         .map(|s| s.contains(needle))
         .unwrap_or(false)
+}
+
+/// Check whether a specific file in the rustc source tree contains a string.
+fn rustc_src_contains_path(relative_path: &str, needle: &str) -> bool {
+    let sysroot = get_sysroot();
+    let path = format!(
+        "{}/lib/rustlib/rustc-src/rust/{}",
+        sysroot, relative_path
+    );
+    std::fs::read_to_string(path)
+        .map(|s| s.contains(needle))
+        .unwrap_or(false)
+}
+
+fn get_sysroot() -> String {
+    let rustc = std::env::var("RUSTC").unwrap_or_else(|_| "rustc".to_string());
+    Command::new(&rustc)
+        .arg("--print")
+        .arg("sysroot")
+        .output()
+        .ok()
+        .and_then(|o| String::from_utf8(o.stdout).ok())
+        .map(|s| s.trim().to_string())
+        .unwrap_or_default()
 }

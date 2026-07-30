@@ -2,8 +2,6 @@
 #![register_tool(rapx)]
 #![allow(unused)]
 
-use std::marker::PhantomData;
-
 #[rapx::invariant(any(Null(prev), (Align(prev, Node), ValidPtr(prev, Node, 1), Allocated(prev, Node, 1), Typed(prev, Node), Owning(prev))))]
 #[rapx::invariant(any(Null(next), (Align(next, Node), ValidPtr(next, Node, 1), Allocated(next, Node, 1), Typed(next, Node), Owning(next))))]
 struct Node<T> {
@@ -18,7 +16,6 @@ struct LinkedList<T> {
     head: *mut Node<T>,
     tail: *mut Node<T>,
     len: usize,
-    _marker: PhantomData<Box<Node<T>>>,
 }
 
 impl<T: Copy> LinkedList<T> {
@@ -28,7 +25,6 @@ impl<T: Copy> LinkedList<T> {
             head: std::ptr::null_mut(),
             tail: std::ptr::null_mut(),
             len: 0,
-            _marker: PhantomData,
         }
     }
 

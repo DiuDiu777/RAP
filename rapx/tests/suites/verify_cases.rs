@@ -31,6 +31,20 @@ fn linked_list_rawptr_skip_invariant() {
 }
 
 #[test]
+fn linked_list_rawptr_unsound() {
+    let output = run_with_args("verify_cases/linked_list_rawptr_unsound", CMD_VERIFY);
+    assert_contain(&output, "result: SOUND");
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
+fn linked_list_nonnull_unsound() {
+    let output = run_with_args("verify_cases/linked_list_nonnull_unsound", CMD_VERIFY);
+    assert_contain(&output, "result: SOUND");
+    assert_not_contain(&output, "result: UNSOUND");
+}
+
+#[test]
 fn std_challenge_17() {
     let output = run_with_args("verify_cases/std-challenge-17", CMD_VERIFY_TARGETED);
 

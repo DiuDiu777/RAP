@@ -291,7 +291,7 @@ pub(super) fn discharge_from_contract_fact<'tcx>(
 ) -> Option<String> {
     let target_key = contract_property_key(property)?;
 
-    // Pass 1: exact place match.
+    // Pass 1: exact place match or reachable via provenance chain.
     for fact in &forward.facts {
         let StateFact::Contract(contract) = fact else {
             continue;
@@ -302,7 +302,9 @@ pub(super) fn discharge_from_contract_fact<'tcx>(
         let Some(contract_key) = contract_property_key(contract) else {
             continue;
         };
-        if contract_key != target_key {
+        if contract_key != target_key
+            && !provenance_chain_reaches(&contract_key, &target_key, forward)
+        {
             continue;
         }
         if !contract_args_cover(contract, property) {
@@ -537,7 +539,7 @@ fn provenance_chain_reaches<'tcx>(
             {
                 match &def.value {
                     AbstractValue::Place(p) | AbstractValue::Ref(p) | AbstractValue::RawPtr(p) => {
-                        queue.push(p.clone())
+                        queue.push(p.clone());
                     }
                     _ => {}
                 }

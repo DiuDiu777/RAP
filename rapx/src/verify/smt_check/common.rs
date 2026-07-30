@@ -62,6 +62,9 @@ use crate::helpers::mir_scan::Checkpoint;
 
 use super::model::SmtModel;
 
+#[cfg(not(rapx_has_skip_norm_wip))]
+use crate::compat::SkipNormWip;
+
 pub(crate) type ValueCursor = usize;
 pub(crate) type TraceSeen = std::collections::HashSet<(PlaceKey, ValueCursor)>;
 
@@ -99,7 +102,24 @@ pub(super) fn safe_type_layout<'tcx>(
     match tcx.layout_of(input) {
         Ok(layout) => Some((layout.align.abi.bytes(), layout.size.bytes())),
         Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
-        Err(_) => None,
+        Err(_) => {
+            if let TyKind::Adt(adt_def, substs) = ty.kind()
+                && substs.iter().any(|arg| {
+                    matches!(arg.kind(), rustc_middle::ty::GenericArgKind::Type(t) if matches!(t.kind(), TyKind::Param(_)))
+                })
+            {
+                let ptr_align = tcx.data_layout.pointer_align().abi.bytes();
+                let mut max_align = ptr_align;
+                for field in adt_def.all_fields() {
+                    let field_ty = field.ty(tcx, substs).skip_norm_wip();
+                    if let Some((f_align, _)) = safe_type_layout(tcx, caller, field_ty) {
+                        if f_align > 0 { max_align = max_align.max(f_align); }
+                    }
+                }
+                return Some((max_align, 0));
+            }
+            None
+        }
     }
 }
 

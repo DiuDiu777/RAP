@@ -78,3 +78,17 @@ pub fn args_get<'tcx>(
 ) -> Option<rustc_middle::ty::GenericArg<'tcx>> {
     args.skip_binder().get(index).copied()
 }
+
+// ── skip_norm_wip (rustc_type_ir) ──────────────────────────────────────
+
+/// `TyKind::skip_norm_wip` was introduced to handle the `Wip` alias
+/// variant.  On older toolchains that do not have `AliasRelation::Wip`,
+/// the method is not needed and we provide an identity fallback.
+#[cfg(not(rapx_has_skip_norm_wip))]
+pub trait SkipNormWip: Sized {
+    fn skip_norm_wip(self) -> Self {
+        self
+    }
+}
+#[cfg(not(rapx_has_skip_norm_wip))]
+impl<T: Sized> SkipNormWip for T {}

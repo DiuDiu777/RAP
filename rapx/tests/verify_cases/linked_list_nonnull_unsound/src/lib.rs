@@ -3,7 +3,6 @@
 #![allow(unused)]
 
 use std::ptr::NonNull;
-use std::marker::PhantomData;
 
 #[rapx::invariant(Align(prev.unwrap_some(), Node))]
 #[rapx::invariant(Allocated(prev.unwrap_some(), Node, 1))]
@@ -31,12 +30,11 @@ struct LinkedList<T> {
     head: Option<NonNull<Node<T>>>,
     tail: Option<NonNull<Node<T>>>,
     len: usize,
-    _marker: PhantomData<Box<Node<T>>>,
 }
 
 impl<T: Copy> LinkedList<T> {
     #[rapx::verify]
-    pub fn new() -> Self { LinkedList { head: None, tail: None, len: 0, _marker: PhantomData } }
+    pub fn new() -> Self { LinkedList { head: None, tail: None, len: 0 } }
 
     #[rapx::verify]
     pub fn len(&self) -> usize { self.len }
