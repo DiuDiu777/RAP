@@ -1,48 +1,22 @@
-use annotate_snippets::{Level, Renderer, Snippet};
-
-use once_cell::sync::OnceCell;
+use annotate_snippets::Level;
 
 use crate::{
     analysis::dataflow::*,
     check::opt::OptCheck,
-    helpers::def_path::DefPath,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
-use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::Local, ty::TyCtxt};
 use rustc_span::Span;
 
-struct DefPaths {
-    hashset_new: DefPath,
-    hashset_with_capacity: DefPath,
-    hashmap_new: DefPath,
-    hashmap_with_capacity: DefPath,
-    btreeset_new: DefPath,
-    btreemap_new: DefPath,
-}
+use crate::check::opt::report::OptReport;
+use crate::check::opt::check_utils::node_matches_any_call;
 
-static DEFPATHS: OnceCell<DefPaths> = OnceCell::new();
-
-impl DefPaths {
-    pub fn new(tcx: &TyCtxt<'_>) -> Self {
-        Self {
-            hashset_new: DefPath::new("std::collections::HashSet::new", tcx),
-            hashset_with_capacity: DefPath::new("std::collections::HashSet::with_capacity", tcx),
-            hashmap_new: DefPath::new("std::collections::HashMap::new", tcx),
-            hashmap_with_capacity: DefPath::new("std::collections::HashMap::with_capacity", tcx),
-            btreeset_new: DefPath::new("std::collections::BTreeSet::new", tcx),
-            btreemap_new: DefPath::new("std::collections::BTreeMap::new", tcx),
-        }
-    }
-
-    fn has_id(&self, id: DefId) -> bool {
-        id == self.hashset_new.last_def_id()
-            || id == self.hashmap_new.last_def_id()
-            || id == self.btreemap_new.last_def_id()
-            || id == self.btreeset_new.last_def_id()
-            || id == self.hashmap_with_capacity.last_def_id()
-            || id == self.hashset_with_capacity.last_def_id()
-    }
+crate::def_paths! {
+    hashset_new: "std::collections::HashSet::new",
+    hashset_with_capacity: "std::collections::HashSet::with_capacity",
+    hashmap_new: "std::collections::HashMap::new",
+    hashmap_with_capacity: "std::collections::HashMap::with_capacity",
+    btreeset_new: "std::collections::BTreeSet::new",
+    btreemap_new: "std::collections::BTreeMap::new",
 }
 
 pub struct LocalSetCheck {
@@ -57,14 +31,15 @@ impl OptCheck for LocalSetCheck {
     fn check(&mut self, graph: &Graph, tcx: &TyCtxt) {
         let def_paths = &DEFPATHS.get_or_init(|| DefPaths::new(tcx));
         for (node_idx, node) in graph.nodes.iter_enumerated() {
-            for op in node.ops.iter() {
-                if let NodeOp::Call(def_id) = op {
-                    if def_paths.has_id(*def_id)
-                        && !graph.is_connected(Local::from_usize(0), node_idx)
-                    {
-                        self.record.push(node.span);
-                    }
-                }
+            if node_matches_any_call(node, |id| {
+                id == def_paths.hashset_new.last_def_id()
+                    || id == def_paths.hashmap_new.last_def_id()
+                    || id == def_paths.btreemap_new.last_def_id()
+                    || id == def_paths.btreeset_new.last_def_id()
+                    || id == def_paths.hashmap_with_capacity.last_def_id()
+                    || id == def_paths.hashset_with_capacity.last_def_id()
+            }) && !graph.is_connected(Local::from_usize(0), node_idx) {
+                self.record.push(node.span);
             }
         }
     }
@@ -81,23 +56,10 @@ impl OptCheck for LocalSetCheck {
 }
 
 fn report_local_set(graph: &Graph, span: Span) {
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(span);
-    let snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, span))
-                .label("Initialization happens here"),
-        );
-    let message = Level::Warning
+    OptReport::from_graph(graph)
+        .file_name(span)
         .title("Unnecessary data collection initialization detected")
-        .snippet(snippet)
-        .footer(
-            Level::Help.title("Move it into parameter list and use hash table to save allocation."),
-        );
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+        .annotate(Level::Error, span, "Initialization happens here")
+        .footer("Move it into parameter list and use hash table to save allocation.")
+        .emit();
 }

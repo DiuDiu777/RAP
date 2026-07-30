@@ -7,10 +7,12 @@ use rustc_span::Span;
 use crate::analysis::dataflow::Graph;
 use crate::helpers::def_path::DefPath;
 use crate::utils::span::{
-    relative_pos_range, span_to_filename, span_to_first_line, span_to_line_number,
-    span_to_source_code, span_to_trimmed_span,
+    span_to_first_line, span_to_trimmed_span,
 };
-use annotate_snippets::{Level, Renderer, Snippet};
+
+use annotate_snippets::Level;
+
+use crate::check::opt::report::OptReport;
 
 use super::super::super::LEVEL;
 use super::super::super::NO_STD;
@@ -73,30 +75,12 @@ impl OptCheck for BoundsLoopPushCheck {
 }
 
 fn report_loop_push_bug(loop_span: Span, push_record: &Vec<Span>) {
-    let code_source = span_to_source_code(loop_span);
-    let filename = span_to_filename(loop_span);
-    let mut snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(loop_span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Info
-                .span(relative_pos_range(
-                    loop_span,
-                    span_to_trimmed_span(span_to_first_line(loop_span)),
-                ))
-                .label("A loop operation."),
-        );
-    for push_span in push_record {
-        snippet = snippet.annotation(
-            Level::Error
-                .span(relative_pos_range(loop_span, *push_span))
-                .label("Push happens here."),
-        );
-    }
-    let message = Level::Warning
+    let trimmed = span_to_trimmed_span(span_to_first_line(loop_span));
+    let mut report = OptReport::new(loop_span, loop_span)
         .title("Unnecessary bounds checkings detected")
-        .snippet(snippet);
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+        .annotate(Level::Info, trimmed, "A loop operation.");
+    for push_span in push_record {
+        report = report.annotate(Level::Error, *push_span, "Push happens here.");
+    }
+    report.emit();
 }

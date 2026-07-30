@@ -169,3 +169,12 @@ pub fn arg_of_local(local: Local, arg_count: usize) -> Option<usize> {
         None
     }
 }
+
+pub fn has_crate(tcx: TyCtxt<'_>, name: &str) -> bool {
+    for num in tcx.crates(()) {
+        if tcx.crate_name(*num) == Symbol::intern(name) {
+            return true;
+        }
+    }
+    false
+}

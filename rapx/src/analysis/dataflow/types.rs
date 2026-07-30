@@ -298,6 +298,54 @@ impl DataflowGraph {
         }
     }
 
+    pub fn find_first_node<P, E>(
+        &self,
+        start: Local,
+        direction: Direction,
+        node_predicate: &mut P,
+        edge_validator: &mut E,
+    ) -> Option<Local>
+    where
+        P: FnMut(&DataflowGraph, Local) -> bool,
+        E: FnMut(&DataflowGraph, EdgeIdx) -> DFSStatus,
+    {
+        let mut result = None;
+        let mut node_op = |graph: &DataflowGraph, idx: Local| -> DFSStatus {
+            if node_predicate(graph, idx) {
+                result = Some(idx);
+                DFSStatus::Stop
+            } else {
+                DFSStatus::Continue
+            }
+        };
+        let mut seen = HashSet::new();
+        self.dfs(start, direction, &mut node_op, edge_validator, false, &mut seen);
+        result
+    }
+
+    pub fn find_all_nodes<P, E>(
+        &self,
+        start: Local,
+        direction: Direction,
+        node_predicate: &mut P,
+        edge_validator: &mut E,
+    ) -> Vec<Local>
+    where
+        P: FnMut(&DataflowGraph, Local) -> bool,
+        E: FnMut(&DataflowGraph, EdgeIdx) -> DFSStatus,
+    {
+        let mut results = Vec::new();
+        let mut node_op = |graph: &DataflowGraph, idx: Local| -> DFSStatus {
+            if node_predicate(graph, idx) {
+                results.push(idx);
+            }
+            DFSStatus::Continue
+        };
+        let mut seen = HashSet::new();
+        self.dfs(start, direction, &mut node_op, edge_validator, true, &mut seen);
+        results
+    }
+
     pub fn equivalent_edge_validator(graph: &DataflowGraph, idx: EdgeIdx) -> DFSStatus {
         match graph.edges[idx].op {
             EdgeOp::Copy | EdgeOp::Move | EdgeOp::Mut | EdgeOp::Immut | EdgeOp::Deref => {

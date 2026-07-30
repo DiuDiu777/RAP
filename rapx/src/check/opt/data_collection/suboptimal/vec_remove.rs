@@ -1,13 +1,15 @@
-use annotate_snippets::{Level, Renderer, Snippet};
+use annotate_snippets::Level;
 
 
 use crate::{
     analysis::dataflow::*,
     check::opt::OptCheck,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::Span;
+
+use crate::check::opt::report::OptReport;
+use crate::check::opt::check_utils::node_matches_call;
 
 crate::def_paths! {
     vec_remove: "std::vec::Vec::remove",
@@ -17,20 +19,6 @@ crate::def_paths! {
 
 pub struct VecRemoveCheck {
     record: Vec<Span>,
-}
-
-fn is_vec_insert_or_remove(node: &GraphNode) -> bool {
-    let def_paths = DEFPATHS.get().unwrap();
-    for op in node.ops.iter() {
-        if let NodeOp::Call(def_id) = op {
-            if *def_id == def_paths.vec_remove.last_def_id()
-                || *def_id == def_paths.vec_insert.last_def_id()
-            {
-                return true;
-            }
-        }
-    }
-    false
 }
 
 fn is_0_usize(node: &GraphNode) -> bool {
@@ -50,9 +38,9 @@ impl OptCheck for VecRemoveCheck {
     }
 
     fn check(&mut self, graph: &Graph, tcx: &TyCtxt) {
-        let _ = &DEFPATHS.get_or_init(|| DefPaths::new(tcx));
+        let def_paths = &DEFPATHS.get_or_init(|| DefPaths::new(tcx));
         for node in graph.nodes.iter() {
-            if is_vec_insert_or_remove(node) {
+            if node_matches_call(node, &[def_paths.vec_remove.last_def_id(), def_paths.vec_insert.last_def_id()]) {
                 let index_edge = &graph.edges[node.in_edges[1]];
                 let index_node = &graph.nodes[index_edge.src];
                 if is_0_usize(index_node) {
@@ -74,21 +62,9 @@ impl OptCheck for VecRemoveCheck {
 }
 
 fn report_vec_remove_bug(graph: &Graph, span: Span) {
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(graph.span);
-    let snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, span))
-                .label("Vec increasement / decreasement happens here."),
-        );
-    let message = Level::Warning
+    OptReport::from_graph(graph)
         .title("Improper data collection detected")
-        .snippet(snippet)
-        .footer(Level::Help.title("Use VecQueue instead of Vec."));
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+        .annotate(Level::Error, span, "Vec increasement / decreasement happens here.")
+        .footer("Use VecQueue instead of Vec.")
+        .emit();
 }

@@ -1,9 +1,10 @@
 use crate::{
     analysis::dataflow::*,
     check::opt::OptCheck,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
-use annotate_snippets::{Level, Renderer, Snippet};
+use annotate_snippets::Level;
+
+use crate::check::opt::report::OptReport;
 
 use super::super::LEVEL;
 use rustc_middle::{
@@ -12,7 +13,6 @@ use rustc_middle::{
 };
 use rustc_span::Span;
 use std::cell::Cell;
-use std::collections::HashSet;
 
 crate::def_paths! {
     clone: "std::clone::Clone::clone",
@@ -21,40 +21,34 @@ crate::def_paths! {
 }
 
 
-// whether the cloned value is used as a parameter
 fn find_downside_use_as_param(graph: &Graph, clone_node_idx: Local) -> Option<(Local, EdgeIdx)> {
     let mut record = None;
-    let edge_idx = Cell::new(0 as usize);
+    let captured_edge = Cell::new(0);
     let deref_id = DEFPATHS.get().unwrap().deref.last_def_id();
-    let mut node_operator = |graph: &Graph, idx: Local| {
-        if idx == clone_node_idx {
-            return DFSStatus::Continue; //the start point, clone, is a Call node as well
-        }
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Call(def_id) = op {
-                if *def_id == deref_id {
-                    //we permit deref here
-                    return DFSStatus::Continue;
-                }
-                record = Some((idx, edge_idx.get())); //here, the edge_idx must be the upside edge of the node
-                return DFSStatus::Stop;
-            }
-        }
-        DFSStatus::Continue
-    };
     let mut edge_operator = |graph: &Graph, idx: EdgeIdx| {
-        edge_idx.set(idx);
-        Graph::equivalent_edge_validator(graph, idx) //can not support ref->deref->ref link
+        captured_edge.set(idx);
+        Graph::equivalent_edge_validator(graph, idx)
     };
-    let mut seen = HashSet::new();
-    graph.dfs(
+    graph.find_first_node(
         clone_node_idx,
         Direction::Downside,
-        &mut node_operator,
+        &mut |graph: &Graph, idx: Local| {
+            if idx == clone_node_idx {
+                return false;
+            }
+            let node = &graph.nodes[idx];
+            for op in node.ops.iter() {
+                if let NodeOp::Call(def_id) = op {
+                    if *def_id == deref_id {
+                        return false;
+                    }
+                    record = Some((idx, captured_edge.get()));
+                    return true;
+                }
+            }
+            false
+        },
         &mut edge_operator,
-        true,
-        &mut seen,
     );
     record
 }
@@ -141,26 +135,11 @@ impl OptCheck for UsedAsImmutableCheck {
 }
 
 fn report_used_as_immutable(graph: &Graph, clone_span: Span, use_span: Span) {
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(clone_span);
-    let snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, clone_span))
-                .label("Cloning happens here."),
-        )
-        .annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, use_span))
-                .label("Used here"),
-        );
-    let message = Level::Warning
+    OptReport::from_graph(graph)
+        .file_name(clone_span)
         .title("Unnecessary memory cloning detected")
-        .snippet(snippet)
-        .footer(Level::Help.title("Use borrowings instead."));
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+        .annotate(Level::Error, clone_span, "Cloning happens here.")
+        .annotate(Level::Error, use_span, "Used here")
+        .footer("Use borrowings instead.")
+        .emit();
 }

@@ -1068,11 +1068,7 @@ impl<'tcx> VerifyRun<'tcx> {
     }
 }
 
-/// Extract the last segment of a def-path (the bare function name).
-fn short_fn_name(tcx: TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> String {
-    let path = tcx.def_path_str(def_id);
-    path.rsplit("::").next().unwrap_or(&path).to_string()
-}
+use crate::helpers::name::short_fn_name;
 
 /// Return true when two properties have the same kind.
 /// Collect struct field indices referenced by a property's contract places.

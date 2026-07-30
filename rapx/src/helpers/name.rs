@@ -438,3 +438,8 @@ pub fn find_generic_in_ty<'tcx>(
     }
     None
 }
+
+pub fn short_fn_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    let path = tcx.def_path_str(def_id);
+    path.rsplit("::").next().unwrap_or(&path).to_string()
+}

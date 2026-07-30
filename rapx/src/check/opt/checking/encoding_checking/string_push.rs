@@ -1,15 +1,13 @@
-use std::collections::HashSet;
-
-
-use rustc_middle::{mir::Local, ty::TyCtxt};
-use rustc_span::Span;
-
 use super::value_is_from_const;
 use crate::{
     analysis::dataflow::*,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
-use annotate_snippets::{Level, Renderer, Snippet};
+use rustc_middle::{mir::Local, ty::TyCtxt};
+use rustc_span::Span;
+
+use annotate_snippets::Level;
+
+use crate::check::opt::report::OptReport;
 
 crate::def_paths! {
     string_new: "std::string::String::new",
@@ -37,30 +35,23 @@ fn extract_value_if_is_string_push(graph: &Graph, node: &GraphNode) -> Option<Lo
 }
 
 fn find_upside_string_new(graph: &Graph, node_idx: Local) -> Option<Local> {
-    let mut string_new_node_idx = None;
     let def_paths = DEFPATHS.get().unwrap();
-    let mut node_operator = |graph: &Graph, idx: Local| -> DFSStatus {
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Call(def_id) = op {
-                if *def_id == def_paths.string_new.last_def_id() {
-                    string_new_node_idx = Some(idx);
-                    return DFSStatus::Stop;
-                }
-            }
-        }
-        DFSStatus::Continue
-    };
-    let mut seen = HashSet::new();
-    graph.dfs(
+    graph.find_first_node(
         node_idx,
         Direction::Upside,
-        &mut node_operator,
+        &mut |graph: &Graph, idx: Local| {
+            let node = &graph.nodes[idx];
+            for op in node.ops.iter() {
+                if let NodeOp::Call(def_id) = op {
+                    if *def_id == def_paths.string_new.last_def_id() {
+                        return true;
+                    }
+                }
+            }
+            false
+        },
         &mut Graph::always_true_edge_validator,
-        false,
-        &mut seen,
-    );
-    string_new_node_idx
+    )
 }
 
 impl OptCheck for StringPushCheck {
@@ -95,23 +86,10 @@ impl OptCheck for StringPushCheck {
 }
 
 fn report_string_push_bug(graph: &Graph, spans: &Vec<Span>) {
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(graph.span);
-    let mut snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true);
+    let mut report = OptReport::from_graph(graph)
+        .title("Unnecessary encoding checkings detected");
     for span in spans.iter() {
-        snippet = snippet.annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, *span))
-                .label("Checked here."),
-        )
+        report = report.annotate(Level::Error, *span, "Checked here.");
     }
-    let message = Level::Warning
-        .title("Unnecessary encoding checkings detected")
-        .snippet(snippet)
-        .footer(Level::Help.title("Use unsafe APIs instead."));
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+    report.footer("Use unsafe APIs instead.").emit();
 }

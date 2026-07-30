@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use crate::analysis::dataflow::*;
 use rustc_middle::{mir::Local, ty::TyCtxt};
 use rustc_span::Span;
@@ -37,63 +35,45 @@ fn extract_vec_if_is_string_from(graph: &Graph, node: &GraphNode) -> Option<Loca
 }
 
 fn find_upside_vec_new_node(graph: &Graph, node_idx: Local) -> Option<Local> {
-    let mut vec_new_node_idx = None;
     let def_paths = &DEFPATHS.get().unwrap();
-    // Warning: may traverse all upside nodes and the new result will overwrite on the previous result
-    let mut node_operator = |graph: &Graph, idx: Local| -> DFSStatus {
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Call(def_id) = op {
-                if *def_id == def_paths.vec_new.last_def_id()
-                    || *def_id == def_paths.vec_with_capacity.last_def_id()
-                {
-                    vec_new_node_idx = Some(idx);
-                    return DFSStatus::Stop;
-                }
-            }
-        }
-        DFSStatus::Continue
-    };
-    let mut seen = HashSet::new();
-    graph.dfs(
+    graph.find_first_node(
         node_idx,
         Direction::Upside,
-        &mut node_operator,
-        &mut Graph::always_true_edge_validator,
-        false,
-        &mut seen,
-    );
-    vec_new_node_idx
-}
-
-// todo: we can find downside index node too
-
-fn find_downside_push_node(graph: &Graph, node_idx: Local) -> Vec<Local> {
-    let mut push_node_idxs: Vec<Local> = Vec::new();
-    let def_paths = &DEFPATHS.get().unwrap();
-    // Warning: traverse all downside nodes
-    let mut node_operator = |graph: &Graph, idx: Local| -> DFSStatus {
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Call(def_id) = op {
-                if *def_id == def_paths.vec_push.last_def_id() {
-                    push_node_idxs.push(idx);
-                    break;
+        &mut |graph: &Graph, idx: Local| {
+            let node = &graph.nodes[idx];
+            for op in node.ops.iter() {
+                if let NodeOp::Call(def_id) = op {
+                    if *def_id == def_paths.vec_new.last_def_id()
+                        || *def_id == def_paths.vec_with_capacity.last_def_id()
+                    {
+                        return true;
+                    }
                 }
             }
-        }
-        DFSStatus::Continue
-    };
-    let mut seen = HashSet::new();
-    graph.dfs(
+            false
+        },
+        &mut Graph::always_true_edge_validator,
+    )
+}
+
+fn find_downside_push_node(graph: &Graph, node_idx: Local) -> Vec<Local> {
+    let def_paths = &DEFPATHS.get().unwrap();
+    graph.find_all_nodes(
         node_idx,
         Direction::Downside,
-        &mut node_operator,
+        &mut |graph: &Graph, idx: Local| {
+            let node = &graph.nodes[idx];
+            for op in node.ops.iter() {
+                if let NodeOp::Call(def_id) = op {
+                    if *def_id == def_paths.vec_push.last_def_id() {
+                        return true;
+                    }
+                }
+            }
+            false
+        },
         &mut Graph::always_true_edge_validator,
-        true,
-        &mut seen,
-    );
-    push_node_idxs
+    )
 }
 
 impl OptCheck for VecEncodingCheck {

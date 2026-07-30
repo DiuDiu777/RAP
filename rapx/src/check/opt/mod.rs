@@ -1,7 +1,9 @@
 pub mod checking;
+pub mod check_utils;
 pub mod data_collection;
 pub mod loop_visitors;
 pub mod memory_cloning;
+pub mod report;
 
 #[macro_export]
 macro_rules! def_paths {
@@ -24,6 +26,7 @@ macro_rules! def_paths {
 use rustc_middle::ty::TyCtxt;
 
 use crate::analysis::dataflow::{Graph, default::DataflowAnalyzer};
+use crate::helpers::mir_utils::has_crate;
 use checking::bounds_checking::BoundsCheck;
 use checking::encoding_checking::EncodingCheck;
 use data_collection::initialization::InitializationCheck;
@@ -32,7 +35,6 @@ use data_collection::suboptimal::SuboptimalCheck;
 use memory_cloning::used_as_immutable::UsedAsImmutableCheck;
 
 use lazy_static::lazy_static;
-use rustc_span::symbol::Symbol;
 use std::sync::Mutex;
 
 lazy_static! {
@@ -57,25 +59,16 @@ impl<'tcx> Opt<'tcx> {
         Self { tcx, level }
     }
 
-    fn has_crate(&self, name: &str) -> bool {
-        for num in self.tcx.crates(()) {
-            if self.tcx.crate_name(*num) == Symbol::intern(name) {
-                return true;
-            }
-        }
-        false
-    }
-
     pub fn start(&mut self) {
         let mut dataflow = DataflowAnalyzer::new(self.tcx, false);
         dataflow.build_graphs();
         {
             let mut no_std = NO_STD.lock().unwrap();
-            *no_std = !self.has_crate("std");
+            *no_std = !has_crate(self.tcx, "std");
             let mut level = LEVEL.lock().unwrap();
             *level = self.level;
         }
-        if !self.has_crate("core") {
+        if !has_crate(self.tcx, "core") {
             //core it self
             return;
         }

@@ -5,6 +5,7 @@ use crate::analysis::safetyflow_analysis::root::{
 use crate::cli::VerifyMode;
 use crate::helpers::fn_info::get_cons;
 use crate::helpers::mir_scan::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
+use crate::helpers::name::short_fn_name;
 use rustc_hir::{
     Attribute, BodyId, FnDecl, ItemKind, LangItem,
     def_id::{DefId, LocalDefId},
@@ -904,8 +905,7 @@ impl<'tcx> PrepareTargets<'tcx> {
     }
 
     fn log_method_target(&self, target: &FunctionTarget<'tcx>) {
-        let target_path = self.tcx.def_path_str(target.def_id);
-        let name = target_path.rsplit("::").next().unwrap_or(&target_path);
+        let name = short_fn_name(self.tcx, target.def_id);
         let dashes = 62usize.saturating_sub(10 + name.len());
         rap_info!("  --- method: {name} {}", "-".repeat(dashes));
 

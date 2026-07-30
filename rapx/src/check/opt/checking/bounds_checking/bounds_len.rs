@@ -1,5 +1,3 @@
-use std::collections::HashSet;
-
 use once_cell::sync::OnceCell;
 
 use rustc_ast::BinOpKind;
@@ -10,9 +8,10 @@ use rustc_span::Span;
 use crate::{
     analysis::dataflow::*,
     helpers::def_path::DefPath,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
-use annotate_snippets::{Level, Renderer, Snippet};
+use annotate_snippets::Level;
+
+use crate::check::opt::report::OptReport;
 
 use super::super::super::NO_STD;
 
@@ -222,90 +221,57 @@ fn extract_upperbound_node_if_ops_range(graph: &Graph, node: &GraphNode) -> Opti
 }
 
 fn find_upside_len_node(graph: &Graph, node_idx: Local) -> Option<Local> {
-    let mut len_node_idx = None;
     let def_paths = &DEFPATHS.get().unwrap();
-    // Warning: may traverse all upside nodes and the new result will overwrite on the previous result
-    let mut node_operator = |graph: &Graph, idx: Local| -> DFSStatus {
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Call(def_id) = op {
-                if *def_id == def_paths.vec_len.last_def_id()
-                    || *def_id == def_paths.slice_len.last_def_id()
-                {
-                    len_node_idx = Some(idx);
-                    return DFSStatus::Stop;
-                }
-            }
-        }
-        DFSStatus::Continue
-    };
-    let mut seen = HashSet::new();
-    graph.dfs(
+    graph.find_first_node(
         node_idx,
         Direction::Upside,
-        &mut node_operator,
+        &mut |graph: &Graph, idx: Local| {
+            let node = &graph.nodes[idx];
+            for op in node.ops.iter() {
+                if let NodeOp::Call(def_id) = op {
+                    if *def_id == def_paths.vec_len.last_def_id()
+                        || *def_id == def_paths.slice_len.last_def_id()
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        },
         &mut Graph::equivalent_edge_validator,
-        false,
-        &mut seen,
-    );
-    len_node_idx
+    )
 }
 
 fn find_downside_index_node(graph: &Graph, node_idx: Local) -> Vec<Local> {
-    let mut index_node_idxs: Vec<Local> = vec![];
     let def_paths = &DEFPATHS.get().unwrap();
-    // Warning: traverse all downside nodes
-    let mut node_operator = |graph: &Graph, idx: Local| -> DFSStatus {
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Call(def_id) = op {
-                if *def_id == def_paths.ops_index.last_def_id()
-                    || *def_id == def_paths.ops_index_mut.last_def_id()
-                {
-                    index_node_idxs.push(idx);
-                    break;
-                }
-            }
-        }
-        DFSStatus::Continue
-    };
-    let mut seen = HashSet::new();
-    graph.dfs(
+    graph.find_all_nodes(
         node_idx,
         Direction::Downside,
-        &mut node_operator,
+        &mut |graph: &Graph, idx: Local| {
+            let node = &graph.nodes[idx];
+            for op in node.ops.iter() {
+                if let NodeOp::Call(def_id) = op {
+                    if *def_id == def_paths.ops_index.last_def_id()
+                        || *def_id == def_paths.ops_index_mut.last_def_id()
+                    {
+                        return true;
+                    }
+                }
+            }
+            false
+        },
         &mut Graph::always_true_edge_validator,
-        true,
-        &mut seen,
-    );
-    index_node_idxs
+    )
 }
 
 fn report_upperbound_bug(graph: &Graph, upperbound_node_idx: Local, index_record: &Vec<Local>) {
     let upperbound_span = graph.nodes[upperbound_node_idx].span;
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(upperbound_span);
-    let mut snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Info
-                .span(relative_pos_range(graph.span, upperbound_span))
-                .label("Index is upperbounded."),
-        );
+    let mut report = OptReport::from_graph(graph)
+        .title("Unnecessary bounds checkings detected")
+        .annotate(Level::Info, upperbound_span, "Index is upperbounded.");
     for node_idx in index_record {
         let index_span = graph.nodes[*node_idx].span;
-        snippet = snippet.annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, index_span))
-                .label("Checked here."),
-        );
+        report = report.annotate(Level::Error, index_span, "Checked here.");
     }
-    let message = Level::Warning
-        .title("Unnecessary bounds checkings detected")
-        .snippet(snippet)
-        .footer(Level::Help.title("Use unsafe APIs instead."));
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+    report.footer("Use unsafe APIs instead.").emit();
 }

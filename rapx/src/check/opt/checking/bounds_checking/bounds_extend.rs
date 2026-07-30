@@ -6,9 +6,11 @@ use rustc_span::Span;
 use crate::{
     analysis::dataflow::*,
     helpers::def_path::DefPath,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
-use annotate_snippets::{Level, Renderer, Snippet};
+use annotate_snippets::Level;
+
+use crate::check::opt::report::OptReport;
+use crate::check::opt::check_utils::node_matches_call;
 
 use super::super::super::LEVEL;
 use super::super::super::NO_STD;
@@ -38,18 +40,6 @@ pub struct BoundsExtendCheck {
     pub record: Vec<Span>,
 }
 
-fn is_extend_from_slice(node: &GraphNode) -> bool {
-    let def_paths = DEFPATHS.get().unwrap();
-    for op in node.ops.iter() {
-        if let NodeOp::Call(def_id) = op {
-            if *def_id == def_paths.vec_extend_from_slice.last_def_id() {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 impl OptCheck for BoundsExtendCheck {
     fn new() -> Self {
         Self { record: Vec::new() }
@@ -60,9 +50,9 @@ impl OptCheck for BoundsExtendCheck {
         if *level <= 1 {
             return;
         }
-        let _ = &DEFPATHS.get_or_init(|| DefPaths::new(tcx));
+        let def_paths = &DEFPATHS.get_or_init(|| DefPaths::new(tcx));
         for node in graph.nodes.iter() {
-            if is_extend_from_slice(node) {
+            if node_matches_call(node, &[def_paths.vec_extend_from_slice.last_def_id()]) {
                 self.record.push(node.span);
             }
         }
@@ -80,21 +70,9 @@ impl OptCheck for BoundsExtendCheck {
 }
 
 fn report_extend_bug(graph: &Graph, span: Span) {
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(graph.span);
-    let snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, span))
-                .label("Checked here."),
-        );
-    let message = Level::Warning
+    OptReport::from_graph(graph)
         .title("Unnecessary bound checkings detected")
-        .snippet(snippet)
-        .footer(Level::Help.title("Manipulate memory directly."));
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+        .annotate(Level::Error, span, "Checked here.")
+        .footer("Manipulate memory directly.")
+        .emit();
 }

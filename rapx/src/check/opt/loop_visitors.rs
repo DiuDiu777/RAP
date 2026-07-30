@@ -8,18 +8,18 @@ pub struct LoopFinder<'tcx> {
     pub target_def_id: rustc_span::def_id::DefId,
 }
 
-pub struct PushFinder<'tcx> {
+pub struct MethodCallFinder<'tcx> {
     typeck_results: &'tcx TypeckResults<'tcx>,
     record: Vec<Span>,
     target_def_id: rustc_span::def_id::DefId,
 }
 
-impl<'tcx> PushFinder<'tcx> {
+impl<'tcx> MethodCallFinder<'tcx> {
     pub fn new(
         typeck_results: &'tcx TypeckResults<'tcx>,
         target_def_id: rustc_span::def_id::DefId,
-    ) -> PushFinder<'tcx> {
-        PushFinder {
+    ) -> MethodCallFinder<'tcx> {
+        MethodCallFinder {
             typeck_results,
             record: Vec::new(),
             target_def_id,
@@ -48,7 +48,7 @@ impl<'tcx> LoopFinder<'tcx> {
     }
 }
 
-impl<'tcx> intravisit::Visitor<'tcx> for PushFinder<'tcx> {
+impl<'tcx> intravisit::Visitor<'tcx> for MethodCallFinder<'tcx> {
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) {
         if let ExprKind::MethodCall(.., span) = ex.kind {
             let def_id = self
@@ -66,7 +66,7 @@ impl<'tcx> intravisit::Visitor<'tcx> for PushFinder<'tcx> {
 impl<'tcx> intravisit::Visitor<'tcx> for LoopFinder<'tcx> {
     fn visit_expr(&mut self, ex: &'tcx Expr<'tcx>) {
         if let ExprKind::Loop(block, ..) = ex.kind {
-            let mut push_finder = PushFinder::new(self.typeck_results, self.target_def_id);
+            let mut push_finder = MethodCallFinder::new(self.typeck_results, self.target_def_id);
             intravisit::walk_block(&mut push_finder, block);
             if push_finder.record.len() == 1 {
                 self.record.push((ex.span, push_finder.into_record()));

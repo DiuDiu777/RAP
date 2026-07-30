@@ -3,14 +3,14 @@ pub mod string_lowercase;
 pub mod string_push;
 pub mod vec_encoding;
 
-use std::collections::HashSet;
-
 use crate::{
     analysis::dataflow::*,
     check::opt::OptCheck,
-    utils::span::{relative_pos_range, span_to_filename, span_to_line_number, span_to_source_code},
 };
-use annotate_snippets::{Level, Renderer, Snippet};
+
+use annotate_snippets::Level;
+
+use crate::check::opt::report::OptReport;
 
 use rustc_middle::{mir::Local, ty::TyCtxt};
 use rustc_span::Span;
@@ -60,43 +60,14 @@ impl OptCheck for EncodingCheck {
 }
 
 fn report_encoding_bug(graph: &Graph, span: Span) {
-    let code_source = span_to_source_code(graph.span);
-    let filename = span_to_filename(graph.span);
-    let snippet = Snippet::source(&code_source)
-        .line_start(span_to_line_number(graph.span))
-        .origin(&filename)
-        .fold(true)
-        .annotation(
-            Level::Error
-                .span(relative_pos_range(graph.span, span))
-                .label("Checked here."),
-        );
-    let message = Level::Warning
+    OptReport::from_graph(graph)
         .title("Unnecessary encoding checkings detected")
-        .snippet(snippet)
-        .footer(Level::Help.title("Use unsafe APIs."));
-    let renderer = Renderer::styled();
-    rap_warn!("{}", renderer.render(message));
+        .annotate(Level::Error, span, "Checked here.")
+        .footer("Use unsafe APIs.")
+        .emit();
 }
 
-// Warning: WE APPROXIMATELY VIEW CONST U8s AS SAFE INPUT
-// which may cause wrong result.
-
-// todo: ascii chars are extracted from String variables
 fn value_is_from_const(graph: &Graph, value_idx: Local) -> bool {
-    let mut const_found = false;
-    let mut node_operator = |graph: &Graph, idx: Local| -> DFSStatus {
-        let node = &graph.nodes[idx];
-        for op in node.ops.iter() {
-            if let NodeOp::Const(_, src_ty) = op {
-                if src_ty.contains("u8") {
-                    const_found = true;
-                    return DFSStatus::Stop;
-                }
-            }
-        }
-        DFSStatus::Continue
-    };
     let mut edge_validator = |graph: &Graph, idx: EdgeIdx| {
         let edge = &graph.edges[idx];
         let dst_node = &graph.nodes[edge.dst];
@@ -117,14 +88,19 @@ fn value_is_from_const(graph: &Graph, value_idx: Local) -> bool {
             _ => DFSStatus::Stop,
         }
     };
-    let mut seen = HashSet::new();
-    graph.dfs(
+    graph.find_first_node(
         value_idx,
         Direction::Upside,
-        &mut node_operator,
+        &mut |graph: &Graph, idx: Local| {
+            let node = &graph.nodes[idx];
+            node.ops.iter().any(|op| {
+                if let NodeOp::Const(_, src_ty) = op {
+                    src_ty.contains("u8")
+                } else {
+                    false
+                }
+            })
+        },
         &mut edge_validator,
-        false,
-        &mut seen,
-    );
-    const_found
+    ).is_some()
 }
