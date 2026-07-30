@@ -16,7 +16,7 @@ use rustc_middle::{
     mir::{
         BasicBlock, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
     },
-    ty::{self, AssocKind, GenericArgsRef, Ty, TyCtxt, TyKind},
+    ty::{self, AssocKind, TyCtxt, TyKind},
 };
 
 use crate::{
@@ -28,9 +28,13 @@ use crate::{
     },
 };
 use crate::helpers::mir_scan::Checkpoint;
+use crate::analysis::alias_analysis::{
+    collect_local_origins, resolve_self_field_origin,
+};
 
 use super::common::{
-    SmtCheckResult, SmtChecker, call_destination, failed_smt, operand_place, rvalue_source_place,
+    SmtCheckResult, SmtChecker, call_destination, failed_smt, operand_mir_place, operand_place,
+    rvalue_source_place,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -250,7 +254,7 @@ pub(super) fn param_index_of_origin<'tcx>(
         return None;
     }
     let ty = body.local_decls[Local::from_usize(local)].ty;
-    is_raw_pointer_ty(ty).then_some(local - 1)
+    matches!(ty.kind(), TyKind::RawPtr(..)).then_some(local - 1)
 }
 
 /// Returns true when the function may be called from outside this crate.
@@ -353,27 +357,20 @@ pub(super) fn callsite_arg_origins<'tcx>(
     origins
 }
 
-/// Adds the receiver of `as_ptr`/`as_mut_ptr` calls that produced any of the
-/// current origin locals, so writes through the original owner are also seen.
-pub(super) fn as_ptr_provenance_origins<'tcx>(
+/// Scan all blocks for `as_ptr`/`as_mut_ptr` calls whose destination overlaps
+/// any of `origins`. Returns the resolved receiver places.
+fn find_as_ptr_receivers<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: DefId,
     origins: &[PlaceKey],
+    aliases: &HashMap<Local, PlaceKey>,
+    check_alias_dest: bool,
 ) -> Vec<PlaceKey> {
     let body = tcx.optimized_mir(caller);
-    let aliases = collect_place_aliases(tcx, caller);
-    let mut extra = Vec::new();
+    let mut result = Vec::new();
     for block in body.basic_blocks.iter() {
-        let Some(terminator) = &block.terminator else {
-            continue;
-        };
-        let TerminatorKind::Call {
-            func,
-            args,
-            destination,
-            ..
-        } = &terminator.kind
-        else {
+        let Some(terminator) = &block.terminator else { continue };
+        let TerminatorKind::Call { func, args, destination, .. } = &terminator.kind else {
             continue;
         };
         let name = crate::helpers::mir_utils::call_name(tcx, func);
@@ -384,29 +381,35 @@ pub(super) fn as_ptr_provenance_origins<'tcx>(
             base: PlaceBaseKey::Local(destination.local.as_usize()),
             fields: Vec::new(),
         };
-        if !origins
-            .iter()
-            .any(|origin| destination_key.overlaps(origin))
-        {
+        let dest_overlaps = || {
+            origins.iter().any(|origin| destination_key.overlaps(origin))
+                || (check_alias_dest
+                    && aliases
+                        .get(&destination.local)
+                        .is_some_and(|alias| origins.iter().any(|o| alias.overlaps(o))))
+        };
+        if !dest_overlaps() {
             continue;
         }
-        let Some(receiver) = args.first() else {
-            continue;
-        };
-        let Some(place) = (match &receiver.node {
-            Operand::Copy(place) | Operand::Move(place) => Some(place),
-            Operand::Constant(_) => None,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => None,
-        }) else {
-            continue;
-        };
-        let resolved = resolve_mir_place(place, &aliases);
-        if !extra.contains(&resolved) {
-            extra.push(resolved);
+        let Some(receiver) = args.first() else { continue };
+        let Some(place) = operand_mir_place(&receiver.node) else { continue };
+        let resolved = resolve_mir_place(place, aliases);
+        if !result.contains(&resolved) {
+            result.push(resolved);
         }
     }
-    extra
+    result
+}
+
+/// Adds the receiver of `as_ptr`/`as_mut_ptr` calls that produced any of the
+/// current origin locals, so writes through the original owner are also seen.
+pub(super) fn as_ptr_provenance_origins<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    origins: &[PlaceKey],
+) -> Vec<PlaceKey> {
+    let aliases = collect_place_aliases(tcx, caller);
+    find_as_ptr_receivers(tcx, caller, origins, &aliases, false)
 }
 
 fn alias_producer(name: &str) -> Option<AliasProducer> {
@@ -544,27 +547,29 @@ fn destination_flows_to_return<'tcx>(
     false
 }
 
+fn rvalue_any_place_matching<'tcx>(
+    rvalue: &Rvalue<'tcx>,
+    pred: &mut impl FnMut(&Place<'tcx>) -> bool,
+) -> bool {
+    match rvalue {
+        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
+            Operand::Copy(place) | Operand::Move(place) => pred(place),
+            Operand::Constant(_) => false,
+            #[cfg(rapx_rustc_ge_196)]
+            Operand::RuntimeChecks(_) => false,
+        }),
+        _ => rvalue_source_place(rvalue).map_or(false, |place| pred(place)),
+    }
+}
+
 fn rvalue_mentions_local<'tcx>(
     rvalue: &Rvalue<'tcx>,
     local: Local,
     aliases: &HashMap<Local, PlaceKey>,
 ) -> bool {
-    match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::CopyForDeref(place) => place.local == local || aliases.contains_key(&place.local),
-        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
-            Operand::Copy(place) | Operand::Move(place) => {
-                place.local == local || aliases.contains_key(&place.local)
-            }
-            Operand::Constant(_) => false,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => false,
-        }),
-        _ => false,
-    }
+    rvalue_any_place_matching(rvalue, &mut |place| {
+        place.local == local || aliases.contains_key(&place.local)
+    })
 }
 
 fn local_hazard_violation<'tcx>(
@@ -883,14 +888,7 @@ fn places_holding_transferred_pointer<'tcx>(
             let target_defines_holder =
                 !killed.contains(&target.local) && holders.iter().any(|h| target_key.overlaps(h));
 
-            let source_place = match rvalue {
-                Rvalue::Use(Operand::Copy(place), ..)
-                | Rvalue::Use(Operand::Move(place), ..)
-                | Rvalue::Cast(_, Operand::Copy(place), _)
-                | Rvalue::Cast(_, Operand::Move(place), _)
-                | Rvalue::CopyForDeref(place) => Some(place),
-                _ => None,
-            };
+            let source_place = rvalue_source_place(rvalue);
 
             if target_defines_holder {
                 // This is the latest pre-call definition of a holder: the
@@ -1024,37 +1022,15 @@ fn place_is_raw_access_to_live_origin<'tcx>(place: &Place<'tcx>, live: &[PlaceKe
 
 /// True when the rvalue dereferences a still-live transferred pointer.
 fn rvalue_reads_live_origin<'tcx>(rvalue: &Rvalue<'tcx>, live: &[PlaceKey]) -> bool {
-    match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::CopyForDeref(place) => place_is_raw_access_to_live_origin(place, live),
-        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
-            Operand::Copy(place) | Operand::Move(place) => {
-                place_is_raw_access_to_live_origin(place, live)
-            }
-            Operand::Constant(_) => false,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => false,
-        }),
-        _ => false,
-    }
+    rvalue_any_place_matching(rvalue, &mut |place| place_is_raw_access_to_live_origin(place, live))
 }
 
 /// True when the rvalue copies the *value* of a still-live origin (or takes
 /// its address), so the assignment target keeps referring to the transferred
 /// pointer and must join the live set.
 fn rvalue_copies_live_origin_value<'tcx>(rvalue: &Rvalue<'tcx>, live: &[PlaceKey]) -> bool {
-    let place = match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::Ref(_, _, place)
-        | Rvalue::RawPtr(_, place)
-        | Rvalue::CopyForDeref(place) => place,
-        _ => return false,
+    let Some(place) = rvalue_source_place(rvalue) else {
+        return false;
     };
     if place
         .projection
@@ -1231,22 +1207,7 @@ fn terminator_uses_any_local<'tcx>(
 }
 
 fn rvalue_mentions_any_local<'tcx>(rvalue: &Rvalue<'tcx>, locals: &HashSet<Local>) -> bool {
-    match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::Ref(_, _, place)
-        | Rvalue::RawPtr(_, place)
-        | Rvalue::CopyForDeref(place) => locals.contains(&place.local),
-        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
-            Operand::Copy(place) | Operand::Move(place) => locals.contains(&place.local),
-            Operand::Constant(_) => false,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => false,
-        }),
-        _ => false,
-    }
+    rvalue_any_place_matching(rvalue, &mut |place| locals.contains(&place.local))
 }
 
 fn blocks_reachable_after_call<'tcx>(
@@ -1291,19 +1252,11 @@ pub(super) fn self_field_origin<'tcx>(
     let PlaceBaseKey::Local(local) = place.base else {
         return None;
     };
-    if local != 1 || place.fields.is_empty() {
-        return None;
-    }
-    let body = tcx.optimized_mir(caller);
-    let self_ty = body.local_decls[Local::from_usize(1)].ty;
-    let (struct_def_id, _) = adt_from_receiver_ty(self_ty)?;
-    let field_index = place.fields[0];
-    let adt = tcx.adt_def(struct_def_id);
-    let field = adt.all_fields().nth(field_index)?;
+    let resolved = resolve_self_field_origin(tcx, caller, local, &place.fields)?;
     Some(SelfFieldOrigin {
-        struct_def_id,
-        field_index,
-        field_name: field.name.to_string(),
+        struct_def_id: resolved.struct_def_id,
+        field_index: resolved.field_index,
+        field_name: resolved.field_name,
     })
 }
 
@@ -1405,7 +1358,7 @@ fn public_raw_field<'tcx>(tcx: TyCtxt<'tcx>, origin: &SelfFieldOrigin) -> bool {
     let field_ty = field.ty(tcx, args);
     #[cfg(rapx_rustc_ge_198)]
     let field_ty = field.ty(tcx, args).skip_norm_wip();
-    is_raw_pointer_ty(field_ty)
+    matches!(field_ty.kind(), TyKind::RawPtr(..))
 }
 
 fn method_writes_self_field<'tcx>(tcx: TyCtxt<'tcx>, method: DefId, field_index: usize) -> bool {
@@ -1520,22 +1473,12 @@ fn self_field_key(field_index: usize) -> PlaceKey {
 }
 
 fn collect_place_aliases<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> HashMap<Local, PlaceKey> {
-    let body = tcx.optimized_mir(def_id);
-    let mut aliases = HashMap::new();
-
-    for block in body.basic_blocks.iter() {
-        for statement in &block.statements {
-            let StatementKind::Assign(assign) = &statement.kind else {
-                continue;
-            };
-            let (target, rvalue) = assign.as_ref();
-            if let Some(alias) = alias_from_rvalue(tcx, def_id, rvalue, &aliases) {
-                aliases.insert(target.local, alias);
-            }
-        }
-    }
-
-    aliases
+    collect_local_origins(tcx, def_id)
+        .into_iter()
+        .map(|(local, (origin_local, fields))| {
+            (Local::from_usize(local), PlaceKey::from_origin(origin_local, fields))
+        })
+        .collect()
 }
 
 fn alias_from_rvalue<'tcx>(
@@ -1544,16 +1487,7 @@ fn alias_from_rvalue<'tcx>(
     rvalue: &Rvalue<'tcx>,
     aliases: &HashMap<Local, PlaceKey>,
 ) -> Option<PlaceKey> {
-    let place = match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::Ref(_, _, place)
-        | Rvalue::RawPtr(_, place)
-        | Rvalue::CopyForDeref(place) => Some(place),
-        _ => None,
-    }?;
+    let place = rvalue_source_place(rvalue)?;
     Some(resolve_mir_place(place, aliases))
 }
 
@@ -1602,22 +1536,7 @@ fn rvalue_reads_any_origin<'tcx>(
     origins: &[PlaceKey],
     aliases: &HashMap<Local, PlaceKey>,
 ) -> bool {
-    match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::CopyForDeref(place) => place_is_raw_access_to_any_origin(place, origins, aliases),
-        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
-            Operand::Copy(place) | Operand::Move(place) => {
-                place_is_raw_access_to_any_origin(place, origins, aliases)
-            }
-            Operand::Constant(_) => false,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => false,
-        }),
-        _ => false,
-    }
+    rvalue_any_place_matching(rvalue, &mut |place| place_is_raw_access_to_any_origin(place, origins, aliases))
 }
 
 fn rvalue_mentions_origin<'tcx>(
@@ -1625,24 +1544,7 @@ fn rvalue_mentions_origin<'tcx>(
     origin: &PlaceKey,
     aliases: &HashMap<Local, PlaceKey>,
 ) -> bool {
-    match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::Ref(_, _, place)
-        | Rvalue::RawPtr(_, place)
-        | Rvalue::CopyForDeref(place) => resolve_mir_place(place, aliases).overlaps(origin),
-        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
-            Operand::Copy(place) | Operand::Move(place) => {
-                resolve_mir_place(place, aliases).overlaps(origin)
-            }
-            Operand::Constant(_) => false,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => false,
-        }),
-        _ => false,
-    }
+    rvalue_any_place_matching(rvalue, &mut |place| resolve_mir_place(place, aliases).overlaps(origin))
 }
 
 fn terminator_writes_origin<'tcx>(
@@ -1730,56 +1632,7 @@ fn vec_owners_for_origins<'tcx>(
     origins: &[PlaceKey],
     aliases: &HashMap<Local, PlaceKey>,
 ) -> Vec<PlaceKey> {
-    let body = tcx.optimized_mir(caller);
-    let mut owners = Vec::new();
-
-    for block in body.basic_blocks.iter() {
-        let Some(terminator) = &block.terminator else {
-            continue;
-        };
-        let TerminatorKind::Call {
-            func,
-            args,
-            destination,
-            ..
-        } = &terminator.kind
-        else {
-            continue;
-        };
-        let name = crate::helpers::mir_utils::call_name(tcx, func);
-        if !fn_simulator::is_as_ptr(&name) {
-            continue;
-        }
-        let destination_key = PlaceKey {
-            base: PlaceBaseKey::Local(destination.local.as_usize()),
-            fields: Vec::new(),
-        };
-        if !origins.iter().any(|origin| {
-            destination_key.overlaps(origin)
-                || aliases
-                    .get(&destination.local)
-                    .is_some_and(|alias| alias.overlaps(origin))
-        }) {
-            continue;
-        }
-        let Some(owner_arg) = args.first() else {
-            continue;
-        };
-        let Some(owner_place) = (match &owner_arg.node {
-            Operand::Copy(place) | Operand::Move(place) => Some(place),
-            Operand::Constant(_) => None,
-            #[cfg(rapx_rustc_ge_196)]
-            Operand::RuntimeChecks(_) => None,
-        }) else {
-            continue;
-        };
-        let owner = resolve_mir_place(owner_place, aliases);
-        if !owners.contains(&owner) {
-            owners.push(owner);
-        }
-    }
-
-    owners
+    find_as_ptr_receivers(tcx, caller, origins, aliases, true)
 }
 
 fn terminator_invalidates_vec_owner<'tcx>(
@@ -1824,16 +1677,4 @@ fn is_vec_invalidating_method(name: &str) -> bool {
             || name.contains("::clear")
             || name.contains("::truncate")
             || name.contains("::set_len"))
-}
-
-fn adt_from_receiver_ty<'tcx>(ty: Ty<'tcx>) -> Option<(DefId, GenericArgsRef<'tcx>)> {
-    match ty.kind() {
-        TyKind::Ref(_, inner, _) | TyKind::RawPtr(inner, _) => adt_from_receiver_ty(*inner),
-        TyKind::Adt(adt, args) => Some((adt.did(), *args)),
-        _ => None,
-    }
-}
-
-fn is_raw_pointer_ty(ty: Ty<'_>) -> bool {
-    matches!(ty.kind(), TyKind::RawPtr(..))
 }

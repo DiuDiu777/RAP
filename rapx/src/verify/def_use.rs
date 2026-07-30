@@ -108,6 +108,14 @@ impl PlaceKey {
         }
     }
 
+    /// Build a PlaceKey from an analysis-level `(origin_local, fields)` tuple.
+    pub fn from_origin(local: usize, fields: Vec<usize>) -> Self {
+        Self {
+            base: PlaceBaseKey::Local(local),
+            fields,
+        }
+    }
+
     /// Return true when this place shares a base-and-projection prefix with
     /// `other`.  Two places overlap when one of them is a shorter projection
     /// of the other (e.g. `[]` overlaps `[0]`, but `[0]` does not overlap

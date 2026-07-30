@@ -418,28 +418,21 @@ fn loop_components(graph: &PathGraph<'_>) -> Vec<LoopComponent> {
 
 /// Return whether a loop SCC can reach a given checkpoint block.
 ///
-/// The planner only deepens loops that can actually influence a checked sink.
-/// Reachability is checked on the CFG from the component's blocks outward.
-fn component_reaches_checkpoint(
+fn graph_reaches_any(
     graph: &PathGraph<'_>,
-    component: &LoopComponent,
-    checkpoint: BasicBlock,
+    sources: &[usize],
+    target_pred: impl Fn(usize) -> bool,
 ) -> bool {
-    let target = checkpoint.as_usize();
-    if component.blocks.contains(&target) {
+    if sources.iter().any(|&s| target_pred(s)) {
         return true;
     }
-
-    let mut stack: Vec<usize> = component.blocks.iter().copied().collect();
+    let mut stack: Vec<usize> = sources.to_vec();
     let mut seen = FxHashSet::default();
     while let Some(block) = stack.pop() {
-        if block == target {
+        if target_pred(block) {
             return true;
         }
-        if !seen.insert(block) {
-            continue;
-        }
-        if block >= graph.cfg.blocks.len() {
+        if !seen.insert(block) || block >= graph.cfg.blocks.len() {
             continue;
         }
         for next in &graph.cfg.block(block).next {
@@ -447,6 +440,21 @@ fn component_reaches_checkpoint(
         }
     }
     false
+}
+
+/// Returns true if any block in `component` can reach `checkpoint` via CFG edges.
+fn component_reaches_checkpoint(
+    graph: &PathGraph<'_>,
+    component: &LoopComponent,
+    checkpoint: BasicBlock,
+) -> bool {
+    let sources: Vec<usize> = component.blocks.iter().copied().collect();
+    graph_reaches_any(graph, &sources, |b| b == checkpoint.as_usize())
+}
+
+/// Return whether `start` can reach any block in `component`.
+fn block_reaches_component(graph: &PathGraph<'_>, start: usize, component: &LoopComponent) -> bool {
+    graph_reaches_any(graph, &[start], |b| component.blocks.contains(&b))
 }
 
 /// Local assignment and transfer summary for one loop SCC.
@@ -740,24 +748,6 @@ fn switch_successors(targets: &rustc_middle::mir::SwitchTargets) -> Vec<SwitchSu
         value: otherwise_value,
     });
     successors
-}
-
-/// Return whether `start` can reach any block in `component`.
-fn block_reaches_component(graph: &PathGraph<'_>, start: usize, component: &LoopComponent) -> bool {
-    let mut stack = vec![start];
-    let mut seen = FxHashSet::default();
-    while let Some(block) = stack.pop() {
-        if component.blocks.contains(&block) {
-            return true;
-        }
-        if !seen.insert(block) || block >= graph.cfg.blocks.len() {
-            continue;
-        }
-        for next in &graph.cfg.block(block).next {
-            stack.push(*next);
-        }
-    }
-    false
 }
 
 /// Estimate extra budget needed when a loop-carried sink is controlled by

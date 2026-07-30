@@ -29,8 +29,8 @@ use std::collections::HashSet;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
-        BasicBlock, BinOp, Local, Operand, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
-        UnOp,
+        BasicBlock, BinOp, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
+        TerminatorKind, UnOp,
     },
     ty::{ConstKind, GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind, UintTy},
 };
@@ -118,16 +118,7 @@ pub(crate) fn call_destination<'tcx>(
 pub(crate) fn rvalue_source_place<'a, 'tcx>(
     rvalue: &'a Rvalue<'tcx>,
 ) -> Option<&'a rustc_middle::mir::Place<'tcx>> {
-    match rvalue {
-        Rvalue::Use(Operand::Copy(place), ..)
-        | Rvalue::Use(Operand::Move(place), ..)
-        | Rvalue::Cast(_, Operand::Copy(place), _)
-        | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::Ref(_, _, place)
-        | Rvalue::RawPtr(_, place)
-        | Rvalue::CopyForDeref(place) => Some(place),
-        _ => None,
-    }
+    crate::helpers::mir_utils::rvalue_source_place(rvalue)
 }
 
 impl<'tcx> SmtChecker<'tcx> {
@@ -3313,6 +3304,13 @@ pub(crate) fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
         Operand::Constant(_) => None,
         #[cfg(rapx_rustc_ge_196)]
         Operand::RuntimeChecks(_) => None,
+    }
+}
+
+pub(crate) fn operand_mir_place<'a, 'tcx>(operand: &'a Operand<'tcx>) -> Option<&'a Place<'tcx>> {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => Some(place),
+        _ => None,
     }
 }
 

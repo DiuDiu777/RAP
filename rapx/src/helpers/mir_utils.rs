@@ -3,7 +3,7 @@ use rustc_hir::{
     def_id::{DefId, LocalDefId},
 };
 use rustc_middle::{
-    mir::{BasicBlock, Local, Operand, TerminatorKind},
+    mir::{BasicBlock, Local, Operand, Rvalue, TerminatorKind},
     ty::{ConstKind, GenericArgKind, Ty, TyCtxt, TyKind},
 };
 use rustc_span::Symbol;
@@ -177,4 +177,20 @@ pub fn has_crate(tcx: TyCtxt<'_>, name: &str) -> bool {
         }
     }
     false
+}
+
+/// Extracts the source `Place` from an rvalue for simple forwarding operations
+/// (copy, move, cast, reference, raw-pointer, copy-for-deref).
+pub fn rvalue_source_place<'a, 'tcx>(rvalue: &'a Rvalue<'tcx>) -> Option<&'a rustc_middle::mir::Place<'tcx>> {
+    use rustc_middle::mir::{Operand, Rvalue};
+    match rvalue {
+        Rvalue::Use(Operand::Copy(place), ..)
+        | Rvalue::Use(Operand::Move(place), ..)
+        | Rvalue::Cast(_, Operand::Copy(place), _)
+        | Rvalue::Cast(_, Operand::Move(place), _)
+        | Rvalue::Ref(_, _, place)
+        | Rvalue::RawPtr(_, place)
+        | Rvalue::CopyForDeref(place) => Some(place),
+        _ => None,
+    }
 }
