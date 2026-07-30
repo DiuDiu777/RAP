@@ -1,23 +1,20 @@
 use super::{MopAliasPair, MopFnAliasMap, graph::*, types::*, value::*};
+use crate::analysis::alias_analysis::observer::AliasObserver;
 use crate::compat::{FxHashMap, FxHashSet};
 use crate::def_id::*;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{Local, Operand, Place, ProjectionElem, TerminatorKind},
-    ty,
+    ty::{self, TyCtxt},
 };
+use rustc_span::Span;
 use std::collections::HashSet;
 
-/// Maximum number of Value nodes allowed per path.
-/// Once exceeded, further field nodes are not created (precision trade-off).
 const MAX_VALUES_PER_PATH: usize = 1000;
-
-/// Maximum field-sync recursion depth.
 const MAX_FIELD_DEPTH: usize = 10;
 
 impl<'tcx> AliasGraph<'tcx> {
-    /* alias analysis for a single block */
-    pub fn alias_bb(&mut self, bb_index: usize) {
+    pub fn alias_bb(&mut self, bb_index: usize, obs: &mut dyn AliasObserver) {
         for constant in self.block_facts[bb_index].const_value.clone() {
             self.constants.insert(constant.local, constant.value);
         }
@@ -27,106 +24,146 @@ impl<'tcx> AliasGraph<'tcx> {
             let lv_idx = self.projection(assign.lv);
             let rv_idx = self.projection(assign.rv);
 
+            obs.on_value_use(&*self, rv_idx, assign.span, false);
             self.assign_alias(lv_idx, rv_idx);
+            obs.on_value_assign(&*self, lv_idx);
             rap_debug!("Alias sets: {:?}", self.alias_sets)
         }
     }
 
-    /* Check the aliases introduced by the terminator of a basic block, i.e., a function call */
+    pub fn call_target_of(&self, bb_index: usize) -> Option<DefId> {
+        let term = self.terminator(bb_index)?;
+        match &term.kind {
+            TerminatorKind::Call {
+                func: Operand::Constant(c),
+                ..
+            } => match c.ty().kind() {
+                ty::FnDef(id, _) => Some(*id),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    fn parse_call_terminator(
+        &mut self,
+        bb_index: usize,
+    ) -> Option<(Vec<usize>, usize, Option<DefId>, Span)> {
+        let terminator = self.terminator(bb_index)?.clone();
+        let TerminatorKind::Call {
+            func: Operand::Constant(ref constant),
+            ref args,
+            ref destination,
+            ..
+        } = terminator.kind else {
+            return None;
+        };
+        let span = terminator.source_info.span;
+
+        let lv = self.projection(*destination);
+        let mut merge_vec = vec![lv];
+        let mut may_drop_count = if self.values[lv].may_drop { 1 } else { 0 };
+
+        for arg in args {
+            match arg.node {
+                Operand::Copy(ref p) | Operand::Move(ref p) => {
+                    let rv = self.projection(*p);
+                    merge_vec.push(rv);
+                    if self.values[rv].may_drop {
+                        may_drop_count += 1;
+                    }
+                }
+                Operand::Constant(_) => {
+                    merge_vec.push(0);
+                }
+                #[cfg(rapx_rustc_ge_196)]
+                Operand::RuntimeChecks(_) => {}
+            }
+        }
+        let target_id = match constant.const_.ty().kind() {
+            ty::FnDef(id, _) => Some(*id),
+            _ => None,
+        };
+        Some((merge_vec, may_drop_count, target_id, span))
+    }
+
+    fn apply_fn_alias_results(
+        &mut self,
+        target_id: DefId,
+        merge_vec: &[usize],
+        fn_map: &MopFnAliasMap,
+        obs: &mut dyn AliasObserver,
+    ) -> bool {
+        let Some(fn_aliases) = fn_map.get(&target_id) else {
+            return false;
+        };
+        let lv = merge_vec[0];
+        if fn_aliases.aliases().is_empty() {
+            if let Some(l_set_idx) = self.find_alias_set(lv) {
+                self.alias_sets[l_set_idx].remove(&lv);
+            }
+            return true;
+        }
+        for alias in fn_aliases.aliases().iter() {
+            if !alias.valuable() {
+                continue;
+            }
+            self.handle_fn_alias(alias, merge_vec);
+            obs.on_state_change(&*self);
+        }
+        rap_debug!("{:?}", self.alias_sets);
+        true
+    }
+
+    fn conservative_call_merge(
+        &mut self,
+        lv: usize,
+        merge_vec: &[usize],
+        obs: &mut dyn AliasObserver,
+    ) {
+        for rv in merge_vec.iter().skip(1) {
+            if self.values[*rv].may_drop && lv != *rv && self.values[lv].is_ptr() {
+                self.merge_alias(lv, *rv);
+                obs.on_value_assign(&*self, lv);
+            }
+        }
+    }
+
     pub fn alias_bbcall(
         &mut self,
         bb_index: usize,
-        fn_map: &mut MopFnAliasMap,
-        recursion_set: &mut HashSet<DefId>,
+        fn_map: &MopFnAliasMap,
+        obs: &mut dyn AliasObserver,
     ) {
-        if let Some(terminator) = self.terminator(bb_index).cloned() {
-            if let TerminatorKind::Call {
-                func: Operand::Constant(ref constant),
-                ref args,
-                ref destination,
-                target: _,
-                unwind: _,
-                call_source: _,
-                fn_span: _,
-            } = terminator.kind
-            {
-                let lv = self.projection(*destination);
-                let mut may_drop = false;
-                if self.values[lv].may_drop {
-                    may_drop = true;
+        let Some((merge_vec, may_drop_count, target_id, span)) =
+            self.parse_call_terminator(bb_index)
+        else {
+            return;
+        };
+        for &vidx in &merge_vec {
+            if vidx != 0 {
+                obs.on_value_use(&*self, vidx, span, true);
+            }
+        }
+        if may_drop_count <= 1 {
+            return;
+        }
+        match target_id {
+            Some(id) => {
+                if is_no_alias_intrinsic(id) {
+                    return;
                 }
-
-                let mut merge_vec = Vec::new();
-                merge_vec.push(lv);
-
-                for arg in args {
-                    match arg.node {
-                        Operand::Copy(ref p) | Operand::Move(ref p) => {
-                            let rv = self.projection(*p);
-                            merge_vec.push(rv);
-                            if self.values[rv].may_drop {
-                                may_drop = true;
-                            }
-                        }
-                        //
-                        Operand::Constant(_) => {
-                            merge_vec.push(0);
-                        }
-                        #[cfg(rapx_rustc_ge_196)]
-                        Operand::RuntimeChecks(_) => {}
+                if !self.tcx().is_mir_available(id) {
+                    if self.values[merge_vec[0]].may_drop {
+                        self.conservative_call_merge(merge_vec[0], &merge_vec, obs);
                     }
+                    return;
                 }
-                if let &ty::FnDef(target_id, _) = constant.const_.ty().kind() {
-                    if may_drop == false {
-                        return;
-                    }
-                    // This function does not introduce new aliases.
-                    if is_no_alias_intrinsic(target_id) {
-                        return;
-                    }
-                    if !self.tcx().is_mir_available(target_id) {
-                        return;
-                    }
-                    rap_debug!("Sync aliases for function call: {:?}", target_id);
-                    let fn_aliases = if fn_map.contains_key(&target_id) {
-                        rap_debug!("Aliases existed");
-                        fn_map.get(&target_id).unwrap()
-                    } else {
-                        /* Fixed-point iteration: this is not perfect */
-                        if recursion_set.contains(&target_id) {
-                            return;
-                        }
-                        recursion_set.insert(target_id);
-                        let mut alias_graph = AliasGraph::new(self.tcx(), target_id);
-                        alias_graph.path_graph.find_scc();
-                        alias_graph.process_function_paths(fn_map, recursion_set);
-                        let ret_alias = alias_graph.ret_alias.clone();
-                        rap_debug!("Find aliases of {:?}: {:?}", target_id, ret_alias);
-                        fn_map.insert(target_id, ret_alias);
-                        recursion_set.remove(&target_id);
-                        fn_map.get(&target_id).unwrap()
-                    };
-                    if fn_aliases.aliases().is_empty() {
-                        if let Some(l_set_idx) = self.find_alias_set(lv) {
-                            self.alias_sets[l_set_idx].remove(&lv);
-                        }
-                    }
-                    for alias in fn_aliases.aliases().iter() {
-                        if !alias.valuable() {
-                            continue;
-                        }
-                        self.handle_fn_alias(alias, &merge_vec);
-                        rap_debug!("{:?}", self.alias_sets);
-                    }
-                } else if self.values[lv].may_drop {
-                    for rv in &merge_vec {
-                        if self.values[*rv].may_drop && lv != *rv && self.values[lv].is_ptr() {
-                            // We assume they are alias;
-                            // It is a function call and we should not distinguish left or right;
-                            // Merge the alias instead of assign.
-                            self.merge_alias(lv, *rv);
-                        }
-                    }
+                self.apply_fn_alias_results(id, &merge_vec, fn_map, obs);
+            }
+            None => {
+                if self.values[merge_vec[0]].may_drop {
+                    self.conservative_call_merge(merge_vec[0], &merge_vec, obs);
                 }
             }
         }
@@ -178,7 +215,7 @@ impl<'tcx> AliasGraph<'tcx> {
     /// Used to assign alias for a statement.
     /// Operation: dealiasing the left; aliasing the left with right.
     /// Synchronize the fields and father nodes iteratively.
-    pub fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
+    fn assign_alias(&mut self, lv_idx: usize, rv_idx: usize) {
         rap_debug!("assign_alias: lv = {:?}. rv = {:?}", lv_idx, rv_idx);
 
         let r_set_idx = if let Some(idx) = self.find_alias_set(rv_idx) {
@@ -211,7 +248,7 @@ impl<'tcx> AliasGraph<'tcx> {
     // Expected result: [1,2] [1.1,2.1];
     // Case 2, lv = 0.0, rv = 7, field of rv: 0;
     // Expected result: [0.0,7] [0.0.0,7.0]
-    pub fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
+    fn sync_field_alias(&mut self, lv: usize, rv: usize, depth: usize, clear_left: bool) {
         if depth > MAX_FIELD_DEPTH || self.values.len() >= MAX_VALUES_PER_PATH {
             return;
         }
@@ -262,7 +299,7 @@ impl<'tcx> AliasGraph<'tcx> {
     // Expected result: [1, 2.0, 3.0], [2, 3];
     // Case 2: lv = 1.0; rv = 2; alias set [1, 3]
     // Expected result: [1.0, 2], [1, 3]
-    pub fn sync_father_alias(&mut self, lv: usize, rv: usize, lv_alias_set_idx: usize) {
+    fn sync_father_alias(&mut self, lv: usize, rv: usize, lv_alias_set_idx: usize) {
         rap_debug!("sync father aliases for lv:{} rv:{}", lv, rv);
         let mut father_id = rv;
         let mut father = self.values[father_id].father.clone();
@@ -310,7 +347,7 @@ impl<'tcx> AliasGraph<'tcx> {
     }
 
     // Handle aliases introduced by function calls.
-    pub fn handle_fn_alias(&mut self, fn_alias: &MopAliasPair, arg_vec: &[usize]) {
+    fn handle_fn_alias(&mut self, fn_alias: &MopAliasPair, arg_vec: &[usize]) {
         rap_debug!(
             "merge aliases returned by function calls, args: {:?}",
             arg_vec
@@ -362,7 +399,7 @@ impl<'tcx> AliasGraph<'tcx> {
         self.merge_alias(lv, rv);
     }
 
-    pub fn get_field_seq(&self, value: &Value) -> Vec<usize> {
+    fn get_field_seq(&self, value: &Value) -> Vec<usize> {
         let mut field_id_seq = vec![];
         let mut node_ref = value;
         let mut iteration = 0usize;
@@ -511,7 +548,7 @@ impl<'tcx> AliasGraph<'tcx> {
     ///      - But do **not** merge (0, 1.0) and (0, 1.1), since these have different non-prefix fields.
     ///
     /// Call this after constructing the alias set to minimize and canonicalize the result.
-    pub fn compress_aliases(&mut self) {
+    fn compress_aliases(&mut self) {
         // Step 1: Truncate fields to only the first element if present
         let mut truncated_facts = Vec::new();
         for fact in self.ret_alias.alias_set.iter() {
@@ -567,13 +604,6 @@ impl<'tcx> AliasGraph<'tcx> {
         self.alias_sets.iter().position(|set| set.contains(&e))
     }
 
-    #[inline(always)]
-    pub fn is_aliasing(&self, e1: usize, e2: usize) -> bool {
-        let s1 = self.find_alias_set(e1);
-        let s2 = self.find_alias_set(e2);
-        s1.is_some() && s1 == s2
-    }
-
     fn build_set_index(&self) -> FxHashMap<usize, usize> {
         let mut map = FxHashMap::default();
         for (set_idx, set) in self.alias_sets.iter().enumerate() {
@@ -592,7 +622,7 @@ impl<'tcx> AliasGraph<'tcx> {
         }
     }
 
-    pub fn merge_alias(&mut self, e1: usize, e2: usize) {
+    fn merge_alias(&mut self, e1: usize, e2: usize) {
         let mut s1 = self.find_alias_set(e1);
         let mut s2 = self.find_alias_set(e2);
 
@@ -636,18 +666,31 @@ impl<'tcx> AliasGraph<'tcx> {
             self.sync_father_alias(e1, e2, idx1);
         }
     }
-
-    #[inline(always)]
-    pub fn get_alias_set(&mut self, e: usize) -> Option<FxHashSet<usize>> {
-        if let Some(idx) = self.find_alias_set(e) {
-            Some(self.alias_sets[idx].clone())
-        } else {
-            None
-        }
-    }
 }
 
-pub fn is_no_alias_intrinsic(def_id: DefId) -> bool {
+fn is_no_alias_intrinsic(def_id: DefId) -> bool {
     let v = [call_mut_opt(), clone_opt(), take_opt()];
     contains(&v, def_id)
+}
+
+pub fn ensure_fn_aliases_cached<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target_id: DefId,
+    fn_map: &mut MopFnAliasMap,
+    recursion_set: &mut HashSet<DefId>,
+) {
+    if fn_map.contains_key(&target_id) || recursion_set.contains(&target_id) {
+        return;
+    }
+    if !tcx.is_mir_available(target_id) {
+        return;
+    }
+    recursion_set.insert(target_id);
+    let mut alias_graph = AliasGraph::new(tcx, target_id);
+    alias_graph.path_graph.find_scc();
+    alias_graph.process_function_paths(fn_map, recursion_set);
+    let ret_alias = alias_graph.ret_alias.clone();
+    rap_debug!("Find aliases of {:?}: {:?}", target_id, ret_alias);
+    fn_map.insert(target_id, ret_alias);
+    recursion_set.remove(&target_id);
 }

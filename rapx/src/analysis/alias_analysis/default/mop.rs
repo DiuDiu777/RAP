@@ -2,44 +2,13 @@ use rustc_hir::def_id::DefId;
 
 use std::collections::HashSet;
 
+use crate::analysis::alias_analysis::observer::NoopAliasObserver;
 use crate::analysis::path_analysis::{PathNode, PathTree};
-use crate::compat::{FxHashMap, FxHashSet};
 
-use super::value::Value;
+use super::alias::ensure_fn_aliases_cached;
 use super::{graph::*, *};
 
-#[derive(Clone)]
-struct MopStateSnapshot {
-    values: Vec<Value>,
-    constants: FxHashMap<usize, usize>,
-    alias_sets: Vec<FxHashSet<usize>>,
-}
-
 impl<'tcx> AliasGraph<'tcx> {
-    fn snapshot_state(&self) -> MopStateSnapshot {
-        MopStateSnapshot {
-            values: self.values.clone(),
-            constants: self.constants.clone(),
-            alias_sets: self.alias_sets.clone(),
-        }
-    }
-
-    fn restore_state(&mut self, snapshot: &MopStateSnapshot) {
-        self.values = snapshot.values.clone();
-        self.constants = snapshot.constants.clone();
-        self.alias_sets = snapshot.alias_sets.clone();
-    }
-
-    /// Process pre-enumerated whole-function paths via DFS on the path tree.
-    ///
-    /// Shared prefixes are processed once. State is saved at branch points
-    /// and restored before processing sibling subtrees, avoiding redundant
-    /// re-analysis of common path prefixes.
-    ///
-    /// If `precomputed_paths` is `Some`, it is used directly instead of
-    /// re-enumerating from the internal `PathGraph`. This allows callers
-    /// that have already cached a `PathTree` (e.g., via `PathAnalyzer`) to
-    /// avoid redundant work.
     pub fn process_function_paths(
         &mut self,
         fn_map: &mut MopFnAliasMap,
@@ -48,7 +17,6 @@ impl<'tcx> AliasGraph<'tcx> {
         self.process_function_paths_opt(None, fn_map, recursion_set)
     }
 
-    /// Like `process_function_paths` but accepts an optional precomputed `PathTree`.
     pub fn process_function_paths_opt(
         &mut self,
         precomputed_paths: Option<PathTree>,
@@ -67,9 +35,8 @@ impl<'tcx> AliasGraph<'tcx> {
             paths.len()
         );
 
-        let Some(root) = paths.root() else {
-            return;
-        };
+        let Some(root) = paths.root() else { return; };
+
         let mut path = Vec::new();
         let _ = self.dfs_mop(root, &mut path, fn_map, recursion_set);
     }
@@ -79,14 +46,20 @@ impl<'tcx> AliasGraph<'tcx> {
         node: &PathNode,
         path: &mut Vec<usize>,
         fn_map: &mut MopFnAliasMap,
-        recursion_set: &mut HashSet<DefId>,
+        rec_set: &mut HashSet<DefId>,
     ) -> Result<(), ()> {
         path.push(node.block);
-        self.alias_bb(node.block);
-        self.alias_bbcall(node.block, fn_map, recursion_set);
+        let mut obs = NoopAliasObserver;
+        self.alias_bb(node.block, &mut obs);
+        if let Some(target_id) = self.call_target_of(node.block) {
+            ensure_fn_aliases_cached(self.tcx(), target_id, fn_map, rec_set);
+        }
+        self.alias_bbcall(node.block, fn_map, &mut obs);
 
-        let saved_state = self.snapshot_state();
-        let saved_recursion = recursion_set.clone();
+        let saved_values = self.values.clone();
+        let saved_constants = self.constants.clone();
+        let saved_alias_sets = self.alias_sets.clone();
+        let saved_rec = rec_set.clone();
 
         if node.is_path_end {
             self.increment_visit_times();
@@ -98,9 +71,11 @@ impl<'tcx> AliasGraph<'tcx> {
         }
 
         for child in &node.children {
-            self.restore_state(&saved_state);
-            *recursion_set = saved_recursion.clone();
-            self.dfs_mop(child, path, fn_map, recursion_set)?;
+            self.values = saved_values.clone();
+            self.constants = saved_constants.clone();
+            self.alias_sets = saved_alias_sets.clone();
+            *rec_set = saved_rec.clone();
+            self.dfs_mop(child, path, fn_map, rec_set)?;
         }
 
         path.pop();

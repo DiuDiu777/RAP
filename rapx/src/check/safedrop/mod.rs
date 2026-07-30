@@ -1,8 +1,9 @@
-pub mod alias;
 pub mod bug_records;
+pub mod checks;
 pub mod corner_case;
 pub mod drop;
 pub mod graph;
+pub mod observer;
 pub mod safedrop;
 
 use rustc_hir::def_id::DefId;

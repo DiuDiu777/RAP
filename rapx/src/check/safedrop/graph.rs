@@ -19,18 +19,7 @@ pub struct SafeDropGraph<'tcx> {
 
 impl<'tcx> SafeDropGraph<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, adt_owner: OHAResultMap) -> Self {
-        let alias_graph = AliasGraph::new(tcx, def_id);
-        let mut drop_record = Vec::<DropRecord>::new();
-        for v in &alias_graph.values {
-            drop_record.push(DropRecord::false_record(v.index));
-        }
-
-        SafeDropGraph {
-            alias_graph,
-            bug_records: BugRecords::new(),
-            drop_record,
-            adt_owner,
-        }
+        Self::from_alias_graph(AliasGraph::new(tcx, def_id), adt_owner)
     }
 
     pub fn from_path_graph(
@@ -39,32 +28,19 @@ impl<'tcx> SafeDropGraph<'tcx> {
         path_graph: PathGraph<'tcx>,
         adt_owner: OHAResultMap,
     ) -> Self {
-        let alias_graph = AliasGraph::from_path_graph(tcx, def_id, path_graph);
+        Self::from_alias_graph(AliasGraph::from_path_graph(tcx, def_id, path_graph), adt_owner)
+    }
+
+    fn from_alias_graph(alias_graph: AliasGraph<'tcx>, adt_owner: OHAResultMap) -> Self {
         let mut drop_record = Vec::<DropRecord>::new();
         for v in &alias_graph.values {
             drop_record.push(DropRecord::false_record(v.index));
         }
-
         SafeDropGraph {
             alias_graph,
             bug_records: BugRecords::new(),
             drop_record,
             adt_owner,
-        }
-    }
-
-    /// Ensure `drop_record` matches the current length of `alias_graph.values`.
-    /// Call this after any alias operation that may create new value nodes
-    /// (`projection`, `sync_field_alias`, `sync_father_alias`, `handle_fn_alias`, etc.).
-    pub fn sync_drop_record(&mut self) {
-        while self.drop_record.len() < self.alias_graph.values.len() {
-            let new_idx = self.drop_record.len();
-            let father = self.alias_graph.values[new_idx].father.clone();
-            self.drop_record.push(if let Some(fi) = father {
-                DropRecord::from(new_idx, &self.drop_record[fi.father_value_id])
-            } else {
-                DropRecord::false_record(new_idx)
-            });
         }
     }
 }
