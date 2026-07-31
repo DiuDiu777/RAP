@@ -2,8 +2,30 @@
 #[test]
 fn linked_list_nonnull() {
     let output = run_with_args("verify_cases/linked_list_nonnull", CMD_VERIFY);
-    assert_contain(&output, "result: SOUND");
-    assert_not_contain(&output, "result: UNSOUND");
+
+    assert_function_result(&output, "LinkedList::<T>::new", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::len", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::is_empty", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::push_back", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::push_front", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::pop_front", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::pop_back", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::clear", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::from_vec", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::front", "UNSOUND");
+    assert_function_result(&output, "LinkedList::<T>::back", "UNSOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::front_copy", "SOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::back_copy", "SOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::front_mut_copy", "SOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::back_mut_copy", "SOUND");
+    assert_function_result(
+        &output,
+        "<LinkedList<T> as std::ops::Drop>::drop",
+        "SOUND",
+    );
+
+    assert_function_result(&output, "LinkedList::<T>::front_mut", "UNSOUND");
+    assert_function_result(&output, "LinkedList::<T>::back_mut", "UNSOUND");
 }
 
 #[test]
@@ -12,34 +34,161 @@ fn linked_list_nonnull_skip_invariant() {
         "verify_cases/linked_list_nonnull",
         CMD_VERIFY_SKIP_INVARIANT,
     );
-    assert_contain(&output, "result: SOUND");
-    assert_not_contain(&output, "result: UNSOUND");
+
+    let unsound_fns = ["front", "back", "front_mut", "back_mut"];
+    let mut result_by_fn: std::collections::BTreeMap<&str, Vec<(&str, bool)>> =
+        std::collections::BTreeMap::new();
+
+    let mut current_seq: Option<&str> = None;
+    let mut current_result: Option<&str> = None;
+    for line in output.lines() {
+        if let Some(pos) = line.find("[rapx::verify] sequence:") {
+            if let Some(seq) = current_seq.take() {
+                let r = current_result.take().unwrap_or("");
+                let fn_name = seq.rsplit(" -> ").next().unwrap_or(seq);
+                let is_unsound = unsound_fns.contains(&fn_name);
+                result_by_fn.entry(fn_name).or_default().push((r, is_unsound));
+            }
+            current_seq = Some(line[pos + "[rapx::verify] sequence:".len()..].trim());
+        }
+        if let Some(res_pos) = line.find("result:") {
+            current_result = Some(line[res_pos..].trim());
+        }
+    }
+    if let Some(seq) = current_seq {
+        let r = current_result.unwrap_or("");
+        let fn_name = seq.rsplit(" -> ").next().unwrap_or(seq);
+        let is_unsound = unsound_fns.contains(&fn_name);
+        result_by_fn.entry(fn_name).or_default().push((r, is_unsound));
+    }
+
+    for (fn_name, results) in &result_by_fn {
+        let is_unsound_fn = unsound_fns.contains(fn_name);
+        let total = results.len();
+        let unsound_count = results.iter().filter(|(r, _)| r.contains("UNSOUND")).count();
+        let sound_count = results.iter().filter(|(r, _)| r.contains("SOUND")).count();
+
+        assert!(total > 0, "no sequences found for reading function: {fn_name}");
+
+        if is_unsound_fn {
+            assert_eq!(
+                unsound_count, total,
+                "expected all {total} sequences for {fn_name} to be UNSOUND, got {unsound_count} UNSOUND / {sound_count} SOUND"
+            );
+        } else {
+            assert_eq!(
+                sound_count, total,
+                "expected all {total} sequences for {fn_name} to be SOUND, got {sound_count} SOUND / {unsound_count} UNSOUND"
+            );
+        }
+    }
+}
+
+#[test]
+fn linked_list_rawptr_skip_invariant() {
+    let output = run_with_args(
+        "verify_cases/linked_list_rawptr",
+        CMD_VERIFY_SKIP_INVARIANT,
+    );
+
+    let unsound_fns = ["front", "back", "front_mut", "back_mut"];
+    let mut result_by_fn: std::collections::BTreeMap<&str, Vec<(&str, bool)>> =
+        std::collections::BTreeMap::new();
+
+    let mut current_seq: Option<&str> = None;
+    let mut current_result: Option<&str> = None;
+    for line in output.lines() {
+        if let Some(pos) = line.find("[rapx::verify] sequence:") {
+            if let Some(seq) = current_seq.take() {
+                let r = current_result.take().unwrap_or("");
+                let fn_name = seq.rsplit(" -> ").next().unwrap_or(seq);
+                let is_unsound = unsound_fns.contains(&fn_name);
+                result_by_fn.entry(fn_name).or_default().push((r, is_unsound));
+            }
+            current_seq = Some(line[pos + "[rapx::verify] sequence:".len()..].trim());
+        }
+        if let Some(res_pos) = line.find("result:") {
+            current_result = Some(line[res_pos..].trim());
+        }
+    }
+    if let Some(seq) = current_seq {
+        let r = current_result.unwrap_or("");
+        let fn_name = seq.rsplit(" -> ").next().unwrap_or(seq);
+        let is_unsound = unsound_fns.contains(&fn_name);
+        result_by_fn.entry(fn_name).or_default().push((r, is_unsound));
+    }
+
+    for (fn_name, results) in &result_by_fn {
+        let is_unsound_fn = unsound_fns.contains(fn_name);
+        let total = results.len();
+        let unsound_count = results.iter().filter(|(r, _)| r.contains("UNSOUND")).count();
+        let sound_count = results.iter().filter(|(r, _)| r.contains("SOUND")).count();
+
+        assert!(total > 0, "no sequences found for reading function: {fn_name}");
+
+        if is_unsound_fn {
+            assert_eq!(
+                unsound_count, total,
+                "expected all {total} sequences for {fn_name} to be UNSOUND, got {unsound_count} UNSOUND / {sound_count} SOUND"
+            );
+        } else {
+            assert_eq!(
+                sound_count, total,
+                "expected all {total} sequences for {fn_name} to be SOUND, got {sound_count} SOUND / {unsound_count} UNSOUND"
+            );
+        }
+    }
 }
 
 #[test]
 fn linked_list_rawptr() {
     let output = run_with_args("verify_cases/linked_list_rawptr", CMD_VERIFY);
+
+    assert_function_result(&output, "LinkedList::<T>::new", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::len", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::is_empty", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::push_back", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::push_front", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::pop_front", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::pop_back", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::clear", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::from_vec", "SOUND");
+    assert_function_result(&output, "LinkedList::<T>::front", "UNSOUND");
+    assert_function_result(&output, "LinkedList::<T>::back", "UNSOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::front_copy", "SOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::back_copy", "SOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::front_mut_copy", "SOUND");
+    assert_function_result(&output, "LinkedList::<T: Copy>::back_mut_copy", "SOUND");
+    assert_function_result(
+        &output,
+        "<LinkedList<T> as std::ops::Drop>::drop",
+        "SOUND",
+    );
+
+    assert_unproved_exclusive_with_result(
+        &output,
+        "LinkedList::<T>::front_mut",
+        &["Alias"],
+        "HAZARD",
+    );
+    assert_unproved_exclusive_with_result(
+        &output,
+        "LinkedList::<T>::back_mut",
+        &["Alias"],
+        "HAZARD",
+    );
+}
+
+#[test]
+fn linked_list_rawptr_no_phantomdata() {
+    let output = run_with_args("verify_cases/linked_list_rawptr_no_phantomdata", CMD_VERIFY);
     assert_contain(&output, "result: SOUND");
     assert_not_contain(&output, "result: UNSOUND");
 }
 
 #[test]
-fn linked_list_rawptr_skip_invariant() {
-    let output = run_with_args("verify_cases/linked_list_rawptr", CMD_VERIFY_SKIP_INVARIANT);
-    assert_contain(&output, "result: SOUND");
-    assert_not_contain(&output, "result: UNSOUND");
-}
-
-#[test]
-fn linked_list_rawptr_unsound() {
-    let output = run_with_args("verify_cases/linked_list_rawptr_unsound", CMD_VERIFY);
-    assert_contain(&output, "result: SOUND");
-    assert_not_contain(&output, "result: UNSOUND");
-}
-
-#[test]
-fn linked_list_nonnull_unsound() {
-    let output = run_with_args("verify_cases/linked_list_nonnull_unsound", CMD_VERIFY);
+fn linked_list_nonnull_no_phantomdata() {
+    let output = run_with_args("verify_cases/linked_list_nonnull_no_phantomdata", CMD_VERIFY);
     assert_contain(&output, "result: SOUND");
     assert_not_contain(&output, "result: UNSOUND");
 }

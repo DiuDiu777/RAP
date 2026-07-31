@@ -1,8 +1,8 @@
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::{
     mir::{
-        BasicBlock, Body, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind,
-        TerminatorKind,
+        BasicBlock, Body, BorrowKind, Local, Operand, Place, ProjectionElem, Rvalue,
+        StatementKind, TerminatorKind,
     },
     ty::{self, Ty, TyCtxt, TyKind},
 };
@@ -45,6 +45,8 @@ pub struct Checkpoint<'tcx> {
     pub args: Vec<Operand<'tcx>>,
     pub kind: CheckpointKind,
     pub is_ref: bool,
+    pub is_mut_ref: bool,
+    pub destination: Option<Local>,
 }
 
 impl<'tcx> Checkpoint<'tcx> {
@@ -240,6 +242,8 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
             args: args.iter().map(|arg| arg.node.clone()).collect(),
             kind: CheckpointKind::UnsafeCall,
             is_ref: false,
+            is_mut_ref: false,
+            destination: None,
         });
     }
 
@@ -294,6 +298,8 @@ pub struct RawPtrDerefInfo<'tcx> {
     pub pointee_ty: Ty<'tcx>,
     pub is_read: bool,
     pub is_ref: bool,
+    pub is_mut_ref: bool,
+    pub destination: Local,
 }
 
 /// Collect all raw pointer dereference operations in `def_id` as
@@ -332,12 +338,15 @@ pub fn collect_raw_ptr_deref_info<'tcx>(
             let (lhs, rhs) = &**assign;
 
             let is_write = place_has_raw_deref(tcx, &body, lhs);
-            let (is_read, is_ref) = match rhs {
+            let (is_read, is_ref, is_mut_ref) = match rhs {
                 Rvalue::Use(Operand::Copy(place) | Operand::Move(place), ..) => {
-                    (place_has_raw_deref(tcx, &body, place), false)
+                    (place_has_raw_deref(tcx, &body, place), false, false)
                 }
-                Rvalue::Ref(_, _, place) => (place_has_raw_deref(tcx, &body, place), true),
-                _ => (false, false),
+                Rvalue::Ref(_, borrow_kind, place) => {
+                    let is_mut = matches!(borrow_kind, BorrowKind::Mut { .. });
+                    (place_has_raw_deref(tcx, &body, place), true, is_mut)
+                }
+                _ => (false, false, false),
             };
 
             if !is_write && !is_read {
@@ -368,6 +377,8 @@ pub fn collect_raw_ptr_deref_info<'tcx>(
                 pointee_ty,
                 is_read,
                 is_ref,
+                is_mut_ref,
+                destination: lhs.local,
             });
         }
     }

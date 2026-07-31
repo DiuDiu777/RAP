@@ -1,4 +1,6 @@
-use rustc_middle::ty::TyCtxt;
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::{self, TyCtxt};
+use rustc_middle::ty::ClauseKind;
 
 use crate::compat::FxHashMap;
 use crate::helpers::fn_info::get_cons;
@@ -31,6 +33,95 @@ pub fn fmt_fn_path_with_generics(
     } else {
         format!("{}::<{}>", path, params.join(", "))
     }
+}
+
+pub fn fmt_fn_path_with_bounds(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+) -> String {
+    let path = tcx.def_path_str(def_id);
+    let predicates = crate::compat::predicates_of(tcx, def_id);
+
+    let mut param_bounds: FxHashMap<String, Vec<String>> = FxHashMap::default();
+
+    macro_rules! collect_bounds {
+        ($iter:expr) => {
+            for (predicate, _span) in $iter {
+                if let ClauseKind::Trait(trait_ref) = predicate.kind().skip_binder() {
+                    let self_ty = trait_ref.self_ty();
+                    if let ty::TyKind::Param(param_ty) = self_ty.kind() {
+                        let param_name = param_ty.name.to_string();
+                        let trait_name = tcx.item_name(trait_ref.def_id()).to_string();
+                        if trait_name != "Sized" {
+                            param_bounds.entry(param_name).or_default().push(trait_name);
+                        }
+                    }
+                }
+            }
+        };
+    }
+
+    #[cfg(not(rapx_rustc_ge_199))]
+    {
+        collect_bounds!(predicates.predicates.iter());
+        if let Some(parent_def_id) = predicates.parent {
+            let parent_preds = crate::compat::predicates_of(tcx, parent_def_id);
+            collect_bounds!(parent_preds.predicates.iter());
+        }
+    }
+    #[cfg(rapx_rustc_ge_199)]
+    {
+        collect_bounds!(predicates.clauses.iter());
+        if let Some(parent_def_id) = predicates.parent {
+            let parent_preds = crate::compat::predicates_of(tcx, parent_def_id);
+            collect_bounds!(parent_preds.clauses.iter());
+        }
+    }
+
+    if param_bounds.is_empty() {
+        return path;
+    }
+
+    insert_bounds_into_path(&path, &param_bounds)
+}
+
+fn insert_bounds_into_path(path: &str, param_bounds: &FxHashMap<String, Vec<String>>) -> String {
+    let mut result = String::new();
+    let mut remaining = path;
+
+    while let Some(pos) = remaining.find("::<") {
+        result.push_str(&remaining[..pos + 3]);
+        remaining = &remaining[pos + 3..];
+
+        let Some(end) = remaining.find('>') else {
+            result.push_str(remaining);
+            return result;
+        };
+
+        let params_str = &remaining[..end];
+        let params: Vec<&str> = params_str.split(',').map(|s| s.trim()).collect();
+        let mut new_params = Vec::new();
+        let mut has_bounds = false;
+        for p in &params {
+            if let Some(bounds) = param_bounds.get(*p) {
+                new_params.push(format!("{}: {}", p, bounds.join(" + ")));
+                has_bounds = true;
+            } else {
+                new_params.push(p.to_string());
+            }
+        }
+
+        if has_bounds {
+            result.push_str(&new_params.join(", "));
+        } else {
+            result.push_str(params_str);
+        }
+        result.push('>');
+        remaining = &remaining[end + 1..];
+    }
+
+    result.push_str(remaining);
+    result
 }
 
 pub fn emit_lines(lines: &[(String, String)]) {
@@ -696,7 +787,7 @@ pub fn emit_property_rows<'tcx>(
             if *kind == PropertyKind::Or && *count == 1 {
                 if let Some(r) = props.first() {
                     let pad = if is_last { "            " } else { "          │   " };
-                    emit_or_subtree(tcx, &r.property, pad);
+                    emit_or_subtree(tcx, &r.property, pad, &r.result, &r.path_description);
                 }
             }
         }
@@ -704,27 +795,56 @@ pub fn emit_property_rows<'tcx>(
 }
 
 /// Render sub-properties of an `Or` with indented tree connectors.
+/// Annotates each sub-property group with `| Proved` when the group index
+/// matches the proved group from the path description.
 fn emit_or_subtree<'tcx>(
     tcx: TyCtxt<'tcx>,
     property: &crate::verify::contract::Property<'tcx>,
     pad: &str,
+    or_result: &super::report::CheckResult,
+    or_path_desc: &str,
 ) {
+    let proved_group: Option<usize> = if matches!(or_result, super::report::CheckResult::Proved) {
+        or_path_desc
+            .split('/')
+            .next()
+            .and_then(|s| {
+                s.trim_start_matches("group-")
+                    .trim_start_matches("OR group ")
+                    .parse::<usize>()
+                    .ok()
+            })
+            .map(|idx| idx.saturating_sub(1))
+    } else {
+        None
+    };
+
     let num_groups = property.or_alternatives.len();
     for (gi, group) in property.or_alternatives.iter().enumerate() {
         let g_last = gi + 1 == num_groups;
         let gconn = if g_last { "└── " } else { "├── " };
+        let is_proved = proved_group == Some(gi);
+        let status = if is_proved { " | Proved" } else { "" };
         let glen = group.len();
         if glen == 1 {
             let (stag, _) = fmt_contract_expanded(tcx, &[], &group[0], None);
-            let gline = format!("{pad}{gconn}{stag}");
-            rap_info!("{gline}");
+            let gline = format!("{pad}{gconn}{stag}{status}");
+            if is_proved {
+                rap_info!(green, "{gline}");
+            } else {
+                rap_info!("{gline}");
+            }
         } else {
             for (si, sub) in group.iter().enumerate() {
                 let s_last = si + 1 == glen;
                 let sconn = if s_last { "└── " } else { "├── " };
                 let (stag, _) = fmt_contract_expanded(tcx, &[], sub, None);
-                let gline = format!("{pad}{gconn}{sconn}{stag}");
-                rap_info!("{gline}");
+                let gline = format!("{pad}{gconn}{sconn}{stag}{status}");
+                if is_proved {
+                    rap_info!(green, "{gline}");
+                } else {
+                    rap_info!("{gline}");
+                }
             }
         }
     }

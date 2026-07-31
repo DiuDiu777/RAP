@@ -25,7 +25,7 @@ use super::{
     contract::Property,
     display::{
         emit_lines, emit_property_rows, emit_verify_summary, fmt_contract_expanded,
-        fmt_fn_path_with_generics, fmt_fn_with_params,
+        fmt_fn_path_with_bounds, fmt_fn_path_with_generics, fmt_fn_with_params,
     },
     engine::VerifyEngine,
     loop_sensitivity::{LoopSensitivityAnalyzer, RepeatStrategy},
@@ -662,6 +662,14 @@ impl<'tcx> VerifyRun<'tcx> {
                 !matches!(r.result, super::report::CheckResult::Proved)
             })
             .count();
+        let hazard_failed = all_results
+            .iter()
+            .filter(|r| {
+                r.property.contract_kind
+                    == crate::verify::contract::ContractKind::Hazard
+                    && !matches!(r.result, super::report::CheckResult::Proved)
+            })
+            .count();
 
         let mut groups: IndexMap<(CheckpointLocation, String), Vec<&PropertyCheckResult<'_>>> =
             IndexMap::new();
@@ -690,10 +698,10 @@ impl<'tcx> VerifyRun<'tcx> {
 
         if all_results.is_empty() {
             rap_info!("  result: SOUND (no unsafe checkpoints)");
-        } else if unproved == 0 {
+        } else if unproved == 0 && hazard_failed == 0 {
             rap_info!(green, "  result: SOUND");
         } else {
-            rap_warn!("  result: UNSOUND ({unproved} unproved)");
+            rap_warn!("  result: UNSOUND ({unproved} unproved, {hazard_failed} hazard)");
         }
         rap_info!("");
     }
@@ -723,7 +731,7 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
         }
 
         for target in &collector.function_targets {
-            let target_path = self.tcx.def_path_str(target.def_id);
+            let target_path = fmt_fn_path_with_bounds(self.tcx, target.def_id);
             let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
 
             let (planned_repeat, repeat_rounds) = self.repeat_rounds_for_target(target);

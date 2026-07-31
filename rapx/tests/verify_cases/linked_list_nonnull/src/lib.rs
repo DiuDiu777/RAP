@@ -34,7 +34,7 @@ struct LinkedList<T> {
     _marker: PhantomData<Box<Node<T>>>,
 }
 
-impl<T: Copy> LinkedList<T> {
+impl<T> LinkedList<T> {
     #[rapx::verify]
     pub fn new() -> Self { LinkedList { head: None, tail: None, len: 0, _marker: PhantomData } }
 
@@ -65,7 +65,7 @@ impl<T: Copy> LinkedList<T> {
         let head = match self.head { Some(h) => h, None => return None };
         let (value, next) = unsafe {
             let r = head.as_ref();
-            let v = r.value;
+            let v = std::ptr::read(&r.value);
             let n = r.next;
             if let Some(mut next_node) = n { next_node.as_mut().prev = None; }
             (v, n)
@@ -81,7 +81,7 @@ impl<T: Copy> LinkedList<T> {
         let tail = match self.tail { Some(t) => t, None => return None };
         let (value, prev) = unsafe {
             let r = tail.as_ref();
-            let v = r.value;
+            let v = std::ptr::read(&r.value);
             let p = r.prev;
             if let Some(mut prev_node) = p { prev_node.as_mut().next = None; }
             (v, p)
@@ -93,18 +93,6 @@ impl<T: Copy> LinkedList<T> {
     }
 
     #[rapx::verify]
-    pub fn front(&self) -> Option<T> { self.head.map(|node| unsafe { node.as_ref().value }) }
-
-    #[rapx::verify]
-    pub fn back(&self) -> Option<T> { self.tail.map(|node| unsafe { node.as_ref().value }) }
-
-    #[rapx::verify]
-    pub fn front_mut(&mut self) -> Option<&mut T> { match self.head { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
-
-    #[rapx::verify]
-    pub fn back_mut(&mut self) -> Option<&mut T> { match self.tail { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
-
-    #[rapx::verify]
     pub fn clear(&mut self) {
         let mut current = self.head;
         unsafe { while let Some(node) = current { current = node.as_ref().next; drop(Box::from_raw(node.as_ptr())); } }
@@ -113,6 +101,87 @@ impl<T: Copy> LinkedList<T> {
 
     #[rapx::verify]
     pub fn from_vec(values: Vec<T>) -> Self { let mut list = Self::new(); for value in values { list.push_back(value); } list }
+
+    // UNSOUND: ptr::read copies out the value without dropping it.
+    // For non-Copy T, the old value is left behind and will be dropped again
+    // when the node is freed via drop/clear, causing a double-free.
+    // The NonNull in self.head aliases the read target.
+    #[rapx::verify]
+    pub fn front(&self) -> Option<T> {
+        match self.head {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
+
+    // UNSOUND: same alias hazard as front().
+    #[rapx::verify]
+    pub fn back(&self) -> Option<T> {
+        match self.tail {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
+
+    // UNSOUND: creates &mut T from a NonNull stored in self.head.
+    // The returned &mut T reference escapes to the caller while the struct
+    // still holds the NonNull (self.head), creating an alias between
+    // a &mut reference and a pointer — undefined behavior in Rust.
+    #[rapx::verify]
+    pub fn front_mut(&mut self) -> Option<&mut T> { match self.head { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
+
+    // UNSOUND: same alias hazard as front_mut().
+    #[rapx::verify]
+    pub fn back_mut(&mut self) -> Option<&mut T> { match self.tail { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
+}
+
+impl<T: Copy> LinkedList<T> {
+    // SOUND under T: Copy — ptr::read of a Copy type is safe.
+    #[rapx::verify]
+    pub fn front_copy(&self) -> Option<T> {
+        match self.head {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
+
+    #[rapx::verify]
+    pub fn back_copy(&self) -> Option<T> {
+        match self.tail {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
+
+    // With T: Copy, returning &mut T from a pointer is still UB.
+    // Use ptr::read to return by value instead, which is safe for Copy types.
+    #[rapx::verify]
+    pub fn front_mut_copy(&mut self) -> Option<T> {
+        match self.head {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
+
+    #[rapx::verify]
+    pub fn back_mut_copy(&mut self) -> Option<T> {
+        match self.tail {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
 }
 
 impl<T> Drop for LinkedList<T> {

@@ -1256,6 +1256,14 @@ fn build_raw_ptr_deref_checks<'tcx>(
                         kind: PropertyKind::Align,
                         args: vec![target.clone(), ty.clone()],
                     },
+                    Property {
+                        null_guard: None,
+                        or_alternatives: Vec::new(),
+                        for_each: None,
+                        contract_kind: crate::verify::contract::ContractKind::Hazard,
+                        kind: PropertyKind::Alias,
+                        args: vec![target.clone()],
+                    },
                 ]
             } else {
                 vec![
@@ -1298,6 +1306,8 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     args: vec![info.ptr_operand],
                     kind: crate::helpers::mir_scan::CheckpointKind::RawPtrDeref,
                     is_ref: info.is_ref,
+                    is_mut_ref: info.is_mut_ref,
+                    destination: Some(info.destination),
                 },
                 properties,
             )
@@ -1362,6 +1372,8 @@ fn build_static_mut_checks<'tcx>(
                     args: vec![info.ptr_operand],
                     kind: crate::helpers::mir_scan::CheckpointKind::StaticMutAccess,
                     is_ref: false,
+                    is_mut_ref: false,
+                    destination: None,
                 },
                 properties,
             )

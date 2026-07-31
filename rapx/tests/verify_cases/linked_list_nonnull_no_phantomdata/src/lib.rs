@@ -32,7 +32,7 @@ struct LinkedList<T> {
     len: usize,
 }
 
-impl<T: Copy> LinkedList<T> {
+impl<T> LinkedList<T> {
     #[rapx::verify]
     pub fn new() -> Self { LinkedList { head: None, tail: None, len: 0 } }
 
@@ -63,7 +63,7 @@ impl<T: Copy> LinkedList<T> {
         let head = match self.head { Some(h) => h, None => return None };
         let (value, next) = unsafe {
             let r = head.as_ref();
-            let v = r.value;
+            let v = std::ptr::read(&r.value);
             let n = r.next;
             if let Some(mut next_node) = n { next_node.as_mut().prev = None; }
             (v, n)
@@ -79,7 +79,7 @@ impl<T: Copy> LinkedList<T> {
         let tail = match self.tail { Some(t) => t, None => return None };
         let (value, prev) = unsafe {
             let r = tail.as_ref();
-            let v = r.value;
+            let v = std::ptr::read(&r.value);
             let p = r.prev;
             if let Some(mut prev_node) = p { prev_node.as_mut().next = None; }
             (v, p)
@@ -89,18 +89,6 @@ impl<T: Copy> LinkedList<T> {
         unsafe { drop(Box::from_raw(tail.as_ptr())); }
         self.len -= 1; Some(value)
     }
-
-    #[rapx::verify]
-    pub fn front(&self) -> Option<T> { self.head.map(|node| unsafe { node.as_ref().value }) }
-
-    #[rapx::verify]
-    pub fn back(&self) -> Option<T> { self.tail.map(|node| unsafe { node.as_ref().value }) }
-
-    #[rapx::verify]
-    pub fn front_mut(&mut self) -> Option<&mut T> { match self.head { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
-
-    #[rapx::verify]
-    pub fn back_mut(&mut self) -> Option<&mut T> { match self.tail { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
 
     #[rapx::verify]
     pub fn clear(&mut self) {

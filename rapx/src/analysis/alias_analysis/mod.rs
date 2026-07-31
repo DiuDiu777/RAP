@@ -173,6 +173,18 @@ pub fn collect_local_origins<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> LocalOri
                 origins.insert(target.local.as_usize(), origin);
             }
         }
+        if let rustc_middle::mir::TerminatorKind::Call { func, args, destination, .. } = &block.terminator().kind {
+            if let rustc_middle::mir::Operand::Constant(c) = func {
+                if let rustc_middle::ty::FnDef(_, _) = c.const_.ty().kind() {
+                    if let Some(first_arg) = args.first() {
+                        if let Some(place) = first_arg.node.place() {
+                            let origin = resolve_place(&place, &origins);
+                            origins.insert(destination.local.as_usize(), origin);
+                        }
+                    }
+                }
+            }
+        }
     }
     origins
 }
@@ -182,8 +194,15 @@ fn rvalue_origin(
     rvalue: &rustc_middle::mir::Rvalue<'_>,
     origins: &LocalOriginMap,
 ) -> Option<(usize, Vec<usize>)> {
-    let place = crate::helpers::mir_utils::rvalue_source_place(rvalue)?;
-    Some(resolve_place(place, origins))
+    if let Some(place) = crate::helpers::mir_utils::rvalue_source_place(rvalue) {
+        return Some(resolve_place(place, origins));
+    }
+    if let rustc_middle::mir::Rvalue::Cast(_, operand, _) = rvalue {
+        if let Some(place) = operand.place() {
+            return Some(resolve_place(&place, origins));
+        }
+    }
+    None
 }
 
 /// Resolve a MIR Place through the origin map.

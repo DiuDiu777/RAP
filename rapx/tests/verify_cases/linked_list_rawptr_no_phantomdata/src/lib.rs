@@ -18,7 +18,7 @@ struct LinkedList<T> {
     len: usize,
 }
 
-impl<T: Copy> LinkedList<T> {
+impl<T> LinkedList<T> {
     #[rapx::verify]
     pub fn new() -> Self {
         LinkedList {
@@ -85,7 +85,7 @@ impl<T: Copy> LinkedList<T> {
         };
         let (value, next) = unsafe {
             let r = &*old_head;
-            (r.value, r.next)
+            (std::ptr::read(&r.value), r.next)
         };
         if next.is_null() {
             self.head = std::ptr::null_mut();
@@ -112,7 +112,7 @@ impl<T: Copy> LinkedList<T> {
         };
         let (value, prev) = unsafe {
             let r = &*old_tail;
-            (r.value, r.prev)
+            (std::ptr::read(&r.value), r.prev)
         };
         if prev.is_null() {
             self.head = std::ptr::null_mut();
@@ -128,42 +128,6 @@ impl<T: Copy> LinkedList<T> {
         }
         self.len -= 1;
         Some(value)
-    }
-
-    #[rapx::verify]
-    pub fn front(&self) -> Option<T> {
-        if self.head.is_null() {
-            None
-        } else {
-            unsafe { Some((*self.head).value) }
-        }
-    }
-
-    #[rapx::verify]
-    pub fn back(&self) -> Option<T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            unsafe { Some((*self.tail).value) }
-        }
-    }
-
-    #[rapx::verify]
-    pub fn front_mut(&mut self) -> Option<&mut T> {
-        if self.head.is_null() {
-            None
-        } else {
-            unsafe { Some(&mut (*self.head).value) }
-        }
-    }
-
-    #[rapx::verify]
-    pub fn back_mut(&mut self) -> Option<&mut T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            unsafe { Some(&mut (*self.tail).value) }
-        }
     }
 
     #[rapx::verify]

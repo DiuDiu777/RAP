@@ -27,9 +27,9 @@ use crate::{
         verifier::{AbstractValue, ForwardVisitResult, StateFact},
     },
 };
-use crate::helpers::mir_scan::Checkpoint;
+use crate::helpers::mir_scan::{Checkpoint, CheckpointKind};
 use crate::analysis::alias_analysis::{
-    collect_local_origins, resolve_self_field_origin,
+    collect_local_origins, resolve_place, resolve_self_field_origin, LocalOriginMap,
 };
 
 use super::common::{
@@ -47,6 +47,7 @@ enum HazardKind {
 enum AliasProducer {
     View(HazardKind),
     OwnershipTransfer,
+    ReadMemory,
 }
 
 #[derive(Clone, Debug)]
@@ -92,6 +93,35 @@ fn alias_proved_for_param_local<'tcx>(
     }
 }
 
+/// Recursively resolve a local through the origin map until reaching a
+/// terminal place (local 1 with fields, or a local without a mapping).
+fn deep_resolve_place(
+    mut local: usize,
+    origins: &LocalOriginMap,
+) -> (usize, Vec<usize>) {
+    let mut seen = std::collections::HashSet::new();
+    let mut all_fields: Vec<usize> = Vec::new();
+    loop {
+        if !seen.insert(local) {
+            return (local, all_fields);
+        }
+        match origins.get(&local) {
+            Some((l, fields)) => {
+                let mut combined = fields.clone();
+                combined.extend(all_fields.iter());
+                all_fields = combined;
+                if *l == 1 {
+                    return (1, all_fields);
+                }
+                local = *l;
+            }
+            None => {
+                return (local, all_fields);
+            }
+        }
+    }
+}
+
 /// Check the path-sensitive / escaped hazard part of `Alias`.
 pub fn check<'tcx>(
     checker: &SmtChecker<'tcx>,
@@ -99,10 +129,21 @@ pub fn check<'tcx>(
     _forward_property: &crate::verify::contract::Property<'tcx>,
     forward: &ForwardVisitResult<'tcx>,
 ) -> SmtCheckResult {
+    if checkpoint.kind == CheckpointKind::RawPtrDeref && checkpoint.is_ref {
+        return check_raw_ptr_deref_alias(checker, checkpoint, forward);
+    }
+
     let Some(callee) = checkpoint.callee else {
         return SmtCheckResult::unknown("Alias target callee could not be resolved");
     };
     let callee_name = checker.tcx.def_path_str(callee);
+
+    if callee_name.contains("::NonNull::<")
+        && (callee_name.ends_with("::as_ref") || callee_name.ends_with("::as_mut"))
+    {
+        return check_nonnull_as_ref_alias(checker, checkpoint, forward, callee_name);
+    }
+
     let Some(producer) = alias_producer(callee_name.as_str()) else {
         return SmtCheckResult::unknown(
             "Alias lowering currently supports view producers and ownership-transfer APIs",
@@ -121,6 +162,64 @@ pub fn check<'tcx>(
         local_origins.push(origin.clone());
     }
     let destination = call_destination(checker.tcx, checkpoint);
+
+    if producer == AliasProducer::ReadMemory {
+        if let Some(origin_arg) = checkpoint.args.first() {
+            if let Some(mir_place) = operand_mir_place(origin_arg) {
+                let body = checker.tcx.optimized_mir(checkpoint.caller);
+                let ptr_ty = body.local_decls[mir_place.local].ty;
+                if let rustc_middle::ty::TyKind::RawPtr(pointee, _) = ptr_ty.kind() {
+                    let typing_env = rustc_middle::ty::TypingEnv::post_analysis(
+                        checker.tcx,
+                        checkpoint.caller,
+                    );
+                    if checker.tcx.type_is_copy_modulo_regions(typing_env, *pointee) {
+                        return SmtCheckResult::proved(
+                            "read API pointee type is Copy — structural copy is safe",
+                        );
+                    }
+                    // Non-Copy read: check if returned value escapes while source persists.
+                    if let Some(dest) = destination {
+                        if !destination_flows_to_return(checker.tcx, checkpoint.caller, Some(dest)) {
+                            return SmtCheckResult::proved(
+                                "read API value does not escape to return — no structural alias hazard",
+                            );
+                        }
+                    }
+                    let origins = collect_local_origins(checker.tcx, checkpoint.caller);
+                    let (origin_local, origin_fields) =
+                        deep_resolve_place(mir_place.local.as_usize(), &origins);
+                    if origin_local == 1 && !origin_fields.is_empty() {
+                        let mut has_from_raw = false;
+                        for (_bb, data) in body.basic_blocks.iter_enumerated() {
+                            if let rustc_middle::mir::TerminatorKind::Call { func, .. } = &data.terminator().kind {
+                                if let rustc_middle::mir::Operand::Constant(c) = func {
+                                    if let rustc_middle::ty::FnDef(def_id, _) = c.const_.ty().kind() {
+                                        let name = checker.tcx.def_path_str(*def_id);
+                                        if is_ownership_transfer_api(&name) {
+                                            has_from_raw = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        if has_from_raw {
+                            return SmtCheckResult::proved(
+                                "read API value escapes but source pointer is freed via ownership-transfer",
+                            );
+                        }
+                        return failed_smt(format!(
+                            "returned value from read API escapes while the source pointer persists — structural alias hazard"
+                        ));
+                    }
+                }
+            }
+        }
+        return SmtCheckResult::proved(
+            "read API creates structural aliasing between source and return value — hazard acknowledged",
+        );
+    }
 
     let AliasProducer::View(kind) = producer else {
         if let Some(reason) = ownership_transfer_violation(
@@ -153,9 +252,9 @@ pub fn check<'tcx>(
             "Alias hazard is local and no conflicting raw access was found after the view producer",
         );
     }
-
     if let Some(origin) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
-        if let Some(reason) = escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin)
+        if let Some(reason) =
+            escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin)
         {
             return failed_smt(reason);
         }
@@ -186,6 +285,135 @@ pub fn check<'tcx>(
         origin
     );
     failed_smt(err_msg)
+}
+
+/// Handle alias hazard for a reference created from a raw pointer dereference
+/// (e.g. `&mut (*self.ptr).field` or `&(*self.ptr).field`).
+fn check_raw_ptr_deref_alias<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
+    forward: &ForwardVisitResult<'tcx>,
+) -> SmtCheckResult {
+    let kind = if checkpoint.is_mut_ref {
+        HazardKind::UniqueView
+    } else {
+        HazardKind::SharedView
+    };
+
+    let Some(origin_arg) = checkpoint.args.first() else {
+        return SmtCheckResult::unknown("raw-ptr-deref alias: no pointer argument");
+    };
+    let Some(origin_place) = operand_place(origin_arg) else {
+        return SmtCheckResult::unknown("raw-ptr-deref alias: pointer argument is not a MIR place");
+    };
+    let origin = resolve_forward_place(origin_place.clone(), forward);
+    let mut local_origins = vec![origin_place.clone()];
+    if !local_origins.contains(&origin) {
+        local_origins.push(origin.clone());
+    }
+    let destination = call_destination(checker.tcx, checkpoint);
+
+    if let Some(reason) = local_hazard_violation(
+        checker.tcx,
+        checkpoint.caller,
+        checkpoint.block,
+        destination,
+        &local_origins,
+        kind,
+    ) {
+        return failed_smt(reason);
+    }
+
+    if !destination_flows_to_return(checker.tcx, checkpoint.caller, destination) {
+        return SmtCheckResult::proved(
+            "alias hazard from raw-ptr-deref reference is local and no conflicting raw access was found",
+        );
+    }
+
+    if let Some(origin) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
+        if let Some(reason) =
+            escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin)
+        {
+            return failed_smt(reason);
+        }
+        return SmtCheckResult::proved(format!(
+            "returned reference from raw-ptr-deref is backed by private field `{}` and no safe raw-field breaker was found",
+            origin.field_name
+        ));
+    }
+
+    let err_msg = format!(
+        "returned reference from raw-ptr-deref escapes while the original pointer is not owned by a private self field [origin={:?}]",
+        origin
+    );
+    failed_smt(err_msg)
+}
+
+/// Handle alias hazard for NonNull::as_mut / NonNull::as_ref creating a reference
+/// from a NonNull pointer stored in a self field.
+fn check_nonnull_as_ref_alias<'tcx>(
+    checker: &SmtChecker<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
+    _forward: &ForwardVisitResult<'tcx>,
+    callee_name: String,
+) -> SmtCheckResult {
+    let kind = if callee_name.ends_with("::as_mut") {
+        HazardKind::UniqueView
+    } else {
+        HazardKind::SharedView
+    };
+
+    let Some(origin_arg) = checkpoint.args.first() else {
+        return SmtCheckResult::unknown("NonNull::as_ref/as_mut alias: no pointer argument");
+    };
+    let Some(origin_place) = operand_mir_place(origin_arg) else {
+        return SmtCheckResult::unknown("NonNull::as_ref/as_mut alias: pointer argument is not a MIR place");
+    };
+
+    let origins = collect_local_origins(checker.tcx, checkpoint.caller);
+    let (origin_local, origin_fields) = resolve_place(origin_place, &origins);
+
+    if origin_local != 1 || origin_fields.is_empty() {
+        return SmtCheckResult::proved(
+            "NonNull::as_ref/as_mut origin is not a self field — no escape hazard",
+        );
+    }
+
+    let origin = PlaceKey {
+        base: PlaceBaseKey::Local(origin_local),
+        fields: origin_fields,
+    };
+
+    let destination = call_destination(checker.tcx, checkpoint);
+
+    if !destination_flows_to_return(checker.tcx, checkpoint.caller, destination) {
+        return SmtCheckResult::proved(
+            "NonNull::as_ref/as_mut reference is local and no conflicting raw access was found",
+        );
+    }
+
+    if let Some(origin) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
+        if let Some(reason) =
+            escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin)
+        {
+            return failed_smt(reason);
+        }
+        if kind == HazardKind::UniqueView {
+            if let Some(reason) =
+                escaped_nonnull_as_mut_violation(checker.tcx, checkpoint.caller, &origin)
+            {
+                return failed_smt(reason);
+            }
+        }
+        return SmtCheckResult::proved(format!(
+            "returned reference from NonNull::as_ref/as_mut is backed by private field `{}` and no safe raw-field breaker was found",
+            origin.field_name
+        ));
+    }
+
+    SmtCheckResult::proved(
+        "NonNull::as_ref/as_mut origin is not a self field — no escape hazard",
+    )
 }
 
 /// When the view producer lives in a crate-private helper whose pointer origin
@@ -425,7 +653,34 @@ fn alias_producer(name: &str) -> Option<AliasProducer> {
     if is_ownership_transfer_api(name) {
         return Some(AliasProducer::OwnershipTransfer);
     }
+    if is_read_api(name) {
+        return Some(AliasProducer::ReadMemory);
+    }
     None
+}
+
+fn is_read_api(name: &str) -> bool {
+    if name.contains("::ptr::") {
+        if name.ends_with("::read")
+            || name.ends_with("::read_unaligned")
+            || name.ends_with("::read_volatile")
+            || name.ends_with("::copy_to")
+            || name.ends_with("::copy_to_nonoverlapping")
+            || name.ends_with("::copy_from")
+            || name.ends_with("::copy_from_nonoverlapping")
+        {
+            return true;
+        }
+    }
+    if name.ends_with("::assume_init_read") {
+        return true;
+    }
+    if name.contains("::intrinsics::")
+        && (name.ends_with("::copy") || name.ends_with("::copy_nonoverlapping"))
+    {
+        return true;
+    }
+    false
 }
 
 fn is_ownership_transfer_api(name: &str) -> bool {
@@ -536,11 +791,13 @@ fn destination_flows_to_return<'tcx>(
                 continue;
             };
             let (target, rvalue) = assign.as_ref();
-            if target.local.as_usize() != 0 {
-                continue;
+            if target.local.as_usize() == 0 {
+                if rvalue_mentions_local(rvalue, destination, &aliases) {
+                    return true;
+                }
             }
             if rvalue_mentions_local(rvalue, destination, &aliases) {
-                return true;
+                aliases.insert(target.local, aliases[&destination].clone());
             }
         }
     }
@@ -662,6 +919,7 @@ fn local_hazard_violation_with<'tcx>(
             };
             if origins.iter().any(|origin| {
                 terminator_writes_origin(tcx, caller, &terminator.kind, origin, &aliases)
+                    && !is_ownership_transfer_terminator(tcx, &terminator.kind)
             }) && hazard_used_after_block(tcx, caller, block_index, &hazard_locals)
             {
                 return Some(format!(
@@ -1465,6 +1723,83 @@ fn method_exposes_self_field<'tcx>(tcx: TyCtxt<'tcx>, method: DefId, field_index
     false
 }
 
+fn escaped_nonnull_as_mut_violation<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    current: DefId,
+    origin: &SelfFieldOrigin,
+) -> Option<String> {
+    for impl_def_id in impls_for_struct(tcx, origin.struct_def_id) {
+        for item in tcx.associated_item_def_ids(impl_def_id) {
+            if *item == current {
+                continue;
+            }
+            if !matches!(tcx.def_kind(*item), DefKind::Fn | DefKind::AssocFn) {
+                continue;
+            }
+            if check_safety(tcx, *item) == Safety::Unsafe {
+                continue;
+            }
+            let Some(assoc) = tcx.opt_associated_item(*item) else {
+                continue;
+            };
+            if !matches!(assoc.kind, AssocKind::Fn { has_self: true, .. }) {
+                continue;
+            }
+            if !tcx.is_mir_available(*item) {
+                continue;
+            }
+
+            if method_uses_nonnull_on_self_field(tcx, *item, origin.field_index) {
+                return Some(format!(
+                    "safe method `{}` creates a NonNull::as_mut reference from field `{}`",
+                    tcx.def_path_str(*item),
+                    origin.field_name
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn method_uses_nonnull_on_self_field<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    method: DefId,
+    field_index: usize,
+) -> bool {
+    let body = tcx.optimized_mir(method);
+    let origins = collect_local_origins(tcx, method);
+
+    for block in body.basic_blocks.iter() {
+        let Some(terminator) = &block.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call { func, args, .. } = &terminator.kind else {
+            continue;
+        };
+        let callee_name = crate::helpers::mir_utils::call_name(tcx, func);
+        if !callee_name.contains("::NonNull::<")
+            || (!callee_name.ends_with("::as_ref") && !callee_name.ends_with("::as_mut"))
+        {
+            continue;
+        }
+        let Some(arg0) = args.first() else {
+            continue;
+        };
+        let Some(place) = (match &arg0.node {
+            Operand::Copy(p) | Operand::Move(p) => Some(p),
+            _ => None,
+        }) else {
+            continue;
+        };
+        let (plocal, pfields) = resolve_place(place, &origins);
+        if plocal == 1 && pfields.first() == Some(&field_index) {
+            return true;
+        }
+    }
+
+    false
+}
+
 fn self_field_key(field_index: usize) -> PlaceKey {
     PlaceKey {
         base: PlaceBaseKey::Local(1),
@@ -1573,6 +1908,20 @@ fn terminator_writes_origin<'tcx>(
         return false;
     };
     resolve_mir_place(place, aliases).overlaps(origin)
+}
+
+// Box::from_raw, drop_in_place, and similar ownership-transfer operations
+// consume the pointer and deallocate memory — they resolve the alias hazard
+// rather than creating a new one.
+fn is_ownership_transfer_terminator<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    terminator: &TerminatorKind<'tcx>,
+) -> bool {
+    let TerminatorKind::Call { func, .. } = terminator else {
+        return false;
+    };
+    let name = crate::helpers::mir_utils::call_name(tcx, func);
+    name.contains("::from_raw") || name.contains("::drop_in_place")
 }
 
 fn terminator_uses_origin<'tcx>(

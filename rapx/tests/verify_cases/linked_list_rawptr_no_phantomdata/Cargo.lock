@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "linked_list_rawptr_unsound"
+name = "linked_list_rawptr_no_phantomdata"
 version = "0.1.0"

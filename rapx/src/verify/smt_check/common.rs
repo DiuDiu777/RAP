@@ -127,6 +127,9 @@ pub(crate) fn call_destination<'tcx>(
     tcx: TyCtxt<'tcx>,
     checkpoint: &Checkpoint<'tcx>,
 ) -> Option<Local> {
+    if checkpoint.kind == crate::helpers::mir_scan::CheckpointKind::RawPtrDeref {
+        return checkpoint.destination;
+    }
     let body = tcx.optimized_mir(checkpoint.caller);
     let terminator = body.basic_blocks[checkpoint.block].terminator();
     let TerminatorKind::Call { destination, .. } = &terminator.kind else {
@@ -190,6 +193,43 @@ impl<'tcx> SmtChecker<'tcx> {
         }
     }
 
+    /// Handle Ptr2Ref for NonNull::as_mut / NonNull::as_ref.
+    /// NonNull guarantees Init + Align, but Alias needs actual hazard checking.
+    fn check_nonnull_ptr2ref(
+        &self,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+        forward: &ForwardVisitResult<'tcx>,
+    ) -> SmtCheckResult {
+        use crate::verify::contract::PropertyKind;
+        let primitives = property.kind.primitive_components().unwrap_or(&[]);
+        let mut failed = false;
+        let mut unknown = false;
+        for &kind in primitives {
+            if kind == PropertyKind::Init || kind == PropertyKind::Align {
+                continue;
+            }
+            let primitive = crate::verify::contract::with_kind(property, kind);
+            let result = self.check(checkpoint, &primitive, forward);
+            match result.result {
+                crate::verify::report::CheckResult::Proved => {}
+                crate::verify::report::CheckResult::Failed => failed = true,
+                _ => unknown = true,
+            }
+        }
+        if failed {
+            SmtCheckResult {
+                result: crate::verify::report::CheckResult::Failed,
+                query: None,
+                notes: vec!["Ptr2Ref: Alias hazard detected".to_string()],
+            }
+        } else if unknown {
+            SmtCheckResult::unknown("Ptr2Ref: Alias check inconclusive")
+        } else {
+            SmtCheckResult::proved("Ptr2Ref proved: NonNull guarantees Init+Align, Alias check passed")
+        }
+    }
+
     /// Try to prove one property using SMT.
     pub fn check(
         &self,
@@ -241,9 +281,7 @@ impl<'tcx> SmtChecker<'tcx> {
                     if callee_path.contains("::NonNull::<")
                         && (callee_path.ends_with("::as_ref") || callee_path.ends_with("::as_mut"))
                     {
-                        return SmtCheckResult::proved(
-                            "Ptr2Ref proved: NonNull guarantees valid pointer-to-ref conversion",
-                        );
+                        return self.check_nonnull_ptr2ref(checkpoint, property, forward);
                     }
                 }
                 super::ptr2ref::check(self, checkpoint, property, forward)
@@ -1621,6 +1659,8 @@ impl<'tcx> SmtChecker<'tcx> {
             args: Vec::new(),
             kind: crate::helpers::mir_scan::CheckpointKind::UnsafeCall,
             is_ref: false,
+            is_mut_ref: false,
+            destination: None,
         };
         self.prove_obligation(&dummy_checkpoint, forward, obligation, None)
     }

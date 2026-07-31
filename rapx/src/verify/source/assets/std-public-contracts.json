@@ -552,12 +552,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::mem::maybe_uninit::assume_init_drop": [
@@ -915,12 +926,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::intrinsics::copy::copy": [
@@ -956,12 +978,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "ValidPtr",
@@ -987,12 +1020,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::intrinsics::exact_div": [
@@ -1051,12 +1095,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "ValidPtr",
@@ -1082,12 +1137,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::intrinsics::write_bytes": [
@@ -1316,12 +1382,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Init",
@@ -1349,12 +1426,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Init",
@@ -1375,12 +1463,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Init",
@@ -1424,12 +1523,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "ValidPtr",
@@ -1481,12 +1591,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -1537,12 +1658,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -1602,12 +1734,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -2074,12 +2217,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::ptr::const_ptr::read_volatile": [
@@ -2107,12 +2261,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::ptr::const_ptr::read_unaligned": [
@@ -2133,12 +2298,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::ptr::const_ptr::copy_to": [
@@ -2174,12 +2350,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "ValidPtr",
@@ -2231,12 +2418,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -2547,12 +2745,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Init",
@@ -2580,12 +2789,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Init",
@@ -2606,12 +2826,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Init",
@@ -2655,12 +2886,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "ValidPtr",
@@ -2712,12 +2954,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -2768,12 +3021,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -2833,12 +3097,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     },
     {
       "tag": "Alias",
@@ -3181,28 +3456,6 @@
     {
       "tag": "ValidPtr",
       "args": [
-        "self",
-        "T",
-        "1"
-      ]
-    },
-    {
-      "tag": "Align",
-      "args": [
-        "self",
-        "T"
-      ]
-    },
-    {
-      "tag": "Typed",
-      "args": [
-        "self",
-        "T"
-      ]
-    },
-    {
-      "tag": "ValidPtr",
-      "args": [
         "src",
         "T",
         "1"
@@ -3210,6 +3463,13 @@
     },
     {
       "tag": "Align",
+      "args": [
+        "src",
+        "T"
+      ]
+    },
+    {
+      "tag": "Typed",
       "args": [
         "src",
         "T"
@@ -3224,12 +3484,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "self",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::ptr::write": [
@@ -3334,12 +3605,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::ptr::write_unaligned": [
@@ -3377,12 +3659,23 @@
       ]
     },
     {
-      "tag": "Trait",
-      "args": [
-        "T",
-        "Copy"
-      ],
-      "kind": "option"
+      "tag": "any",
+      "any": [
+        {
+          "tag": "Trait",
+          "args": [
+            "T",
+            "Copy"
+          ]
+        },
+        {
+          "tag": "Alias",
+          "args": [
+            "src",
+            "ret"
+          ]
+        }
+      ]
     }
   ],
   "core::ptr::write_volatile": [
