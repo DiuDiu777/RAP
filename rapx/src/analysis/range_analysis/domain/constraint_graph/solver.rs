@@ -21,11 +21,17 @@ where
         for &place in component.iter() {
 
             if let Some(sit) = self.symbmap.get_mut(place) {
-                let node = self.vars.get(place).unwrap();
+                let Some(node) = self.vars.get(place) else {
+                    rap_trace!("fix_intersects: place {:?} not in vars\n", place);
+                    continue;
+                };
 
                 for &op in sit.iter() {
                     let op = &mut self.oprs[op];
-                    let sinknode = self.vars.get(op.get_sink()).unwrap();
+                    let Some(sinknode) = self.vars.get(op.get_sink()) else {
+                        rap_trace!("fix_intersects: sink {:?} not in vars\n", op.get_sink());
+                        continue;
+                    };
 
                     op.op_fix_intersects(node, sinknode);
                 }
@@ -43,10 +49,16 @@ where
     ) -> bool {
         let op_kind = &self.oprs[op];
         let sink = op_kind.get_sink();
-        let old_interval = self.vars.get(sink).unwrap().get_range().clone();
+        let Some(sink_node) = self.vars.get(sink) else {
+            rap_trace!("step_range: sink {:?} not in vars\n", sink);
+            return false;
+        };
+        let old_interval = sink_node.get_range().clone();
         let estimated_interval = op_kind.eval_interproc(&self.vars, cg_map, vars_map);
         let updated = step_fn(&old_interval, &estimated_interval);
-        self.vars.get_mut(sink).unwrap().set_range(updated.clone());
+        if let Some(sink_node) = self.vars.get_mut(sink) {
+            sink_node.set_range(updated.clone());
+        }
         rap_trace!(
             "{} in {} set {:?}: E {:?} U {:?} {:?} -> {:?}",
             trace_op, op, sink, estimated_interval, updated, old_interval, updated
@@ -133,18 +145,26 @@ where
         vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
     ) {
         for &place in component {
-            let op = self.defmap.get(place).unwrap();
+            let Some(op) = self.defmap.get(place) else {
+                rap_trace!("generate_entry_points: place {:?} not in defmap\n", place);
+                continue;
+            };
             if let BasicOpKind::Essa(essaop) = &mut self.oprs[*op] {
                 if essaop.is_unresolved() {
                     let source = essaop.get_source();
                     let new_range = essaop.eval(&self.vars);
-                    let sink_node = self.vars.get_mut(source).unwrap();
-                    sink_node.set_range(new_range);
+                    if let Some(sink_node) = self.vars.get_mut(source) {
+                        sink_node.set_range(new_range);
+                    } else {
+                        rap_trace!("generate_entry_points: source {:?} not in vars\n", source);
+                    }
                 }
                 essaop.mark_resolved();
             }
-            if !self.vars[place].get_range().is_unknown() {
-                entry_points.insert(place);
+            if let Some(var_node) = self.vars.get(place) {
+                if !var_node.get_range().is_unknown() {
+                    entry_points.insert(place);
+                }
             }
         }
     }
@@ -156,22 +176,31 @@ where
         vars_map: &mut FxHashMap<DefId, Vec<RefCell<VarNodes<'tcx, T>>>>,
     ) {
         for &place in component.iter() {
-            let node = self.vars.get_mut(place).unwrap();
-            for &op in self.usemap.get(place).unwrap().iter() {
+            if !self.vars.contains_key(place) {
+                rap_trace!("propagate_to_next_scc: place {:?} not in vars\n", place);
+                continue;
+            }
+            let Some(uses) = self.usemap.get(place) else {
+                rap_trace!("propagate_to_next_scc: place {:?} not in usemap\n", place);
+                continue;
+            };
+            for &op in uses.iter() {
                 let op_kind = &mut self.oprs[op];
                 let sink = op_kind.get_sink();
                 if !component.contains(sink) {
                     let new_range = op_kind.eval_interproc(&self.vars, cg_map, vars_map);
-                    let sink_node = self.vars.get_mut(sink).unwrap();
-                    rap_trace!(
-                        "prop component {:?} set {:?} to {:?} through {:?}\n",
-                        component,
-                        new_range,
-                        sink,
-                        op_kind.get_instruction()
-                    );
-                    sink_node.set_range(new_range);
-
+                    if let Some(sink_node) = self.vars.get_mut(sink) {
+                        rap_trace!(
+                            "prop component {:?} set {:?} to {:?} through {:?}\n",
+                            component,
+                            new_range,
+                            sink,
+                            op_kind.get_instruction()
+                        );
+                        sink_node.set_range(new_range);
+                    } else {
+                        rap_trace!("propagate_to_next_scc: sink {:?} not in vars\n", sink);
+                    }
                     if let BasicOpKind::Essa(essaop) = op_kind {
                         if essaop.get_intersect().get_range().is_unknown() {
                             essaop.mark_unresolved();
@@ -196,7 +225,11 @@ where
             if let BasicOpKind::Call(_) = &self.oprs[*op] {
                 let new_range = self.oprs[*op].eval_interproc(&self.vars, cg_map, vars_map);
                 rap_trace!("Setting range for {:?} to {:?}\n", sink, new_range);
-                self.vars.get_mut(sink).unwrap().set_range(new_range);
+                if let Some(var_node) = self.vars.get_mut(sink) {
+                    var_node.set_range(new_range);
+                } else {
+                    rap_trace!("solve_const_func_call: sink {:?} not in vars\n", sink);
+                }
             }
         }
     }
@@ -248,9 +281,12 @@ where
                 self.fix_intersects(&component);
 
                 let variable: &Place<'tcx> = *component.iter().next().unwrap();
-                let varnode = self.vars.get_mut(variable).unwrap();
-                if varnode.get_range().is_unknown() {
-                    varnode.set_default();
+                if let Some(varnode) = self.vars.get_mut(variable) {
+                    if varnode.get_range().is_unknown() {
+                        varnode.set_default();
+                    }
+                } else {
+                    rap_trace!("find_intervals: single variable {:?} not in vars\n", variable);
                 }
             } else {
 
@@ -387,7 +423,11 @@ where
         self.dfs.entry(place).and_modify(|v| *v = self.index);
         self.index += 1;
         self.root.insert(place, place);
-        let uses = self.usemap.get(place).unwrap().clone();
+        let Some(uses) = self.usemap.get(place) else {
+            rap_trace!("visit: place {:?} not in usemap\n", place);
+            return;
+        };
+        let uses = uses.clone();
         for op in uses {
             let name = self.oprs[op].get_sink();
             rap_trace!("place {:?} get name{:?}\n", place, name);
@@ -396,16 +436,19 @@ where
             }
 
             if !self.in_component.contains(name)
-                && self.dfs[self.root[place]] >= self.dfs[self.root[name]]
+                && self.dfs.get(self.root.get(place).copied().unwrap_or(place)).copied().unwrap_or(-1)
+                    >= self.dfs.get(self.root.get(name).copied().unwrap_or(name)).copied().unwrap_or(-1)
             {
-                *self.root.get_mut(place).unwrap() = self.root.get(name).copied().unwrap();
-
-
-
+                let name_root = self.root.get(name).copied();
+                if let (Some(place_root), Some(name_root)) =
+                    (self.root.get_mut(place), name_root)
+                {
+                    *place_root = name_root;
+                }
             }
         }
 
-        if self.root.get(place).copied().unwrap() == place {
+        if self.root.get(place).copied().unwrap_or(place) == place {
             self.worklist.push_back(place);
 
             let mut scc = HashSet::new();

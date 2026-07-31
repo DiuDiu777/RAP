@@ -182,7 +182,10 @@ where
         let field_ty = match adt_ty.kind() {
             ty::TyKind::Adt(adt_def, substs) => {
                 // Get the single variant of the struct using an iterator.
-                let variant_def = adt_def.variants().iter().next().unwrap();
+                let Some(variant_def) = adt_def.variants().iter().next() else {
+                    rap_trace!("get_field_place: ADT has no variants\n");
+                    return adt_place;
+                };
 
                 // Get the field's definition from the variant.
                 let field_def = &variant_def.fields[field_index];
@@ -248,9 +251,14 @@ where
                         ..
                     }) = &current_bb_data.terminator
                     {
-                        let (constraint_place_1, constraint_place_2) =
-                            self.switchbbs.get(&current_bb).unwrap();
-                        if let Some(vbm) = self.values_branchmap.get(constraint_place_1) {
+                        let Some((constraint_place_1_ref, constraint_place_2_ref)) =
+                            self.switchbbs.get(&current_bb) else {
+                                rap_trace!("addvar_in_branches: bb {:?} not in switchbbs\n", current_bb);
+                                continue;
+                            };
+                        let constraint_place_1 = *constraint_place_1_ref;
+                        let constraint_place_2 = *constraint_place_2_ref;
+                        if let Some(vbm) = self.values_branchmap.get(&constraint_place_1) {
                             let relevant_interval_opt = if next_bb == *vbm.get_bb_true() {
                                 Some(vbm.get_itv_t())
                             } else if next_bb == *vbm.get_bb_false() {

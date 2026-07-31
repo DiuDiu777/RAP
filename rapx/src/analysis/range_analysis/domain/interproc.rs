@@ -59,7 +59,17 @@ impl<'tcx, T: IntervalArithmetic + ConstConvert + Debug> CallOp<'tcx, T> {
                 match self.args.last() {
                     Some(Operand::Copy(place)) | Some(Operand::Move(place)) => {
                         let range = caller_vars[place].get_range().clone();
-                        let len = range.get_upper().clone() - range.get_lower().clone();
+                        let len = range
+                            .get_upper()
+                            .clone()
+                            .checked_sub(&range.get_lower().clone())
+                            .unwrap_or_else(|| {
+                                rap_trace!(
+                                    "len() subtraction overflow for range {:?}, returning [0, max]",
+                                    range
+                                );
+                                T::max_value()
+                            });
                         result = Range::exact(len.clone());
                     }
                     Some(Operand::Constant(c)) => {}

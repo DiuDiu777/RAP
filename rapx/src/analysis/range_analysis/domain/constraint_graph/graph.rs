@@ -322,7 +322,10 @@ where
                         self.add_varnode(variable);
                         rap_trace!("add_vbm_varnode{:?}\n", variable.clone());
 
-                        let value = T::from_const(&c.const_).unwrap();
+                        let Some(value) = T::from_const(&c.const_) else {
+                            rap_trace!("from_const returned None for const {:?}, skipping VBM", c);
+                            return;
+                        };
                         let const_range =
                             Range::new(value.clone(), value.clone(), RangeType::Unknown);
                         rap_trace!("cmp_op {:?}\n", cmp_op);
@@ -784,12 +787,16 @@ where
         {
             let bi = BasicInterval::default();
 
+            let Some(def_id) = func_def_id else {
+                rap_debug!("Call to function without DefId, skipping\n");
+                return;
+            };
             let call_op = CallOp::new(
                 IntervalType::Basic(bi),
                 &sink,
-                terminator, // Pass the allocated dummy statement
+                terminator,
                 arg_operands,
-                *func_def_id.unwrap(), // Use the DefId if available
+                *def_id,
                 path,
                 places,
             );
