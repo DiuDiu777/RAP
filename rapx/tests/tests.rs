@@ -291,7 +291,11 @@ fn std_contracts_valid() {
     for (key, entries) in &db {
         for entry in entries {
             assert!(entry["tag"].is_string(), "{key}: missing or invalid tag");
-            assert!(entry["args"].is_array(), "{key}: missing or invalid args");
+            if entry["tag"].as_str() == Some("any") {
+                assert!(entry["any"].is_array(), "{key}: any entry missing 'any' array");
+            } else {
+                assert!(entry["args"].is_array(), "{key}: missing or invalid args");
+            }
         }
     }
     assert!(!db.is_empty(), "contract database is empty");

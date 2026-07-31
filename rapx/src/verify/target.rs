@@ -14,12 +14,10 @@ use rustc_hir::{
 use rustc_middle::{hir::nested_filter, ty::TyCtxt};
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet};
-use syn::Expr;
 
 use super::{
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
     path_extractor::PathExtractor,
-    source::assets::*,
     source::attr::parse_rapx_attr,
 };
 use crate::helpers::mir_utils::{
@@ -199,7 +197,6 @@ fn resolve_chain_contracts<'tcx>(
     tcx: TyCtxt<'tcx>,
     callee_def_id: DefId,
     visited: &mut HashSet<DefId>,
-    std_contracts: fn(TyCtxt<'tcx>, DefId) -> &'static [super::source::assets::PropertyEntry],
 ) -> FnContracts<'tcx> {
     if !visited.insert(callee_def_id) {
         return Vec::new();
@@ -238,13 +235,12 @@ fn resolve_chain_contracts<'tcx>(
 
                 // Try std contracts database.
                 if reqs.is_empty() && is_std_crate_def_id(tcx, sub_def_id) {
-                    let entries = std_contracts(tcx, sub_def_id);
-                    reqs = get_contract_from_entry(tcx, sub_def_id, entries);
+                    reqs = super::contract::query_json_contracts(tcx, sub_def_id);
                 }
 
                 // If still no contracts, recurse into this callee.
                 if reqs.is_empty() {
-                    reqs = resolve_chain_contracts(tcx, sub_def_id, visited, std_contracts);
+                    reqs = resolve_chain_contracts(tcx, sub_def_id, visited);
                 }
 
                 contracts.extend(reqs);
@@ -323,10 +319,9 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                 }
 
                 if requires.is_empty() && is_std {
-                    requires = get_contract_from_entry(
+                    requires = super::contract::query_json_contracts(
                         self.tcx,
                         callee_def_id,
-                        get_std_contracts_from_assets(self.tcx, callee_def_id),
                     );
 
                 if requires.is_empty() {
@@ -338,7 +333,6 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                         self.tcx,
                         callee_def_id,
                         &mut visited,
-                        get_std_contracts_from_assets,
                     );
                     if requires.is_empty() {
                         let path = crate::helpers::name::get_cleaned_def_path_name(
@@ -399,11 +393,8 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         // the full documented safety contract.  Callee-side resolution is
         // unchanged.
         if is_std_crate_def_id(self.tcx, def_id) {
-            let json_contracts = get_contract_from_entry(
-                self.tcx,
-                def_id,
-                get_std_contracts_from_assets(self.tcx, def_id),
-            );
+            let json_contracts =
+                super::contract::query_json_contracts(self.tcx, def_id);
             caller_requires.extend(json_contracts);
         }
 
@@ -1023,191 +1014,6 @@ impl<'tcx> PrepareTargets<'tcx> {
             }
         }
     }
-}
-
-/// Builds contracts from backup JSON entries.
-///
-/// Each entry stores property-expression arguments that are passed directly into
-/// `Property::new`. The target information is resolved by `Property` itself
-/// from those arguments.
-fn get_contract_from_entry<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-    contract_entries: &[PropertyEntry],
-) -> FnContracts<'tcx> {
-    let mut results = Vec::new();
-
-    // Resolve parameter names for this function so JSON contracts can use
-    // named references (e.g. "src") instead of positional ones ("arg:0").
-    let (param_names, _) = crate::helpers::name::parse_signature(tcx, def_id);
-    let has_names = !param_names.is_empty() && !param_names[0].chars().all(|c| c.is_ascii_digit());
-
-    for entry in contract_entries {
-        if entry.args.is_empty() {
-            continue;
-        }
-
-        let mut exprs: Vec<Expr> = Vec::new();
-        for arg_str in &entry.args {
-            // Resolve simple identifiers to `arg:N` when parameter names are known.
-            let resolved = if has_names {
-                resolve_json_param_name(arg_str, &param_names)
-            } else {
-                arg_str.clone()
-            };
-            let normalized_arg = normalize_json_contract_arg(&resolved);
-            match syn::parse_str::<Expr>(&normalized_arg) {
-                Ok(expr) => exprs.push(expr),
-                Err(_) => {
-                    // Lifetime arguments like 'a are not valid Rust expressions.
-                    // Parse them as an identifier path (without the tick) so they
-                    // can be stored as PropertyArg::Ident.
-                    if let Some(lifetime) = normalized_arg.strip_prefix('\'') {
-                        if lifetime.chars().all(|c| c.is_alphabetic() || c == '_') {
-                            match syn::parse_str::<Expr>(lifetime) {
-                                Ok(expr) => exprs.push(expr),
-                                Err(_) => {
-                                    rap_error!(
-                                        "JSON Contract Error: Failed to parse lifetime \
-                                         '{}' as Rust Expr for tag {}",
-                                        arg_str,
-                                        entry.tag
-                                    );
-                                }
-                            }
-                        } else {
-                            rap_error!(
-                                "JSON Contract Error: Failed to parse arg '{}' as Rust Expr for tag {}",
-                                arg_str,
-                                entry.tag
-                            );
-                        }
-                    } else {
-                        rap_error!(
-                            "JSON Contract Error: Failed to parse arg '{}' as Rust Expr for tag {}",
-                            arg_str,
-                            entry.tag
-                        );
-                    }
-                }
-            }
-        }
-
-        if exprs.len() != entry.args.len() {
-            rap_error!(
-                "Parse std API args error: Failed to parse arg '{:?}'",
-                entry.args
-            );
-            continue;
-        }
-
-        let mut property = Property::new(tcx, def_id, entry.tag.as_str(), &exprs);
-        property.apply_kind(entry.kind.as_deref());
-        if matches!(property.kind, PropertyKind::Unknown) {
-            rap_debug!(
-                "skip unsupported std safety contract tag '{}' for callee {:?}",
-                entry.tag,
-                def_id
-            );
-            continue;
-        }
-        results.push(property);
-    }
-    results
-}
-
-/// Resolve a simple parameter-name reference in a JSON contract arg string to
-/// the `arg:N` positional form.  Complex expressions (containing function
-/// calls, field access, etc.) are left unchanged — they are handled later by
-/// the expression parser which already knows how to resolve named parameters.
-fn resolve_json_param_name(arg: &str, param_names: &[String]) -> String {
-    // Only rewrite top-level simple identifiers, not expressions.
-    if arg.starts_with("arg:")
-        || arg.starts_with("const:")
-        || arg.starts_with("ty:")
-        || arg.contains('(')
-        || arg.contains('.')
-        || arg.contains("::")
-        || arg.contains(' ')
-        || arg.starts_with('\'')
-    {
-        return arg.to_string();
-    }
-    if let Some(pos) = param_names.iter().position(|n| n == arg) {
-        format!("arg:{pos}")
-    } else {
-        arg.to_string()
-    }
-}
-
-/// Convert explicit JSON contract tokens into the expression syntax accepted by
-/// the existing property parser.
-///
-/// Supported explicit tokens:
-/// - `arg:N` names callee argument `N` and becomes internal `Arg_N`.
-/// - `const:N` names an integer constant and becomes `N`.
-/// - `ty:T` names a type parameter/type identifier and becomes `T`.
-///
-/// Unprefixed strings are kept unchanged for compatibility with older entries
-/// such as `"0"`, `"T"`, and `"1"`.
-fn normalize_json_contract_arg(arg: &str) -> String {
-    let bytes = arg.as_bytes();
-    let mut out = String::with_capacity(arg.len());
-    let mut i = 0;
-
-    while i < bytes.len() {
-        if arg[i..].starts_with("arg:") {
-            let start = i + "arg:".len();
-            let end = scan_while(arg, start, |ch| ch.is_ascii_digit());
-            if end > start {
-                out.push_str("Arg_");
-                out.push_str(&arg[start..end]);
-                i = end;
-                continue;
-            }
-        }
-
-        if arg[i..].starts_with("const:") {
-            let start = i + "const:".len();
-            let end = scan_while(arg, start, is_contract_token_char);
-            if end > start {
-                out.push_str(&arg[start..end]);
-                i = end;
-                continue;
-            }
-        }
-
-        if arg[i..].starts_with("ty:") {
-            let start = i + "ty:".len();
-            let end = scan_while(arg, start, is_contract_token_char);
-            if end > start {
-                out.push_str(&arg[start..end]);
-                i = end;
-                continue;
-            }
-        }
-
-        let ch = arg[i..].chars().next().unwrap();
-        out.push(ch);
-        i += ch.len_utf8();
-    }
-
-    out
-}
-
-fn scan_while(arg: &str, mut index: usize, predicate: impl Fn(char) -> bool) -> usize {
-    while index < arg.len() {
-        let ch = arg[index..].chars().next().unwrap();
-        if !predicate(ch) {
-            break;
-        }
-        index += ch.len_utf8();
-    }
-    index
-}
-
-fn is_contract_token_char(ch: char) -> bool {
-    ch.is_ascii_alphanumeric() || ch == '_' || ch == ':'
 }
 
 fn is_rapx_named_attr(attr: &Attribute, name: &str) -> bool {

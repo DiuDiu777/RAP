@@ -595,7 +595,7 @@ pub fn emit_verify_summary<'tcx>(
                 "      unsafe checkpoint: bb{} -> {callee_name}",
                 checkpoint.block.as_usize(),
             );
-            emit_property_rows(results);
+            emit_property_rows(tcx, results);
         }
     }
 
@@ -604,7 +604,7 @@ pub fn emit_verify_summary<'tcx>(
         rap_info!("  --- struct invariants ---");
         for ((checkpoint, _), results) in &invariant_groups {
             rap_info!("      checkpoint bb{}:", checkpoint.block.as_usize(),);
-            emit_property_rows(results);
+            emit_property_rows(tcx, results);
         }
     }
 
@@ -622,7 +622,14 @@ pub fn emit_verify_summary<'tcx>(
     rap_info!("");
 }
 
-pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
+
+
+pub fn emit_property_rows<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    results: &[&PropertyCheckResult<'tcx>],
+) {
+    use crate::verify::contract::PropertyKind;
+
     let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
     for r in results.iter() {
         path_groups
@@ -632,7 +639,7 @@ pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
     }
     for (path_desc, props) in &path_groups {
         rap_info!("        path {path_desc}:");
-        // Count identical (kind, hazard, result) groups.
+        // Count identical (kind, hazard, result) groups for dedup.
         let mut counts: Vec<(
             crate::verify::contract::PropertyKind,
             bool,
@@ -660,7 +667,14 @@ pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
                 ));
             }
         }
-        for (kind, is_hazard, is_option, result, count) in &counts {
+        let n = counts.len();
+        for (i, (kind, is_hazard, is_option, result, count)) in counts.iter().enumerate() {
+            let is_last = i + 1 == n;
+            let conn = if n > 1 {
+                if is_last { "└── " } else { "├── " }
+            } else {
+                ""
+            };
             let tag = if *is_hazard {
                 format!("[hazard] {:?}", kind)
             } else if *is_option {
@@ -668,7 +682,7 @@ pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
             } else {
                 format!("{:?}", kind)
             };
-            let mut line = format!("          {tag} | {:?}", result);
+            let mut line = format!("          {conn}{tag} | {:?}", result);
             if *count > 1 {
                 line.push_str(&format!(" (x{count})"));
             }
@@ -676,6 +690,41 @@ pub fn emit_property_rows(results: &[&PropertyCheckResult<'_>]) {
                 rap_info!(green, "{line}");
             } else {
                 rap_warn!("{line}");
+            }
+
+            // Expand OR sub-properties with indented tree
+            if *kind == PropertyKind::Or && *count == 1 {
+                if let Some(r) = props.first() {
+                    let pad = if is_last { "            " } else { "          │   " };
+                    emit_or_subtree(tcx, &r.property, pad);
+                }
+            }
+        }
+    }
+}
+
+/// Render sub-properties of an `Or` with indented tree connectors.
+fn emit_or_subtree<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    property: &crate::verify::contract::Property<'tcx>,
+    pad: &str,
+) {
+    let num_groups = property.or_alternatives.len();
+    for (gi, group) in property.or_alternatives.iter().enumerate() {
+        let g_last = gi + 1 == num_groups;
+        let gconn = if g_last { "└── " } else { "├── " };
+        let glen = group.len();
+        if glen == 1 {
+            let (stag, _) = fmt_contract_expanded(tcx, &[], &group[0], None);
+            let gline = format!("{pad}{gconn}{stag}");
+            rap_info!("{gline}");
+        } else {
+            for (si, sub) in group.iter().enumerate() {
+                let s_last = si + 1 == glen;
+                let sconn = if s_last { "└── " } else { "├── " };
+                let (stag, _) = fmt_contract_expanded(tcx, &[], sub, None);
+                let gline = format!("{pad}{gconn}{sconn}{stag}");
+                rap_info!("{gline}");
             }
         }
     }

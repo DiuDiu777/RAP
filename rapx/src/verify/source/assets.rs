@@ -8,12 +8,57 @@ use crate::helpers::name::get_cleaned_def_path_name;
 
 /// Structure of JSON entries.
 ///
+/// When `tag == "any"` and `any` is present, the entry represents a
+/// disjunction (logical OR) of property groups.  Each element in `any`
+/// is either a single [`PropertyEntry`] (one disjunct) or an array of
+/// entries (a conjunction group — all must hold).
+///
+/// JSON format for `any` (flat OR):
+/// ```json
+/// {
+///   "tag": "any",
+///   "any": [
+///     {"tag": "Trait", "args": ["T", "Copy"]},
+///     {"tag": "Alias", "args": ["T", "return"]}
+///   ]
+/// }
+/// ```
+///
+/// JSON format for `any` with conjunction group (null-guard):
+/// ```json
+/// {
+///   "tag": "any",
+///   "any": [
+///     {"tag": "Null", "args": ["head"]},
+///     [
+///       {"tag": "Align", "args": ["head", "Node"]},
+///       {"tag": "ValidPtr", "args": ["head", "Node", "1"]}
+///     ]
+///   ]
+/// }
+/// ```
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct PropertyEntry {
     pub tag: String,
+    #[serde(default)]
     pub args: Vec<String>,
     #[serde(default)]
     pub kind: Option<String>,
+    /// When `tag == "any"`, the list of disjuncts (OR alternatives).
+    /// Each element is either a single entry or a conjunction group.
+    #[serde(default)]
+    pub any: Option<Vec<AnyItem>>,
+}
+
+/// One disjunct inside a JSON `any` entry.
+///
+/// `Single` is one property; `Group` is a conjunction of properties
+/// (all must hold together, forming one OR alternative).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(untagged)]
+pub enum AnyItem {
+    Single(PropertyEntry),
+    Group(Vec<PropertyEntry>),
 }
 
 /// Looks up backup contracts for a standard-library function by its normalized path.

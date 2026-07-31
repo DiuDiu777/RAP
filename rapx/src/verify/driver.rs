@@ -684,7 +684,7 @@ impl<'tcx> VerifyRun<'tcx> {
                     "      unsafe checkpoint: bb{} -> {callee_name}",
                     checkpoint.block.as_usize(),
                 );
-                emit_property_rows(results);
+                emit_property_rows(self.tcx, results);
             }
         }
 
