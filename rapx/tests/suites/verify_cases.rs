@@ -75,7 +75,7 @@ fn linked_list_rawptr_unsound() {
         "LinkedList::<T>::front_mut",
         "LinkedList::<T>::back_mut",
     ] {
-        assert_unproved_exclusive_with_result(&output, func, &["Alias", "Or"], "HAZARD");
+        assert_unproved_exclusive_with_result(&output, func, &["Alias", "Or"], "UNSOUND");
     }
 }
 

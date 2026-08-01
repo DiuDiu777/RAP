@@ -248,6 +248,30 @@ pub fn resolve_self_field_origin<'tcx>(
     })
 }
 
+/// Like `resolve_self_field_origin` but uses the type of `local` instead
+/// of always `_1`.  For origins from call-site verification.
+pub fn resolve_any_field_origin<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    local: usize,
+    fields: &[usize],
+) -> Option<FieldOrigin> {
+    if fields.is_empty() {
+        return None;
+    }
+    let body = tcx.optimized_mir(def_id);
+    let self_ty = body.local_decls[Local::from_usize(local)].ty;
+    let (struct_def_id, _) = adt_from_ty(self_ty)?;
+    let field_index = fields[0];
+    let adt = tcx.adt_def(struct_def_id);
+    let field = adt.all_fields().nth(field_index)?;
+    Some(FieldOrigin {
+        struct_def_id,
+        field_index,
+        field_name: field.name.to_string(),
+    })
+}
+
 /// AliasPair is used to store the alias relationships between two places.
 /// The result is field-sensitive.
 #[derive(Debug, Clone, Hash, PartialEq, Eq)]

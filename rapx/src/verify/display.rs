@@ -699,15 +699,10 @@ pub fn emit_verify_summary<'tcx>(
         }
     }
 
-    if unproved == 0 {
+    if unproved == 0 && hazard_failed == 0 {
         rap_info!(green, "  result: SOUND");
-        if hazard_failed > 0 {
-            rap_warn!("  result: HAZARD ({hazard_failed} unproved)");
-        }
-    } else if hazard_failed > 0 {
-        rap_warn!("  result: UNSOUND ({unproved} unproved, {hazard_failed} hazard)");
     } else {
-        rap_warn!("  result: UNSOUND ({unproved} unproved)");
+        rap_warn!("  result: UNSOUND ({unproved} unproved, {hazard_failed} hazard)");
     }
 
     rap_info!("");

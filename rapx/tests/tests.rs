@@ -229,7 +229,7 @@ macro_rules! verify_unsound {
 macro_rules! verify_hazard {
     ($dir:literal, $func:literal, $prop:literal) => {{
         let output = $crate::run_with_args($dir, CMD_VERIFY);
-        $crate::assert_unproved_exclusive_with_result(&output, $func, &[$prop], "HAZARD");
+        $crate::assert_unproved_exclusive_with_result(&output, $func, &[$prop], "UNSOUND");
     }};
 }
 

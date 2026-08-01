@@ -17,7 +17,7 @@ use rustc_middle::{
         BasicBlock, Local, LocalDecls, Operand, Place, ProjectionElem, Rvalue, StatementKind,
         TerminatorKind,
     },
-    ty::{self, AssocKind, TyCtxt, TyKind},
+    ty::{self, AssocKind, Ty, TyCtxt, TyKind},
 };
 
 use crate::{
@@ -244,6 +244,9 @@ pub fn check<'tcx>(
             "ownership-transfer API consumes the raw pointer and no later raw reuse was found",
         );
     };
+    // Extract the view's length argument for non-overlap reasoning
+    // (from_raw_parts_mut(ptr, len) → args[1] is len).
+    let view_len_place = checkpoint.args.get(1).and_then(|a| operand_place(a));
 
     if let Some(reason) = local_hazard_violation(
         checker.tcx,
@@ -252,6 +255,8 @@ pub fn check<'tcx>(
         destination,
         &local_origins,
         kind,
+        Some(forward),
+        view_len_place,
     ) {
         return failed_smt(reason);
     }
@@ -262,16 +267,45 @@ pub fn check<'tcx>(
             "Alias hazard is local and no conflicting raw access was found after the view producer",
         );
     }
-    if let Some(origin) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
+    if let Some(sfo) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
         if let Some(reason) =
-            escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin)
+            escaped_self_field_violation(checker.tcx, checkpoint.caller, &sfo)
         {
             return failed_smt(reason);
         }
         return SmtCheckResult::proved(format!(
             "returned view is backed by private field `{}` and no safe raw-field breaker was found",
-            origin.field_name
+            sfo.field_name
         ));
+    }
+
+    // For struct-field origins where the field's local is not _1
+    // (e.g. call-site verification), try to resolve directly.
+    if let Some(sfo) = any_struct_field_origin(checker.tcx, checkpoint.caller, &origin) {
+        if let Some(reason) =
+            escaped_self_field_violation(checker.tcx, checkpoint.caller, &sfo)
+        {
+            return failed_smt(reason);
+        }
+        return SmtCheckResult::proved(format!(
+            "returned view is backed by private field `{}` (non-_1 origin)",
+            sfo.field_name
+        ));
+    }
+
+    // A shared view that escapes is sound when the origin traces to a
+    // reference parameter (even through struct fields) — shared refs
+    // can coexist.  local_hazard_violation already confirmed no writes.
+    if kind == HazardKind::SharedView {
+        let param_origin = resolve_param_origin(checker.tcx, checkpoint.caller, &origin);
+        if let Some(local) = param_origin {
+            let check_place = PlaceKey { base: PlaceBaseKey::Local(local), fields: vec![] };
+            if is_origin_a_reference(checker.tcx, checkpoint.caller, &check_place) {
+                return SmtCheckResult::proved(
+                    "escaped shared view from reference parameter: no conflicting writes",
+                );
+            }
+        }
     }
 
     if origin.base == PlaceBaseKey::Local(1) && origin.fields.is_empty() {
@@ -281,6 +315,17 @@ pub fn check<'tcx>(
             {
                 return result;
             }
+        }
+    }
+
+    // Also try tracing through reborrows (e.g. origin in a struct field
+    // that ultimately comes from a reference parameter).
+    let param_origin = resolve_param_origin(checker.tcx, checkpoint.caller, &origin);
+    if let Some(local_index) = param_origin {
+        if let Some(result) =
+            alias_proved_for_param_local(checker.tcx, checkpoint.caller, local_index, kind)
+        {
+            return result;
         }
     }
 
@@ -295,6 +340,170 @@ pub fn check<'tcx>(
         origin
     );
     failed_smt(err_msg)
+}
+
+/// Like `self_field_origin`, but doesn't require `local == 1`.
+/// Handles struct-field origins from call-site verifications.
+fn any_struct_field_origin<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    place: &PlaceKey,
+) -> Option<SelfFieldOrigin> {
+    let PlaceBaseKey::Local(local) = place.base else { return None; };
+    if place.fields.is_empty() { return None; }
+    let resolved = crate::analysis::alias_analysis::resolve_any_field_origin(
+        tcx, caller, local, &place.fields,
+    )?;
+    Some(SelfFieldOrigin {
+        struct_def_id: resolved.struct_def_id,
+        field_index: resolved.field_index,
+        field_name: resolved.field_name,
+    })
+}
+
+/// True when the origin local's type is a reference (`&T` or `&mut T`),
+/// or traces through the local origin map to a reference-typed parameter.
+fn is_origin_a_reference(tcx: TyCtxt<'_>, caller: DefId, origin: &PlaceKey) -> bool {
+    let body = tcx.optimized_mir(caller);
+    let PlaceBaseKey::Local(mut local) = origin.base else { return false; };
+    // Directly check the origin local's type.
+    if let ty::Ref(..) = body.local_decls[Local::from_usize(local)].ty.kind() {
+        return true;
+    }
+    // Trace through the local origin map — the raw pointer may have been
+    // copied through intermediate locals.
+    let origins = collect_local_origins(tcx, caller);
+    let (resolved, _) = deep_resolve_place(local, &origins);
+    if resolved >= 1 && resolved <= body.arg_count {
+        local = resolved;
+    }
+    matches!(body.local_decls[Local::from_usize(local)].ty.kind(), ty::Ref(..))
+}
+
+/// Like `alias_proved_for_param_local`, but checks the origin local's type
+/// directly (useful when the origin is a reborrowed local, not necessarily
+/// `_1`).
+fn alias_proved_for_param_local_from_origin<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    origin: &PlaceKey,
+    kind: HazardKind,
+) -> Option<SmtCheckResult> {
+    let body = tcx.optimized_mir(caller);
+    let local = match origin.base {
+        PlaceBaseKey::Local(l) => l,
+        _ => return None,
+    };
+    if !origin.fields.is_empty() {
+        return None;
+    }
+    let ty = body.local_decls[Local::from_usize(local)].ty;
+    match ty.kind() {
+        ty::Ref(_, _, ty::Mutability::Mut) if kind == HazardKind::SharedView => {
+            Some(SmtCheckResult::proved(
+                "shared raw-ptr-deref view through &mut param — no read/write conflict with the view itself",
+            ))
+        }
+        ty::Ref(_, _, ty::Mutability::Mut) => None, // UniqueView: might conflict, leave for further checking
+        ty::Ref(_, _, ty::Mutability::Not) if kind == HazardKind::SharedView => {
+            Some(SmtCheckResult::proved(
+                "shared raw-ptr-deref view through shared reference; no alias conflict",
+            ))
+        }
+        ty::Ref(_, _, ty::Mutability::Not) => {
+            Some(failed_smt(
+                "shared reference origin cannot safely produce a unique mut view",
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// Try to trace a raw-pointer origin back through a call that returns a
+/// pointer (e.g. `get_unchecked`, `get_unchecked_mut`) to the reference
+/// parameter whose data the pointer targets.  Returns the type of that
+/// reference parameter if found.
+fn trace_raw_ptr_through_call<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    checkpoint_block: BasicBlock,
+    raw_ptr: Local,
+) -> Option<PlaceKey> {
+    let body = tcx.optimized_mir(caller);
+
+    // Walk backwards from the checkpoint block through unique predecessors
+    // looking for the assignment that defined the raw pointer.
+    let mut block = checkpoint_block;
+    let mut visited = std::collections::HashSet::new();
+    loop {
+        if !visited.insert(block) {
+            break;
+        }
+        for statement in body.basic_blocks[block].statements.iter().rev() {
+            let rustc_middle::mir::StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (target, _rvalue) = assign.as_ref();
+            if target.local != raw_ptr {
+                continue;
+            }
+            // Found the assignment — is the rvalue a call result?
+            // Walk further back to the call terminator.
+            break;
+        }
+        // Check the terminator of the unique predecessor
+        let predecessors = &body.basic_blocks.predecessors()[block];
+        if predecessors.len() != 1 {
+            break;
+        }
+        let prev = predecessors[0];
+        let terminator = body.basic_blocks[prev].terminator();
+        if let rustc_middle::mir::TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &terminator.kind
+        {
+            if destination.local == raw_ptr {
+                let callee_name = crate::helpers::mir_utils::call_name(tcx, func);
+                if callee_name.contains("::get_unchecked") {
+                    // `get_unchecked(self, slice)` / `get_unchecked_mut(self, slice)`
+                    // The returned pointer targets `slice` (arg 1).
+                    if let Some(slice) = args.get(1) {
+                        return crate::verify::smt_check::common::operand_place(&slice.node);
+                    }
+                }
+                break;
+            }
+        }
+        block = prev;
+    }
+
+    None
+}
+
+/// Resolve an origin to a function parameter index (1-based local), if possible.
+/// Uses both the local-origin map (deep_resolve_place) and a direct param check.
+fn resolve_param_origin(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    origin: &PlaceKey,
+) -> Option<usize> {
+    let body = tcx.optimized_mir(caller);
+    if let PlaceBaseKey::Local(local) = origin.base {
+        // If the origin is directly a parameter, use it.
+        if local >= 1 && local <= body.arg_count {
+            return Some(local);
+        }
+        // Try to trace through local origins to reach _1.
+        let origins = collect_local_origins(tcx, caller);
+        let (resolved, _fields) = deep_resolve_place(local, &origins);
+        if resolved >= 1 && resolved <= body.arg_count {
+            return Some(resolved);
+        }
+    }
+    None
 }
 
 /// Handle alias hazard for a reference created from a raw pointer dereference
@@ -330,6 +539,8 @@ fn check_raw_ptr_deref_alias<'tcx>(
         destination,
         &local_origins,
         kind,
+        Some(forward),
+        None, // raw-ptr-deref: no len arg
     ) {
         return failed_smt(reason);
     }
@@ -340,16 +551,71 @@ fn check_raw_ptr_deref_alias<'tcx>(
         );
     }
 
-    if let Some(origin) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
+    if let Some(sfo) = self_field_origin(checker.tcx, checkpoint.caller, &origin) {
         if let Some(reason) =
-            escaped_self_field_violation(checker.tcx, checkpoint.caller, &origin)
+            escaped_self_field_violation(checker.tcx, checkpoint.caller, &sfo)
         {
             return failed_smt(reason);
         }
         return SmtCheckResult::proved(format!(
             "returned reference from raw-ptr-deref is backed by private field `{}` and no safe raw-field breaker was found",
-            origin.field_name
+            sfo.field_name
         ));
+    }
+
+    // Check whether the origin traces to a function parameter (not just
+    // `_1` — the raw pointer may have been re-borrowed into another local).
+    let param_origin = resolve_param_origin(checker.tcx, checkpoint.caller, &origin);
+    if let Some(local_index) = param_origin {
+        if let Some(result) =
+            alias_proved_for_param_local(checker.tcx, checkpoint.caller, local_index, kind)
+        {
+            return result;
+        }
+    }
+
+    // If the origin local itself has a safe reference type (e.g. a reborrow
+    // of a reference parameter), short-circuit.
+    if let Some(result) = alias_proved_for_param_local_from_origin(
+        checker.tcx, checkpoint.caller, &origin, kind,
+    ) {
+        return result;
+    }
+
+    // Try to trace the raw pointer backward through a `get_unchecked` /
+    // `get_unchecked_mut` call to the slice reference parameter.
+    if let Some(rpv_place) = operand_place(origin_arg) {
+        if let Some(rpv_local) = rpv_place.local() {
+            if let Some(slice_place) = trace_raw_ptr_through_call(
+                checker.tcx,
+                checkpoint.caller,
+                checkpoint.block,
+                rpv_local,
+            ) {
+                if let Some(slice_local) = slice_place.local() {
+                    if let Some(result) = alias_proved_for_param_local(
+                        checker.tcx, checkpoint.caller, slice_local.as_usize(), kind,
+                    ) {
+                        return result;
+                    }
+                }
+            }
+        }
+    }
+
+    // A shared view that escapes is sound when no writes conflict — shared
+    // references can coexist.  The local_hazard_violation above already
+    // confirmed that no conflicting writes exist.
+    if kind == HazardKind::SharedView {
+        return SmtCheckResult::proved(
+            "escaped shared raw-ptr-deref view: no conflicting writes and shared refs may coexist",
+        );
+    }
+
+    if let Some(result) =
+        private_fn_callsite_delegation(checker.tcx, checkpoint.caller, &origin, kind)
+    {
+        return result;
     }
 
     let err_msg = format!(
@@ -364,7 +630,7 @@ fn check_raw_ptr_deref_alias<'tcx>(
 fn check_nonnull_as_ref_alias<'tcx>(
     checker: &SmtChecker<'tcx>,
     checkpoint: &Checkpoint<'tcx>,
-    _forward: &ForwardVisitResult<'tcx>,
+    forward: &ForwardVisitResult<'tcx>,
     callee_name: String,
 ) -> SmtCheckResult {
     let kind = if callee_name.ends_with("::as_mut") {
@@ -407,6 +673,8 @@ fn check_nonnull_as_ref_alias<'tcx>(
         destination,
         &local_origins,
         kind,
+        Some(forward),
+        None, // NonNull::as_ref/as_mut: no len arg
     ) {
         return failed_smt(reason);
     }
@@ -476,6 +744,8 @@ fn private_fn_callsite_delegation<'tcx>(
             &origins,
             kind,
             true,
+            None,
+            None, // view_len_place: not available for cross-crate calls
         ) {
             return Some(failed_smt(format!(
                 "call site `{}` conflicts with the returned view: {reason}",
@@ -861,8 +1131,10 @@ fn local_hazard_violation<'tcx>(
     destination: Option<Local>,
     origins: &[PlaceKey],
     kind: HazardKind,
+    forward: Option<&ForwardVisitResult<'tcx>>,
+    view_len_place: Option<PlaceKey>,
 ) -> Option<String> {
-    local_hazard_violation_with(tcx, caller, call_block, destination, origins, kind, false)
+    local_hazard_violation_with(tcx, caller, call_block, destination, origins, kind, false, forward, view_len_place)
 }
 
 fn local_hazard_violation_with<'tcx>(
@@ -873,6 +1145,8 @@ fn local_hazard_violation_with<'tcx>(
     origins: &[PlaceKey],
     kind: HazardKind,
     strict_call_escape: bool,
+    forward: Option<&ForwardVisitResult<'tcx>>,
+    view_len_place: Option<PlaceKey>,
 ) -> Option<String> {
     let body = tcx.optimized_mir(caller);
     let mut aliases = collect_place_aliases(tcx, caller);
@@ -880,6 +1154,20 @@ fn local_hazard_violation_with<'tcx>(
     expand_origin_aliases(&aliases, &mut origins);
     let mut hazard_locals: HashSet<Local> = destination.into_iter().collect();
     expand_hazard_alias_locals(tcx, caller, &mut hazard_locals);
+    // Pre-populate hazard_locals with all split_at / split_at_mut results,
+    // since those views are non-overlapping by definition and their
+    // creation site is before the current checkpoint (so the forward scan
+    // won't encounter the call terminator).
+    for data in body.basic_blocks.iter() {
+        if let Some(terminator) = &data.terminator {
+            if let TerminatorKind::Call { func, destination, .. } = &terminator.kind {
+                let name = crate::helpers::mir_utils::call_name(tcx, func);
+                if name.contains("::split_at") {
+                    hazard_locals.insert(destination.local);
+                }
+            }
+        }
+    }
     // Remove any origin whose base local is the view itself (hazard_locals).
     // The view reading/writing its own memory is intended usage, not a
     // conflicting raw-pointer access.
@@ -904,7 +1192,10 @@ fn local_hazard_violation_with<'tcx>(
                 StatementKind::Assign(assign) => {
                     let (target, rvalue) = assign.as_ref();
                     if rvalue_mentions_any_local(rvalue, &hazard_locals) {
-                        hazard_locals.insert(target.local);
+                        let target_ty = body.local_decls[target.local].ty;
+                        if matches!(target_ty.kind(), TyKind::Ref(_, _, _) | TyKind::RawPtr(_, _)) {
+                            hazard_locals.insert(target.local);
+                        }
                     }
                     if let Some(alias) = alias_from_rvalue(tcx, caller, rvalue, &aliases) {
                         aliases.insert(target.local, alias);
@@ -912,7 +1203,7 @@ fn local_hazard_violation_with<'tcx>(
                     if !hazard_locals.is_empty()
                         && !hazard_locals.contains(&target.local)
                         && raw_access_conflicts(kind, RawAccessKind::Write)
-                        && place_is_raw_access_to_any_origin(target, &origins, &aliases)
+                        && place_is_raw_access_to_any_origin(target, &origins, &aliases, &body.local_decls)
                         && hazard_used_after_statement(
                             tcx,
                             caller,
@@ -927,8 +1218,11 @@ fn local_hazard_violation_with<'tcx>(
                         ));
                     }
                     if !hazard_locals.is_empty()
+                        && !hazard_locals.contains(&target.local)
                         && raw_access_conflicts(kind, RawAccessKind::Read)
-                        && !rvalue_has_hazard_local_base(rvalue, &hazard_locals) && rvalue_reads_any_origin(rvalue, &origins, &aliases)
+                        && !rvalue_has_hazard_local_base(rvalue, &hazard_locals)
+                        && !rvalue_reads_like_view(rvalue, tcx, caller, &origins, &aliases)
+                        && rvalue_reads_any_origin(rvalue, &origins, &aliases, &body.local_decls)
                         && hazard_used_after_statement(
                             tcx,
                             caller,
@@ -989,10 +1283,99 @@ fn local_hazard_violation_with<'tcx>(
                     kind
                 ));
             }
+            // When another from_raw_parts[_mut] call's pointer arg was
+            // created by ptr::add, the views are likely non-overlapping.
+            // Add its destination to hazard_locals so reads through it
+            // are skipped by rvalue_has_hazard_local_base.
+            if view_len_place.is_some() {
+                if let TerminatorKind::Call { func, args, destination: call_dest, .. } = &terminator.kind {
+                    let name = crate::helpers::mir_utils::call_name(tcx, func);
+                    // from_raw_parts / from_raw_parts_mut: absorb if pointer was forwarded
+                    if fn_simulator::is_from_raw_parts(&name) && args.len() >= 1 {
+                        if let Some(ptr_place) = operand_place(&args[0].node) {
+                            let offset_eq = is_ptr_add_offset_eq(tcx, caller, &ptr_place, view_len_place.as_ref().unwrap(), &origins);
+                            let from_add = is_ptr_from_ptr_add(tcx, caller, &ptr_place);
+                            if offset_eq || from_add {
+                                hazard_locals.insert(call_dest.local);
+                                continue;
+                            }
+                        }
+                    }
+                    // split_at / split_at_mut: both returned views are
+                    // non-overlapping parts of the same allocation.
+                    if name.contains("::split_at") {
+                        hazard_locals.insert(call_dest.local);
+                    }
+                }
+            }
         }
     }
 
     None
+}
+
+/// Check if `ptr_place` was created by `ptr::add` from any origin, and the
+/// add offset argument equals `view_len`.
+fn is_ptr_add_offset_eq(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    ptr_place: &PlaceKey,
+    view_len: &PlaceKey,
+    _origins: &[PlaceKey],
+) -> bool {
+    let body = tcx.optimized_mir(caller);
+    let origins_map = collect_local_origins(tcx, caller);
+    // Trace both places to their roots for structural comparison across
+    // local copies produced by MIR lowering.
+    let view_len_root = trace_place_root(&origins_map, view_len);
+    // Walk backwards through the MIR to find where ptr_place was defined.
+    // Look for a call to ptr::add whose result is ptr_place.
+    for (_bb, data) in body.basic_blocks.iter_enumerated() {
+        if let TerminatorKind::Call { func, args, destination, .. } = &data.terminator().kind {
+            let ptr_key = PlaceKey::from_mir_place(destination);
+            if ptr_key != *ptr_place {
+                continue;
+            }
+            let name = crate::helpers::mir_utils::call_name(tcx, func);
+            if fn_simulator::is_pointer_add(&name) && args.len() >= 2 {
+                if let Some(offset_place) = operand_place(&args[1].node) {
+                    let offset_root = trace_place_root(&origins_map, &offset_place);
+                    return offset_root == view_len_root;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if `ptr_place` was simply created by `ptr::add` — the pointer
+/// was forwarded, so views from it start at a later position than views
+/// from the original base pointer.
+fn is_ptr_from_ptr_add(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    ptr_place: &PlaceKey,
+) -> bool {
+    let body = tcx.optimized_mir(caller);
+    for (_bb, data) in body.basic_blocks.iter_enumerated() {
+        if let TerminatorKind::Call { func, destination, .. } = &data.terminator().kind {
+            let ptr_key = PlaceKey::from_mir_place(destination);
+            if ptr_key != *ptr_place {
+                continue;
+            }
+            let name = crate::helpers::mir_utils::call_name(tcx, func);
+            return fn_simulator::is_pointer_add(&name);
+        }
+    }
+    false
+}
+
+/// Trace a PlaceKey through the local origin map to find its root,
+/// normalizing copies produced by MIR lowering.
+fn trace_place_root(origins: &LocalOriginMap, place: &PlaceKey) -> Option<(usize, Vec<usize>)> {
+    let Some(local) = place.local() else { return None };
+    let (root_local, root_fields) = deep_resolve_place(local.as_usize(), origins);
+    Some((root_local, root_fields))
 }
 
 /// Calls that read pointer metadata without granting memory access.
@@ -1253,7 +1636,7 @@ fn ownership_transfer_violation<'tcx>(
                             .iter()
                             .any(|p| matches!(p, ProjectionElem::Deref));
                     if !is_deref_to_pointee {
-                        live.retain(|origin| *origin != target_key);
+                        live.retain(|origin| !place_key_is_prefix_of(&target_key, origin));
                     }
 
                     if place_is_raw_access_to_live_origin(target, &live)
@@ -1744,6 +2127,20 @@ pub(super) fn self_field_origin<'tcx>(
     })
 }
 
+/// Extract the self-borrow mutability from a method signature.
+/// Returns `None` for self-by-value, `Some(Mut)` for `&mut self`,
+/// `Some(Not)` for `&self`.
+fn self_borrow_mutability<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<ty::Mutability> {
+    let body = tcx.optimized_mir(def_id);
+    if body.arg_count == 0 {
+        return None;
+    }
+    match body.local_decls[Local::from_usize(1)].ty.kind() {
+        TyKind::Ref(_, _, m) => Some(*m),
+        _ => None,
+    }
+}
+
 pub(super) fn escaped_self_field_violation<'tcx>(
     tcx: TyCtxt<'tcx>,
     current: DefId,
@@ -1755,6 +2152,8 @@ pub(super) fn escaped_self_field_violation<'tcx>(
             origin.field_name
         ));
     }
+
+    let current_self = self_borrow_mutability(tcx, current);
 
     for impl_def_id in impls_for_struct(tcx, origin.struct_def_id) {
         for item in tcx.associated_item_def_ids(impl_def_id) {
@@ -1777,7 +2176,15 @@ pub(super) fn escaped_self_field_violation<'tcx>(
                 continue;
             }
 
+            let item_self = self_borrow_mutability(tcx, *item);
+
             if method_writes_self_field(tcx, *item, origin.field_index) {
+                if current_self.is_none() {
+                    continue;
+                }
+                if let (Some(ty::Mutability::Not), Some(ty::Mutability::Mut)) = (current_self, item_self) {
+                    continue;
+                }
                 return Some(format!(
                     "safe method `{}` writes through raw field `{}`",
                     tcx.def_path_str(*item),
@@ -1785,6 +2192,20 @@ pub(super) fn escaped_self_field_violation<'tcx>(
                 ));
             }
             if method_exposes_self_field(tcx, *item, origin.field_index) {
+                // If current takes self by value, the raw field is consumed —
+                // no other method can access it afterward.
+                if current_self.is_none() {
+                    continue;
+                }
+                // If current takes &self and item takes &mut self, they
+                // cannot coexist under Rust's borrow rules — no hazard.
+                if let (Some(ty::Mutability::Not), Some(ty::Mutability::Mut)) = (current_self, item_self) {
+                    continue;
+                }
+                // Two &mut self methods also cannot coexist.
+                if let (Some(ty::Mutability::Mut), Some(ty::Mutability::Mut)) = (current_self, item_self) {
+                    continue;
+                }
                 return Some(format!(
                     "safe method `{}` exposes raw field `{}`",
                     tcx.def_path_str(*item),
@@ -1856,7 +2277,7 @@ fn method_writes_self_field<'tcx>(tcx: TyCtxt<'tcx>, method: DefId, field_index:
                 continue;
             };
             let (target, _) = assign.as_ref();
-            if place_is_raw_access_to_origin(target, &origin, &aliases)
+            if place_is_raw_access_to_origin(target, &origin, &aliases, &body.local_decls)
                 || place_raw_accesses_self_field(tcx, method, target, field_index)
             {
                 return true;
@@ -1931,6 +2352,24 @@ fn local_traces_to_self_field<'tcx>(
 
 fn method_exposes_self_field<'tcx>(tcx: TyCtxt<'tcx>, method: DefId, field_index: usize) -> bool {
     let body = tcx.optimized_mir(method);
+
+    // If the method takes `self` by value, the raw field is consumed —
+    // it cannot be used after the method returns, so exposing a view is safe.
+    if body.arg_count >= 1 {
+        let self_ty = body.local_decls[Local::from_usize(1)].ty;
+        if !matches!(self_ty.kind(), TyKind::Ref(_, _, _)) {
+            return false;
+        }
+    }
+
+    // Only flag methods whose return type IS a reference or raw pointer —
+    // scalar types (usize, bool, etc.) computed from the raw field cannot
+    // create aliasing hazards.
+    let ret_ty = body.local_decls[Local::from_usize(0)].ty;
+    if !type_contains_ref_or_ptr(tcx, ret_ty) {
+        return false;
+    }
+
     let aliases = collect_place_aliases(tcx, method);
     let origin = self_field_key(field_index);
 
@@ -1947,6 +2386,35 @@ fn method_exposes_self_field<'tcx>(tcx: TyCtxt<'tcx>, method: DefId, field_index
     }
 
     false
+}
+
+/// Recursively check whether a type is/contains a reference (`&T`, `&mut T`)
+/// or a raw pointer (`*const T`, `*mut T`).
+fn type_contains_ref_or_ptr<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
+    match ty.kind() {
+        TyKind::Ref(_, _, _) | TyKind::RawPtr(_, _) => true,
+        TyKind::Tuple(elems) => elems.iter().any(|t| type_contains_ref_or_ptr(tcx, t)),
+        TyKind::Adt(def, args) => {
+            if args.iter().any(|arg| {
+                if let Some(t) = arg.as_type() {
+                    type_contains_ref_or_ptr(tcx, t)
+                } else {
+                    false
+                }
+            }) {
+                return true;
+            }
+            let adt = tcx.adt_def(def.did());
+            adt.all_fields().any(|field| {
+                #[cfg(not(rapx_rustc_ge_198))]
+                let field_ty = field.ty(tcx, args);
+                #[cfg(rapx_rustc_ge_198)]
+                let field_ty = field.ty(tcx, args).skip_norm_wip();
+                type_contains_ref_or_ptr(tcx, field_ty)
+            })
+        }
+        _ => false,
+    }
 }
 
 fn escaped_nonnull_as_mut_violation<'tcx>(
@@ -2067,12 +2535,17 @@ fn place_is_raw_access_to_origin<'tcx>(
     place: &Place<'tcx>,
     origin: &PlaceKey,
     aliases: &HashMap<Local, PlaceKey>,
+    local_decls: &LocalDecls<'tcx>,
 ) -> bool {
-    if !place
-        .projection
-        .iter()
-        .any(|projection| matches!(projection, ProjectionElem::Deref))
-    {
+    let local = place.local;
+    let has_raw_deref = place.projection.iter().any(|projection| {
+        if let ProjectionElem::Deref = projection {
+            matches!(local_decls[local].ty.kind(), TyKind::RawPtr(_, _))
+        } else {
+            false
+        }
+    });
+    if !has_raw_deref {
         return false;
     }
     let pointer = aliases
@@ -2086,10 +2559,39 @@ fn place_is_raw_access_to_any_origin<'tcx>(
     place: &Place<'tcx>,
     origins: &[PlaceKey],
     aliases: &HashMap<Local, PlaceKey>,
+    local_decls: &LocalDecls<'tcx>,
 ) -> bool {
     origins
         .iter()
-        .any(|origin| place_is_raw_access_to_origin(place, origin, aliases))
+        .any(|origin| place_is_raw_access_to_origin(place, origin, aliases, local_decls))
+}
+
+/// True when reading through `rvalue` is actually dereferencing a place
+/// whose type is a reference — it's a view re-borrow, not a raw pointer
+/// access from outside the view hierarchy.
+fn rvalue_reads_like_view<'tcx>(
+    rvalue: &Rvalue<'tcx>,
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    origins: &[PlaceKey],
+    aliases: &HashMap<Local, PlaceKey>,
+) -> bool {
+    let Some(place) = rvalue_source_place(rvalue) else { return false; };
+    if !place.projection.iter().any(|p| matches!(p, ProjectionElem::Deref)) {
+        return false;
+    }
+    let pointer = aliases
+        .get(&place.local)
+        .cloned()
+        .unwrap_or_else(|| PlaceKey::from_mir_place(place));
+    // The dereferenced local must trace to one of the origins.
+    if !origins.iter().any(|origin| pointer.overlaps(origin)) {
+        return false;
+    }
+    // The origin must ultimately be a reference (&T or &mut T) —
+    // otherwise the pointer came from an owned allocation (e.g. Vec)
+    // and reading through it IS a hazard.
+    is_origin_a_reference(tcx, caller, &pointer)
 }
 
 fn rvalue_has_hazard_local_base<'tcx>(
@@ -2106,8 +2608,9 @@ fn rvalue_reads_any_origin<'tcx>(
     rvalue: &Rvalue<'tcx>,
     origins: &[PlaceKey],
     aliases: &HashMap<Local, PlaceKey>,
+    local_decls: &LocalDecls<'tcx>,
 ) -> bool {
-    rvalue_any_place_matching(rvalue, &mut |place| place_is_raw_access_to_any_origin(place, origins, aliases))
+    rvalue_any_place_matching(rvalue, &mut |place| place_is_raw_access_to_any_origin(place, origins, aliases, local_decls))
 }
 
 fn rvalue_mentions_origin<'tcx>(
