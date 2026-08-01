@@ -3,6 +3,7 @@
 #![allow(unused)]
 
 use std::ptr::NonNull;
+use std::marker::PhantomData;
 
 #[rapx::invariant(Align(prev.unwrap_some(), Node))]
 #[rapx::invariant(Allocated(prev.unwrap_some(), Node, 1))]
@@ -30,26 +31,10 @@ struct LinkedList<T> {
     head: Option<NonNull<Node<T>>>,
     tail: Option<NonNull<Node<T>>>,
     len: usize,
+    _marker: PhantomData<Box<Node<T>>>,
 }
 
 impl<T> LinkedList<T> {
-    #[rapx::verify]
-    pub fn new() -> Self { LinkedList { head: None, tail: None, len: 0 } }
-
-    #[rapx::verify]
-    pub fn len(&self) -> usize { self.len }
-
-    #[rapx::verify]
-    pub fn is_empty(&self) -> bool { self.len == 0 }
-
-    #[rapx::verify]
-    pub fn push_back(&mut self, value: T) {
-        let node = Box::new(Node { value, prev: self.tail, next: None });
-        let mut node = NonNull::from(Box::leak(node));
-        unsafe { match self.tail { None => { self.head = Some(node); self.tail = Some(node); } Some(mut tail) => { tail.as_mut().next = Some(node); self.tail = Some(node); } } }
-        self.len += 1;
-    }
-
     #[rapx::verify]
     pub fn push_front(&mut self, value: T) {
         let node = Box::new(Node { value, prev: None, next: self.head });
@@ -91,19 +76,38 @@ impl<T> LinkedList<T> {
     }
 
     #[rapx::verify]
-    pub fn clear(&mut self) {
-        let mut current = self.head;
-        unsafe { while let Some(node) = current { current = node.as_ref().next; drop(Box::from_raw(node.as_ptr())); } }
-        self.head = None; self.tail = None; self.len = 0;
+    pub fn front(&self) -> Option<T> {
+        match self.head {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
     }
 
     #[rapx::verify]
-    pub fn from_vec(values: Vec<T>) -> Self { let mut list = Self::new(); for value in values { list.push_back(value); } list }
-}
+    pub fn back(&self) -> Option<T> {
+        match self.tail {
+            Some(node) => unsafe {
+                Some(std::ptr::read(&node.as_ref().value))
+            },
+            None => None,
+        }
+    }
 
-impl<T> Drop for LinkedList<T> {
-    fn drop(&mut self) {
-        let mut current = self.head;
-        unsafe { while let Some(node) = current { current = node.as_ref().next; drop(Box::from_raw(node.as_ptr())); } }
+    #[rapx::verify]
+    pub fn front_mut(&mut self) -> Option<&mut T> {
+        match self.head {
+            Some(mut node) => Some(unsafe { &mut node.as_mut().value }),
+            None => None,
+        }
+    }
+
+    #[rapx::verify]
+    pub fn back_mut(&mut self) -> Option<&mut T> {
+        match self.tail {
+            Some(mut node) => Some(unsafe { &mut node.as_mut().value }),
+            None => None,
+        }
     }
 }

@@ -14,7 +14,8 @@ use std::collections::{HashMap, HashSet};
 use rustc_hir::{Safety, def::DefKind, def_id::DefId};
 use rustc_middle::{
     mir::{
-        BasicBlock, Local, Operand, Place, ProjectionElem, Rvalue, StatementKind, TerminatorKind,
+        BasicBlock, Local, LocalDecls, Operand, Place, ProjectionElem, Rvalue, StatementKind,
+        TerminatorKind,
     },
     ty::{self, AssocKind, TyCtxt, TyKind},
 };
@@ -205,8 +206,8 @@ pub fn check<'tcx>(
                             }
                         }
                         if has_from_raw {
-                            return SmtCheckResult::proved(
-                                "read API value escapes but source pointer is freed via ownership-transfer",
+                            return failed_smt(
+                                "read API value escapes, and a subsequent from_raw may double-drop the original value in the freed allocation",
                             );
                         }
                         return failed_smt(format!(
@@ -381,10 +382,25 @@ fn check_nonnull_as_ref_alias<'tcx>(
 
     let origin = PlaceKey {
         base: PlaceBaseKey::Local(origin_local),
-        fields: origin_fields,
+        fields: origin_fields.clone(),
     };
 
     let destination = call_destination(checker.tcx, checkpoint);
+
+    let mut local_origins = vec![PlaceKey::from_mir_place(origin_place)];
+    if !local_origins.contains(&origin) {
+        local_origins.push(origin.clone());
+    }
+    if let Some(reason) = local_hazard_violation(
+        checker.tcx,
+        checkpoint.caller,
+        checkpoint.block,
+        destination,
+        &local_origins,
+        kind,
+    ) {
+        return failed_smt(reason);
+    }
 
     if !destination_flows_to_return(checker.tcx, checkpoint.caller, destination) {
         return SmtCheckResult::proved(
@@ -984,6 +1000,149 @@ fn reverse_postorder_blocks<'a, 'tcx>(
     rustc_middle::mir::traversal::reverse_postorder(body).map(|(block, data)| (block, data))
 }
 
+/// Walk backward from the ownership-transfer call through unique predecessors.
+/// If a preceding view-producer (as_ref, as_mut) references the same origin
+/// AND its destination is still alive at the transfer point, the transfer
+/// conflicts with the still-live view.
+fn pre_existing_view_on_origin<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    call_block: BasicBlock,
+    reachable_after: &HashSet<BasicBlock>,
+    origin_holders: &[PlaceKey],
+) -> Option<String> {
+    let body = tcx.optimized_mir(caller);
+    let origins = collect_local_origins(tcx, caller);
+
+    // Collect the resolved structural origins for the holders.
+    let holder_origins: Vec<(usize, Vec<usize>)> = origin_holders
+        .iter()
+        .flat_map(|h| {
+            if let PlaceBaseKey::Local(l) = h.base {
+                let resolved = resolve_place_for_key(l, &h.fields, &origins);
+                if resolved.0 == 1 && !resolved.1.is_empty() {
+                    Some(resolved)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Scan all basic blocks that are NOT reachable *after* the transfer
+    // (i.e. blocks that execute before or at the transfer).
+    for (bb, data) in body.basic_blocks.iter_enumerated() {
+        if reachable_after.contains(&bb) || bb == call_block {
+            continue;
+        }
+
+        // --- Call terminators: NonNull::as_ref / as_mut ---
+        let terminator = data.terminator();
+        if let TerminatorKind::Call { func, args, .. } = &terminator.kind {
+            let callee_name = crate::helpers::mir_utils::call_name(tcx, func);
+            if callee_name.contains("::NonNull::<")
+                && (callee_name.ends_with("::as_ref") || callee_name.ends_with("::as_mut"))
+            {
+                if let Some(arg) = args.first()
+                    && let Some(place) = operand_mir_place(&arg.node)
+                {
+                    let arg_resolved = resolve_place(place, &origins);
+                    if arg_resolved.0 == 1
+                        && !arg_resolved.1.is_empty()
+                        && holder_origins.iter().any(|(h, hf)| {
+                            *h == arg_resolved.0 && *hf == arg_resolved.1
+                        })
+                    {
+                        return Some(format!(
+                            "pre-existing view from {} aliases the ownership-transferred pointer",
+                            callee_name,
+                        ));
+                    }
+                }
+            }
+        }
+
+        // --- Statements: &*raw_ptr or raw-ptr-cast that creates a view ---
+        for statement in &data.statements {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (_, rvalue) = assign.as_ref();
+
+            // &*raw_ptr → Rvalue::Ref with Deref projection
+            let src_place: Option<&Place<'tcx>> = match rvalue {
+                Rvalue::Ref(_, _, place) => Some(place),
+                // raw-ptr-to-reference cast: *mut T → &T via PtrToPtr
+                Rvalue::Cast(kind, _, _)
+                    if matches!(kind, rustc_middle::mir::CastKind::PtrToPtr) =>
+                {
+                    extract_cast_source_place_for_ptr_to_ptr(tcx, &statement.kind)
+                }
+                _ => None,
+            };
+            let Some(place) = src_place else { continue };
+
+            if !place
+                .projection
+                .iter()
+                .any(|p| matches!(p, ProjectionElem::Deref))
+            {
+                continue;
+            }
+            let resolved = resolve_place(place, &origins);
+            if resolved.0 == 1
+                && !resolved.1.is_empty()
+                && holder_origins.iter().any(|(h, hf)| *h == resolved.0 && *hf == resolved.1)
+            {
+                return Some(
+                    "pre-existing &*raw_ptr view aliases the ownership-transferred pointer"
+                        .to_string(),
+                );
+            }
+        }
+    }
+    None
+}
+
+/// When the compiler lowers `&*raw_ptr` to a `PtrToPtr` cast (`_r = raw as
+/// *const ()`), the cast rvalue doesn't carry the source place.  Walk the
+/// operand to recover the underlying place that was dereferenced.
+fn extract_cast_source_place_for_ptr_to_ptr<'tcx>(
+    _tcx: TyCtxt<'tcx>,
+    kind: &'tcx rustc_middle::mir::StatementKind<'tcx>,
+) -> Option<&'tcx Place<'tcx>> {
+    let StatementKind::Assign(assign) = kind else {
+        return None;
+    };
+    let (_, rvalue) = assign.as_ref();
+    if let Rvalue::Cast(_, operand, _) = rvalue {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => Some(place),
+            _ => None,
+        }
+    } else {
+        None
+    }
+}
+
+/// Like `resolve_place` but for a PlaceKey (local + fields) instead of a MIR Place.
+fn resolve_place_for_key(
+    local: usize,
+    local_fields: &[usize],
+    origins: &LocalOriginMap,
+) -> (usize, Vec<usize>) {
+    if !local_fields.is_empty() {
+        return (local, local_fields.to_vec());
+    }
+    origins
+        .get(&local)
+        .cloned()
+        .unwrap_or((local, local_fields.to_vec()))
+}
+
+
 fn ownership_transfer_violation<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: DefId,
@@ -1008,6 +1167,14 @@ fn ownership_transfer_violation<'tcx>(
     }
 
     let origins = places_holding_transferred_pointer(tcx, caller, call_block, origin_place);
+
+    // Check for a pre-existing view (as_ref/as_mut/&*ptr) on the same origin
+    // whose result is still alive when the ownership transfer occurs.
+    if let Some(reason) =
+        pre_existing_view_on_origin(tcx, caller, call_block, &reachable, &origins)
+    {
+        return Some(reason);
+    }
 
     // Flow-sensitive forward scan from the transfer call.  Each CFG edge
     // carries the set of still-live origin places; an origin dies as soon as
@@ -1053,6 +1220,24 @@ fn ownership_transfer_violation<'tcx>(
             match &statement.kind {
                 StatementKind::Assign(assign) => {
                     let (target, rvalue) = assign.as_ref();
+
+                    // Writing to a place that exactly holds a transferred-origin
+                    // pointer is a legitimate overwrite (e.g. `self.head = next`
+                    // after `Box::from_raw(old_head)`), not a reuse violation.
+                    // But we must NOT kill when the only "match" is via a
+                    // Deref projection with no field access (e.g. `*raw = val`)
+                    // because then the raw pointer is being dereferenced to
+                    // write to the pointee, which IS a violation.
+                    let target_key = PlaceKey::from_mir_place(target);
+                    let is_deref_to_pointee = target_key.fields.is_empty()
+                        && target
+                            .projection
+                            .iter()
+                            .any(|p| matches!(p, ProjectionElem::Deref));
+                    if !is_deref_to_pointee {
+                        live.retain(|origin| *origin != target_key);
+                    }
+
                     if place_is_raw_access_to_live_origin(target, &live)
                         || rvalue_reads_live_origin(rvalue, &live)
                     {
@@ -1062,7 +1247,7 @@ fn ownership_transfer_violation<'tcx>(
                         );
                     }
                     let copies_origin = rvalue_copies_live_origin_value(rvalue, &live);
-                    kill_strongly_updated_origins(target, &mut live);
+                    kill_strongly_updated_origins(&body.local_decls, target, &mut live);
                     if copies_origin
                         && !target
                             .projection
@@ -1095,7 +1280,7 @@ fn ownership_transfer_violation<'tcx>(
             ..
         } = &terminator.kind
         {
-            kill_strongly_updated_origins(call_destination, &mut live);
+            kill_strongly_updated_origins(&body.local_decls, call_destination, &mut live);
         }
         if live.is_empty() {
             continue;
@@ -1245,16 +1430,39 @@ fn splice_holder_fields(
 /// it is a prefix of no longer holds the transferred pointer.  Writes through
 /// pointers (`(*p).f = ...`) do not redefine the pointer-holding place itself
 /// and keep every origin alive.
-fn kill_strongly_updated_origins<'tcx>(target: &Place<'tcx>, live: &mut Vec<PlaceKey>) {
-    if target
+fn kill_strongly_updated_origins<'tcx>(
+    local_decls: &LocalDecls<'tcx>,
+    target: &Place<'tcx>,
+    live: &mut Vec<PlaceKey>,
+) {
+    let deref_count = target
         .projection
         .iter()
-        .any(|projection| matches!(projection, ProjectionElem::Deref))
-    {
+        .filter(|p| matches!(p, ProjectionElem::Deref))
+        .count();
+
+    // No Deref: strong update is always valid on local variables.
+    if deref_count == 0 {
+        let target_key = PlaceKey::from_mir_place(target);
+        live.retain(|origin| !place_key_is_prefix_of(&target_key, origin));
         return;
     }
-    let target_key = PlaceKey::from_mir_place(target);
-    live.retain(|origin| !place_key_is_prefix_of(&target_key, origin));
+
+    // Single Deref as the first projection: a write through `&mut T` is a
+    // strong update (Rust guarantees exclusive access), whereas writes through
+    // raw pointers (`*mut T`, `*const T`) are NOT strong updates.
+    if deref_count == 1
+        && matches!(
+            target.projection[0],
+            ProjectionElem::Deref
+        )
+    {
+        let ty = local_decls[target.local].ty;
+        if matches!(ty.kind(), ty::Ref(_, _, ty::Mutability::Mut)) {
+            let target_key = PlaceKey::from_mir_place(target);
+            live.retain(|origin| !place_key_is_prefix_of(&target_key, origin));
+        }
+    }
 }
 
 /// True when `prefix` denotes the same place as `place` or one of its parents

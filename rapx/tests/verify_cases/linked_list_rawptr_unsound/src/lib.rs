@@ -2,6 +2,8 @@
 #![register_tool(rapx)]
 #![allow(unused)]
 
+use std::marker::PhantomData;
+
 #[rapx::invariant(any(Null(prev), (Align(prev, Node), ValidPtr(prev, Node, 1), Allocated(prev, Node, 1), Typed(prev, Node), Owning(prev))))]
 #[rapx::invariant(any(Null(next), (Align(next, Node), ValidPtr(next, Node, 1), Allocated(next, Node, 1), Typed(next, Node), Owning(next))))]
 struct Node<T> {
@@ -16,29 +18,19 @@ struct LinkedList<T> {
     head: *mut Node<T>,
     tail: *mut Node<T>,
     len: usize,
+    _marker: PhantomData<Box<Node<T>>>,
 }
 
 impl<T> LinkedList<T> {
-    #[rapx::verify]
     pub fn new() -> Self {
         LinkedList {
             head: std::ptr::null_mut(),
             tail: std::ptr::null_mut(),
             len: 0,
+            _marker: PhantomData,
         }
     }
 
-    #[rapx::verify]
-    pub fn len(&self) -> usize {
-        self.len
-    }
-
-    #[rapx::verify]
-    pub fn is_empty(&self) -> bool {
-        self.len == 0
-    }
-
-    #[rapx::verify]
     pub fn push_back(&mut self, value: T) {
         let node = Box::into_raw(Box::new(Node {
             value,
@@ -130,7 +122,6 @@ impl<T> LinkedList<T> {
         Some(value)
     }
 
-    #[rapx::verify]
     pub fn clear(&mut self) {
         let mut current = self.head;
         unsafe {
@@ -145,13 +136,48 @@ impl<T> LinkedList<T> {
         self.len = 0;
     }
 
-    #[rapx::verify]
     pub fn from_vec(values: Vec<T>) -> Self {
         let mut list = Self::new();
         for value in values {
             list.push_back(value);
         }
         list
+    }
+
+    #[rapx::verify]
+    pub fn front(&self) -> Option<T> {
+        if self.head.is_null() {
+            None
+        } else {
+            unsafe { Some(std::ptr::read(&(*self.head).value)) }
+        }
+    }
+
+    #[rapx::verify]
+    pub fn back(&self) -> Option<T> {
+        if self.tail.is_null() {
+            None
+        } else {
+            unsafe { Some(std::ptr::read(&(*self.tail).value)) }
+        }
+    }
+
+    #[rapx::verify]
+    pub fn front_mut(&mut self) -> Option<&mut T> {
+        if self.head.is_null() {
+            None
+        } else {
+            unsafe { Some(&mut (*self.head).value) }
+        }
+    }
+
+    #[rapx::verify]
+    pub fn back_mut(&mut self) -> Option<&mut T> {
+        if self.tail.is_null() {
+            None
+        } else {
+            unsafe { Some(&mut (*self.tail).value) }
+        }
     }
 }
 

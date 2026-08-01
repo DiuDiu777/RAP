@@ -53,43 +53,39 @@ impl<T> LinkedList<T> {
     }
 
     #[rapx::verify]
-    pub fn push_front(&mut self, value: T) {
-        let node = Box::new(Node { value, prev: None, next: self.head });
-        let mut node = NonNull::from(Box::leak(node));
-        unsafe { match self.head { None => { self.head = Some(node); self.tail = Some(node); } Some(mut head) => { head.as_mut().prev = Some(node); self.head = Some(node); } } }
-        self.len += 1;
-    }
-
-    #[rapx::verify]
     pub fn pop_front(&mut self) -> Option<T> {
-        let head = match self.head { Some(h) => h, None => return None };
-        let (value, next) = unsafe {
-            let r = head.as_ref();
-            let v = std::ptr::read(&r.value);
-            let n = r.next;
-            if let Some(mut next_node) = n { next_node.as_mut().prev = None; }
-            (v, n)
+        let head = match self.head {
+            Some(h) => h,
+            None => return None,
         };
-        if next.is_none() { self.tail = None; }
-        unsafe { drop(Box::from_raw(head.as_ptr())); }
+        let boxed = unsafe { Box::from_raw(head.as_ptr()) };
+        let Node { value, next, .. } = *boxed;
         self.head = next;
-        self.len -= 1; Some(value)
+        if let Some(mut next_node) = next {
+            unsafe { next_node.as_mut().prev = None; }
+        } else {
+            self.tail = None;
+        }
+        self.len -= 1;
+        Some(value)
     }
 
     #[rapx::verify]
     pub fn pop_back(&mut self) -> Option<T> {
-        let tail = match self.tail { Some(t) => t, None => return None };
-        let (value, prev) = unsafe {
-            let r = tail.as_ref();
-            let v = std::ptr::read(&r.value);
-            let p = r.prev;
-            if let Some(mut prev_node) = p { prev_node.as_mut().next = None; }
-            (v, p)
+        let tail = match self.tail {
+            Some(t) => t,
+            None => return None,
         };
-        if prev.is_none() { self.head = None; }
+        let boxed = unsafe { Box::from_raw(tail.as_ptr()) };
+        let Node { value, prev, .. } = *boxed;
         self.tail = prev;
-        unsafe { drop(Box::from_raw(tail.as_ptr())); }
-        self.len -= 1; Some(value)
+        if let Some(mut prev_node) = prev {
+            unsafe { prev_node.as_mut().next = None; }
+        } else {
+            self.head = None;
+        }
+        self.len -= 1;
+        Some(value)
     }
 
     #[rapx::verify]
@@ -101,42 +97,6 @@ impl<T> LinkedList<T> {
 
     #[rapx::verify]
     pub fn from_vec(values: Vec<T>) -> Self { let mut list = Self::new(); for value in values { list.push_back(value); } list }
-
-    // UNSOUND: ptr::read copies out the value without dropping it.
-    // For non-Copy T, the old value is left behind and will be dropped again
-    // when the node is freed via drop/clear, causing a double-free.
-    // The NonNull in self.head aliases the read target.
-    #[rapx::verify]
-    pub fn front(&self) -> Option<T> {
-        match self.head {
-            Some(node) => unsafe {
-                Some(std::ptr::read(&node.as_ref().value))
-            },
-            None => None,
-        }
-    }
-
-    // UNSOUND: same alias hazard as front().
-    #[rapx::verify]
-    pub fn back(&self) -> Option<T> {
-        match self.tail {
-            Some(node) => unsafe {
-                Some(std::ptr::read(&node.as_ref().value))
-            },
-            None => None,
-        }
-    }
-
-    // UNSOUND: creates &mut T from a NonNull stored in self.head.
-    // The returned &mut T reference escapes to the caller while the struct
-    // still holds the NonNull (self.head), creating an alias between
-    // a &mut reference and a pointer — undefined behavior in Rust.
-    #[rapx::verify]
-    pub fn front_mut(&mut self) -> Option<&mut T> { match self.head { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
-
-    // UNSOUND: same alias hazard as front_mut().
-    #[rapx::verify]
-    pub fn back_mut(&mut self) -> Option<&mut T> { match self.tail { Some(mut node) => Some(unsafe { &mut node.as_mut().value }), None => None } }
 }
 
 impl<T: Copy> LinkedList<T> {

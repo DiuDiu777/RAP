@@ -62,46 +62,20 @@ impl<T> LinkedList<T> {
     }
 
     #[rapx::verify]
-    pub fn push_front(&mut self, value: T) {
-        let node = Box::into_raw(Box::new(Node {
-            value,
-            prev: std::ptr::null_mut(),
-            next: self.head,
-        }));
-        unsafe {
-            if self.head.is_null() {
-                self.head = node;
-                self.tail = node;
-            } else {
-                (*self.head).prev = node;
-                self.head = node;
-            }
-        }
-        self.len += 1;
-    }
-
-    #[rapx::verify]
     pub fn pop_front(&mut self) -> Option<T> {
-        let old_head = if self.head.is_null() {
+        if self.head.is_null() {
             return None;
-        } else {
-            self.head
-        };
-        let (value, next) = unsafe {
-            let r = &*old_head;
-            (std::ptr::read(&r.value), r.next)
-        };
-        if next.is_null() {
-            self.head = std::ptr::null_mut();
+        }
+        let old_head = self.head;
+        let boxed = unsafe { Box::from_raw(old_head) };
+        let Node { value, next, .. } = *boxed;
+        self.head = next;
+        if self.head.is_null() {
             self.tail = std::ptr::null_mut();
         } else {
-            self.head = next;
             unsafe {
                 (*self.head).prev = std::ptr::null_mut();
             }
-        }
-        unsafe {
-            drop(Box::from_raw(old_head));
         }
         self.len -= 1;
         Some(value)
@@ -109,26 +83,19 @@ impl<T> LinkedList<T> {
 
     #[rapx::verify]
     pub fn pop_back(&mut self) -> Option<T> {
-        let old_tail = if self.tail.is_null() {
+        if self.tail.is_null() {
             return None;
-        } else {
-            self.tail
-        };
-        let (value, prev) = unsafe {
-            let r = &*old_tail;
-            (std::ptr::read(&r.value), r.prev)
-        };
-        if prev.is_null() {
+        }
+        let old_tail = self.tail;
+        let boxed = unsafe { Box::from_raw(old_tail) };
+        let Node { value, prev, .. } = *boxed;
+        self.tail = prev;
+        if self.tail.is_null() {
             self.head = std::ptr::null_mut();
-            self.tail = std::ptr::null_mut();
         } else {
-            self.tail = prev;
             unsafe {
                 (*self.tail).next = std::ptr::null_mut();
             }
-        }
-        unsafe {
-            drop(Box::from_raw(old_tail));
         }
         self.len -= 1;
         Some(value)
@@ -156,52 +123,6 @@ impl<T> LinkedList<T> {
             list.push_back(value);
         }
         list
-    }
-
-    // UNSOUND: ptr::read copies out the value without dropping it.
-    // For non-Copy T, the old value is left behind and will be dropped again
-    // when the node is freed via drop/clear, causing a double-free.
-    // The raw pointer in self.head aliases the read target.
-    #[rapx::verify]
-    pub fn front(&self) -> Option<T> {
-        if self.head.is_null() {
-            None
-        } else {
-            unsafe { Some(std::ptr::read(&(*self.head).value)) }
-        }
-    }
-
-    // UNSOUND: same alias hazard as front().
-    #[rapx::verify]
-    pub fn back(&self) -> Option<T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            unsafe { Some(std::ptr::read(&(*self.tail).value)) }
-        }
-    }
-
-    // UNSOUND: creates &mut T from a raw pointer stored in self.head.
-    // The returned &mut T reference escapes to the caller while the struct
-    // still holds the raw pointer (self.head), creating an alias between
-    // a &mut reference and a raw pointer — undefined behavior in Rust.
-    #[rapx::verify]
-    pub fn front_mut(&mut self) -> Option<&mut T> {
-        if self.head.is_null() {
-            None
-        } else {
-            unsafe { Some(&mut (*self.head).value) }
-        }
-    }
-
-    // UNSOUND: same alias hazard as front_mut().
-    #[rapx::verify]
-    pub fn back_mut(&mut self) -> Option<&mut T> {
-        if self.tail.is_null() {
-            None
-        } else {
-            unsafe { Some(&mut (*self.tail).value) }
-        }
     }
 }
 

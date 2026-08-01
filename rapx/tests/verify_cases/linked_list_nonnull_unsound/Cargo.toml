@@ -1,5 +1,5 @@
 [package]
-name = "linked_list_rawptr_no_phantomdata"
+name = "linked_list_nonnull_unsound"
 version = "0.1.0"
 edition = "2024"
 
