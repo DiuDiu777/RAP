@@ -86,9 +86,17 @@ fn alias_proved_for_param_local<'tcx>(
                 ))
             } else {
                 Some(SmtCheckResult::proved(
-                    "returned shared view tied to shared reference; no alias conflict",
+                    "returned shared view tied to shared reference; no shared alias conflict",
                 ))
             }
+        }
+        // Owned parameter (e.g. Vec, Box): this function owns the memory;
+        // the caller cannot alias it.  If local_hazard_violation found
+        // nothing, there is no further alias risk.
+        _ if !matches!(ty.kind(), ty::RawPtr(..)) && local_index <= body.arg_count => {
+            Some(SmtCheckResult::proved(
+                "returned view derives from an owned parameter; no external alias risk",
+            ))
         }
         _ => None,
     }
@@ -248,7 +256,8 @@ pub fn check<'tcx>(
         return failed_smt(reason);
     }
 
-    if !destination_flows_to_return(checker.tcx, checkpoint.caller, destination) {
+    let dest_flows = destination_flows_to_return(checker.tcx, checkpoint.caller, destination);
+    if !dest_flows {
         return SmtCheckResult::proved(
             "Alias hazard is local and no conflicting raw access was found after the view producer",
         );
@@ -871,6 +880,14 @@ fn local_hazard_violation_with<'tcx>(
     expand_origin_aliases(&aliases, &mut origins);
     let mut hazard_locals: HashSet<Local> = destination.into_iter().collect();
     expand_hazard_alias_locals(tcx, caller, &mut hazard_locals);
+    // Remove any origin whose base local is the view itself (hazard_locals).
+    // The view reading/writing its own memory is intended usage, not a
+    // conflicting raw-pointer access.
+    origins.retain(|origin| {
+        !origin
+            .local()
+            .is_some_and(|l| hazard_locals.contains(&l))
+    });
     let vec_owners = vec_owners_for_origins(tcx, caller, &origins, &aliases);
     let reachable = blocks_reachable_after_call(tcx, caller, call_block);
 
@@ -893,6 +910,7 @@ fn local_hazard_violation_with<'tcx>(
                         aliases.insert(target.local, alias);
                     }
                     if !hazard_locals.is_empty()
+                        && !hazard_locals.contains(&target.local)
                         && raw_access_conflicts(kind, RawAccessKind::Write)
                         && place_is_raw_access_to_any_origin(target, &origins, &aliases)
                         && hazard_used_after_statement(
@@ -910,7 +928,7 @@ fn local_hazard_violation_with<'tcx>(
                     }
                     if !hazard_locals.is_empty()
                         && raw_access_conflicts(kind, RawAccessKind::Read)
-                        && rvalue_reads_any_origin(rvalue, &origins, &aliases)
+                        && !rvalue_has_hazard_local_base(rvalue, &hazard_locals) && rvalue_reads_any_origin(rvalue, &origins, &aliases)
                         && hazard_used_after_statement(
                             tcx,
                             caller,
@@ -2072,6 +2090,16 @@ fn place_is_raw_access_to_any_origin<'tcx>(
     origins
         .iter()
         .any(|origin| place_is_raw_access_to_origin(place, origin, aliases))
+}
+
+fn rvalue_has_hazard_local_base<'tcx>(
+    rvalue: &Rvalue<'tcx>,
+    hazard_locals: &HashSet<Local>,
+) -> bool {
+    let Some(place) = rvalue_source_place(rvalue) else {
+        return false;
+    };
+    hazard_locals.contains(&place.local)
 }
 
 fn rvalue_reads_any_origin<'tcx>(
