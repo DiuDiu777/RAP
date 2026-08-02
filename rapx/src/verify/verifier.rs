@@ -29,7 +29,7 @@ use super::{
 };
 use crate::helpers::mir_utils::call_name;
 
-use crate::analysis::points_to_analysis::PointsToGraph;
+use crate::analysis::points_to::PointsToGraph;
 use crate::helpers::mir_scan::CheckpointLocation;
 
 /// Visits relevant MIR items forward and builds an abstract state.
