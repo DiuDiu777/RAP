@@ -1464,19 +1464,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
         // 2) PointsTo facts — when a pointer (or a projection of one)
         //    traces to a reference, the reference is the allocation object.
-        let base = if place.fields.is_empty() {
-            place.clone()
-        } else {
-            PlaceKey {
-                base: place.base.clone(),
-                fields: Vec::new(),
-            }
-        };
-        if let Some(source) = self.forward.facts.iter().find_map(|fact| match fact {
-            StateFact::PointsTo { pointer, source } if *pointer == base => Some(source.clone()),
-            _ => None,
-        }) {
-            return Some(source);
+        if let Some(source) = self.forward.points_to_graph.get_source(place) {
+            return Some(source.clone());
         }
         None
     }
@@ -3295,23 +3284,13 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             .unwrap_or_else(|| value.clone());
         match resolved {
             AbstractValue::Ref(place) | AbstractValue::RawPtr(place) => Some(place_label(&place)),
-            AbstractValue::Place(place) => self
-                .source_from_points_to(&place)
-                .map(|source| place_label(&source))
-                .or_else(|| {
-                    // Follow PointsTo(pointer→source) recursively to find
-                    // the ultimate origin (e.g. _5 → _6 → _1).
-                    self.forward.facts.iter().find_map(|fact| match fact {
-                        StateFact::PointsTo { pointer, source } if *pointer == place => self
-                            .origin_key_for_value_before(
-                                &AbstractValue::Place(source.clone()),
-                                cursor,
-                                seen,
-                            ),
-                        _ => None,
-                    })
-                })
-                .or_else(|| Some(place_label(&place))),
+            AbstractValue::Place(place) => {
+                let resolved = self.forward.points_to_graph.resolve(&place);
+                if resolved != place {
+                    return Some(place_label(&resolved));
+                }
+                Some(place_label(&place))
+            }
             AbstractValue::Cast(inner, _) => self.origin_key_for_value_before(&inner, cursor, seen),
             #[cfg(not(rapx_rustc_ge_196))]
             AbstractValue::ShallowInitBox(_, _) => {
@@ -3487,30 +3466,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
     /// Return the source place recorded by a `PointsTo(pointer, source)` fact.
     pub(crate) fn source_from_points_to(&self, pointer: &PlaceKey) -> Option<PlaceKey> {
-        self.forward
-            .facts
-            .iter()
-            .find_map(|fact| match fact {
-                StateFact::PointsTo {
-                    pointer: fact_pointer,
-                    source,
-                } if fact_pointer == pointer => Some(source.clone()),
-                _ => None,
-            })
-            .or_else(|| {
-                if pointer.fields.is_empty() {
-                    return None;
-                }
-                let mut base = pointer.clone();
-                base.fields.clear();
-                self.forward.facts.iter().find_map(|fact| match fact {
-                    StateFact::PointsTo {
-                        pointer: fact_pointer,
-                        source,
-                    } if *fact_pointer == base => Some(source.clone()),
-                    _ => None,
-                })
-            })
+        self.forward.points_to_graph.get_source(pointer).cloned()
     }
 
     /// Candidate address/value terms for an `Init` target.

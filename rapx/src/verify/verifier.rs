@@ -29,6 +29,7 @@ use super::{
 };
 use crate::helpers::mir_utils::call_name;
 
+use crate::analysis::points_to_analysis::PointsToGraph;
 use crate::helpers::mir_scan::CheckpointLocation;
 
 /// Visits relevant MIR items forward and builds an abstract state.
@@ -386,6 +387,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     pointer: target.clone(),
                     source: source.clone(),
                 });
+                result.points_to_graph.insert(target.clone(), source);
                 if let Some((ty_name, elements)) =
                     self.allocated_element_summary(result.checkpoint.caller, object.local())
                 {
@@ -423,8 +425,9 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     .unwrap_or_else(|| allocation_object_for_source(&source_key, result));
                 result.facts.push(StateFact::PointsTo {
                     pointer: target.clone(),
-                    source: source_key,
+                    source: source_key.clone(),
                 });
+                result.points_to_graph.insert(target.clone(), source_key);
                 result.facts.push(StateFact::KnownNonZero {
                     place: target.clone(),
                     reason: "created from reference".to_string(),
@@ -713,8 +716,9 @@ impl<'tcx> ForwardVerifier<'tcx> {
         let base_val = AbstractValue::Place(source.clone());
         result.facts.push(StateFact::PointsTo {
             pointer: destination_place.clone(),
-            source,
+            source: source.clone(),
         });
+        result.points_to_graph.insert(destination_place.clone(), source);
         if known_nonzero_of(&base_val, result) {
             result.facts.push(StateFact::KnownNonZero {
                 place: destination_place.clone(),
@@ -870,6 +874,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             pointer: destination_place.clone(),
             source: source.clone(),
         });
+        result.points_to_graph.insert(destination_place.clone(), source.clone());
         if let Some((ty_name, elements)) =
             self.allocated_element_summary(result.checkpoint.caller, object.local())
         {
@@ -1254,6 +1259,8 @@ pub struct ForwardVisitResult<'tcx> {
     pub steps: Vec<ForwardStep>,
     /// Unsupported items kept as notes rather than modeled facts.
     pub notes: Vec<String>,
+    /// Points-to graph built from the full forward path.
+    pub points_to_graph: PointsToGraph,
 }
 
 impl<'tcx> ForwardVisitResult<'tcx> {
@@ -1269,6 +1276,7 @@ impl<'tcx> ForwardVisitResult<'tcx> {
             forgets: Vec::new(),
             steps: Vec::new(),
             notes: Vec::new(),
+            points_to_graph: PointsToGraph::new(),
         }
     }
 

@@ -4,6 +4,7 @@ pub mod callgraph;
 pub mod dataflow;
 pub mod ownedheap_analysis;
 pub mod path_analysis;
+pub mod points_to_analysis;
 pub mod range_analysis;
 pub mod safetyflow_analysis;
 pub mod scan;

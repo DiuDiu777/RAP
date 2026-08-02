@@ -192,12 +192,7 @@ impl<'a, 'tcx> TypedContext<'a, 'tcx> {
 
     /// Return the latest provenance source retained for a pointer place.
     fn latest_points_to_source(&self, place: &PlaceKey) -> Option<PlaceKey> {
-        self.forward.facts.iter().rev().find_map(|fact| {
-            let StateFact::PointsTo { pointer, source } = fact else {
-                return None;
-            };
-            (pointer == place).then(|| source.clone())
-        })
+        self.forward.points_to_graph.get_source(place).cloned()
     }
 
     /// Return true when a previous write initialized this place as `required_ty`.

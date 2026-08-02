@@ -103,17 +103,7 @@ fn substitute_base<'tcx>(place: &PlaceKey, forward: &ForwardVisitResult<'tcx>) -
     };
 
     let source = source.or_else(|| {
-        // Pointer-returning calls (`as_ptr`, `NonNull::from`, ...) record a
-        // PointsTo edge from the destination to the pointer-carrying
-        // argument.
-        forward.facts.iter().find_map(|fact| match fact {
-            StateFact::PointsTo { pointer, source }
-                if pointer.base == place.base && pointer.fields.is_empty() =>
-            {
-                Some(source.clone())
-            }
-            _ => None,
-        })
+        forward.points_to_graph.get_source(place).cloned()
     })?;
 
     let mut fields = source.fields.clone();

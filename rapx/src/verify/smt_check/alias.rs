@@ -25,7 +25,7 @@ use crate::{
     verify::{
         def_use::{PlaceBaseKey, PlaceKey},
         call_summary::fn_simulator,
-        verifier::{AbstractValue, ForwardVisitResult, StateFact},
+        verifier::{AbstractValue, ForwardVisitResult},
     },
 };
 use crate::helpers::mir_scan::{Checkpoint, CheckpointKind};
@@ -1024,30 +1024,18 @@ pub(super) fn resolve_forward_place<'tcx>(
             AbstractValue::CallResult(call)
                 if fn_simulator::is_as_ptr(&call.func) =>
             {
-                let Some(source) = forward.facts.iter().find_map(|fact| match fact {
-                    StateFact::PointsTo { pointer, source } if pointer.overlaps(&place) => {
-                        Some(source.clone())
-                    }
-                    _ => None,
-                }) else {
+                let Some(source) = forward.points_to_graph.get_source(&place) else {
                     return place;
                 };
-                place = resolve_forward_place(source, forward);
+                place = resolve_forward_place(source.clone(), forward);
             }
             AbstractValue::CallResult(call)
                 if fn_simulator::is_pointer_arithmetic(&call.func) =>
             {
-                // ptr::add/sub/offset create a new pointer from the base;
-                // follow PointsTo (ReturnPointerAdd effect) to the base.
-                let Some(source) = forward.facts.iter().find_map(|fact| match fact {
-                    StateFact::PointsTo { pointer, source } if pointer.overlaps(&place) => {
-                        Some(source.clone())
-                    }
-                    _ => None,
-                }) else {
+                let Some(source) = forward.points_to_graph.get_source(&place) else {
                     return place;
                 };
-                place = resolve_forward_place(source, forward);
+                place = resolve_forward_place(source.clone(), forward);
             }
             _ => return place,
         }
