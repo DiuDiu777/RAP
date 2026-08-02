@@ -1859,13 +1859,10 @@ fn allocation_object_for_source<'tcx>(
             _ => {}
         }
     }
-        let Some(next) = result.facts.iter().find_map(|fact| match fact {
-            StateFact::PointsTo { pointer, source } if pointer == &cur => Some(source.clone()),
-            _ => None,
-        }) else {
+        let Some(next) = result.points_to_graph.get_source(&cur) else {
             return cur;
         };
-        cur = next;
+        cur = next.clone();
     }
 }
 

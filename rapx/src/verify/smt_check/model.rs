@@ -322,6 +322,23 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
     /// Assert facts collected by the forward visitor.
     pub(crate) fn assert_forward_facts(&mut self, solver: &Solver<'ctx>) {
+        // Assert PointsTo edges from the graph (align + length alias).
+        for (pointer, source) in self.forward.points_to_graph.edges() {
+            let ptr_pointee_str = self
+                .place_ty(pointer)
+                .and_then(|ty| pointee_ty_str(ty))
+                .map(|s| normalize_init_ty_name(&s));
+            let src_pointee_str = self
+                .place_ty(source)
+                .and_then(|ty| pointee_ty_str(ty))
+                .map(|s| normalize_init_ty_name(&s));
+            if ptr_pointee_str == src_pointee_str {
+                self.assert_place_alignment(solver, pointer);
+            }
+            self.assert_place_alignment(solver, source);
+            self.assert_length_alias(solver, pointer, source);
+        }
+
         // Two-pass processing: non-Contract facts first (establish value chain),
         // then Contract facts (which depend on the chain for term resolution).
         // Clone the facts so we can process them in dependency order without
@@ -333,23 +350,6 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             .chain(facts.iter().filter(|f| matches!(f, StateFact::Contract(_))))
         {
             match fact {
-                StateFact::PointsTo { pointer, source } => {
-                    // Normalize types (strip MaybeUninit, array/slice brackets)
-                    // so that e.g. [T] and T share the same alignment key.
-                    let ptr_pointee_str = self
-                        .place_ty(pointer)
-                        .and_then(|ty| pointee_ty_str(ty))
-                        .map(|s| normalize_init_ty_name(&s));
-                    let src_pointee_str = self
-                        .place_ty(source)
-                        .and_then(|ty| pointee_ty_str(ty))
-                        .map(|s| normalize_init_ty_name(&s));
-                    if ptr_pointee_str == src_pointee_str {
-                        self.assert_place_alignment(solver, pointer);
-                    }
-                    self.assert_place_alignment(solver, source);
-                    self.assert_length_alias(solver, pointer, source);
-                }
                 StateFact::Call(call) => self.assert_call_fact(solver, call),
                 StateFact::KnownNonZero { place, reason } => {
                     self.assert_place_non_zero(solver, place, reason);
@@ -863,6 +863,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     _ => {}
                 },
                 StateFact::PathCondition(_)
+                | StateFact::PointsTo { .. }
                 | StateFact::Drop(_)
                 | StateFact::LocalDead(_)
                 | StateFact::CallEffect(_)
@@ -3856,13 +3857,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     return Some(ty_name.clone());
                 }
             }
-            for fact in &self.forward.facts {
-                let StateFact::PointsTo { pointer, source } = fact else {
-                    continue;
-                };
-                if *pointer == cur {
-                    queue.push(source.clone());
-                }
+            if let Some(source) = self.forward.points_to_graph.get_source(&cur) {
+                queue.push(source.clone());
             }
             for fact in &self.forward.facts {
                 let StateFact::Cast { target, source, .. } = fact else {
@@ -4089,13 +4085,8 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     }
                 }
             }
-            for fact in &self.forward.facts {
-                let StateFact::PointsTo { pointer, source } = fact else {
-                    continue;
-                };
-                if *pointer == cur {
-                    queue.push(source.clone());
-                }
+            if let Some(source) = self.forward.points_to_graph.get_source(&cur) {
+                queue.push(source.clone());
             }
             // Also follow Cast links — copies that transfer a pointer
             // value (e.g. `_17 = Copy(_8)`) which may be the only link
