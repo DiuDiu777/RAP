@@ -1,4 +1,4 @@
-use crate::analysis::alias_analysis::default::types::ValueKind;
+use crate::analysis::alias::default::types::ValueKind;
 use crate::compat::FxHashMap;
 
 /// Represents a value node in the alias analysis graph.

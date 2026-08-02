@@ -1,5 +1,5 @@
 use crate::analysis::Analysis;
-use crate::analysis::safetyflow_analysis::root::{
+use crate::analysis::safety_flow::root::{
     function_has_struct_invariant, function_has_trait_ensurance, hir_contains_unsafe,
 };
 use crate::cli::VerifyMode;
@@ -706,7 +706,7 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
                         }
                     } else {
                         let root =
-                            crate::analysis::safetyflow_analysis::root::scan_mir(self.tcx, def_id);
+                            crate::analysis::safety_flow::root::scan_mir(self.tcx, def_id);
                         if root.is_none() {
                             return;
                         }

@@ -11,7 +11,7 @@ use rustc_middle::mir::{BinOp, UnOp};
 use std::ops::{Add, Mul, Sub};
 
 use crate::{
-    analysis::range_analysis::{Range, RangeType, domain::symbolic_expr::IntervalTypeTrait},
+    analysis::range::{Range, RangeType, domain::symbolic_expr::IntervalTypeTrait},
     rap_trace,
 };
 

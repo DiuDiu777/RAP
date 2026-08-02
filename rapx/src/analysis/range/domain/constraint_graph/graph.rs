@@ -1,8 +1,8 @@
 
-use crate::analysis::range_analysis::domain::domain::*;
-use crate::analysis::range_analysis::{Range, RangeType};
+use crate::analysis::range::domain::domain::*;
+use crate::analysis::range::{Range, RangeType};
 
-use crate::analysis::range_analysis::domain::symbolic_expr::*;
+use crate::analysis::range::domain::symbolic_expr::*;
 use crate::compat::Spanned;
 use rustc_abi::FieldIdx;
 use rustc_hir::def_id::LOCAL_CRATE;

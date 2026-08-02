@@ -2,11 +2,11 @@ pub mod debug;
 pub mod graph;
 pub mod solver;
 
-use crate::analysis::range_analysis::domain::domain::*;
-use crate::analysis::range_analysis::Range;
+use crate::analysis::range::domain::domain::*;
+use crate::analysis::range::Range;
 
-use crate::analysis::range_analysis::domain::symbolic_expr::*;
-use crate::analysis::path_analysis::PathTree;
+use crate::analysis::range::domain::symbolic_expr::*;
+use crate::analysis::path::PathTree;
 use rustc_abi::FieldIdx;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{

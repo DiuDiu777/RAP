@@ -1,4 +1,4 @@
-use crate::analysis::alias_analysis::default::graph::AliasGraph;
+use crate::analysis::alias::default::graph::AliasGraph;
 use rustc_span::Span;
 
 pub trait AliasObserver {

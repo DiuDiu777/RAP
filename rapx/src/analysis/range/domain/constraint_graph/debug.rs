@@ -1,8 +1,8 @@
 
 use super::ConstraintGraph;
-use crate::analysis::range_analysis::domain::domain::BasicOpKind;
-use crate::analysis::range_analysis::domain::domain::{ConstConvert, IntervalArithmetic};
-use crate::analysis::range_analysis::domain::symbolic_expr::IntervalTypeTrait;
+use crate::analysis::range::domain::domain::BasicOpKind;
+use crate::analysis::range::domain::domain::{ConstConvert, IntervalArithmetic};
+use crate::analysis::range::domain::symbolic_expr::IntervalTypeTrait;
 use rustc_middle::mir::Place;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{Debug, Write};

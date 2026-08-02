@@ -1,6 +1,6 @@
 use rustc_span::Span;
-use crate::analysis::alias_analysis::default::graph::AliasGraph;
-use crate::analysis::alias_analysis::default::types::ValueKind;
+use crate::analysis::alias::default::graph::AliasGraph;
+use crate::analysis::alias::default::types::ValueKind;
 use super::bug_records::*;
 use super::drop::*;
 

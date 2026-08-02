@@ -29,7 +29,7 @@ use crate::{
     },
 };
 use crate::helpers::mir_scan::{Checkpoint, CheckpointKind};
-use crate::analysis::alias_analysis::{
+use crate::analysis::alias::{
     collect_local_origins, resolve_place, resolve_self_field_origin, LocalOriginMap,
 };
 
@@ -351,7 +351,7 @@ fn any_struct_field_origin<'tcx>(
 ) -> Option<SelfFieldOrigin> {
     let PlaceBaseKey::Local(local) = place.base else { return None; };
     if place.fields.is_empty() { return None; }
-    let resolved = crate::analysis::alias_analysis::resolve_any_field_origin(
+    let resolved = crate::analysis::alias::resolve_any_field_origin(
         tcx, caller, local, &place.fields,
     )?;
     Some(SelfFieldOrigin {

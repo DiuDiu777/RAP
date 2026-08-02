@@ -4,8 +4,8 @@ use crate::{
     analysis::{
         Analysis,
         callgraph::{default::CallGraph, visitor::CallGraphVisitor},
-        path_analysis::default::PathAnalyzer,
-        range_analysis::{
+        path::default::PathAnalyzer,
+        range::{
             Range, RangeAnalysis,
             domain::{
                 ConstraintGraph,
@@ -71,7 +71,7 @@ where
     /// Entry point of the analysis
     fn run(&mut self) {
         // self.start();
-        self.only_caller_range_analysis();
+        self.only_caller_range();
         self.start_path_constraints_analysis();
     }
 
@@ -169,7 +169,7 @@ where
         }).collect()
     }
 
-    fn only_caller_range_analysis(&mut self) {
+    fn only_caller_range(&mut self) {
         let ssa_def_id = self.ssa_def_id.expect("SSA definition ID is not set");
         let essa_def_id = self.essa_def_id.expect("ESSA definition ID is not set");
         // ====================================================================

@@ -1,7 +1,7 @@
 use rustc_span::Span;
 
-use crate::analysis::alias_analysis::default::graph::AliasGraph;
-use crate::analysis::alias_analysis::observer::AliasObserver;
+use crate::analysis::alias::default::graph::AliasGraph;
+use crate::analysis::alias::observer::AliasObserver;
 
 use super::bug_records::*;
 use super::checks;

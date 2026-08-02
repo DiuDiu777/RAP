@@ -1,8 +1,8 @@
 use super::{bug_records::*, checks, corner_case::*, drop::*, graph::*};
 use super::observer::SafeDropObserver;
 use crate::{
-    analysis::alias_analysis::default::MopFnAliasMap,
-    analysis::path_analysis::{PathNode, PathTree},
+    analysis::alias::default::MopFnAliasMap,
+    analysis::path::{PathNode, PathTree},
     def_id::is_drop_fn,
     utils::source::{get_filename, get_name},
 };

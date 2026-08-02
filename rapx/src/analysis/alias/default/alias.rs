@@ -1,5 +1,5 @@
 use super::{MopAliasPair, MopFnAliasMap, graph::*, types::*, value::*};
-use crate::analysis::alias_analysis::observer::AliasObserver;
+use crate::analysis::alias::observer::AliasObserver;
 use crate::compat::{FxHashMap, FxHashSet};
 use crate::def_id::*;
 use rustc_hir::def_id::DefId;

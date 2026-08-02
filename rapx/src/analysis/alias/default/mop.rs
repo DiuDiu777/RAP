@@ -2,8 +2,8 @@ use rustc_hir::def_id::DefId;
 
 use std::collections::HashSet;
 
-use crate::analysis::alias_analysis::observer::NoopAliasObserver;
-use crate::analysis::path_analysis::{PathNode, PathTree};
+use crate::analysis::alias::observer::NoopAliasObserver;
+use crate::analysis::path::{PathNode, PathTree};
 
 use super::alias::ensure_fn_aliases_cached;
 use super::{graph::*, *};

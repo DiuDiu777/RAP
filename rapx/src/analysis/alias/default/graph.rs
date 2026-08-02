@@ -1,6 +1,6 @@
 use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
 use crate::{
-    analysis::path_analysis::{
+    analysis::path::{
         PathTree,
         graph::{PathEnumerator, PathGraph},
     },

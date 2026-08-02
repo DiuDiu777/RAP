@@ -11,9 +11,9 @@ use rustc_middle::ty::TyCtxt;
 
 use crate::{
     analysis::{
-        alias_analysis::default::{AliasAnalyzer, MopFnAliasMap},
-        ownedheap_analysis::{OHAResultMap, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
-        path_analysis::default::PathAnalyzer,
+        alias::default::{AliasAnalyzer, MopFnAliasMap},
+        owned_heap::{OHAResultMap, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
+        path::default::PathAnalyzer,
     },
     utils::source::get_fn_name,
 };
@@ -81,7 +81,7 @@ pub fn query_safedrop<'tcx>(
             .get(&def_id)
             .cloned()
             .unwrap_or_else(|| {
-                let mut g = crate::analysis::path_analysis::graph::PathGraph::new(tcx, def_id);
+                let mut g = crate::analysis::path::graph::PathGraph::new(tcx, def_id);
                 g.find_scc();
                 g
             });

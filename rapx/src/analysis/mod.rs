@@ -1,12 +1,12 @@
-pub mod alias_analysis;
+pub mod alias;
 pub mod api_dependency;
 pub mod callgraph;
 pub mod dataflow;
-pub mod ownedheap_analysis;
-pub mod path_analysis;
+pub mod owned_heap;
+pub mod path;
 pub mod points_to;
-pub mod range_analysis;
-pub mod safetyflow_analysis;
+pub mod range;
+pub mod safety_flow;
 pub mod scan;
 pub mod ssa_transform;
 

@@ -1,7 +1,7 @@
 use super::{bug_records::*, drop::*};
 use crate::analysis::{
-    alias_analysis::default::graph::AliasGraph, ownedheap_analysis::OHAResultMap,
-    path_analysis::graph::PathGraph,
+    alias::default::graph::AliasGraph, owned_heap::OHAResultMap,
+    path::graph::PathGraph,
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;

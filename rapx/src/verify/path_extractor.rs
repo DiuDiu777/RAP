@@ -20,7 +20,7 @@ use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
-use crate::analysis::path_analysis::{
+use crate::analysis::path::{
     PathTree,
     graph::{PathEnumerator, PathGraph},
 };

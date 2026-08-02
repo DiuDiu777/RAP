@@ -20,7 +20,7 @@ use super::super::{
 };
 use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
 
-use crate::analysis::path_analysis::{PathNode, PathTree};
+use crate::analysis::path::{PathNode, PathTree};
 
 use super::{
     call_visit,

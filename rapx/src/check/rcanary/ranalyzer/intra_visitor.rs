@@ -20,7 +20,7 @@ use super::is_z3_goal_verbose;
 use super::ownership::IntraVar;
 use super::{FlowAnalysis, IcxSliceFroBlock, IntraFlowAnalysis};
 use crate::{
-    analysis::ownedheap_analysis::{default::*, *},
+    analysis::owned_heap::{default::*, *},
     utils::{
         span::{
             are_spans_in_same_file, relative_pos_range, span_to_filename, span_to_line_number,

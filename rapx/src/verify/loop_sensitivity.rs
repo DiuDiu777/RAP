@@ -32,7 +32,7 @@
 //! both hint kinds into the `PathEnumerator`'s `allow_repeat` budget and picks
 //! the maximum, so detector-specific details stay inside this module.
 
-use crate::analysis::path_analysis::graph::PathGraph;
+use crate::analysis::path::graph::PathGraph;
 use crate::compat::{FxHashMap, FxHashSet};
 use rustc_hir::def_id::DefId;
 use rustc_middle::{

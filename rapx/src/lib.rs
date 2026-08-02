@@ -36,7 +36,7 @@ extern crate rustc_type_ir;
 extern crate thin_vec;
 
 use crate::{
-    analysis::{alias_analysis::mfp::MfpAliasAnalyzer, api_dependency, scan::ScanAnalysis},
+    analysis::{alias::mfp::MfpAliasAnalyzer, api_dependency, scan::ScanAnalysis},
     check::{opt::Opt, rcanary::rCanary, safedrop::SafeDrop},
     cli::{
         AliasStrategyKind, AnalysisKind, CheckArgs, Commands, PostfixRepeat, RapxArgs, VerifyArgs,
@@ -45,16 +45,16 @@ use crate::{
 };
 use analysis::{
     Analysis,
-    alias_analysis::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
+    alias::{AliasAnalysis, FnAliasMapWrapper, default::AliasAnalyzer},
     api_dependency::ApiDependencyAnalyzer,
     callgraph::{CallGraphAnalysis, FnCallDisplay, default::CallGraphAnalyzer},
     dataflow::{Arg2RetMapWrapper, DataflowAnalysis, default::DataflowAnalyzer},
-    ownedheap_analysis::{OHAResultMapWrapper, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
-    path_analysis::{PathMapWrapper, default::PathAnalyzer},
-    range_analysis::{
+    owned_heap::{OHAResultMapWrapper, OwnedHeapAnalysis, default::OwnedHeapAnalyzer},
+    path::{PathMapWrapper, default::PathAnalyzer},
+    range::{
         PathConstraintMapWrapper, RAResultMapWrapper, RangeAnalysis, default::RangeAnalyzer,
     },
-    safetyflow_analysis::{SafetyFlowAnalysis, TargetCrate},
+    safety_flow::{SafetyFlowAnalysis, TargetCrate},
     ssa_transform::SSATrans,
 };
 use helpers::show_mir::ShowMir;

@@ -1,6 +1,6 @@
 use crate::analysis::{
     Analysis,
-    path_analysis::graph::{PathEnumerator, PathGraph},
+    path::graph::{PathEnumerator, PathGraph},
 };
 use crate::compat::FxHashMap;
 use rustc_hir::{def::DefKind, def_id::DefId};

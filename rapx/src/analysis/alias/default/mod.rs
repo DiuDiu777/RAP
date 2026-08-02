@@ -9,7 +9,7 @@ pub mod value;
 use super::{AliasAnalysis, AliasPair, FnAliasMap, FnAliasPairs};
 use crate::compat::FxHashMap;
 use crate::{
-    analysis::{Analysis, path_analysis::default::PathAnalyzer},
+    analysis::{Analysis, path::default::PathAnalyzer},
     def_id::*,
     utils::source::*,
 };
@@ -238,7 +238,7 @@ impl<'tcx> AliasAnalyzer<'tcx> {
                 .cloned()
                 .unwrap_or_else(|| {
                     let mut g =
-                        crate::analysis::path_analysis::graph::PathGraph::new(self.tcx, def_id);
+                        crate::analysis::path::graph::PathGraph::new(self.tcx, def_id);
                     g.find_scc();
                     g
                 });

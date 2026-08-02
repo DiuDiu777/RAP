@@ -7,7 +7,7 @@ use rustc_middle::{
 };
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
-use crate::analysis::path_analysis::graph::{PathEnumerator, PathGraph};
+use crate::analysis::path::graph::{PathEnumerator, PathGraph};
 use crate::helpers::mir_utils as helpers;
 
 use super::fn_simulator;

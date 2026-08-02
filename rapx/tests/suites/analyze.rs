@@ -177,7 +177,7 @@ fn path_cases() {
 }
 
 #[test]
-fn range_analysis() {
+fn range() {
     let output = run_with_args("analyze/range_1", CMD_ANALYZE_RANGE);
 
     let expected_ranges = vec![
@@ -202,7 +202,7 @@ fn range_analysis() {
 
 #[test]
 
-fn interprocedural_range_analysis() {
+fn interprocedural_range() {
     let output = run_with_args("analyze/range_2", CMD_ANALYZE_RANGE);
 
     let expected_ranges = vec![

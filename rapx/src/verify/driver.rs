@@ -7,7 +7,7 @@
 //! the shared `VerifyEngine`.
 
 use crate::analysis::Analysis;
-use crate::analysis::path_analysis::{
+use crate::analysis::path::{
     PathTree,
     graph::{PathEnumerator, PathGraph},
 };
