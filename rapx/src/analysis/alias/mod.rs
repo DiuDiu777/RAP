@@ -98,6 +98,24 @@ impl FnAliasPairs {
         }
         self.alias_set = new_alias_set;
     }
+
+    /// Compress field paths: truncate each side's field list to its
+    /// first element.  This matches the old MoP alias analysis behaviour
+    /// where deeply nested fields like `0.0.0.0` are shortened to `0.0`.
+    pub fn compress_fields(&mut self) {
+        let alias_set = std::mem::take(&mut self.alias_set);
+        let mut compressed = HashSet::with_capacity(alias_set.len());
+        for mut ra in alias_set.into_iter() {
+            if !ra.lhs_fields.is_empty() {
+                ra.lhs_fields = vec![ra.lhs_fields[0]];
+            }
+            if !ra.rhs_fields.is_empty() {
+                ra.rhs_fields = vec![ra.rhs_fields[0]];
+            }
+            compressed.insert(ra);
+        }
+        self.alias_set = compressed;
+    }
 }
 
 impl fmt::Display for FnAliasPairs {

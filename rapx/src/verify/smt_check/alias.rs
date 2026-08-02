@@ -1133,7 +1133,7 @@ fn local_hazard_violation_with<'tcx>(
     origins: &[PlaceKey],
     kind: HazardKind,
     strict_call_escape: bool,
-    forward: Option<&ForwardVisitResult<'tcx>>,
+    _forward: Option<&ForwardVisitResult<'tcx>>,
     view_len_place: Option<PlaceKey>,
 ) -> Option<String> {
     let body = tcx.optimized_mir(caller);

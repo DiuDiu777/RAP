@@ -233,6 +233,59 @@ macro_rules! verify_hazard {
     }};
 }
 
+macro_rules! sound_tests {
+    ($($name:ident: $dir:literal => $func:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                verify_sound!($dir, $func);
+            }
+        )*
+    };
+}
+
+macro_rules! unsound_tests {
+    ($($name:ident: $dir:literal => $func:literal => $prop:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                verify_unsound!($dir, $func, $prop);
+            }
+        )*
+    };
+}
+
+macro_rules! hazard_tests {
+    ($($name:ident: $dir:literal => $func:literal => $prop:literal),* $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                verify_hazard!($dir, $func, $prop);
+            }
+        )*
+    };
+}
+
+macro_rules! check_contain_test {
+    ($name:ident, $dir:literal, $cmd:ident, $pattern:literal) => {
+        #[test]
+        fn $name() {
+            let output = run_with_args($dir, $cmd);
+            assert_contain(&output, $pattern);
+        }
+    };
+}
+
+macro_rules! check_not_contain_test {
+    ($name:ident, $dir:literal, $cmd:ident, $pattern:literal) => {
+        #[test]
+        fn $name() {
+            let output = run_with_args($dir, $cmd);
+            assert_not_contain(&output, $pattern);
+        }
+    };
+}
+
 include!("suites/check.rs");
 include!("suites/analyze.rs");
 include!("suites/verify_units.rs");

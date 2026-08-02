@@ -1,35 +1,38 @@
-use super::{MopFnAliasPairs, assign::*, block::*, types::*, value::*};
+use super::MopFnAliasPairs;
 use crate::{
     analysis::path::{
         PathTree,
         graph::{PathEnumerator, PathGraph},
     },
-    compat::{FxHashMap, FxHashSet},
+    analysis::points_to::graph::PtsGraph,
+    compat::FxHashMap,
     graphs::cfg::CfgBlock,
-    utils::source::*,
+    utils::source::get_fn_name,
 };
-use rustc_middle::{
-    mir::{AggregateKind, BasicBlock, Const, Operand, Rvalue, StatementKind, Terminator},
-    ty::{self, TyCtxt, TypingEnv},
-};
+use rustc_middle::mir::Terminator;
+use rustc_middle::ty::{TyCtxt, TypingEnv};
 use rustc_span::{Span, def_id::DefId};
 use std::fmt;
+
+use super::types::{is_not_drop, kind};
+use super::value::Value;
 
 #[derive(Clone)]
 pub struct AliasGraph<'tcx> {
     pub path_graph: PathGraph<'tcx>,
-    /// Path-sensitive state used by alias/safedrop traversal.
-    pub constants: FxHashMap<usize, usize>,
-    /// Traversal visit counter for recursion limiting.
     pub visit_times: usize,
-    // All values (including fields) of the function.
-    // For general variables, we use its Local as the value index;
-    // For fields, the value index is determined via auto increment.
+
+    /// Per-slot type info — kept for SafeDrop compatibility.
+    /// Indexed by value index = PtsGraph slot index.
     pub values: Vec<Value>,
-    // Alias-analysis-specific facts extracted from each MIR block.
-    pub block_facts: Vec<AliasBlockFacts<'tcx>>,
-    pub alias_sets: Vec<FxHashSet<usize>>,
-    // contains the return results for inter-procedure analysis.
+
+    /// New unified PtsGraph for both MoP alias and SafeDrop.
+    pub pts_graph: PtsGraph,
+
+    /// Tracks Move operand destinations → source value indices.
+    /// Used by SafeDrop to propagate drop info through move chains.
+    pub move_sources: FxHashMap<usize, usize>,
+
     pub ret_alias: MopFnAliasPairs,
     pub arg_size: usize,
     pub span: Span,
@@ -48,376 +51,25 @@ impl<'tcx> AliasGraph<'tcx> {
         def_id: DefId,
         path_graph: PathGraph<'tcx>,
     ) -> AliasGraph<'tcx> {
-        let fn_name = get_fn_name(tcx, def_id);
-        rap_debug!(
-            "New an AliasGraph from existing PathGraph for: {:?}",
-            fn_name
-        );
-        // handle variables
+        let _fn_name = get_fn_name(tcx, def_id);
         let body = tcx.optimized_mir(def_id);
         let locals = &body.local_decls;
         let arg_size = body.arg_count;
         let mut values = Vec::<Value>::new();
         let ty_env = TypingEnv::post_analysis(tcx, def_id);
         for (local, local_decl) in locals.iter_enumerated() {
-            let need_drop = local_decl.ty.needs_drop(tcx, ty_env); // the type is drop
+            let need_drop = local_decl.ty.needs_drop(tcx, ty_env);
             let may_drop = !is_not_drop(tcx, local_decl.ty);
-            let mut node = Value::new(
-                local.as_usize(),
-                local.as_usize(),
-                need_drop,
-                need_drop || may_drop,
-            );
+            let mut node = Value::new(local.as_usize(), local.as_usize(), need_drop, may_drop);
             node.kind = kind(local_decl.ty);
             values.push(node);
         }
-
-        let basicblocks = &body.basic_blocks;
-        let mut block_facts = Vec::<AliasBlockFacts<'tcx>>::new();
-
-        // handle each basicblock
-        for i in 0..basicblocks.len() {
-            let bb = &basicblocks[BasicBlock::from(i)];
-            let mut alias_block = AliasBlockFacts::new();
-
-            // handle general statements
-            for stmt in &bb.statements {
-                let span = stmt.source_info.span;
-                match &stmt.kind {
-                    StatementKind::Assign(assign) => {
-                        let (place, rvalue) = &**assign;
-                        let lv_place = *place;
-                        let lv_local = place.local.as_usize();
-                        match rvalue.clone() {
-                            // rvalue is a Rvalue
-                            Rvalue::Use(operand, ..) => {
-                                match operand {
-                                    Operand::Copy(rv_place) => {
-                                        let rv_local = rv_place.local.as_usize();
-                                        if values[lv_local].may_drop && values[rv_local].may_drop {
-                                            let assign = Assignment::new(
-                                                lv_place,
-                                                rv_place,
-                                                AssignType::Copy,
-                                                span,
-                                            );
-                                            alias_block.assignments.push(assign);
-                                        }
-                                    }
-                                    Operand::Move(rv_place) => {
-                                        let rv_local = rv_place.local.as_usize();
-                                        if values[lv_local].may_drop && values[rv_local].may_drop {
-                                            let assign = Assignment::new(
-                                                lv_place,
-                                                rv_place,
-                                                AssignType::Move,
-                                                span,
-                                            );
-                                            alias_block.assignments.push(assign);
-                                        }
-                                    }
-                                    Operand::Constant(constant) => {
-                                        /* We should check the correctness due to the update of rustc
-                                         * https://doc.rust-lang.org/beta/nightly-rustc/rustc_middle/mir/enum.Const.html
-                                         */
-                                        match constant.const_ {
-                                            Const::Ty(_ty, const_value) => {
-                                                if let Some(val) =
-                                                    const_value.try_to_target_usize(tcx)
-                                                {
-                                                    alias_block.const_value.push(ConstValue::new(
-                                                        lv_local,
-                                                        val as usize,
-                                                    ));
-                                                }
-                                            }
-                                            Const::Unevaluated(_const_value, _ty) => {}
-                                            Const::Val(const_value, _ty) => {
-                                                if let Some(scalar) =
-                                                    const_value.try_to_scalar_int()
-                                                {
-                                                    let val = scalar.to_uint(scalar.size());
-                                                    alias_block.const_value.push(ConstValue::new(
-                                                        lv_local,
-                                                        val as usize,
-                                                    ));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    #[cfg(rapx_rustc_ge_196)]
-                                    Operand::RuntimeChecks(_) => {}
-                                }
-                            }
-                            Rvalue::Ref(_, _, rv_place)
-                            | Rvalue::RawPtr(_, rv_place)
-                            | Rvalue::CopyForDeref(rv_place) => {
-                                let rv_local = rv_place.local.as_usize();
-                                if values[lv_local].may_drop && values[rv_local].may_drop {
-                                    let assign =
-                                        Assignment::new(lv_place, rv_place, AssignType::Copy, span);
-                                    alias_block.assignments.push(assign);
-                                }
-                            }
-                            #[cfg(not(rapx_rustc_ge_196))]
-                            Rvalue::ShallowInitBox(operand, _) => {
-                                /*
-                                 * Original ShllowInitBox is a two-level pointer: lvl0 -> lvl1 -> lvl2
-                                 * Since our alias analysis does not consider multi-level pointer,
-                                 * We simplify it as: lvl0
-                                 */
-                                if !values[lv_local].fields.contains_key(&0) {
-                                    let mut lvl0 = Value::new(values.len(), lv_local, false, true);
-                                    lvl0.father = Some(FatherInfo::new(lv_local, 0));
-                                    values[lv_local].fields.insert(0, lvl0.index);
-                                    values.push(lvl0);
-                                }
-                                match operand {
-                                    Operand::Copy(rv_place) | Operand::Move(rv_place) => {
-                                        let rv_local = rv_place.local.as_usize();
-                                        if values[lv_local].may_drop && values[rv_local].may_drop {
-                                            let assign = Assignment::new(
-                                                lv_place,
-                                                rv_place,
-                                                AssignType::InitBox,
-                                                span,
-                                            );
-                                            alias_block.assignments.push(assign);
-                                        }
-                                    }
-                                    Operand::Constant(_) => {}
-                                }
-                            }
-                            Rvalue::Cast(_, operand, _) => match operand {
-                                Operand::Copy(rv_place) => {
-                                    let rv_local = rv_place.local.as_usize();
-                                    if values[lv_local].may_drop && values[rv_local].may_drop {
-                                        let assign = Assignment::new(
-                                            lv_place,
-                                            rv_place,
-                                            AssignType::Copy,
-                                            span,
-                                        );
-                                        alias_block.assignments.push(assign);
-                                    }
-                                }
-                                Operand::Move(rv_place) => {
-                                    let rv_local = rv_place.local.as_usize();
-                                    if values[lv_local].may_drop && values[rv_local].may_drop {
-                                        let assign = Assignment::new(
-                                            lv_place,
-                                            rv_place,
-                                            AssignType::Move,
-                                            span,
-                                        );
-                                        alias_block.assignments.push(assign);
-                                    }
-                                }
-                                Operand::Constant(_) => {}
-                                #[cfg(rapx_rustc_ge_196)]
-                                Operand::RuntimeChecks(_) => {}
-                            },
-                            Rvalue::Aggregate(kind, operands) => {
-                                match kind.as_ref() {
-                                    // For tuple aggregation such as _10 = (move _11, move _12)
-                                    // we create `_10.0 = move _11` and `_10.1 = move _12` to achieve field sensitivity
-                                    // and prevent transitive alias: (_10, _11) + (_10, _12) => (_11, _12)
-                                    AggregateKind::Tuple => {
-                                        let lv_ty = lv_place.ty(&body.local_decls, tcx).ty;
-                                        for (field_idx, operand) in operands.iter_enumerated() {
-                                            match operand {
-                                                Operand::Copy(rv_place)
-                                                | Operand::Move(rv_place) => {
-                                                    let rv_local = rv_place.local.as_usize();
-                                                    if values[lv_local].may_drop
-                                                        && values[rv_local].may_drop
-                                                    {
-                                                        // Get field type from tuple or array
-                                                        let field_ty = match lv_ty.kind() {
-                                                            ty::Tuple(fields) => {
-                                                                fields[field_idx.as_usize()]
-                                                            }
-                                                            _ => {
-                                                                continue;
-                                                            }
-                                                        };
-
-                                                        // Create lv.field_idx Place using tcx.mk_place_field
-                                                        let lv_field_place = tcx.mk_place_field(
-                                                            lv_place, field_idx, field_ty,
-                                                        );
-
-                                                        let assign = Assignment::new(
-                                                            lv_field_place,
-                                                            *rv_place,
-                                                            if matches!(operand, Operand::Move(_)) {
-                                                                AssignType::Move
-                                                            } else {
-                                                                AssignType::Copy
-                                                            },
-                                                            span,
-                                                        );
-                                                        alias_block.assignments.push(assign);
-                                                        rap_debug!(
-                                                            "Aggregate field assignment: {:?}.{} = {:?}",
-                                                            lv_place,
-                                                            field_idx.as_usize(),
-                                                            rv_place
-                                                        );
-                                                    }
-                                                }
-                                                Operand::Constant(_) => {
-                                                    // Constants don't need alias analysis
-                                                }
-                                                #[cfg(rapx_rustc_ge_196)]
-                                                Operand::RuntimeChecks(_) => {}
-                                            }
-                                        }
-                                    }
-                                    AggregateKind::Adt(_, _, _, _, _) => {
-                                        // For ADTs (structs/enums), handle field assignments field-sensitively.
-                                        // NOTE: Here we treat the ADT similarly to tuples,
-                                        // but fields might be named and ADT type info is available, so more precise field indexing is possible if needed.
-                                        let lv_ty = lv_place.ty(&body.local_decls, tcx).ty;
-                                        for (field_idx, operand) in operands.iter_enumerated() {
-                                            match operand {
-                                                Operand::Copy(rv_place)
-                                                | Operand::Move(rv_place) => {
-                                                    let rv_local = rv_place.local.as_usize();
-                                                    if values[lv_local].may_drop
-                                                        && values[rv_local].may_drop
-                                                    {
-                                                        // If possible, resolve field type for better analysis. Here we use tuple logic as a template.
-                                                        let field_ty = match lv_ty.kind() {
-                                                            ty::Adt(adt_def, substs) => {
-                                                                // Try getting the field type if available.
-                                                                if field_idx.as_usize()
-                                                                    < adt_def.all_fields().count()
-                                                                {
-                                                                    adt_def
-                                                                        .all_fields()
-                                                                        .nth(field_idx.as_usize())
-                                                                        .map(|f| {
-                                                                            #[cfg(not(
-                                                                                rapx_rustc_ge_198
-                                                                            ))]
-                                                                            {
-                                                                                f.ty(tcx, substs)
-                                                                            }
-                                                                            #[cfg(
-                                                                                rapx_rustc_ge_198
-                                                                            )]
-                                                                            {
-                                                                                f.ty(tcx, substs)
-                                                                                    .skip_norm_wip()
-                                                                            }
-                                                                        })
-                                                                        .unwrap_or(lv_ty)
-                                                                // fallback
-                                                                } else {
-                                                                    lv_ty
-                                                                }
-                                                            }
-                                                            _ => lv_ty,
-                                                        };
-
-                                                        // Create lv.field_idx Place using tcx.mk_place_field, as for tuples.
-                                                        let lv_field_place = tcx.mk_place_field(
-                                                            lv_place, field_idx, field_ty,
-                                                        );
-
-                                                        let assign = Assignment::new(
-                                                            lv_field_place,
-                                                            *rv_place,
-                                                            if matches!(operand, Operand::Move(_)) {
-                                                                AssignType::Move
-                                                            } else {
-                                                                AssignType::Copy
-                                                            },
-                                                            span,
-                                                        );
-                                                        alias_block.assignments.push(assign);
-                                                        rap_debug!(
-                                                            "Aggregate ADT field assignment: {:?}.{} = {:?}",
-                                                            lv_place,
-                                                            field_idx.as_usize(),
-                                                            rv_place
-                                                        );
-                                                    }
-                                                }
-                                                Operand::Constant(_) => {
-                                                    // Constants don't need alias analysis for this context.
-                                                }
-                                                #[cfg(rapx_rustc_ge_196)]
-                                                Operand::RuntimeChecks(_) => {}
-                                            }
-                                        }
-                                    }
-                                    // TODO: Support alias for array
-                                    AggregateKind::Array(_) => {}
-                                    // For other aggregate types, simply create an assignment for each aggregated operand
-                                    _ => {
-                                        for operand in operands {
-                                            match operand {
-                                                Operand::Copy(rv_place)
-                                                | Operand::Move(rv_place) => {
-                                                    let rv_local = rv_place.local.as_usize();
-                                                    if values[lv_local].may_drop
-                                                        && values[rv_local].may_drop
-                                                    {
-                                                        let assign = Assignment::new(
-                                                            lv_place,
-                                                            rv_place,
-                                                            AssignType::Copy,
-                                                            span,
-                                                        );
-                                                        alias_block.assignments.push(assign);
-                                                    }
-                                                }
-                                                Operand::Constant(_) => {}
-                                                #[cfg(rapx_rustc_ge_196)]
-                                                Operand::RuntimeChecks(_) => {}
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            Rvalue::Discriminant(rv_place) => {
-                                let assign =
-                                    Assignment::new(lv_place, rv_place, AssignType::Variant, span);
-                                alias_block.assignments.push(assign);
-                            }
-                            _ => {}
-                        }
-                    }
-                    StatementKind::SetDiscriminant {
-                        place: _,
-                        variant_index: _,
-                    } => {
-                        rap_warn!("SetDiscriminant: {:?} is not handled in RAPx!", stmt);
-                    }
-                    _ => {}
-                }
-            }
-
-            if bb.terminator.is_none() {
-                rap_info!(
-                    "Basic block BB{} has no terminator in function {:?}",
-                    i,
-                    fn_name
-                );
-                continue;
-            }
-            block_facts.push(alias_block);
-        }
-
         AliasGraph {
             path_graph,
-            constants: FxHashMap::default(),
             visit_times: 0,
             values,
-            block_facts,
-            alias_sets: Vec::<FxHashSet<usize>>::new(),
+            pts_graph: PtsGraph::new(),
+            move_sources: FxHashMap::default(),
             ret_alias: MopFnAliasPairs::new(arg_size),
             arg_size,
             span: body.span,
@@ -444,7 +96,6 @@ impl<'tcx> AliasGraph<'tcx> {
         self.path_graph.cfg_block(index)
     }
 
-    /// Retrieve the MIR terminator for the block at `index` on demand.
     pub fn terminator(&self, index: usize) -> Option<&Terminator<'tcx>> {
         self.path_graph.terminator(index)
     }
@@ -462,18 +113,60 @@ impl<'tcx> AliasGraph<'tcx> {
         self.visit_times += 1;
         self.visit_times
     }
+
+    // ── Index translation: value index → PtsGraph slot index ──
+
+    pub fn value_to_slot_idx(&self, value_idx: usize) -> Option<usize> {
+        if value_idx >= self.values.len() {
+            return None;
+        }
+        let local = self.values[value_idx].local;
+        let fields: Vec<usize> = {
+            let mut seq = vec![];
+            let mut cur = value_idx;
+            let mut iter = 0usize;
+            while let Some(ref father) = self.values[cur].father {
+                iter += 1;
+                if iter > 1000 {
+                    break;
+                }
+                seq.push(father.field_id);
+                cur = father.father_value_id;
+            }
+            seq.into_iter().rev().collect()
+        };
+        let slot = crate::analysis::points_to::slot::Slot { local, fields };
+        self.pts_graph.get_slot_idx(&slot)
+    }
+
+    pub fn get_alias_set(&self, e: usize) -> Option<Vec<usize>> {
+        let e_slot = self.value_to_slot_idx(e)?;
+        let mut result = vec![e];
+        for i in 0..self.values.len() {
+            if i == e {
+                continue;
+            }
+            if let Some(i_slot) = self.value_to_slot_idx(i) {
+                if self.pts_graph.may_alias(e_slot, i_slot) {
+                    result.push(i);
+                }
+            }
+        }
+        if result.len() > 1 {
+            Some(result)
+        } else {
+            None
+        }
+    }
+
 }
 
-// Implement Display for debugging / printing purposes.
-// Prints selected fields: def_id, values, blocks, constants, discriminants, scc_indices, child_scc.
 impl<'tcx> std::fmt::Display for AliasGraph<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(f, "AliasGraph {{")?;
         writeln!(f, "  def_id: {:?}", self.def_id())?;
         writeln!(f, "  values: {:?}", self.values)?;
         writeln!(f, "  cfg_blocks: {:?}", self.path_graph.cfg.blocks)?;
-        writeln!(f, "  block_facts: {:?}", self.block_facts)?;
-        writeln!(f, "  constants: {:?}", self.constants)?;
         writeln!(f, "  disc_info: {:?}", self.path_graph.disc_info)?;
         write!(f, "}}")
     }

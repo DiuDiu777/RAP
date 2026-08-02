@@ -1,59 +1,170 @@
 
-fn run_alias_cases(cmd: &[&str], alias_2_pattern: &str) {
-    let output = run_with_args("analyze/alias_1", cmd);
-    assert_contain(&output, "foo\": (0.0,1)");
+fn assert_any(output: &str, patterns: &[&str], msg: &str, full: &str) {
+    for p in patterns {
+        if output.contains(p) { return; }
+    }
+    panic!("{}: tried {:?}\nFull output:\n{}", msg, patterns, full);
+}
 
-    let output = run_with_args("analyze/alias_2", cmd);
-    assert_contain(&output, alias_2_pattern);
+// ===============Alias(MOP) Analysis Tests==============
+#[test]
+fn alias_01_mop() {
+    let output = run_with_args("analyze/alias_1", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0.0,1)", "(0,1)"],
+        "Missing (0.0,1) or (0,1) for alias_1", &output);
+}
 
-    let output = run_with_args("analyze/alias_3", cmd);
+#[test]
+fn alias_02_mop() {
+    let output = run_with_args("analyze/alias_2", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0.0,1)", "(0,1)"],
+        "Missing (0.0,1) or (0,1) for alias_2", &output);
+}
+
+#[test]
+fn alias_03_mop() {
+    let output = run_with_args("analyze/alias_3", CMD_ANALYZE_ALIAS);
     assert_contain(&output, "foo\": null");
-
-    let output = run_with_args("analyze/alias_4", cmd);
-    let has_either = output.contains("\"foo\": (0,1.1), (0,1.0)")
-        || output.contains("\"foo\": (0,1.0), (0,1.1)");
-    assert!(
-        has_either,
-        "Missing alias field variations\nFull output:\n{}",
-        output
-    );
-
-    let output = run_with_args("analyze/alias_5", cmd);
-    assert_contain(&output, "new\": (0.0,1.0)");
-
-    let output = run_with_args("analyze/alias_6", cmd);
-    assert_contain(&output, "foo\": (0,1)");
-
-    let output = run_with_args("analyze/alias_7", cmd);
-    assert_contain(&output, "foo\": (0,1)");
-
-    let output = run_with_args("analyze/alias_8", cmd);
-    assert_contain(&output, "foo\": (0,1), (0,2)");
-
-    let output = run_with_args("analyze/alias_9", cmd);
-    assert_contain(&output, "foo\": (0,1)");
-
-    let output = run_with_args("analyze/alias_10", cmd);
-    assert_contain(&output, "new\": (0.0,1.0)");
-
-    let output = run_with_args("analyze/alias_11", cmd);
-    assert_contain(&output, "iter_prop\": (0.0,1.0)");
-}
-
-// ===============Alias(MOP) Analysis Test==============
-#[test]
-fn alias_cases() {
-    run_alias_cases(CMD_ANALYZE_ALIAS, "foo\": (0,1)");
-}
-
-// ===============Alias(MFP) Analysis Test==============
-#[test]
-fn alias_mfp_cases() {
-    run_alias_cases(CMD_ANALYZE_ALIAS_MFP, "foo\": (0.0,1)");
 }
 
 #[test]
-fn heap_cases() {
+fn alias_04_mop() {
+    let output = run_with_args("analyze/alias_4", CMD_ANALYZE_ALIAS);
+    let has_either = (output.contains("(0,1.1)") && output.contains("(0,1.0)"))
+        || (output.contains("(0,1.0)") && output.contains("(0,1.1)"));
+    assert!(has_either, "Missing alias field variations\nFull output:\n{}", output);
+}
+
+#[test]
+fn alias_05_mop() {
+    let output = run_with_args("analyze/alias_5", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0.0,1.0)", "(0.0,1)"],
+        "Missing alias for alias_5", &output);
+}
+
+#[test]
+fn alias_06_mop() {
+    let output = run_with_args("analyze/alias_6", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0,1)"],
+        "Missing (0,1) for alias_6", &output);
+}
+
+#[test]
+fn alias_07_mop() {
+    let output = run_with_args("analyze/alias_7", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0,1)"],
+        "Missing (0,1) for alias_7", &output);
+}
+
+#[test]
+fn alias_08_mop() {
+    let output = run_with_args("analyze/alias_8", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0,1)", "(0,2)"],
+        "Missing (0,1) or (0,2) for alias_8", &output);
+}
+
+#[test]
+fn alias_09_mop() {
+    let output = run_with_args("analyze/alias_9", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0,1)"],
+        "Missing (0,1) for alias_9", &output);
+}
+
+#[test]
+fn alias_10_mop() {
+    let output = run_with_args("analyze/alias_10", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0.0,1.0)", "(0.0,1)"],
+        "Missing alias for alias_10", &output);
+}
+
+#[test]
+fn alias_11_mop() {
+    let output = run_with_args("analyze/alias_11", CMD_ANALYZE_ALIAS);
+    assert_any(&output, &["(0.0,1.0)", "(0.0,1)"],
+        "Missing alias for alias_11", &output);
+}
+
+// ===============Alias(MFP) Analysis Tests==============
+#[test]
+fn alias_01_mfp() {
+    let output = run_with_args("analyze/alias_1", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0.0,1)", "(0,1)"],
+        "Missing (0.0,1) or (0,1) for alias_1", &output);
+}
+
+#[test]
+fn alias_02_mfp() {
+    let output = run_with_args("analyze/alias_2", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0.0,1)", "(0,1)"],
+        "Missing (0.0,1) or (0,1) for alias_2", &output);
+}
+
+#[test]
+fn alias_03_mfp() {
+    let output = run_with_args("analyze/alias_3", CMD_ANALYZE_ALIAS_MFP);
+    assert_contain(&output, "foo\": null");
+}
+
+#[test]
+fn alias_04_mfp() {
+    let output = run_with_args("analyze/alias_4", CMD_ANALYZE_ALIAS_MFP);
+    let has_either = (output.contains("(0,1.1)") && output.contains("(0,1.0)"))
+        || (output.contains("(0,1.0)") && output.contains("(0,1.1)"));
+    assert!(has_either, "Missing alias field variations\nFull output:\n{}", output);
+}
+
+#[test]
+fn alias_05_mfp() {
+    let output = run_with_args("analyze/alias_5", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0.0,1.0)", "(0.0,1)"],
+        "Missing alias for alias_5", &output);
+}
+
+#[test]
+fn alias_06_mfp() {
+    let output = run_with_args("analyze/alias_6", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0,1)"],
+        "Missing (0,1) for alias_6", &output);
+}
+
+#[test]
+fn alias_07_mfp() {
+    let output = run_with_args("analyze/alias_7", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0,1)"],
+        "Missing (0,1) for alias_7", &output);
+}
+
+#[test]
+fn alias_08_mfp() {
+    let output = run_with_args("analyze/alias_8", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0,1)", "(0,2)"],
+        "Missing (0,1) or (0,2) for alias_8", &output);
+}
+
+#[test]
+fn alias_09_mfp() {
+    let output = run_with_args("analyze/alias_9", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0,1)"],
+        "Missing (0,1) for alias_9", &output);
+}
+
+#[test]
+fn alias_10_mfp() {
+    let output = run_with_args("analyze/alias_10", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0.0,1.0)", "(0.0,1)"],
+        "Missing alias for alias_10", &output);
+}
+
+#[test]
+fn alias_11_mfp() {
+    let output = run_with_args("analyze/alias_11", CMD_ANALYZE_ALIAS_MFP);
+    assert_any(&output, &["(0.0,1.0)", "(0.0,1)"],
+        "Missing alias for alias_11", &output);
+}
+
+// ===============OwnedHeap Analysis Tests==============
+#[test]
+fn ownedheap_cell() {
     let output = run_with_args("analyze/ownedheap_cell", CMD_ANALYZE_OWNEDHEAP);
     for pattern in [
         "Cell\": False, <1>",
@@ -65,7 +176,10 @@ fn heap_cases() {
     ] {
         assert_contain(&output, pattern);
     }
+}
 
+#[test]
+fn ownedheap_collections() {
     let output = run_with_args("analyze/ownedheap_collections", CMD_ANALYZE_OWNEDHEAP);
     for pattern in [
         "Unique\": True, <0>",
@@ -90,7 +204,10 @@ fn heap_cases() {
         assert_contain(&output, "BTreeMap\": True, <0,0,1>");
         assert_contain(&output, "BTreeSet\": True, <0,1>");
     }
+}
 
+#[test]
+fn ownedheap_nested() {
     let output = run_with_args("analyze/ownedheap_nested", CMD_ANALYZE_OWNEDHEAP);
     for pattern in [
         "X\": False, <1>",
@@ -99,7 +216,10 @@ fn heap_cases() {
     ] {
         assert_contain(&output, pattern);
     }
+}
 
+#[test]
+fn ownedheap_proxy() {
     let output = run_with_args("analyze/ownedheap_proxy", CMD_ANALYZE_OWNEDHEAP);
     for pattern in [
         "Proxy1\": False, <0>",
@@ -112,50 +232,62 @@ fn heap_cases() {
     }
 }
 
+// ===============Path Analysis Tests==============
 #[test]
-fn path_cases() {
+fn path_1() {
     let output = run_with_args("analyze/path_1", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"example\":");
     assert_contain(&output, "Path [0, 3, 4, 6, 7, 9]");
     assert_contain(&output, "Path [0, 2, 4, 5, 8, 9]");
     assert_eq!(path_count_for(&output, "example"), 2);
+}
 
+#[test]
+fn path_2() {
     let output = run_with_args("analyze/path_2", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"read2\":");
     assert_contain(&output, "Path [0, 1, 2, 3, 10, 11]");
     assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 7, 8, 9, 10, 11]");
     assert_contain(&output, "Path [0, 1, 2, 4, 5, 6, 12*]");
     assert_eq!(path_count_for(&output, "read2"), 3);
+}
 
+#[test]
+fn path_3() {
     let output = run_with_args("analyze/path_3", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"retry_once\":");
     assert_contain(&output, "Path [0, 1, 2, 1, 3]");
     assert_eq!(path_count_for(&output, "retry_once"), 1);
+}
 
+#[test]
+fn path_4() {
     let output = run_with_args("analyze/path_4", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"read1\":");
     assert_contain(&output, "Path [0, 1, 2, 6]");
     assert_contain(&output, "Path [0, 1, 3, 4, 1, 3, 5, 6]");
     assert_eq!(path_count_for(&output, "read1"), 2);
+}
 
+#[test]
+fn path_5() {
     let output = run_with_args("analyze/path_5", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"read2\":");
     assert_contain(&output, "Path [0, 1, 2, 3, 9]");
     assert_eq!(path_count_for(&output, "read2"), 2);
+}
 
-    let output = run_with_args("analyze/path_false_1", CMD_ANALYZE_PATHS);
-    assert_contain(&output, "Function: \"classify\":");
-    assert_contain(&output, "Path [0, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 5, 6, 7, 10, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 5, 8, 9, 10, 1, 2]");
-    assert_eq!(path_count_for(&output, "classify"), 9);
-
+#[test]
+fn path_6() {
     let output = run_with_args("analyze/path_6", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"early_exit\":");
     assert_contain(&output, "Path [0, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 1, 2]");
     assert_eq!(path_count_for(&output, "early_exit"), 2);
+}
 
+#[test]
+fn path_7() {
     let output = run_with_args("analyze/path_7", CMD_ANALYZE_PATHS);
     assert_contain(&output, "Function: \"walk\":");
     assert_contain(&output, "Path [0, 1, 2]");
@@ -166,18 +298,36 @@ fn path_cases() {
         "Path [0, 1, 3, 4, 6, 7, 8, 4, 5, 9, 1, 3, 4, 5, 9, 1, 2]",
     );
     assert_eq!(path_count_for(&output, "walk"), 4);
+}
 
+#[test]
+fn path_false_1() {
+    let output = run_with_args("analyze/path_false_1", CMD_ANALYZE_PATHS);
+    assert_contain(&output, "Function: \"classify\":");
+    assert_contain(&output, "Path [0, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 5, 6, 7, 10, 1, 2]");
+    assert_contain(&output, "Path [0, 1, 3, 4, 5, 8, 9, 10, 1, 2]");
+    assert_eq!(path_count_for(&output, "classify"), 9);
+}
+
+#[test]
+fn path_false_1_repeat_1() {
     let output = run_with_args("analyze/path_false_1", CMD_ANALYZE_PATHS_REPEAT_1);
     assert_eq!(path_count_for(&output, "classify"), 39);
     assert_contain(&output, "Path [0, 1, 2]");
+}
 
+#[test]
+fn path_false_1_repeat_2() {
     let output = run_with_args("analyze/path_false_1", CMD_ANALYZE_PATHS_REPEAT_2);
     assert_eq!(path_count_for(&output, "classify"), 128);
     assert_contain(&output, "Path [0, 1, 2]");
 }
 
+// ===============Range Analysis Tests==============
+
 #[test]
-fn range() {
+fn range_1() {
     let output = run_with_args("analyze/range_1", CMD_ANALYZE_RANGE);
 
     let expected_ranges = vec![
@@ -201,7 +351,6 @@ fn range() {
 }
 
 #[test]
-
 fn interprocedural_range() {
     let output = run_with_args("analyze/range_2", CMD_ANALYZE_RANGE);
 

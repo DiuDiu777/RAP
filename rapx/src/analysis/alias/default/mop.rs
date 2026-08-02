@@ -23,18 +23,9 @@ impl<'tcx> AliasGraph<'tcx> {
         fn_map: &mut MopFnAliasMap,
         recursion_set: &mut HashSet<DefId>,
     ) {
-        rap_debug!(
-            "process_function_paths: def_id={:?} blocks={}",
-            self.def_id(),
-            self.path_graph.cfg.blocks.len()
-        );
-        let paths = precomputed_paths.unwrap_or_else(|| self.enumerate_paths());
-        rap_debug!(
-            "process_function_paths: def_id={:?} paths_enumerated={}",
-            self.def_id(),
-            paths.len()
-        );
+        self.init_pts_graph();
 
+        let paths = precomputed_paths.unwrap_or_else(|| self.enumerate_paths());
         let Some(root) = paths.root() else { return; };
 
         let mut path = Vec::new();
@@ -50,15 +41,14 @@ impl<'tcx> AliasGraph<'tcx> {
     ) -> Result<(), ()> {
         path.push(node.block);
         let mut obs = NoopAliasObserver;
-        self.alias_bb(node.block, &mut obs);
+
+        self.alias_bb_pts(node.block, &mut obs);
         if let Some(target_id) = self.call_target_of(node.block) {
             ensure_fn_aliases_cached(self.tcx(), target_id, fn_map, rec_set);
         }
-        self.alias_bbcall(node.block, fn_map, &mut obs);
+        self.alias_bbcall_pts(node.block, fn_map, &mut obs);
 
-        let saved_values = self.values.clone();
-        let saved_constants = self.constants.clone();
-        let saved_alias_sets = self.alias_sets.clone();
+        let saved_pts_graph = self.pts_graph.clone();
         let saved_rec = rec_set.clone();
 
         if node.is_path_end {
@@ -67,13 +57,11 @@ impl<'tcx> AliasGraph<'tcx> {
                 path.pop();
                 return Err(());
             }
-            self.merge_results();
+            self.merge_results_pts();
         }
 
         for child in &node.children {
-            self.values = saved_values.clone();
-            self.constants = saved_constants.clone();
-            self.alias_sets = saved_alias_sets.clone();
+            self.pts_graph = saved_pts_graph.clone();
             *rec_set = saved_rec.clone();
             self.dfs_mop(child, path, fn_map, rec_set)?;
         }

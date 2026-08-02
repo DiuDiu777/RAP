@@ -37,8 +37,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         self.drop_check(node.block);
 
         let saved_values = self.alias_graph.values.clone();
-        let saved_constants = self.alias_graph.constants.clone();
-        let saved_alias_sets = self.alias_graph.alias_sets.clone();
+        let saved_pts_graph = self.alias_graph.pts_graph.clone();
         let saved_drop_record = self.drop_record.clone();
 
         if node.is_path_end {
@@ -57,8 +56,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
         for child in &node.children {
             self.alias_graph.values = saved_values.clone();
-            self.alias_graph.constants = saved_constants.clone();
-            self.alias_graph.alias_sets = saved_alias_sets.clone();
+            self.alias_graph.pts_graph = saved_pts_graph.clone();
             self.drop_record = saved_drop_record.clone();
             self.dfs_safedrop(child, path, fn_map)?;
         }
@@ -153,6 +151,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
         precomputed_paths: Option<PathTree>,
         fn_map: &MopFnAliasMap,
     ) {
+        self.alias_graph.init_pts_graph();
         let paths = precomputed_paths.unwrap_or_else(|| self.alias_graph.enumerate_paths());
         let Some(root) = paths.root() else { return };
         let mut path = Vec::new();
@@ -201,10 +200,9 @@ impl<'tcx> SafeDropGraph<'tcx> {
     ) -> bool {
         let local = self.alias_graph.values[value_idx].local;
         rap_debug!(
-            "df_check: value_idx = {:?}, bb_idx = {:?}, alias_sets: {:?}",
+            "df_check: value_idx = {:?}, bb_idx = {:?}",
             value_idx,
             bb_idx,
-            self.alias_graph.alias_sets,
         );
         let Some(confidence) = checks::check_drop_status(&self.alias_graph, &mut self.drop_record, value_idx) else {
             return false;
@@ -250,7 +248,6 @@ impl<'tcx> SafeDropGraph<'tcx> {
 
     pub fn dp_check(&mut self, flag_cleanup: bool) {
         rap_debug!("dangling pointer check");
-        rap_debug!("current alias sets: {:?}", self.alias_graph.alias_sets);
         if flag_cleanup {
             for arg_idx in 1..self.alias_graph.arg_size() + 1 {
                 self.dp_check_arg(arg_idx, flag_cleanup);

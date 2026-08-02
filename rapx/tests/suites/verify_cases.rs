@@ -1,8 +1,8 @@
 
+// ================ LinkedList NonNull Sound ================
 #[test]
 fn linked_list_nonnull() {
     let output = run_with_args("verify_cases/linked_list_nonnull", CMD_VERIFY);
-
     for &func in &[
         "LinkedList::<T>::new",
         "LinkedList::<T>::len",
@@ -22,11 +22,10 @@ fn linked_list_nonnull() {
     }
 }
 
-
+// ================ LinkedList RawPtr Sound ================
 #[test]
 fn linked_list_rawptr() {
     let output = run_with_args("verify_cases/linked_list_rawptr", CMD_VERIFY);
-
     for &func in &[
         "LinkedList::<T>::new",
         "LinkedList::<T>::len",
@@ -46,10 +45,10 @@ fn linked_list_rawptr() {
     }
 }
 
+// ================ LinkedList NonNull Unsound ================
 #[test]
 fn linked_list_nonnull_unsound() {
     let output = run_with_args("verify_cases/linked_list_nonnull_unsound", CMD_VERIFY_TARGETED);
-
     for &func in &[
         "LinkedList::<T>::pop_front",
         "LinkedList::<T>::pop_back",
@@ -62,10 +61,10 @@ fn linked_list_nonnull_unsound() {
     }
 }
 
+// ================ LinkedList RawPtr Unsound ================
 #[test]
 fn linked_list_rawptr_unsound() {
     let output = run_with_args("verify_cases/linked_list_rawptr_unsound", CMD_VERIFY_TARGETED);
-
     for &func in &["LinkedList::<T>::front", "LinkedList::<T>::back"] {
         assert_function_result(&output, func, "UNSOUND");
     }
@@ -79,7 +78,7 @@ fn linked_list_rawptr_unsound() {
     }
 }
 
-
+// ================ Std Challenge Cases ================
 #[test]
 fn std_challenge_17() {
     let output = run_with_args("verify_cases/std-challenge-17", CMD_VERIFY_TARGETED);
@@ -99,6 +98,16 @@ fn std_challenge_18() {
 }
 
 #[test]
+fn std_challenge_02() {
+    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_TARGETED);
+    assert!(
+        !output.contains("UNSOUND"),
+        "unexpected UNSOUND in std-challenge-02"
+    );
+}
+
+// ================ HashMap Tests ================
+#[test]
 fn hashmap() {
     let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_TARGETED);
     assert_contain(&output, "result: SOUND");
@@ -112,15 +121,7 @@ fn hashmap_skip_invariant() {
     assert_not_contain(&output, "result: UNSOUND");
 }
 
-#[test]
-fn std_challenge_02() {
-    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_TARGETED);
-    assert!(
-        !output.contains("UNSOUND"),
-        "unexpected UNSOUND in std-challenge-02"
-    );
-}
-
+// ================ Allocator Tests ================
 #[test]
 fn bump_allocator() {
     let output = run_with_args("verify_cases/bump_allocator", CMD_VERIFY);
