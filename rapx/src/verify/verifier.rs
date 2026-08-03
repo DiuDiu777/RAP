@@ -74,6 +74,8 @@ impl<'tcx> ForwardVerifier<'tcx> {
             }
         }
 
+        let mut block_occs: FxHashMap<BasicBlock, usize> = FxHashMap::default();
+
         for item in &items.items {
             match item {
                 BackwardItem::Statement {
@@ -92,8 +94,10 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     );
                 }
                 BackwardItem::Terminator { block, kind } => {
+                    let occ = block_occs.entry(*block).or_insert(0);
+                    *occ += 1;
                     let terminator = body.basic_blocks[*block].terminator();
-                    self.visit_terminator(*block, *kind, terminator, body, &mut result);
+                    self.visit_terminator(*block, *kind, terminator, body, &mut result, *occ);
                 }
                 BackwardItem::PathStep { step, kind } => {
                     result.steps.push(ForwardStep::PathStep {
@@ -165,6 +169,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
         terminator: &Terminator<'tcx>,
         body: &Body<'tcx>,
         result: &mut ForwardVisitResult<'tcx>,
+        occurrence: usize,
     ) {
         result.steps.push(ForwardStep::Terminator { block, reason });
 
@@ -244,6 +249,8 @@ impl<'tcx> ForwardVerifier<'tcx> {
                         cmp_op,
                         cmp_lhs,
                         cmp_rhs,
+                        block,
+                        occurrence,
                     });
                     if let Some((place, align)) = align_guard_value(&value, equals, result) {
                         result.facts.push(StateFact::KnownAligned {
@@ -270,6 +277,8 @@ impl<'tcx> ForwardVerifier<'tcx> {
                             cmp_op: Some(BinOp::Lt),
                             cmp_lhs: Some(yielded),
                             cmp_rhs: Some(end),
+                            block,
+                            occurrence,
                         });
                     }
                 } else {
@@ -286,6 +295,8 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     cmp_op,
                     cmp_lhs,
                     cmp_rhs,
+                    block,
+                    occurrence,
                 });
             }
             TerminatorKind::Drop { place, .. } => {
@@ -1261,6 +1272,8 @@ pub struct ForwardVisitResult<'tcx> {
     pub notes: Vec<String>,
     /// Points-to graph built from the full forward path.
     pub pts_graph: PtsGraph,
+    /// Per-object init ranges aggregated from KnownInit facts.
+    pub(crate) init_ranges: Vec<crate::verify::smt_check::common::InitRangeState>,
 }
 
 impl<'tcx> ForwardVisitResult<'tcx> {
@@ -1277,6 +1290,7 @@ impl<'tcx> ForwardVisitResult<'tcx> {
             steps: Vec::new(),
             notes: Vec::new(),
             pts_graph: PtsGraph::new(),
+            init_ranges: Vec::new(),
         }
     }
 
@@ -1444,6 +1458,10 @@ pub enum StateFact<'tcx> {
         cmp_op: Option<BinOp>,
         cmp_lhs: Option<AbstractValue<'tcx>>,
         cmp_rhs: Option<AbstractValue<'tcx>>,
+        /// The basic block where this branch occurs.
+        block: BasicBlock,
+        /// 1-based occurrence count of this block along the path (1st, 2nd, …).
+        occurrence: usize,
     },
     PathCondition(String),
     Drop(PlaceKey),

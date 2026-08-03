@@ -1,5 +1,5 @@
 [package]
-name = "sliceindex_unsound_03"
+name = "nonoverlap_sound_01"
 version = "0.1.0"
 edition = "2024"
 

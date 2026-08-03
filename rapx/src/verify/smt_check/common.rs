@@ -3206,6 +3206,43 @@ impl SmtPredicate {
     }
 }
 
+// ── Init Range Types (shared between aggregator and SMT checker) ────────
+
+/// One contiguous initialized range within a single allocation object.
+#[derive(Clone, Debug)]
+pub(crate) struct InitRange {
+    pub start: SmtTerm,
+    pub end: SmtTerm,
+    pub ty_name: String,
+    pub reason: String,
+}
+
+/// Per-object aggregated initialization state (see `init_range` module).
+#[derive(Clone, Debug)]
+pub(crate) struct InitRangeState {
+    pub object: PlaceKey,
+    pub ranges: Vec<InitRange>,
+}
+
+impl InitRangeState {
+    pub fn total_concrete(&self) -> u64 {
+        self.ranges
+            .iter()
+            .filter_map(|r| {
+                match (&r.start, &r.end) {
+                    (SmtTerm::Const(s), SmtTerm::Const(e)) if e >= s => Some(e - s),
+                    _ => None,
+                }
+            })
+            .sum()
+    }
+    pub fn all_concrete(&self) -> bool {
+        self.ranges.iter().all(|r| {
+            matches!(&r.start, SmtTerm::Const(_)) && matches!(&r.end, SmtTerm::Const(_))
+        })
+    }
+}
+
 // ── SMT Query + Result Types ───────────────────────────────────────────
 
 /// Solver query built from path facts plus one negated obligation.

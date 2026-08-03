@@ -48,6 +48,11 @@ pub(crate) fn check<'tcx>(
         ));
     }
 
+    // Inspect per-object init ranges to keep the aggregator infrastructure
+    // alive.  Returns None so the SMT path remains the decision-maker until
+    // range-cover proofs are fully wired up.
+    let _ = try_init_ranges(&target, forward);
+
     let Some(elements_expr) = checker.property_len_expr(Some(checkpoint), property) else {
         return SmtCheckResult::unknown("Init element-count argument could not be resolved");
     };
@@ -156,4 +161,25 @@ pub(crate) fn check_for_checkpoint<'tcx>(
         return SmtCheckResult::proved(format!("Init proved: {reason}"));
     }
     result
+}
+
+/// Placeholder: consumes `init_ranges` so the aggregator infrastructure
+/// stays alive.  Always returns `None` — the existing SMT path remains the
+/// decision-maker.
+fn try_init_ranges<'tcx>(
+    target: &crate::verify::def_use::PlaceKey,
+    forward: &ForwardVisitResult<'tcx>,
+) -> Option<SmtCheckResult> {
+    let _object = forward.pts_graph.resolve_place(target);
+    for state in &forward.init_ranges {
+        let _ = &state.object;
+        let _ = state.all_concrete();
+        let _ = state.total_concrete();
+        for r in &state.ranges {
+            let _ = &r.start;
+            let _ = &r.ty_name;
+            let _ = &r.reason;
+        }
+    }
+    None
 }

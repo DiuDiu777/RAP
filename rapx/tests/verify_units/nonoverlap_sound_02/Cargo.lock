@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "sliceindex_sound_03"
+name = "nonoverlap_sound_02"
 version = "0.1.0"

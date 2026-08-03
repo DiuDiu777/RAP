@@ -77,6 +77,10 @@ pub struct BlockConstantInfo {
     pub assigned_locals: FxHashSet<usize>,
     pub constants: FxHashMap<usize, usize>,
     pub constraint_copies: FxHashMap<usize, usize>,
+    /// Maps a local assigned by `AddWithOverflow(src, const)` to `(src, const)`.
+    pub increments: FxHashMap<usize, (usize, usize)>,
+    /// Maps a local assigned by `Rem(src, const)` to `(src, divisor)`.
+    pub remainders: FxHashMap<usize, (usize, usize)>,
     /// Maps a boolean local (e.g., a guard result) to the binary comparison
     /// that produced it: `(op, lhs_local, rhs_kind)`.
     pub comparison_sources: FxHashMap<usize, ComparisonSource>,
@@ -255,6 +259,37 @@ impl<'tcx> PathGraph<'tcx> {
                         Rvalue::BinaryOp(op, operands)
                             if matches!(
                                 op,
+                                BinOp::AddWithOverflow
+                            ) =>
+                        {
+                            let (lhs, rhs): (&Operand<'_>, &Operand<'_>) =
+                                (&operands.0, &operands.1);
+                            if let Some(lhs_local) = match lhs {
+                                Operand::Copy(l) | Operand::Move(l)
+                                    if l.projection.is_empty() =>
+                                {
+                                    Some(l.local.as_usize())
+                                }
+                                _ => None,
+                            } {
+                                let incr = match rhs {
+                                    Operand::Constant(c) => {
+                                        let typing_env =
+                                            TypingEnv::post_analysis(tcx, def_id);
+                                        c.const_
+                                            .try_eval_bits(tcx, typing_env)
+                                            .map(|v| v as usize)
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(incr) = incr {
+                                    info.increments.insert(dest, (lhs_local, incr));
+                                }
+                            }
+                        }
+                        Rvalue::BinaryOp(op, operands)
+                            if matches!(
+                                op,
                                 BinOp::Lt
                                     | BinOp::Le
                                     | BinOp::Gt
@@ -267,36 +302,31 @@ impl<'tcx> PathGraph<'tcx> {
                             let (lhs, rhs): (&Operand<'_>, &Operand<'_>) =
                                 (&operands.0, &operands.1);
                             let lhs_local = match lhs {
-                                Operand::Copy(l) | Operand::Move(l) if l.projection.is_empty() => {
+                                Operand::Copy(l) | Operand::Move(l)
+                                    if l.projection.is_empty() =>
+                                {
                                     Some(l.local.as_usize())
                                 }
                                 _ => None,
                             };
-                            // Allow Constant RHS (e.g. `Ne(ptr, const 0_usize)` for null checks)
-                            let rhs_is_zero = match rhs {
-                                Operand::Constant(c) => {
-                                    let typing_env = TypingEnv::post_analysis(tcx, def_id);
-                                    c.const_
-                                        .try_eval_bits(tcx, typing_env)
-                                        .map(|v| v == 0)
-                                        .unwrap_or(false)
-                                }
-                                _ => false,
-                            };
                             if let Some(lhs_local) = lhs_local {
-                                let rhs_local = if rhs_is_zero {
-                                    0
-                                } else {
-                                    match rhs {
-                                        Operand::Copy(r) | Operand::Move(r)
-                                            if r.projection.is_empty() =>
-                                        {
-                                            r.local.as_usize()
-                                        }
-                                        _ => {
-                                            continue;
-                                        }
+                                let rhs_eval = match rhs {
+                                    Operand::Constant(c) => {
+                                        let typing_env =
+                                            TypingEnv::post_analysis(tcx, def_id);
+                                        c.const_
+                                            .try_eval_bits(tcx, typing_env)
+                                            .map(|v| (v as usize, true))
                                     }
+                                    Operand::Copy(r) | Operand::Move(r)
+                                        if r.projection.is_empty() =>
+                                    {
+                                        Some((r.local.as_usize(), false))
+                                    }
+                                    _ => None,
+                                };
+                                let Some((rhs_local, rhs_is_constant)) = rhs_eval else {
+                                    continue;
                                 };
                                 info.comparison_sources.insert(
                                     dest,
@@ -304,7 +334,7 @@ impl<'tcx> PathGraph<'tcx> {
                                         op: *op,
                                         lhs_local,
                                         rhs_local,
-                                        rhs_is_constant: rhs_is_zero,
+                                        rhs_is_constant,
                                     },
                                 );
                                 if matches!(op, BinOp::BitAnd)
@@ -314,6 +344,30 @@ impl<'tcx> PathGraph<'tcx> {
                                     )
                                 {
                                     info.and_sources.insert(dest, (lhs_local, rhs_local));
+                                }
+                            }
+                        }
+                        Rvalue::BinaryOp(op, operands) if matches!(op, BinOp::Rem) => {
+                            let (lhs, rhs): (&Operand<'_>, &Operand<'_>) = (&operands.0, &operands.1);
+                            if let Some(lhs_local) = match lhs {
+                                Operand::Copy(l) | Operand::Move(l) if l.projection.is_empty() => {
+                                    Some(l.local.as_usize())
+                                }
+                                _ => None,
+                            } {
+                                let divisor = match rhs {
+                                    Operand::Constant(c) => {
+                                        let typing_env = TypingEnv::post_analysis(tcx, def_id);
+                                        c.const_
+                                            .try_eval_bits(tcx, typing_env)
+                                            .map(|v| v as usize)
+                                    }
+                                    _ => None,
+                                };
+                                if let Some(divisor) = divisor {
+                                    if divisor != 0 {
+                                        info.remainders.insert(dest, (lhs_local, divisor));
+                                    }
                                 }
                             }
                         }
@@ -836,6 +890,68 @@ impl<'tcx> PathGraph<'tcx> {
                         }
                         return true;
                     }
+
+                    // General Eq/Ne integer comparison: resolve both operands
+                    // and prune the infeasible branch when both are known.
+                    let is_eq = matches!(cmp.op, BinOp::Eq);
+                    let lhs_val = self.resolve_local_value(cmp.lhs_local, constraints);
+                    let rhs_val = if cmp.rhs_is_constant {
+                        Some(cmp.rhs_local)
+                    } else {
+                        self.resolve_local_value(cmp.rhs_local, constraints)
+                    };
+                    if let (Some(lhs), Some(rhs)) = (lhs_val, rhs_val) {
+                        let val = if is_eq {
+                            if lhs == rhs { 1 } else { 0 }
+                        } else {
+                            if lhs != rhs { 1 } else { 0 }
+                        };
+                        let expected = resolve_switch_target(targets, val as u128);
+                        if let Some(local) = constraint_local {
+                            constraints.insert(local, val);
+                        }
+                        if next != expected {
+                            return false;
+                        }
+                        return true;
+                    }
+                }
+
+                // Try to resolve a boolean comparison with concrete-value
+                // reasoning (handles Lt/Le/Gt/Ge with fully known operands).
+                // Only filter when the discriminant resolves to a definite value
+                // from a comparison with BOTH operands as known constants
+                // (not derived via increments, which may be imprecise across
+                // SCC boundaries).
+                if let Some(discr_local) = discr_local
+                    && let Some(info) = self.block_info.get(cur)
+                    && let Some(cmp) = info.comparison_sources.get(&discr_local)
+                    && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+                {
+                    // Resolve LHS directly from constants (no increment chains)
+                    let lhs_val = self.resolve_local_value_direct(cmp.lhs_local, constraints);
+                    let rhs_val = if cmp.rhs_is_constant {
+                        Some(cmp.rhs_local)
+                    } else {
+                        self.resolve_local_value_direct(cmp.rhs_local, constraints)
+                    };
+                    if let (Some(lhs), Some(rhs)) = (lhs_val, rhs_val) {
+                        let val = match cmp.op {
+                            BinOp::Lt => if lhs < rhs { 1 } else { 0 },
+                            BinOp::Le => if lhs <= rhs { 1 } else { 0 },
+                            BinOp::Gt => if lhs > rhs { 1 } else { 0 },
+                            BinOp::Ge => if lhs >= rhs { 1 } else { 0 },
+                            _ => unreachable!(),
+                        };
+                        let expected = resolve_switch_target(targets, val as u128);
+                        if let Some(local) = constraint_local {
+                            constraints.insert(local, val);
+                        }
+                        if next != expected {
+                            return false;
+                        }
+                        return true;
+                    }
                 }
 
                 // No prior constraint — conservatively allow any valid target
@@ -915,7 +1031,9 @@ impl<'tcx> PathGraph<'tcx> {
 
     /// Recursively resolve a local's value through constraint copies,
     /// cast chains, field projections, and aggregate sources (global maps).
-    fn resolve_local_value(
+    /// Like `resolve_local_value` but does NOT follow increment chains.
+    /// Used in conservative path filtering where we need high confidence.
+    fn resolve_local_value_direct(
         &self,
         local: usize,
         constraints: &FxHashMap<usize, usize>,
@@ -927,9 +1045,10 @@ impl<'tcx> PathGraph<'tcx> {
                 continue;
             }
             if let Some(&val) = constraints.get(&cur) {
-                return Some(val);
+                if val != usize::MAX {
+                    return Some(val);
+                }
             }
-            // Follow constraint copies in any block (per-block metadata).
             for info in &self.block_info {
                 if let Some(&src) = info.constraint_copies.get(&cur) {
                     stack.push(src);
@@ -938,16 +1057,76 @@ impl<'tcx> PathGraph<'tcx> {
                     return Some(val);
                 }
             }
-            // Follow global cast chains.
             if let Some(&cast_src) = self.cast_chains.get(&cur) {
                 stack.push(cast_src);
+            }
+        }
+        None
+    }
+
+    fn resolve_local_value(
+        &self,
+        local: usize,
+        constraints: &FxHashMap<usize, usize>,
+    ) -> Option<usize> {
+        let mut stack = vec![(local, 0isize)];
+        let mut seen = FxHashSet::default();
+        while let Some((cur, offset)) = stack.pop() {
+            if !seen.insert(cur) {
+                continue;
+            }
+            if let Some(&val) = constraints.get(&cur) {
+                if val == usize::MAX {
+                    // Sentinel for known-nonnull; not a concrete integer value.
+                } else if offset >= 0 {
+                    return Some(val + offset as usize);
+                } else {
+                    return val.checked_sub((-offset) as usize);
+                }
+            }
+            // Follow constraint copies in any block (per-block metadata).
+            for info in &self.block_info {
+                if let Some(&src) = info.constraint_copies.get(&cur) {
+                    stack.push((src, offset));
+                }
+                if let Some(&val) = info.constants.get(&cur) {
+                    if offset >= 0 {
+                        return Some(val + offset as usize);
+                    } else {
+                        return val.checked_sub((-offset) as usize);
+                    }
+                }
+                // Follow increments: if cur = src + incr, the effective value
+                // of cur is value_of(src) + incr + offset.
+                if let Some(&(incr_src, incr_amt)) = info.increments.get(&cur) {
+                    stack.push((incr_src, offset + incr_amt as isize));
+                }
+                // Follow remainder: cur = rem_src % rem_div.
+                // Resolve rem_src recursively, compute remainder, then apply offset.
+                if let Some(&(rem_src, rem_div)) = info.remainders.get(&cur) {
+                    if let Some(src_val) = self.resolve_local_value(rem_src, constraints) {
+                        let rem = src_val % rem_div;
+                        let result = if offset >= 0 {
+                            Some(rem + offset as usize)
+                        } else {
+                            rem.checked_sub((-offset) as usize)
+                        };
+                        if let Some(v) = result {
+                            return Some(v);
+                        }
+                    }
+                }
+            }
+            // Follow global cast chains.
+            if let Some(&cast_src) = self.cast_chains.get(&cur) {
+                stack.push((cast_src, offset));
             }
             // Follow field projection -> aggregate source.
             if let Some(&encoded) = self.field_projection_source.get(&cur) {
                 if let Some((agg_local, field_idx)) = decode_aggregate_field(encoded) {
                     let key = encode_aggregate_field(agg_local, field_idx);
                     if let Some(&source) = self.aggregate_field_sources.get(&key) {
-                        stack.push(source);
+                        stack.push((source, offset));
                     }
                 }
             }

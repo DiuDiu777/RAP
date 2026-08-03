@@ -15,6 +15,7 @@ use super::{
     report::CheckResult,
     slicer::{BackwardItem, BackwardSlicer},
     smt_check::{SmtCheckResult, SmtChecker},
+    smt_check::init_range::InitRangeAggregator,
     verifier::{ForwardVerifier, ForwardVisitResult},
 };
 use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
@@ -78,7 +79,8 @@ impl<'tcx> VerifyEngine<'tcx> {
                 items.extend(backward.items.clone());
                 backward.items = items;
             }
-            let forward = self.verifier.visit(&backward);
+            let mut forward = self.verifier.visit(&backward);
+            forward.init_ranges = InitRangeAggregator::aggregate(&forward);
             let smt = self
                 .checker
                 .check_for_checkpoint(def_id, invariant, &forward);
@@ -125,7 +127,8 @@ impl<'tcx> VerifyEngine<'tcx> {
                 items.extend(backward.items.clone());
                 backward.items = items;
             }
-            let forward = self.verifier.visit(&backward);
+            let mut forward = self.verifier.visit(&backward);
+            forward.init_ranges = InitRangeAggregator::aggregate(&forward);
             let smt = self.checker.check(checkpoint, property, &forward);
             results.push((forward, smt));
         }

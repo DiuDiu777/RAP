@@ -16,6 +16,7 @@ pub(crate) mod common;
 mod field_invariant;
 mod in_bound;
 mod init;
+pub(crate) mod init_range;
 mod model;
 mod non_null;
 mod non_overlap;

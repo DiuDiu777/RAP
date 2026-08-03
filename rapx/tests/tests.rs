@@ -226,7 +226,7 @@ macro_rules! verify_unsound {
     }};
 }
 
-macro_rules! verify_hazard {
+macro_rules! verify_unsound_hazard {
     ($dir:literal, $func:literal, $prop:literal) => {{
         let output = $crate::run_with_args($dir, CMD_VERIFY);
         $crate::assert_unproved_exclusive_with_result(&output, $func, &[$prop], "UNSOUND");
@@ -255,12 +255,12 @@ macro_rules! unsound_tests {
     };
 }
 
-macro_rules! hazard_tests {
+macro_rules! unsound_hazard_tests {
     ($($name:ident: $dir:literal => $func:literal => $prop:literal),* $(,)?) => {
         $(
             #[test]
             fn $name() {
-                verify_hazard!($dir, $func, $prop);
+                verify_unsound_hazard!($dir, $func, $prop);
             }
         )*
     };

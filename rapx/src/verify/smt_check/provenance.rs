@@ -399,7 +399,10 @@ fn operand_is_ref_rooted<'tcx>(
             let owned = name.contains("Vec") || name.contains("Box") || name.contains("String");
             owned && count != CountSpec::One
         }
-        TyKind::Array(..) => true,
+        TyKind::Array(elem, _) => {
+            // `MaybeUninit::uninit()` arrays are explicitly uninitialized.
+            !format!("{elem:?}").contains("MaybeUninit")
+        },
         _ => false,
     }
 }

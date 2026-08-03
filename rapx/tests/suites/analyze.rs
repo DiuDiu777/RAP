@@ -306,22 +306,36 @@ fn path_false_1() {
     assert_contain(&output, "Function: \"classify\":");
     assert_contain(&output, "Path [0, 1, 2]");
     assert_contain(&output, "Path [0, 1, 3, 4, 5, 6, 7, 10, 1, 2]");
-    assert_contain(&output, "Path [0, 1, 3, 4, 5, 8, 9, 10, 1, 2]");
-    assert_eq!(path_count_for(&output, "classify"), 9);
+    assert_eq!(path_count_for(&output, "classify"), 4);
 }
 
 #[test]
 fn path_false_1_repeat_1() {
     let output = run_with_args("analyze/path_false_1", CMD_ANALYZE_PATHS_REPEAT_1);
-    assert_eq!(path_count_for(&output, "classify"), 39);
+    assert_eq!(path_count_for(&output, "classify"), 5);
     assert_contain(&output, "Path [0, 1, 2]");
 }
 
 #[test]
 fn path_false_1_repeat_2() {
     let output = run_with_args("analyze/path_false_1", CMD_ANALYZE_PATHS_REPEAT_2);
-    assert_eq!(path_count_for(&output, "classify"), 128);
+    assert_eq!(path_count_for(&output, "classify"), 6);
     assert_contain(&output, "Path [0, 1, 2]");
+}
+
+// Path count checks for functions whose verification result changed
+// after correct phantom-path pruning.
+
+#[test]
+fn init_std_unsound_08_paths() {
+    let output = run_with_args("verify_units/init_std_unsound_8", CMD_ANALYZE_PATHS);
+    assert_eq!(path_count_for(&output, "unsound_len_bound_loop_skips_even_indices"), 1);
+}
+
+#[test]
+fn align_unsound_05_paths() {
+    let output = run_with_args("verify_units/align_unsound_5", CMD_ANALYZE_PATHS);
+    assert_eq!(path_count_for(&output, "unsound_iteration_count_can_leave_unaligned"), 4);
 }
 
 // ===============Range Analysis Tests==============

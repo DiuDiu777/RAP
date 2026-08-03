@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "verify_module_filter"
+name = "module_filter"
 version = "0.1.0"

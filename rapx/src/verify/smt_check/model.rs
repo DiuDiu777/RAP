@@ -7,7 +7,7 @@
 use std::collections::{HashMap, HashSet};
 
 use rustc_middle::{
-    mir::{BinOp, Local, Operand, UnOp},
+    mir::{BasicBlock, BinOp, Local, Operand, UnOp},
     ty::{Ty, TyCtxt, TyKind},
 };
 
@@ -266,6 +266,49 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
     }
 
+    /// Like `value_to_int` but resolves `Place` values through
+    /// `path_value_definition_at_occurrence` so that loop‑carried locals
+    /// are resolved at the correct iteration rather than at the final
+    /// definition point.  Falls back to standard `term_for_place` when the
+    /// occurrence‑aware scan finds nothing (e.g. function parameters).
+    pub(crate) fn value_to_int_at_occurrence(
+        &mut self,
+        value: &AbstractValue<'tcx>,
+        block: BasicBlock,
+        occurrence: usize,
+    ) -> Option<Int<'ctx>> {
+        match value {
+            AbstractValue::ConstInt(v) => {
+                u64::try_from(*v).ok().map(|v| Int::from_u64(self.ctx, v))
+            }
+            AbstractValue::Place(place) => {
+                if let Some(resolved) =
+                    self.path_value_definition_at_occurrence(place, block, occurrence)
+                {
+                    return self.value_to_int_at_occurrence(&resolved, block, occurrence);
+                }
+                self.term_for_place(place)
+            }
+            AbstractValue::Binary(op, lhs, rhs) => {
+                let lhs_t = self.value_to_int_at_occurrence(lhs, block, occurrence)?;
+                let rhs_t = self.value_to_int_at_occurrence(rhs, block, occurrence)?;
+                self.term_for_binary(*op, &lhs_t, &rhs_t)
+            }
+            AbstractValue::Cast(inner, _) => {
+                self.value_to_int_at_occurrence(inner, block, occurrence)
+            }
+            AbstractValue::ConstParam(name) => {
+                Some(Int::new_const(self.ctx, format!("const_{name}").as_str()))
+            }
+            AbstractValue::Const(name) => {
+                Some(Int::new_const(self.ctx, sanitize_smt_name(name).as_str()))
+            }
+            _ => {
+                self.term_for_value(value, &mut HashSet::new())
+            }
+        }
+    }
+
     fn assert_call_fact(&mut self, solver: &Solver<'ctx>, call: &CallSummary<'tcx>) {
         if is_as_ptr_call(&call.func) {
             let place = PlaceKey { base: PlaceBaseKey::Local(call.destination.as_usize()), fields: Vec::new() };
@@ -399,8 +442,29 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     cmp_op,
                     cmp_lhs,
                     cmp_rhs,
+                    block,
+                    occurrence,
                 } => {
-                    if let Some(term) = self.term_for_value(value, &mut HashSet::new()) {
+                    // Only use occurrence‑aware resolution for blocks that
+                    // appear more than once in the path (loop / SCC blocks).
+                    // Single‑occurrence blocks use the standard latest‑cursor
+                    // resolution which avoids subtle term‑builder edge‑cases.
+                    let block_repeats = self
+                        .forward
+                        .path
+                        .steps
+                        .iter()
+                        .filter(|s| matches!(s, PathStep::Block(b) if b == block))
+                        .count()
+                        > 1;
+
+                    let term = if block_repeats {
+                        self.value_to_int_at_occurrence(value, *block, *occurrence)
+                    } else {
+                        self.term_for_value(value, &mut HashSet::new())
+                    };
+
+                    if let Some(term) = term {
                         let expected = Int::from_u64(self.ctx, *equals as u64);
                         solver.assert(&term._eq(&expected));
                         self.assumptions.push(SmtPredicate::Eq(
@@ -409,9 +473,15 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                         ));
                     }
                     if let (Some(op), Some(lhs), Some(rhs)) = (cmp_op, cmp_lhs, cmp_rhs) {
-                        if let (Some(lhs_t), Some(rhs_t)) =
+                        let (lhs_t, rhs_t) = if block_repeats {
+                            (
+                                self.value_to_int_at_occurrence(lhs, *block, *occurrence),
+                                self.value_to_int_at_occurrence(rhs, *block, *occurrence),
+                            )
+                        } else {
                             (self.value_to_int(lhs), self.value_to_int(rhs))
-                        {
+                        };
+                        if let (Some(lhs_t), Some(rhs_t)) = (lhs_t, rhs_t) {
                             let holds = *equals == 1;
                             match (op, holds) {
                                 (BinOp::Eq, true) | (BinOp::Ne, false) => {
@@ -3111,11 +3181,15 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             return Some(AbstractValue::Place(place.clone()));
         }
         let local = place.local()?;
+        // Prefer the raw path scan for the latest definition — the backward
+        // slicer may have pruned a later overwrite, making the value-definition
+        // list return a stale (earlier) assignment.  The raw path always
+        // reflects the full enumerated path.
+        if let Some(path_value) = self.path_value_definition_before(place, cursor) {
+            return self.resolved_value_before(&path_value, cursor, seen);
+        }
         if let Some(definition) = self.forward.latest_value_definition_before(local, cursor) {
             return self.resolved_value_before(&definition.value, definition.ordinal, seen);
-        }
-        if let Some(value) = self.path_value_definition_before(place, cursor) {
-            return self.resolved_value_before(&value, cursor, seen);
         }
         None
     }
@@ -3190,6 +3264,38 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             if is_cutoff_block {
                 return latest;
             }
+
+            // Also check the terminator for call destinations (e.g. wrapping_add).
+            if let Some(terminator) = &block_data.terminator {
+                if let rustc_middle::mir::TerminatorKind::Call {
+                    destination,
+                    func,
+                    args,
+                    ..
+                } = &terminator.kind
+                {
+                    if destination.local == local {
+                        let arg_values: Vec<_> = args
+                            .iter()
+                            .map(|arg| abstract_value_from_operand(&arg.node))
+                            .collect();
+                        let effect_summary = crate::verify::call_summary::effect_summary(
+                            self.tcx,
+                            self.forward.checkpoint.caller,
+                            func,
+                            destination.local,
+                        );
+                        latest = Some(AbstractValue::CallResult(CallSummary {
+                            destination: destination.local,
+                            func: crate::helpers::mir_utils::call_name(self.tcx, func),
+                            arg_count: args.len(),
+                            args: arg_values,
+                            effects: effect_summary.effects.clone(),
+                            unsupported: effect_summary.unsupported,
+                        }));
+                    }
+                }
+            }
         }
 
         latest
@@ -3207,6 +3313,89 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
             block: self.forward.checkpoint.block,
             statement_index: None,
         }
+    }
+
+    /// Like `path_value_definition_before` but stops at the N-th occurrence
+    /// of `cutoff_block` in the path rather than using a cursor-derived cutoff.
+    /// Used by `BranchEq` facts to resolve loop-carried locals at the correct
+    /// iteration point.
+    pub(crate) fn path_value_definition_at_occurrence(
+        &self,
+        place: &PlaceKey,
+        cutoff_block: BasicBlock,
+        cutoff_occurrence: usize,
+    ) -> Option<AbstractValue<'tcx>> {
+        if !place.fields.is_empty() {
+            return None;
+        }
+        let local = place.local()?;
+        let body = self.tcx.optimized_mir(self.forward.checkpoint.caller);
+        let mut latest = None;
+        let mut occ_count: usize = 0;
+
+        for step in &self.forward.path.steps {
+            let PathStep::Block(block) = step else {
+                continue;
+            };
+            let is_cutoff_block = *block == cutoff_block;
+            if is_cutoff_block {
+                occ_count += 1;
+                if occ_count > cutoff_occurrence {
+                    // Past the target occurrence — stop.
+                    return latest;
+                }
+            }
+            let block_data = &body.basic_blocks[*block];
+
+            for (_si, statement) in block_data.statements.iter().enumerate() {
+                let rustc_middle::mir::StatementKind::Assign(assign) = &statement.kind else {
+                    continue;
+                };
+                let (target, rvalue) = &**assign;
+                if target.local == local {
+                    latest = abstract_value_from_rvalue(rvalue);
+                }
+            }
+
+            // At the exact occurrence, return after statements (don't process its terminator).
+            if is_cutoff_block && occ_count == cutoff_occurrence {
+                return latest;
+            }
+
+            // Also check the terminator for call destinations.
+            if let Some(terminator) = &block_data.terminator {
+                if let rustc_middle::mir::TerminatorKind::Call {
+                    destination,
+                    func,
+                    args,
+                    ..
+                } = &terminator.kind
+                {
+                    if destination.local == local {
+                        let arg_values: Vec<_> = args
+                            .iter()
+                            .map(|arg| abstract_value_from_operand(&arg.node))
+                            .collect();
+                        let effect_summary = crate::verify::call_summary::effect_summary(
+                            self.tcx,
+                            self.forward.checkpoint.caller,
+                            func,
+                            destination.local,
+                        );
+                        latest = Some(AbstractValue::CallResult(CallSummary {
+                            destination: destination.local,
+                            func: crate::helpers::mir_utils::call_name(self.tcx, func),
+                            arg_count: args.len(),
+                            args: arg_values,
+                            effects: effect_summary.effects.clone(),
+                            unsupported: effect_summary.unsupported,
+                        }));
+                    }
+                }
+            }
+        }
+
+        latest
     }
 
     /// Return a stable origin key for matching `as_ptr(source)` and `len(source)`.
