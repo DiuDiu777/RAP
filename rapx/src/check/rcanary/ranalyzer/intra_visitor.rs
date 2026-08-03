@@ -1270,6 +1270,7 @@ impl<'tcx, 'ctx, 'a> IntraFlowAnalysis<'tcx, 'ctx, 'a> {
             goal.assert(&constraint_l_ctor_zero);
             solver.assert(&constraint_l_ctor_zero);
             self.icx_slice_mut().ty_mut()[lu] = TyWithIndex::new(l_local_ty, disc);
+            self.icx_slice_mut().layout_mut()[lu] = default_heap.layout().clone();
             self.icx_slice_mut().var_mut()[lu] = IntraVar::Init(l_ori_bv_ctor);
         }
     }

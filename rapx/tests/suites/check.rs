@@ -25,6 +25,6 @@ check_not_contain_test!(check_uaf_false_10, "check/uaf_false_10", CMD_CHECK_UAF,
 check_not_contain_test!(check_uaf_false_11, "check/uaf_false_11", CMD_CHECK_UAF, "detected");
 
 // ==================== Memory Leak Detection Tests ====================
-check_not_contain_test!(check_memleak_01, "check/memleak_1", CMD_CHECK_MEMLEAK, "Memory Leak detected in function main");
+check_contain_test!(check_memleak_01, "check/memleak_1", CMD_CHECK_MEMLEAK, "Memory Leak detected in function main");
 check_contain_test!(check_memleak_02, "check/memleak_2", CMD_CHECK_MEMLEAK, "Memory Leak detected in function main");
 check_contain_test!(check_memleak_03, "check/memleak_3", CMD_CHECK_MEMLEAK, "Memory Leak detected in function main");
