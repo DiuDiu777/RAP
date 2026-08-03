@@ -1,8 +1,11 @@
 use std::collections::VecDeque;
 
 use crate::compat::{FxHashMap, FxHashSet};
+use crate::verify::def_use::{PlaceBaseKey, PlaceKey};
 
 use super::slot::{AbstractLoc, Slot};
+
+use crate::analysis::alias::default::types::ValueKind;
 
 pub const MAX_VALUES_PER_PATH: usize = 1000;
 
@@ -26,6 +29,8 @@ pub struct PtsGraph {
     slot_index: FxHashMap<Slot, usize>,
     may_drop: Vec<bool>,
     need_drop: Vec<bool>,
+    /// Type classification per slot (RawPtr, Ref, Adt, etc.).
+    slot_kind: Vec<ValueKind>,
 
     /// Alias partition: which slots are value-equivalent (union-find).
     /// `alias_parent[i]` is the representative of i's partition,
@@ -42,6 +47,7 @@ impl PtsGraph {
             slot_index: FxHashMap::default(),
             may_drop: Vec::new(),
             need_drop: Vec::new(),
+            slot_kind: Vec::new(),
             alias_parent: Vec::new(),
         }
     }
@@ -87,8 +93,27 @@ impl PtsGraph {
         self.value_flow.push(FxHashSet::default());
         self.may_drop.push(may_drop);
         self.need_drop.push(need_drop);
+        self.slot_kind.push(ValueKind::Adt);
         self.alias_parent.push(idx);  // singleton: points to itself
         idx
+    }
+
+    pub fn set_slot_kind(&mut self, idx: usize, kind: ValueKind) {
+        if idx < self.slot_kind.len() {
+            self.slot_kind[idx] = kind;
+        }
+    }
+
+    pub fn slot_kind(&self, idx: usize) -> ValueKind {
+        self.slot_kind.get(idx).copied().unwrap_or(ValueKind::Adt)
+    }
+
+    pub fn slot_is_ptr(&self, idx: usize) -> bool {
+        matches!(self.slot_kind(idx), ValueKind::RawPtr | ValueKind::Ref)
+    }
+
+    pub fn slot_is_ref_count(&self, idx: usize) -> bool {
+        matches!(self.slot_kind(idx), ValueKind::SpecialPtr)
     }
 
     // ── Value-flow updates ─────────────────────────────────────────
@@ -457,6 +482,85 @@ impl PtsGraph {
             if self.alias_find(i) == root {
                 self.alias_parent[i] = i;
             }
+        }
+    }
+
+    // ── PlaceKey-oriented adapter methods ──────────────────────────
+
+    /// Record that `pointer` place was derived from `source` place.
+    /// Strong-update semantics: clears old points-to info for the pointer.
+    pub fn insert_place_edge(&mut self, pointer: &PlaceKey, source: &PlaceKey) {
+        let ptr_slot = Self::place_key_to_slot(pointer);
+        let src_slot = Self::place_key_to_slot(source);
+        let ptr_idx = self.ensure_slot(ptr_slot, false, false);
+        self.ensure_slot(src_slot.clone(), false, false);
+        self.assign_pointee(ptr_idx, AbstractLoc::Slot(src_slot));
+    }
+
+    /// Single-step points-to lookup (non-transitive) with overlap semantics.
+    /// When the exact place has no edge, falls back through field-stripping.
+    pub fn get_place_source(&self, place: &PlaceKey) -> Option<PlaceKey> {
+        let mut slot = Self::place_key_to_slot(place);
+        loop {
+            if let Some(idx) = self.slot_index.get(&slot) {
+                if let Some(first_loc) =
+                    self.points_to.get(*idx).and_then(|set| set.iter().next())
+                {
+                    if let AbstractLoc::Slot(target) = first_loc {
+                        return Some(Self::slot_to_place_key(target));
+                    }
+                }
+            }
+            if slot.fields.is_empty() {
+                return None;
+            }
+            slot.fields.pop();
+        }
+    }
+
+    /// Transitive points-to resolution with overlap semantics and loop
+    /// detection.
+    pub fn resolve_place(&self, place: &PlaceKey) -> PlaceKey {
+        let mut cur = place.clone();
+        let mut seen: Vec<PlaceKey> = vec![cur.clone()];
+        loop {
+            let Some(next) = self.get_place_source(&cur) else {
+                break;
+            };
+            if seen.iter().any(|p| p == &next) {
+                break;
+            }
+            seen.push(next.clone());
+            cur = next.clone();
+        }
+        cur
+    }
+
+    /// Return all PlaceKey-based points-to edges.
+    pub fn place_edges(&self) -> Vec<(PlaceKey, PlaceKey)> {
+        let mut edges = Vec::new();
+        for (idx, targets) in self.points_to.iter().enumerate() {
+            let Some(slot) = self.slots.get(idx) else { continue };
+            let pointer = Self::slot_to_place_key(slot);
+            for target in targets {
+                if let AbstractLoc::Slot(target_slot) = target {
+                    let source = Self::slot_to_place_key(target_slot);
+                    edges.push((pointer.clone(), source));
+                }
+            }
+        }
+        edges
+    }
+
+    fn place_key_to_slot(pk: &PlaceKey) -> Slot {
+        let local = pk.local().map(|l| l.as_usize()).unwrap_or(0);
+        Slot { local, fields: pk.fields.clone() }
+    }
+
+    fn slot_to_place_key(slot: &Slot) -> PlaceKey {
+        PlaceKey {
+            base: PlaceBaseKey::Local(slot.local),
+            fields: slot.fields.clone(),
         }
     }
 }

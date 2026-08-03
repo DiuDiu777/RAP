@@ -25,7 +25,6 @@ impl<'tcx> AliasGraph<'tcx> {
                             let mut node = super::value::Value::new(
                                 self.values.len(), local,
                             );
-                            node.kind = super::types::kind(ty);
                             node.father = Some(super::value::FatherInfo::new(value_idx, field_idx));
                             let node_index = node.index;
                             self.values[value_idx].fields.insert(field_idx, node.index);
@@ -34,7 +33,8 @@ impl<'tcx> AliasGraph<'tcx> {
                                 local,
                                 fields: self.get_field_seq(node_index).into_iter().rev().collect(),
                             };
-                            self.pts_graph.ensure_slot(field_slot, may_drop, need_drop);
+                            self.values[node_index].slot_idx = Some(self.pts_graph.ensure_slot(field_slot, may_drop, need_drop));
+                            self.pts_graph.set_slot_kind(self.values[node_index].slot_idx.unwrap(), super::types::kind(ty));
                         } else { break; }
                     }
                     value_idx = *self.values[value_idx].fields.get(&field_idx).unwrap();

@@ -14,7 +14,6 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{Span, def_id::DefId};
 use std::fmt;
 
-use super::types::kind;
 use super::value::Value;
 
 pub struct AliasGraph<'tcx> {
@@ -54,9 +53,8 @@ impl<'tcx> AliasGraph<'tcx> {
         let locals = &body.local_decls;
         let arg_size = body.arg_count;
         let mut values = Vec::<Value>::new();
-        for (local, local_decl) in locals.iter_enumerated() {
-            let mut node = Value::new(local.as_usize(), local.as_usize());
-            node.kind = kind(local_decl.ty);
+        for local in locals.indices() {
+            let node = Value::new(local.as_usize(), local.as_usize());
             values.push(node);
         }
         AliasGraph {
@@ -112,26 +110,7 @@ impl<'tcx> AliasGraph<'tcx> {
     // ── Index translation: value index → PtsGraph slot index ──
 
     pub fn value_to_slot_idx(&self, value_idx: usize) -> Option<usize> {
-        if value_idx >= self.values.len() {
-            return None;
-        }
-        let local = self.values[value_idx].local;
-        let fields: Vec<usize> = {
-            let mut seq = vec![];
-            let mut cur = value_idx;
-            let mut iter = 0usize;
-            while let Some(ref father) = self.values[cur].father {
-                iter += 1;
-                if iter > 1000 {
-                    break;
-                }
-                seq.push(father.field_id);
-                cur = father.father_value_id;
-            }
-            seq.into_iter().rev().collect()
-        };
-        let slot = crate::analysis::points_to::slot::Slot { local, fields };
-        self.pts_graph.get_slot_idx(&slot)
+        self.values.get(value_idx).and_then(|v| v.slot_idx)
     }
 
     pub fn get_alias_set(&self, e: usize) -> Option<Vec<usize>> {
@@ -163,11 +142,9 @@ impl<'tcx> AliasGraph<'tcx> {
     }
 
     pub fn value_is_ptr(&self, value_idx: usize) -> bool {
-        if value_idx < self.values.len() {
-            self.values[value_idx].is_ptr()
-        } else {
-            false
-        }
+        self.value_to_slot_idx(value_idx)
+            .map(|si| self.pts_graph.slot_is_ptr(si))
+            .unwrap_or(false)
     }
 
 }

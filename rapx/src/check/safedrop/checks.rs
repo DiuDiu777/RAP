@@ -90,7 +90,9 @@ pub fn check_drop_status(
             return None;
         }
     }
-    let kind = graph.values[idx].kind;
+    let kind = graph.value_to_slot_idx(idx)
+        .map(|si| graph.pts_graph.slot_kind(si))
+        .unwrap_or(ValueKind::Adt);
     Some(rate_confidence(kind, fully_dropped))
 }
 
@@ -180,7 +182,8 @@ fn push_drop_top_down(
     rap_debug!("push_drop_top_down: value_idx = {}", value_idx);
     let mut prop_chain = vec![value_idx];
     for (_field_id, field_value_id) in graph.values[value_idx].fields.clone() {
-        if graph.values[field_value_id].kind == ValueKind::Ref {
+        if graph.value_to_slot_idx(field_value_id)
+            .map_or(false, |si| graph.pts_graph.slot_kind(si) == ValueKind::Ref) {
             continue;
         }
         drop_record[field_value_id] = DropRecord::new(field_value_id, true, drop_spot);

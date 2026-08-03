@@ -89,15 +89,19 @@ impl<'tcx> SafeDropGraph<'tcx> {
             value_idx,
             bb_idx
         );
-        //Rc drop
-        if self.alias_graph.values[value_idx].is_ref_count() {
+        if self.alias_graph.value_to_slot_idx(value_idx)
+            .map_or(false, |si| self.alias_graph.pts_graph.slot_is_ref_count(si)) {
             return;
         }
         if self.df_check(value_idx, bb_idx, self.alias_graph.span(), flag_cleanup) {
             return;
         }
         if !self.drop_record[value_idx].is_dropped {
-            let drop_spot = LocalSpot::new(bb_idx, self.alias_graph.values[value_idx].local);
+            let local = self.alias_graph.value_to_slot_idx(value_idx)
+                .and_then(|si| self.alias_graph.pts_graph.get_slot(si))
+                .map(|s| s.local)
+                .unwrap_or(value_idx);
+            let drop_spot = LocalSpot::new(bb_idx, local);
             self.drop_record[value_idx] = DropRecord::new(value_idx, true, drop_spot);
             rap_debug!("{:?}", self.drop_record[value_idx]);
             checks::push_drop_info(&self.alias_graph, &mut self.drop_record, value_idx, drop_spot);

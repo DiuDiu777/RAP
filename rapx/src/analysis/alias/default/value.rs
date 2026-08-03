@@ -1,13 +1,12 @@
-use crate::analysis::alias::default::types::ValueKind;
 use crate::compat::FxHashMap;
 
 #[derive(Debug, Clone)]
 pub struct Value {
     pub index: usize,
     pub local: usize,
-    pub kind: ValueKind,
     pub father: Option<FatherInfo>,
     pub fields: FxHashMap<usize, usize>,
+    pub slot_idx: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -26,17 +25,9 @@ impl Value {
     pub fn new(index: usize, local: usize) -> Self {
         Value {
             index, local,
-            kind: ValueKind::Adt,
             father: None,
             fields: FxHashMap::default(),
+            slot_idx: None,
         }
-    }
-
-    pub fn is_ptr(&self) -> bool {
-        self.kind == ValueKind::RawPtr || self.kind == ValueKind::Ref
-    }
-
-    pub fn is_ref_count(&self) -> bool {
-        self.kind == ValueKind::SpecialPtr
     }
 }

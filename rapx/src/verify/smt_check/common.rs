@@ -4449,7 +4449,7 @@ pub(crate) fn allocation_object_invalidated<'tcx>(
                 // A KnownAllocated fact referencing a dead object is still
                 // valid when a PointsTo link transfers the allocation from
                 // the (now dead) wrapper to a live pointer (e.g. Box into_raw).
-                && forward.points_to_graph.get_source(alloc_place) != Some(object)
+                && forward.pts_graph.get_place_source(alloc_place).as_ref() != Some(object)
         }
         StateFact::Drop(place) => place.overlaps(object) || object.overlaps(place),
         _ => false,

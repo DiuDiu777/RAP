@@ -1,7 +1,7 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{self, Ty, TyCtxt, TypingEnv};
 
-use crate::analysis::alias::default::types::is_not_drop;
+use crate::analysis::alias::default::types::{is_not_drop, kind};
 
 use super::graph::PtsGraph;
 use super::slot::Slot;
@@ -23,6 +23,7 @@ pub fn from_body<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> PtsGraph {
 
         let slot = Slot::new(local.as_usize());
         let slot_idx = graph.ensure_slot(slot.clone(), may_drop, need_drop);
+        graph.set_slot_kind(slot_idx, kind(ty));
 
         register_field_slots(tcx, ty, &slot, slot_idx, &mut graph, 0, 0, ty_env);
     }
@@ -68,6 +69,7 @@ fn register_field_slots<'tcx>(
                 };
                 let field_idx_global =
                     graph.ensure_slot(field_slot.clone(), may_drop, need_drop);
+                graph.set_slot_kind(field_idx_global, kind(field_ty));
                 register_field_slots(
                     tcx, field_ty, &field_slot, field_idx_global, graph,
                     field_depth + 1, deref_depth, ty_env,
@@ -85,6 +87,7 @@ fn register_field_slots<'tcx>(
                 let need_drop = field_ty.needs_drop(tcx, ty_env);
                 let field_idx_global =
                     graph.ensure_slot(field_slot.clone(), may_drop, need_drop);
+                graph.set_slot_kind(field_idx_global, kind(field_ty));
                 register_field_slots(
                     tcx, field_ty, &field_slot, field_idx_global, graph,
                     field_depth + 1, deref_depth, ty_env,

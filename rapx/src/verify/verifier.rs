@@ -29,7 +29,7 @@ use super::{
 };
 use crate::helpers::mir_utils::call_name;
 
-use crate::analysis::points_to::PointsToGraph;
+use crate::analysis::points_to::graph::PtsGraph;
 use crate::helpers::mir_scan::CheckpointLocation;
 
 /// Visits relevant MIR items forward and builds an abstract state.
@@ -387,7 +387,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     pointer: target.clone(),
                     source: source.clone(),
                 });
-                result.points_to_graph.insert(target.clone(), source);
+                result.pts_graph.insert_place_edge(&target, &source);
                 if let Some((ty_name, elements)) =
                     self.allocated_element_summary(result.checkpoint.caller, object.local())
                 {
@@ -427,7 +427,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
                     pointer: target.clone(),
                     source: source_key.clone(),
                 });
-                result.points_to_graph.insert(target.clone(), source_key);
+                result.pts_graph.insert_place_edge(&target, &source_key);
                 result.facts.push(StateFact::KnownNonZero {
                     place: target.clone(),
                     reason: "created from reference".to_string(),
@@ -718,7 +718,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             pointer: destination_place.clone(),
             source: source.clone(),
         });
-        result.points_to_graph.insert(destination_place.clone(), source);
+        result.pts_graph.insert_place_edge(destination_place, &source);
         if known_nonzero_of(&base_val, result) {
             result.facts.push(StateFact::KnownNonZero {
                 place: destination_place.clone(),
@@ -874,7 +874,7 @@ impl<'tcx> ForwardVerifier<'tcx> {
             pointer: destination_place.clone(),
             source: source.clone(),
         });
-        result.points_to_graph.insert(destination_place.clone(), source.clone());
+        result.pts_graph.insert_place_edge(destination_place, &source);
         if let Some((ty_name, elements)) =
             self.allocated_element_summary(result.checkpoint.caller, object.local())
         {
@@ -1260,7 +1260,7 @@ pub struct ForwardVisitResult<'tcx> {
     /// Unsupported items kept as notes rather than modeled facts.
     pub notes: Vec<String>,
     /// Points-to graph built from the full forward path.
-    pub points_to_graph: PointsToGraph,
+    pub pts_graph: PtsGraph,
 }
 
 impl<'tcx> ForwardVisitResult<'tcx> {
@@ -1276,7 +1276,7 @@ impl<'tcx> ForwardVisitResult<'tcx> {
             forgets: Vec::new(),
             steps: Vec::new(),
             notes: Vec::new(),
-            points_to_graph: PointsToGraph::new(),
+            pts_graph: PtsGraph::new(),
         }
     }
 
@@ -1859,7 +1859,7 @@ fn allocation_object_for_source<'tcx>(
             _ => {}
         }
     }
-        let Some(next) = result.points_to_graph.get_source(&cur) else {
+        let Some(next) = result.pts_graph.get_place_source(&cur) else {
             return cur;
         };
         cur = next.clone();

@@ -12,6 +12,12 @@ use super::MopFnAliasMap;
 impl<'tcx> AliasGraph<'tcx> {
     pub fn init_pts_graph(&mut self) {
         self.pts_graph = crate::analysis::points_to::builder::from_body(self.tcx(), self.def_id());
+        for val in self.values.iter_mut() {
+            let slot = crate::analysis::points_to::slot::Slot::new(val.local);
+            if let Some(si) = self.pts_graph.get_slot_idx(&slot) {
+                val.slot_idx = Some(si);
+            }
+        }
     }
 
     /// Unified basic-block MIR processing, shared by MoP alias and SafeDrop.
@@ -58,7 +64,7 @@ impl<'tcx> AliasGraph<'tcx> {
                     if let Some((rv_val, rv_pts)) = self.resolve_operand(rv_place) {
                         self.move_sources.insert(lv_val, rv_val);
                         obs.on_value_use(self, rv_val, span, false);
-                        if obs.track_all_moves() || self.values[rv_val].kind == ValueKind::RawPtr {
+                        if obs.track_all_moves() || self.pts_graph.slot_kind(rv_pts) == ValueKind::RawPtr {
                             self.pts_graph.assign_value(lv_pts, rv_pts);
                         }
                         obs.on_value_assign(self, lv_val);
@@ -69,19 +75,8 @@ impl<'tcx> AliasGraph<'tcx> {
                 Operand::RuntimeChecks(_) => {}
             },
             Rvalue::Ref(_, _, rv_place)
-            | Rvalue::RawPtr(_, rv_place) => {
-                let rv_slot = Slot::from_mir_place(rv_place);
-                if let Some(rv_val) = self.place_to_value_idx(rv_place) {
-                    obs.on_value_use(self, rv_val, span, false);
-                }
-                let rv_slot_clone = rv_slot.clone();
-                self.pts_graph.assign_pointee(lv_pts, AbstractLoc::Slot(rv_slot));
-                if let Some(rv_pts) = self.pts_graph.get_slot_idx(&rv_slot_clone) {
-                    self.pts_graph.merge_equivalence(lv_pts, rv_pts);
-                }
-                obs.on_value_assign(self, lv_val);
-            }
-            Rvalue::CopyForDeref(rv_place) => {
+            | Rvalue::RawPtr(_, rv_place)
+            | Rvalue::CopyForDeref(rv_place) => {
                 let rv_slot = Slot::from_mir_place(rv_place);
                 if let Some(rv_val) = self.place_to_value_idx(rv_place) {
                     obs.on_value_use(self, rv_val, span, false);
@@ -197,7 +192,6 @@ impl<'tcx> AliasGraph<'tcx> {
 
     /// Reverse lookup: given a Slot, find the corresponding value index.
     pub fn slot_to_value_idx(&self, slot: &Slot) -> Option<usize> {
-        // Base locals have value index == local
         if slot.fields.is_empty() {
             let local = slot.local;
             if local < self.values.len() {
@@ -205,7 +199,6 @@ impl<'tcx> AliasGraph<'tcx> {
             }
             return None;
         }
-        // Field values: walk the tree from the base local
         let mut cur = slot.local;
         if cur >= self.values.len() {
             return None;
@@ -263,7 +256,7 @@ impl<'tcx> AliasGraph<'tcx> {
             }
             None => {
                 let (ret_val, _) = merge_slots[0];
-                if ret_val != 0 && ret_local < self.values.len() && self.values[ret_local].is_ptr() {
+                if ret_val != 0 && self.pts_graph.get_slot_idx(&Slot::new(ret_local)).map_or(false, |si| self.pts_graph.slot_is_ptr(si)) {
                     let slot_args: Vec<usize> = merge_slots.iter().map(|&(_, s)| s).collect();
                     self.pts_graph.conservative_call_merge(&slot_args);
                     obs.on_value_assign(self, ret_val);

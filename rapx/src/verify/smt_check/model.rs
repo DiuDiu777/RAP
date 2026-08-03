@@ -323,20 +323,20 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
     /// Assert facts collected by the forward visitor.
     pub(crate) fn assert_forward_facts(&mut self, solver: &Solver<'ctx>) {
         // Assert PointsTo edges from the graph (align + length alias).
-        for (pointer, source) in self.forward.points_to_graph.edges() {
+        for (pointer, source) in self.forward.pts_graph.place_edges() {
             let ptr_pointee_str = self
-                .place_ty(pointer)
+                .place_ty(&pointer)
                 .and_then(|ty| pointee_ty_str(ty))
                 .map(|s| normalize_init_ty_name(&s));
             let src_pointee_str = self
-                .place_ty(source)
+                .place_ty(&source)
                 .and_then(|ty| pointee_ty_str(ty))
                 .map(|s| normalize_init_ty_name(&s));
             if ptr_pointee_str == src_pointee_str {
-                self.assert_place_alignment(solver, pointer);
+                self.assert_place_alignment(solver, &pointer);
             }
-            self.assert_place_alignment(solver, source);
-            self.assert_length_alias(solver, pointer, source);
+            self.assert_place_alignment(solver, &source);
+            self.assert_length_alias(solver, &pointer, &source);
         }
 
         // Two-pass processing: non-Contract facts first (establish value chain),
@@ -1465,7 +1465,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         }
         // 2) PointsTo facts — when a pointer (or a projection of one)
         //    traces to a reference, the reference is the allocation object.
-        if let Some(source) = self.forward.points_to_graph.get_source(place) {
+        if let Some(source) = self.forward.pts_graph.get_place_source(place) {
             return Some(source.clone());
         }
         None
@@ -3286,7 +3286,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
         match resolved {
             AbstractValue::Ref(place) | AbstractValue::RawPtr(place) => Some(place_label(&place)),
             AbstractValue::Place(place) => {
-                let resolved = self.forward.points_to_graph.resolve(&place);
+                let resolved = self.forward.pts_graph.resolve_place(&place);
                 if resolved != place {
                     return Some(place_label(&resolved));
                 }
@@ -3467,7 +3467,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
 
     /// Return the source place recorded by a `PointsTo(pointer, source)` fact.
     pub(crate) fn source_from_points_to(&self, pointer: &PlaceKey) -> Option<PlaceKey> {
-        self.forward.points_to_graph.get_source(pointer).cloned()
+        self.forward.pts_graph.get_place_source(pointer)
     }
 
     /// Candidate address/value terms for an `Init` target.
@@ -3857,7 +3857,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     return Some(ty_name.clone());
                 }
             }
-            if let Some(source) = self.forward.points_to_graph.get_source(&cur) {
+            if let Some(source) = self.forward.pts_graph.get_place_source(&cur) {
                 queue.push(source.clone());
             }
             for fact in &self.forward.facts {
@@ -4085,7 +4085,7 @@ impl<'a, 'ctx, 'tcx> SmtModel<'a, 'ctx, 'tcx> {
                     }
                 }
             }
-            if let Some(source) = self.forward.points_to_graph.get_source(&cur) {
+            if let Some(source) = self.forward.pts_graph.get_place_source(&cur) {
                 queue.push(source.clone());
             }
             // Also follow Cast links — copies that transfer a pointer

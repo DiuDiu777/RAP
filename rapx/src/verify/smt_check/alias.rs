@@ -1024,7 +1024,7 @@ pub(super) fn resolve_forward_place<'tcx>(
             AbstractValue::CallResult(call)
                 if fn_simulator::is_as_ptr(&call.func) =>
             {
-                let Some(source) = forward.points_to_graph.get_source(&place) else {
+                let Some(source) = forward.pts_graph.get_place_source(&place) else {
                     return place;
                 };
                 place = resolve_forward_place(source.clone(), forward);
@@ -1032,7 +1032,7 @@ pub(super) fn resolve_forward_place<'tcx>(
             AbstractValue::CallResult(call)
                 if fn_simulator::is_pointer_arithmetic(&call.func) =>
             {
-                let Some(source) = forward.points_to_graph.get_source(&place) else {
+                let Some(source) = forward.pts_graph.get_place_source(&place) else {
                     return place;
                 };
                 place = resolve_forward_place(source.clone(), forward);

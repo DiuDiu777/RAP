@@ -103,7 +103,7 @@ fn substitute_base<'tcx>(place: &PlaceKey, forward: &ForwardVisitResult<'tcx>) -
     };
 
     let source = source.or_else(|| {
-        forward.points_to_graph.get_source(place).cloned()
+        forward.pts_graph.get_place_source(place)
     })?;
 
     let mut fields = source.fields.clone();
