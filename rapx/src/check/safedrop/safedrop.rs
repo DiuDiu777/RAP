@@ -252,7 +252,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
             for arg_idx in 1..self.alias_graph.arg_size() + 1 {
                 self.dp_check_arg(arg_idx, flag_cleanup);
             }
-        } else if self.alias_graph.values[0].may_drop
+        } else if self.alias_graph.value_may_drop(0)
             && (self.drop_record[0].is_dropped || self.drop_record[0].has_dropped_field)
         {
             let Some(confidence) = checks::check_drop_status(&self.alias_graph, &mut self.drop_record, 0) else {
@@ -277,7 +277,7 @@ impl<'tcx> SafeDropGraph<'tcx> {
     }
 
     fn dp_check_arg(&mut self, arg_idx: usize, flag_cleanup: bool) {
-        if !self.alias_graph.values[arg_idx].is_ptr() {
+        if !self.alias_graph.value_is_ptr(arg_idx) {
             return;
         }
         let Some(confidence) = checks::check_drop_status(&self.alias_graph, &mut self.drop_record, arg_idx) else {

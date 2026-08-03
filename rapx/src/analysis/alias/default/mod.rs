@@ -1,7 +1,7 @@
 pub mod alias;
 pub mod graph;
 pub mod mop;
-pub mod pts;
+pub mod stmt;
 pub mod types;
 pub mod value;
 

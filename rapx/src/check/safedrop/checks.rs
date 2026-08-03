@@ -49,10 +49,10 @@ pub fn uaf_check(
         local,
         drop_record[value_idx],
     );
-    if !graph.values[value_idx].may_drop {
+    if !graph.value_may_drop(value_idx) {
         return;
     }
-    if graph.values[value_idx].is_ptr() && !is_fncall {
+    if graph.value_is_ptr(value_idx) && !is_fncall {
         return;
     }
     let Some(confidence) = check_drop_status(graph, drop_record, value_idx) else {
@@ -209,7 +209,7 @@ fn fetch_drop_from_pointee(
     drop_record: &mut Vec<DropRecord>,
     value_idx: usize,
 ) {
-    if !graph.values[value_idx].is_ptr() {
+    if !graph.value_is_ptr(value_idx) {
         return;
     }
     if drop_record[value_idx].is_dropped || drop_record[value_idx].has_dropped_field {

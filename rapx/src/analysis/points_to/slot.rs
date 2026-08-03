@@ -21,6 +21,19 @@ impl Slot {
             fields,
         }
     }
+
+    pub fn from_mir_place(place: &rustc_middle::mir::Place) -> Self {
+        let local = place.local.as_usize();
+        let fields: Vec<usize> = place
+            .projection
+            .iter()
+            .filter_map(|elem| match elem {
+                rustc_middle::mir::ProjectionElem::Field(idx, _) => Some(idx.as_usize()),
+                _ => None,
+            })
+            .collect();
+        Slot { local, fields }
+    }
 }
 
 /// An abstract memory location a pointer can point to.

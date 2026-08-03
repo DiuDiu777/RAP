@@ -10,14 +10,13 @@ use crate::{
     utils::source::get_fn_name,
 };
 use rustc_middle::mir::Terminator;
-use rustc_middle::ty::{TyCtxt, TypingEnv};
+use rustc_middle::ty::TyCtxt;
 use rustc_span::{Span, def_id::DefId};
 use std::fmt;
 
-use super::types::{is_not_drop, kind};
+use super::types::kind;
 use super::value::Value;
 
-#[derive(Clone)]
 pub struct AliasGraph<'tcx> {
     pub path_graph: PathGraph<'tcx>,
     pub visit_times: usize,
@@ -51,16 +50,12 @@ impl<'tcx> AliasGraph<'tcx> {
         def_id: DefId,
         path_graph: PathGraph<'tcx>,
     ) -> AliasGraph<'tcx> {
-        let _fn_name = get_fn_name(tcx, def_id);
         let body = tcx.optimized_mir(def_id);
         let locals = &body.local_decls;
         let arg_size = body.arg_count;
         let mut values = Vec::<Value>::new();
-        let ty_env = TypingEnv::post_analysis(tcx, def_id);
         for (local, local_decl) in locals.iter_enumerated() {
-            let need_drop = local_decl.ty.needs_drop(tcx, ty_env);
-            let may_drop = !is_not_drop(tcx, local_decl.ty);
-            let mut node = Value::new(local.as_usize(), local.as_usize(), need_drop, may_drop);
+            let mut node = Value::new(local.as_usize(), local.as_usize());
             node.kind = kind(local_decl.ty);
             values.push(node);
         }
@@ -156,6 +151,22 @@ impl<'tcx> AliasGraph<'tcx> {
             Some(result)
         } else {
             None
+        }
+    }
+
+    // ── Value type queries (delegate to PtsGraph) ──
+
+    pub fn value_may_drop(&self, value_idx: usize) -> bool {
+        self.value_to_slot_idx(value_idx)
+            .map(|s| self.pts_graph.may_drop(s))
+            .unwrap_or(false)
+    }
+
+    pub fn value_is_ptr(&self, value_idx: usize) -> bool {
+        if value_idx < self.values.len() {
+            self.values[value_idx].is_ptr()
+        } else {
+            false
         }
     }
 

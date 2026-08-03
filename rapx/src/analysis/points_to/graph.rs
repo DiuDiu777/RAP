@@ -4,7 +4,7 @@ use crate::compat::{FxHashMap, FxHashSet};
 
 use super::slot::{AbstractLoc, Slot};
 
-const MAX_VALUES_PER_PATH: usize = 1000;
+pub const MAX_VALUES_PER_PATH: usize = 1000;
 
 /// Unified points-to and value-flow graph.
 ///

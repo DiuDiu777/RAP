@@ -5,7 +5,7 @@ use crate::analysis::{
 };
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
-use std::{fmt, vec::Vec};
+use std::fmt;
 
 /// We represent each target function with the `SafeDropGraph` struct and then perform analysis
 /// based on the struct.
@@ -18,10 +18,6 @@ pub struct SafeDropGraph<'tcx> {
 }
 
 impl<'tcx> SafeDropGraph<'tcx> {
-    pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId, adt_owner: OHAResultMap) -> Self {
-        Self::from_alias_graph(AliasGraph::new(tcx, def_id), adt_owner)
-    }
-
     pub fn from_path_graph(
         tcx: TyCtxt<'tcx>,
         def_id: DefId,

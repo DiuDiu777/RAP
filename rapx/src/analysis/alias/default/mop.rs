@@ -42,11 +42,11 @@ impl<'tcx> AliasGraph<'tcx> {
         path.push(node.block);
         let mut obs = NoopAliasObserver;
 
-        self.alias_bb_pts(node.block, &mut obs);
+        self.alias_bb(node.block, &mut obs);
         if let Some(target_id) = self.call_target_of(node.block) {
             ensure_fn_aliases_cached(self.tcx(), target_id, fn_map, rec_set);
         }
-        self.alias_bbcall_pts(node.block, fn_map, &mut obs);
+        self.alias_bbcall(node.block, fn_map, &mut obs);
 
         let saved_pts_graph = self.pts_graph.clone();
         let saved_rec = rec_set.clone();

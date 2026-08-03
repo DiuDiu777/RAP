@@ -529,8 +529,6 @@ impl DebugWithContext<FnAliasAnalyzer<'_>> for AliasDomain {}
 /// Intraprocedural alias analyzer
 pub struct FnAliasAnalyzer<'tcx> {
     pub tcx: TyCtxt<'tcx>,
-    _body: &'tcx Body<'tcx>,
-    _def_id: DefId,
     place_info: PlaceInfo<'tcx>,
     /// Function summaries for interprocedural analysis
     fn_summaries: Rc<RefCell<FnAliasMap>>,
@@ -550,8 +548,6 @@ impl<'tcx> FnAliasAnalyzer<'tcx> {
         let place_info = PlaceInfo::build(tcx, def_id, body);
         FnAliasAnalyzer {
             tcx,
-            _body: body,
-            _def_id: def_id,
             place_info,
             fn_summaries,
             bb_iter_cnt: RefCell::new(0),
