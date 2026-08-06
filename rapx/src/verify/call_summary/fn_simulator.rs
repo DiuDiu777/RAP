@@ -14,14 +14,11 @@
 //!    API.
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::Operand;
+use rustc_middle::mir::{Local, Operand};
 use rustc_middle::ty::{GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind};
 
 use super::{CallDependencySummary, CallEffect, CallEffectSummary};
-use crate::helpers::mir_utils::ty_has_param_const;
-use crate::verify::{
-    smt_check::common::pointee_ty,
-};
+use crate::helpers::mir_utils::{ty_has_param_const, pointee_ty};
 
 // ── Context for effect builders ────────────────────────────────────────
 
@@ -61,14 +58,16 @@ static REGISTRY: &[Entry] = &[
     E!(mem_forget_capacity,   dep0!(),  false,  none!(),  eff_none),
     E!(transmute,             dep0!(),  false,  none!(),  eff_none),
     E!(is_maybe_uninit_uninit,none!(),  false,  none!(),  eff_none),
+    E!(is_maybe_uninit_assume_init,dep0!(), false, none!(), eff_none),
     E!(is_numeric_arith,      ALL,      true,   none!(),  eff_none),
     E!(saturating_sub,        ALL,      true,   none!(),  eff_none),
-    E!(is_option_unwrap,      dep0!(),  false,  none!(),  eff_none),
+    E!(is_option_unwrap,      dep0!(),  false,  none!(),  eff_alias_arg0),
     E!(from_trait_call,       dep0!(),  false,  none!(),  eff_from_trait),
 
     // ── Pointer extraction / cast ───────────────────────────────────
     E!(nonnull_from,          dep0!(),  false,  none!(),  eff_alias_ptr),
-    E!(nonnull_new_unchecked, dep0!(),  false,  none!(),  eff_alias_ptr),
+    E!(nonnull_new_unchecked, dep0!(),  false,  none!(),  eff_none),
+    E!(nonnull_new,           dep0!(),  false,  none!(),  eff_alias_ptr),
     E!(nonnull_as_ref,        dep0!(),  false,  none!(),  eff_alias_ptr),
     E!(nonnull_as_mut,        dep0!(),  false,  none!(),  eff_alias_ptr),
     E!(is_as_ptr,             dep0!(),  false,  none!(),  eff_alias_ptr),
@@ -84,6 +83,7 @@ static REGISTRY: &[Entry] = &[
     // ── Memory read / write ─────────────────────────────────────────
     E!(ptr_read,              dep0!(),  false,  none!(),  eff_read_mem),
     E!(is_ptr_write,          none!(),  false,  dep0!(),  eff_write_mem),
+    E!(is_maybe_uninit_write, none!(),  false,  dep0!(),  eff_write_mem),
 
     // ── Slice / collection queries ──────────────────────────────────
     E!(is_len,                dep0!(),  false,  none!(),  eff_len),
@@ -101,6 +101,11 @@ static REGISTRY: &[Entry] = &[
 
     // ── Layout constants ────────────────────────────────────────────
     E!(is_layout_constant,    none!(),  false,  none!(),  eff_layout_const),
+
+    // ── CStr / CString helpers ──────────────────────────────────────
+    E!(is_cstr_from_ptr,      dep0!(),  false,  none!(),  eff_alias_arg0),
+    E!(is_cstr_from_bytes_with_nul_unchecked, dep0!(), false, none!(), eff_alias_arg0),
+    E!(is_vec_push,           none!(),  false,  dep0!(),  eff_write_mem),
 ];
 
 pub fn lookup_dependency(
@@ -247,8 +252,20 @@ fn eff_split_at(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
 }
 
 fn eff_from_raw_parts(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    let elem = slice_element_size(ctx.tcx, ctx.caller, ctx.func, ctx.dest);
     let mut eff = vec![
+        // ReturnAliasArg keeps the legacy PointsTo chain intact so the
+        // legacy SMT Align checker can trace through as_ptr() → reference
+        // provenance.  Without it, place_is_reference_aligned cannot
+        // prove alignment for the pointer argument.
         CallEffect::ReturnAliasArg { arg: 0 },
+        // ReturnFreshAllocation provides the allocation-tracking hint
+        // used by the VM backend's memory model.
+        CallEffect::ReturnFreshAllocation {
+            pointer_arg: 0,
+            size_arg: 1,
+            elem_size: elem,
+        },
         CallEffect::ReturnNonZero,
     ];
     if let Some((a, n)) = pointee_alignment(ctx.tcx, ctx.caller, ctx.dest) {
@@ -270,10 +287,15 @@ fn transmute(n: &str) -> bool               { n.contains("::transmute") || n.con
 fn slice_range(n: &str) -> bool             { let b = n.split('<').next().unwrap_or(n); b.ends_with("slice::range") || b.contains("slice::index::range") }
 fn align_to_offsets(n: &str) -> bool        { n.contains("::align_to_offsets") }
 fn from_trait_call(n: &str) -> bool         { n == "std::convert::From::from" || n == "core::convert::From::from" }
-fn nonnull_from(n: &str) -> bool            { n.ends_with("::from") && n.contains("ptr::non_null") }
-fn nonnull_new_unchecked(n: &str) -> bool   { n.ends_with("::new_unchecked") && n.contains("ptr::non_null") }
-fn nonnull_as_ref(n: &str) -> bool          { n.ends_with("::as_ref") && n.contains("ptr::non_null") }
-fn nonnull_as_mut(n: &str) -> bool          { n.ends_with("::as_mut") && n.contains("ptr::non_null") }
+fn nonnull_from(n: &str) -> bool            { n.ends_with("::from") && is_nonnull_api(n) }
+fn nonnull_new_unchecked(n: &str) -> bool   { n.ends_with("::new_unchecked") && is_nonnull_api(n) }
+fn nonnull_new(n: &str) -> bool             { n.ends_with("::new") && is_nonnull_api(n) && !n.ends_with("::new_unchecked") }
+fn nonnull_as_ref(n: &str) -> bool          { n.ends_with("::as_ref") && is_nonnull_api(n) }
+fn nonnull_as_mut(n: &str) -> bool          { n.ends_with("::as_mut") && is_nonnull_api(n) }
+
+fn is_nonnull_api(n: &str) -> bool {
+    n.contains("ptr::non_null") || n.contains("ptr::NonNull")
+}
 fn ptr_add(n: &str) -> bool                 { is_pointer_add(n) && !is_byte_ptr_arith(n) }
 fn ptr_sub(n: &str) -> bool                 { is_pointer_sub(n) && !is_byte_ptr_arith(n) }
 fn byte_ptr_add(n: &str) -> bool            { is_byte_ptr_arith(n) }
@@ -290,6 +312,7 @@ pub fn is_ownership_reconstruction(name: &str) -> bool {
     name.contains("from_raw") && !name.contains("from_raw_parts")
         && (name.contains("boxed") || name.contains("Box")
             || name.contains("CString") || name.contains("ffi::c_str"))
+        || name.contains("from_vec_with_nul_unchecked")
 }
 
 pub fn is_as_ptr(name: &str) -> bool {
@@ -349,6 +372,10 @@ pub fn is_ptr_write(name: &str) -> bool {
         && !name.contains("write_bytes") && !name.contains("write_unaligned")
         && !name.contains("write_volatile")
 }
+pub fn is_maybe_uninit_write(name: &str) -> bool {
+    name.contains("MaybeUninit") && name.ends_with("::write")
+        && !name.contains("write_bytes")
+}
 pub fn is_len(name: &str) -> bool { name.contains("::len") }
 pub fn is_numeric_arith(name: &str) -> bool {
     name.contains("::unchecked_mul") || name.contains("::unchecked_add")
@@ -365,7 +392,20 @@ pub fn is_option_unwrap(name: &str) -> bool {
 pub fn is_maybe_uninit_uninit(name: &str) -> bool {
     name.contains("MaybeUninit") && name.ends_with("::uninit")
 }
+pub fn is_maybe_uninit_assume_init(name: &str) -> bool {
+    name.contains("MaybeUninit") && (name.ends_with("::assume_init") || name.ends_with("::assume_init_read"))
+}
 pub fn is_from_raw_parts(name: &str) -> bool { name.contains("::from_raw_parts") }
+pub fn is_cstr_from_ptr(name: &str) -> bool {
+    name.contains("CStr") && name.ends_with("::from_ptr")
+}
+pub fn is_cstr_from_bytes_with_nul_unchecked(name: &str) -> bool {
+    name.contains("CStr") && name.ends_with("::from_bytes_with_nul_unchecked")
+}
+pub fn is_vec_push(name: &str) -> bool {
+    (name.ends_with("::push") || name.ends_with("::reserve") || name.ends_with("::reserve_exact"))
+        && name.contains("Vec")
+}
 
 // ── Layout helpers (used by effect builders) ─────────────────────────
 
@@ -431,6 +471,31 @@ fn nonnull_inner_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
     let TyKind::Adt(def, args) = ty.kind() else { return None };
     if !tcx.def_path_str(def.did()).contains("ptr::non_null::NonNull") { return None }
     args.iter().find_map(|a| match a.kind() { GenericArgKind::Type(t) => Some(t), _ => None })
+}
+
+fn slice_element_size(
+    tcx: TyCtxt<'_>, caller: DefId, _func: &Operand<'_>, dest: Option<Local>,
+) -> u64 {
+    let d = match dest {
+        Some(d) => d,
+        None => return 1,
+    };
+    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
+    // Walk through Ref/Slice/Array to find the element type
+    let elem = match ty.kind() {
+        TyKind::Ref(_, inner, _) => match inner.kind() {
+            TyKind::Slice(e) => *e,
+            _ => return 1,
+        },
+        TyKind::RawPtr(inner, _) => match inner.kind() {
+            TyKind::Slice(e) => *e,
+            _ => return 1,
+        },
+        _ => return 1,
+    };
+    type_layout(tcx, caller, elem)
+        .map(|(_, s)| s)
+        .unwrap_or(1)
 }
 
 fn layout_constant_effect<'tcx>(

@@ -284,6 +284,7 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             crate_name,
             module,
             debug_contracts,
+            ..
         }) => {
             if *prepare_targets {
                 PrepareTargets::new(

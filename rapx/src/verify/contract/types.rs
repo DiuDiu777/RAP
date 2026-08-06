@@ -569,16 +569,3 @@ impl<'tcx> Property<'tcx> {
         }
     }
 }
-
-/// Reuse a property's arg structure while replacing its kind.
-/// Clears `null_guard` and `or_alternatives` because primitives are plain.
-pub fn with_kind<'tcx>(property: &Property<'tcx>, kind: PropertyKind) -> Property<'tcx> {
-    Property {
-        kind,
-        args: property.args.clone(),
-        contract_kind: property.contract_kind,
-        null_guard: None,
-        or_alternatives: Vec::new(),
-        for_each: property.for_each.clone(),
-    }
-}

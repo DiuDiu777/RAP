@@ -92,3 +92,16 @@ pub trait SkipNormWip: Sized {
 }
 #[cfg(not(rapx_has_skip_norm_wip))]
 impl<T: Sized> SkipNormWip for T {}
+
+// ── attribute_to_string (PpAnn for TyCtxt was removed in ≥ 1.99) ───────
+
+#[cfg(not(rapx_rustc_ge_199))]
+pub fn attribute_to_string<'tcx>(tcx: TyCtxt<'tcx>, attr: &rustc_hir::Attribute) -> String {
+    rustc_hir_pretty::attribute_to_string(&tcx, attr)
+}
+#[cfg(rapx_rustc_ge_199)]
+pub fn attribute_to_string(_tcx: TyCtxt<'_>, attr: &rustc_hir::Attribute) -> String {
+    struct Ann;
+    impl rustc_hir_pretty::PpAnn for Ann {}
+    rustc_hir_pretty::attribute_to_string(&Ann, attr)
+}

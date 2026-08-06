@@ -249,6 +249,22 @@ pub(super) fn try_pointer_arith_wrapper_effect<'tcx>(
     None
 }
 
+/// Check whether a callee body contains pointer arithmetic calls.
+pub(super) fn callee_contains_pointer_arithmetic(tcx: TyCtxt<'_>, callee: DefId) -> bool {
+    let Some(_) = callee.as_local() else { return false };
+    if !tcx.is_mir_available(callee) { return false; }
+    let body = tcx.optimized_mir(callee);
+    for bb in body.basic_blocks.iter() {
+        let Some(terminator) = &bb.terminator else { continue };
+        let TerminatorKind::Call { func, .. } = &terminator.kind else { continue };
+        let name = helpers::call_name(tcx, func);
+        if fn_simulator::is_pointer_add(&name) || fn_simulator::is_pointer_sub(&name) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Use the existing dataflow graph to approximate local callee return deps.
 pub(super) fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Option<Vec<usize>> {
     callee.as_local()?;
@@ -270,6 +286,89 @@ pub(super) fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Optio
             .collect()
     })
     .ok()
+}
+
+/// Detect when a local callee wraps `from_raw_parts(ptr, len)` and produce
+/// a `ReturnFreshAllocation` effect with the correct element size.
+pub(super) fn try_from_raw_parts_wrapper_effect<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    callee: DefId,
+    _destination: Option<Local>,
+) -> Option<CallEffect> {
+    if !tcx.is_mir_available(callee) {
+        return None;
+    }
+    let body = tcx.optimized_mir(callee);
+    if body.basic_blocks.len() > 8 {
+        return None;
+    }
+    let ret = Local::from_usize(0);
+
+    for bb in body.basic_blocks.iter() {
+        let Some(terminator) = &bb.terminator else { continue };
+        let TerminatorKind::Call {
+            func, args, destination: call_dest, ..
+        } = &terminator.kind else { continue };
+
+        let name = helpers::call_name(tcx, func);
+        if !fn_simulator::is_from_raw_parts(&name) {
+            continue;
+        }
+
+        // Verify the call result reaches return
+        let mut queue = VecDeque::from([call_dest.local]);
+        let mut seen = HashSet::from([call_dest.local]);
+        let mut reaches_ret = false;
+        while let Some(current) = queue.pop_front() {
+            if current == ret { reaches_ret = true; break; }
+            for bb2 in body.basic_blocks.iter() {
+                for stmt in &bb2.statements {
+                    let StatementKind::Assign(assign) = &stmt.kind else { continue };
+                    if seen.contains(&assign.0.local) { continue; }
+                    match &assign.1 {
+                        Rvalue::Use(Operand::Copy(place), ..)
+                        | Rvalue::Use(Operand::Move(place), ..)
+                        | Rvalue::Cast(_, Operand::Copy(place), _)
+                        | Rvalue::Cast(_, Operand::Move(place), _) => {
+                            if place.local == current {
+                                queue.push_back(assign.0.local);
+                                seen.insert(assign.0.local);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if !reaches_ret { continue; }
+
+        // Trace from_raw_parts args to callee args
+        let pointer_arg = trace_to_callee_arg(tcx, body, &args[0].node)?;
+        let size_arg = trace_to_callee_arg(tcx, body, &args[1].node)?;
+
+        // Determine element size from return type
+        let ret_ty = body.local_decls[ret].ty;
+        let elem_size = match ret_ty.kind() {
+            rustc_middle::ty::TyKind::Ref(_, inner, _) => match inner.kind() {
+                rustc_middle::ty::TyKind::Slice(elem) => {
+                    let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, callee);
+                    let input = rustc_middle::ty::PseudoCanonicalInput { typing_env, value: *elem };
+                    tcx.layout_of(input)
+                        .map(|l| l.size.bytes())
+                        .unwrap_or(1)
+                }
+                _ => 1,
+            },
+            _ => 1,
+        };
+
+        return Some(CallEffect::ReturnFreshAllocation {
+            pointer_arg,
+            size_arg,
+            elem_size,
+        });
+    }
+    None
 }
 
 /// Return callee argument indices that are definitely written on every

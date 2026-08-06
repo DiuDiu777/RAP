@@ -3,10 +3,26 @@ use rustc_hir::{
     def_id::{DefId, LocalDefId},
 };
 use rustc_middle::{
-    mir::{BasicBlock, Local, Operand, Rvalue, TerminatorKind},
+    mir::{BasicBlock, ConstValue, Local, Operand, Place, Rvalue, StatementKind, TerminatorKind},
+    mir::interpret::{AllocId, GlobalAlloc},
     ty::{ConstKind, GenericArgKind, Ty, TyCtxt, TyKind},
 };
 use rustc_span::Symbol;
+
+use std::collections::{HashMap, HashSet};
+
+use crate::{
+    analysis::alias::{collect_local_origins, LocalOriginMap},
+    helpers::mir_scan::Checkpoint,
+    verify::def_use::PlaceKey,
+};
+
+pub(crate) fn pointee_ty<'tcx>(ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    match ty.kind() {
+        TyKind::RawPtr(ty, _) | TyKind::Ref(_, ty, _) => Some(*ty),
+        _ => None,
+    }
+}
 
 pub(crate) fn dep_callee_def_id(func: &Operand<'_>) -> Option<DefId> {
     let Operand::Constant(func_constant) = func else { return None };
@@ -188,9 +204,270 @@ pub fn rvalue_source_place<'a, 'tcx>(rvalue: &'a Rvalue<'tcx>) -> Option<&'a rus
         | Rvalue::Use(Operand::Move(place), ..)
         | Rvalue::Cast(_, Operand::Copy(place), _)
         | Rvalue::Cast(_, Operand::Move(place), _)
-        | Rvalue::Ref(_, _, place)
+        |         Rvalue::Ref(_, _, place)
         | Rvalue::RawPtr(_, place)
         | Rvalue::CopyForDeref(place) => Some(place),
         _ => None,
     }
+}
+
+// ── PlaceKey / operand utilities ─────────────────────────────────
+
+/// Extract a PlaceKey from a MIR operand.
+pub fn operand_place(operand: &Operand<'_>) -> Option<PlaceKey> {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => Some(PlaceKey::from_mir_place(place)),
+        Operand::Constant(_) => None,
+        #[cfg(rapx_rustc_ge_196)]
+        Operand::RuntimeChecks(_) => None,
+    }
+}
+
+/// Extract the MIR Place from an operand.
+pub fn operand_mir_place<'a, 'tcx>(operand: &'a Operand<'tcx>) -> Option<&'a Place<'tcx>> {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => Some(place),
+        _ => None,
+    }
+}
+
+/// Return the destination local for a checkpoint's call or deref.
+pub fn call_destination<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    checkpoint: &Checkpoint<'tcx>,
+) -> Option<Local> {
+    if checkpoint.kind == crate::helpers::mir_scan::CheckpointKind::RawPtrDeref {
+        return checkpoint.destination;
+    }
+    let body = tcx.optimized_mir(checkpoint.caller);
+    let terminator = body.basic_blocks[checkpoint.block].terminator();
+    let TerminatorKind::Call { destination, .. } = &terminator.kind else {
+        return None;
+    };
+    Some(destination.local)
+}
+
+// ── Place resolution utilities ───────────────────────────────────
+
+/// Follow local-origin associations transitively to resolve to the
+/// ultimate source (parameter or root local) and accumulated field path.
+pub fn deep_resolve_place(
+    mut local: usize,
+    origins: &LocalOriginMap,
+) -> (usize, Vec<usize>) {
+    let mut seen = HashSet::new();
+    let mut all_fields: Vec<usize> = Vec::new();
+    loop {
+        if !seen.insert(local) {
+            return (local, all_fields);
+        }
+        match origins.get(&local) {
+            Some((l, fields)) => {
+                let mut combined = fields.clone();
+                combined.extend(all_fields.iter());
+                all_fields = combined;
+                if *l == 1 {
+                    return (1, all_fields);
+                }
+                local = *l;
+            }
+            None => {
+                return (local, all_fields);
+            }
+        }
+    }
+}
+
+/// Trace a raw pointer local back through call terminators to find the
+/// originating place (e.g. slice from `get_unchecked`).
+pub fn trace_raw_ptr_through_call(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    checkpoint_block: BasicBlock,
+    raw_ptr: Local,
+) -> Option<PlaceKey> {
+    let body = tcx.optimized_mir(caller);
+    let mut block = checkpoint_block;
+    let mut visited = HashSet::new();
+    loop {
+        if !visited.insert(block) {
+            break;
+        }
+        for statement in body.basic_blocks[block].statements.iter().rev() {
+            let StatementKind::Assign(assign) = &statement.kind else {
+                continue;
+            };
+            let (target, _rvalue) = assign.as_ref();
+            if target.local != raw_ptr {
+                continue;
+            }
+            break;
+        }
+        let predecessors = &body.basic_blocks.predecessors()[block];
+        if predecessors.len() != 1 {
+            break;
+        }
+        let prev = predecessors[0];
+        let terminator = body.basic_blocks[prev].terminator();
+        if let TerminatorKind::Call {
+            func,
+            args,
+            destination,
+            ..
+        } = &terminator.kind
+        {
+            if destination.local == raw_ptr {
+                let callee_name = call_name(tcx, func);
+                if callee_name.contains("::get_unchecked") {
+                    if let Some(slice) = args.get(1) {
+                        return operand_place(&slice.node);
+                    }
+                }
+                break;
+            }
+        }
+        block = prev;
+    }
+    None
+}
+
+// ── Block reachability ───────────────────────────────────────────
+
+/// Collect all basic blocks reachable after (and including) a call block.
+pub fn blocks_reachable_after_call(
+    tcx: TyCtxt<'_>,
+    caller: DefId,
+    call_block: BasicBlock,
+) -> HashSet<BasicBlock> {
+    let body = tcx.optimized_mir(caller);
+    let mut starts = Vec::new();
+    if let TerminatorKind::Call { target, .. } = &body.basic_blocks[call_block].terminator().kind
+        && let Some(target) = target
+    {
+        starts.push(*target);
+    }
+
+    let mut seen = HashSet::new();
+    let mut stack = starts;
+    while let Some(block) = stack.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        let terminator = body.basic_blocks[block].terminator();
+        for successor in terminator.successors() {
+            stack.push(successor);
+        }
+    }
+    seen
+}
+
+// ── MIR place alias mapping ──────────────────────────────────────
+
+/// Build a mapping from MIR locals to their resolved PlaceKey origins.
+pub fn collect_place_aliases(
+    tcx: TyCtxt<'_>,
+    def_id: DefId,
+) -> HashMap<Local, PlaceKey> {
+    collect_local_origins(tcx, def_id)
+        .into_iter()
+        .map(|(local, (origin_local, fields))| {
+            (
+                Local::from_usize(local),
+                PlaceKey::from_origin(origin_local, fields),
+            )
+        })
+        .collect()
+}
+
+/// Resolve a MIR place through alias mapping to get a canonical PlaceKey.
+pub fn resolve_mir_place<'tcx>(
+    _tcx: TyCtxt<'tcx>,
+    place: &Place<'tcx>,
+    aliases: &HashMap<Local, PlaceKey>,
+) -> PlaceKey {
+    let key = PlaceKey::from_mir_place(place);
+    if !key.fields.is_empty() {
+        return key;
+    }
+    aliases.get(&place.local).cloned().unwrap_or(key)
+}
+
+// ── Rvalue place scanning ────────────────────────────────────────
+
+/// Check whether any MIR place used in an rvalue matches a predicate.
+pub fn rvalue_any_place_matching<'tcx>(
+    rvalue: &Rvalue<'tcx>,
+    pred: &mut impl FnMut(&Place<'tcx>) -> bool,
+) -> bool {
+    match rvalue {
+        Rvalue::Aggregate(_, operands) => operands.iter().any(|operand| match operand {
+            Operand::Copy(place) | Operand::Move(place) => pred(place),
+            Operand::Constant(_) => false,
+            #[cfg(rapx_rustc_ge_196)]
+            Operand::RuntimeChecks(_) => false,
+        }),
+        _ => rvalue_source_place(rvalue)
+            .map_or(false, |place| pred(place)),
+    }
+}
+
+// ── Pointer arithmetic origin tracing ────────────────────────────
+
+/// Trace a place back to its root local via local origin map.
+pub fn trace_place_root(
+    origins: &LocalOriginMap,
+    place: &PlaceKey,
+) -> Option<(usize, Vec<usize>)> {
+    let Some(local) = place.local() else {
+        return None;
+    };
+    let (root_local, root_fields) = deep_resolve_place(local.as_usize(), origins);
+    Some((root_local, root_fields))
+}
+
+/// Extract raw bytes from a `ConstValue`, following reference indirection.
+pub fn const_value_bytes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    value: ConstValue,
+    depth: usize,
+) -> Option<Vec<u8>> {
+    if depth > 4 {
+        return None;
+    }
+    match value {
+        ConstValue::Slice { alloc_id, .. } => alloc_id_bytes(tcx, alloc_id, depth),
+        ConstValue::Scalar(scalar) => {
+            let ptr = scalar.to_pointer(&tcx).discard_err()?;
+            let alloc_id = ptr.provenance?.alloc_id();
+            alloc_id_bytes(tcx, alloc_id, depth)
+        }
+        ConstValue::Indirect { alloc_id, .. } => alloc_id_bytes(tcx, alloc_id, depth),
+        _ => None,
+    }
+}
+
+/// Read bytes from a global allocation.
+pub fn alloc_id_bytes<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    alloc_id: AllocId,
+    depth: usize,
+) -> Option<Vec<u8>> {
+    if depth > 4 {
+        return None;
+    }
+    let alloc = match tcx.global_alloc(alloc_id) {
+        GlobalAlloc::Memory(alloc) => alloc,
+        GlobalAlloc::Static(def_id) => tcx.eval_static_initializer(def_id).ok()?,
+        _ => return None,
+    };
+    let alloc = alloc.inner();
+    let provenance = alloc.provenance().ptrs();
+    if let Some((_, prov)) = provenance.iter().next() {
+        return alloc_id_bytes(tcx, prov.alloc_id(), depth + 1);
+    }
+    Some(
+        alloc
+            .inspect_with_uninit_and_ptr_outside_interpreter(0..alloc.len())
+            .to_vec(),
+    )
 }

@@ -105,6 +105,14 @@ pub enum CallEffect {
     ReadMemory { arg: usize },
     /// The call writes one initialized element through a pointer argument.
     WriteMemory { pointer_arg: usize },
+    /// The return value is a pointer backed by a fresh allocation of
+    /// `size_arg` elements × `elem_size` bytes. The base address is taken
+    /// from `pointer_arg`. Used for `from_raw_parts(ptr, len)`.
+    ReturnFreshAllocation {
+        pointer_arg: usize,
+        size_arg: usize,
+        elem_size: u64,
+    },
     /// The return value is the length of an aggregate argument.
     ReturnLengthOfArg { arg: usize },
     /// The return value is `1` iff the length of the aggregate argument is 0.
@@ -238,6 +246,15 @@ pub fn effect_summary<'tcx>(
                 unsupported: false,
             };
         }
+        if let Some(effect) = interprocedural::try_from_raw_parts_wrapper_effect(tcx, callee, Some(destination)) {
+            return CallEffectSummary {
+                callee: Some(callee),
+                name,
+                destination: Some(destination),
+                effects: vec![effect],
+                unsupported: false,
+            };
+        }
         if let Some((indices_arg, len_arg)) = interprocedural::detect_index_disjoint_validator(tcx, callee)
             .or_else(|| interprocedural::named_index_disjoint_validator(&name))
         {
@@ -253,16 +270,20 @@ pub fn effect_summary<'tcx>(
             };
         }
         if let Some(return_deps) = interprocedural::local_return_dependencies(tcx, callee) {
-            return CallEffectSummary {
-                callee: Some(callee),
-                name,
-                destination: Some(destination),
-                effects: return_deps
-                    .into_iter()
-                    .map(|arg| CallEffect::ReturnAliasArg { arg })
-                    .collect(),
-                unsupported: false,
-            };
+            // If the callee does pointer arithmetic, don't produce ReturnAliasArg
+            // since the offset might have been changed (e.g. wrapping_add(1)).
+            if !interprocedural::callee_contains_pointer_arithmetic(tcx, callee) {
+                return CallEffectSummary {
+                    callee: Some(callee),
+                    name,
+                    destination: Some(destination),
+                    effects: return_deps
+                        .into_iter()
+                        .map(|arg| CallEffect::ReturnAliasArg { arg })
+                        .collect(),
+                    unsupported: false,
+                };
+            }
         }
     }
 

@@ -45,7 +45,9 @@ fn make_dummy_fn(ident_name: &str, build_std: bool) -> Box<Item> {
         sig: make_dummy_fn_sig(),
         contract: None,
         define_opaque: None,
-        #[cfg(rapx_rustc_ge_196)]
+        #[cfg(rapx_rustc_ge_199)]
+        eii_impl: Default::default(),
+        #[cfg(all(rapx_rustc_ge_196, not(rapx_rustc_ge_199)))]
         eii_impls: Default::default(),
         body: Some(Box::new(make_dummy_block())),
     };

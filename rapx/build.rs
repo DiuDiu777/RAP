@@ -12,6 +12,8 @@ fn main() {
     emit_check_cfg("rapx_has_attr_item_kind");
     emit_check_cfg("rapx_has_fielddef_extras");
     emit_check_cfg("rapx_has_skip_norm_wip");
+    emit_check_cfg("rapx_rvalue_use_with_retag");
+    emit_check_cfg("rapx_rvalue_has_reborrow");
 
     emit_cfg("rustc_spanned_at_root", minor >= 96);
     emit_cfg("rapx_rustc_ge_193", minor >= 93);
@@ -30,6 +32,14 @@ fn main() {
     emit_cfg(
         "rapx_has_skip_norm_wip",
         rustc_src_contains_path("compiler/rustc_type_ir/src/unnormalized.rs", "fn skip_norm_wip"),
+    );
+    emit_cfg(
+        "rapx_rvalue_use_with_retag",
+        rustc_src_contains_path("compiler/rustc_middle/src/mir/syntax.rs", "WithRetag"),
+    );
+    emit_cfg(
+        "rapx_rvalue_has_reborrow",
+        rustc_src_contains_path("compiler/rustc_middle/src/mir/syntax.rs", "Reborrow("),
     );
 }
 

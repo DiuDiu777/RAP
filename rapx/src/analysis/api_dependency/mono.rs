@@ -7,6 +7,9 @@ use crate::helpers::def_path::path_str_def_id;
 use crate::{rap_debug, rap_trace};
 use rand::Rng;
 use rand::seq::SliceRandom;
+#[cfg(not(rapx_has_skip_norm_wip))]
+use crate::compat::SkipNormWip;
+
 use rustc_hir::LangItem;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::DefineOpaqueTypes;

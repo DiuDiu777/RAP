@@ -1,0 +1,2255 @@
+//! Unified property checker for the symbolic VM.
+
+use rustc_middle::mir::{Local, Operand, Rvalue, StatementKind, TerminatorKind};
+use rustc_middle::ty::{GenericArg, GenericArgKind, Ty, TyKind};
+#[cfg(not(rapx_has_skip_norm_wip))]
+use crate::compat::SkipNormWip;
+use rustc_hash::FxHashSet;
+use z3::{
+    SatResult, Solver,
+    ast::{Ast, Bool, Int},
+};
+
+use crate::verify::{
+    contract::{
+        ContractExpr, ContractProjection, NumericOp, PlaceBase, Property, PropertyArg, PropertyKind,
+        RelOp,
+    },
+    report::CheckResult,
+};
+
+use crate::helpers::mir_scan::Checkpoint;
+
+use super::vm::state::{AllocId, VmState, VmValue};
+
+pub struct PropertyChecker;
+
+impl PropertyChecker {
+    pub fn check<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+    ) -> CheckResult {
+        let solver = Solver::new(vm_state.ctx);
+        vm_state.assert_all(&solver);
+        self.check_inner(vm_state, &solver, checkpoint, property)
+    }
+
+    fn check_inner<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+    ) -> CheckResult {
+        // Null guard: property is vacuously true when the guarded place is null.
+        if let Some(ref guard_key) = property.null_guard {
+            if self.is_guard_null(vm_state, checkpoint, guard_key) {
+                return CheckResult::Proved;
+            }
+        }
+        // Vacuous truth: properties with unwrap_some() / iter() projections
+        // are trivially true when the container value cannot be resolved to
+        // a meaningful pointer (e.g. Option::None has no provenance).
+        if self.is_vacuously_true_for_nullable(vm_state, checkpoint, property) {
+            return CheckResult::Proved;
+        }
+        match &property.kind {
+            PropertyKind::Deref => self.check_decomposed(vm_state, solver, checkpoint, property,
+                &[PropertyKind::Allocated, PropertyKind::InBound]),
+            PropertyKind::Ptr2Ref => {
+                // NonNull::as_mut / NonNull::as_ref fast-path:
+                // NonNull guarantees Init+Align by construction.
+                if let Some(callee) = checkpoint.callee {
+                    let callee_path = vm_state.tcx.def_path_str(callee);
+                    if callee_path.contains("::NonNull::")
+                        && (callee_path.ends_with("::as_ref") || callee_path.ends_with("::as_mut"))
+                    {
+                        // When the enclosing function returns a reference, the
+                        // NonNull::as_ref/as_mut result may escape, creating a
+                        // hazard for struct-field Owning invariants.
+                        let ret_ty = vm_state.body.local_decls[rustc_middle::mir::RETURN_PLACE].ty;
+                        if Self::type_contains_reference(ret_ty) {
+                            return CheckResult::Unknown;
+                        }
+                        return CheckResult::Proved;
+                    }
+                }
+                self.check_decomposed(vm_state, solver, checkpoint, property,
+                    &[PropertyKind::Init, PropertyKind::Align, PropertyKind::Alias])
+            }
+            PropertyKind::Layout => self.check_decomposed(vm_state, solver, checkpoint, property,
+                &[PropertyKind::Allocated]),
+            PropertyKind::ValidPtr => self.check_decomposed(vm_state, solver, checkpoint, property,
+                &[PropertyKind::Allocated, PropertyKind::InBound, PropertyKind::Init, PropertyKind::Align]),
+            PropertyKind::Or => self.check_or(vm_state, solver, checkpoint, property),
+
+            PropertyKind::Align => self.check_align(vm_state, solver, checkpoint, property),
+            PropertyKind::NonNull => self.check_non_null(vm_state, solver, checkpoint, property),
+            PropertyKind::Allocated => self.check_allocated(vm_state, solver, checkpoint, property),
+            PropertyKind::InBound => self.check_in_bound(vm_state, solver, checkpoint, property),
+            PropertyKind::Init => self.check_init(vm_state, solver, checkpoint, property),
+            PropertyKind::Typed => self.check_typed(vm_state, solver, checkpoint, property),
+            PropertyKind::Alias => self.check_alias(vm_state, solver, checkpoint, property),
+            PropertyKind::Owning => self.check_owning(vm_state, solver, checkpoint, property),
+            PropertyKind::Alive => self.check_alive(vm_state, solver, checkpoint, property),
+            PropertyKind::NonOverlap => self.check_non_overlap(vm_state, solver, checkpoint, property),
+            PropertyKind::NonVolatile => CheckResult::Proved,
+            PropertyKind::ValidNum => self.check_valid_num(vm_state, solver, checkpoint, property),
+            PropertyKind::ValidCStr => self.check_valid_cstr(vm_state, solver, checkpoint, property),
+            PropertyKind::ValidTransmute => self.check_valid_transmute(vm_state, solver, checkpoint, property),
+            PropertyKind::SplitTransmute => self.check_split_transmute(vm_state, solver, checkpoint, property),
+            PropertyKind::Trait => self.check_trait(vm_state, solver, checkpoint, property),
+
+            _ => CheckResult::Unknown,
+        }
+    }
+
+    fn check_decomposed<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>, primitives: &[PropertyKind]) -> CheckResult
+    {
+        let mut all_proved = true;
+        for kind in primitives {
+            let sub = crate::verify::contract::Property {
+                kind: *kind, args: property.args.clone(),
+                contract_kind: property.contract_kind, null_guard: property.null_guard.clone(),
+                or_alternatives: vec![], for_each: property.for_each.clone(),
+            };
+            match self.check_inner(vm_state, solver, checkpoint, &sub) {
+                CheckResult::Proved => {}
+                CheckResult::Failed => return CheckResult::Failed,
+                CheckResult::Unknown => all_proved = false,
+            }
+        }
+        if all_proved { CheckResult::Proved } else { CheckResult::Unknown }
+    }
+
+    fn check_or<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        for group in &property.or_alternatives {
+            if group.iter().all(|p| matches!(self.check_inner(vm_state, solver, checkpoint, p), CheckResult::Proved)) {
+                return CheckResult::Proved;
+            }
+        }
+        CheckResult::Unknown
+    }
+
+    // ── Resolve target place through checkpoint args ────────────
+
+    fn target_value<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> Option<VmValue<'ctx, 'tcx>>
+    {
+        let cp = match property.args.first()? {
+            PropertyArg::Place(cp) => cp.clone(),
+            PropertyArg::Expr(ContractExpr::Const(n)) => {
+                let idx = usize::try_from(*n).ok()?;
+                crate::verify::contract::ContractPlace {
+                    base: PlaceBase::Arg(idx),
+                    projections: vec![],
+                }
+            }
+            PropertyArg::Predicates(_) | PropertyArg::Ty(_) | PropertyArg::Ident(_) => return None,
+            PropertyArg::Expr(ContractExpr::Place(cp)) => cp.clone(),
+            _ => return None,
+        };
+        if cp.projections.is_empty() {
+            return match cp.base {
+                PlaceBase::Return => vm_state.local_value(Local::from_usize(0)).cloned(),
+                PlaceBase::Arg(n) => {
+                    let operand = checkpoint.args.get(n)?;
+                    Some(vm_state.value_of_operand(operand))
+                }
+                PlaceBase::Local(n) => vm_state.local_value(Local::from_usize(n)).cloned(),
+            };
+        }
+        let base_local = match cp.base {
+            PlaceBase::Return => Local::from_usize(0),
+            PlaceBase::Arg(n) => {
+                let operand = checkpoint.args.get(n)?;
+                match operand {
+                    Operand::Copy(place) | Operand::Move(place) => place.local,
+                    _ => return None,
+                }
+            }
+            PlaceBase::Local(n) => Local::from_usize(n),
+        };
+        let mut field_path: Vec<usize> = Vec::new();
+        let mut last_field_ty: Option<Ty<'tcx>> = None;
+
+        for proj in &cp.projections {
+            match proj {
+                ContractProjection::Field { index, ty } => {
+                    field_path.push(*index);
+                    last_field_ty = *ty;
+                }
+                ContractProjection::Downcast { variant_index } => {
+                    let base_val = vm_state.field_value(base_local, &field_path)
+                        .cloned()
+                        .or_else(|| vm_state.local_value(base_local).cloned());
+                    let Some(base_val) = base_val else { return None };
+
+                    let enum_ty = last_field_ty.unwrap_or(base_val.ty);
+                    let inner_ty = match enum_ty.kind() {
+                        TyKind::Adt(adt_def, substs) => {
+                            if adt_def.is_enum() {
+                                let variant = &adt_def.variants()[rustc_abi::VariantIdx::from_usize(*variant_index)];
+                                if !variant.fields.is_empty() {
+                                    Some(variant.fields[rustc_abi::FieldIdx::from_usize(0)].ty(vm_state.tcx, substs).skip_norm_wip())
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        _ => None,
+                    };
+                    let inner_ty = inner_ty.unwrap_or(base_val.ty);
+
+                    return Some(VmValue {
+                        term: base_val.term.clone(),
+                        ty: inner_ty,
+                        provenance: base_val.provenance.clone(),
+                        invariants: base_val.invariants,
+                    });
+                }
+                ContractProjection::IterElements => {
+                    // iter() projections: try to resolve the base field and
+                    // return the base value (iterator elements handled elsewhere).
+                    if let Some(val) = vm_state.field_value(base_local, &field_path) {
+                        return Some(val.clone());
+                    }
+                    if let Some(base_val) = vm_state.local_value(base_local) {
+                        if base_val.provenance.is_some() {
+                            return Some(VmValue {
+                                term: base_val.term.clone(),
+                                ty: base_val.ty,
+                                provenance: base_val.provenance.clone(),
+                                invariants: base_val.invariants,
+                            });
+                        }
+                    }
+                    return None;
+                }
+            }
+        }
+
+        // All projections were Field (or no projections)
+        if let Some(val) = vm_state.field_value(base_local, &field_path) {
+            return Some(val.clone());
+        }
+        if let Some(base_val) = vm_state.local_value(base_local) {
+            if let Some(ref prov) = base_val.provenance {
+                return Some(VmValue {
+                    term: base_val.term.clone(),
+                    ty: base_val.ty,
+                    provenance: Some(prov.clone()),
+                    invariants: base_val.invariants,
+                });
+            }
+        }
+        None
+    }
+
+    /// Check whether a property is vacuously true because its target place
+    /// uses a nullable projection (Downcast/IterElements) on a container
+    /// that has no meaningful provenance (e.g. Option::None).
+    fn is_vacuously_true_for_nullable<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+    ) -> bool {
+        let cp = match property.args.first() {
+            Some(PropertyArg::Place(cp)) => cp,
+            Some(PropertyArg::Expr(crate::verify::contract::ContractExpr::Place(cp))) => cp,
+            _ => return false,
+        };
+        let has_nullable_proj = cp.projections.iter().any(|p| {
+            matches!(p, ContractProjection::Downcast { .. } | ContractProjection::IterElements)
+        });
+        if !has_nullable_proj {
+            return false;
+        }
+        match self.target_value(vm_state, checkpoint, property) {
+            Some(val) => val.provenance.is_none(),
+            None => true,
+        }
+    }
+
+    fn type_contains_reference(ty: Ty<'_>) -> bool {
+        use rustc_middle::ty::TyKind;
+        match ty.kind() {
+            TyKind::Ref(..) => true,
+            TyKind::Adt(_, substs) => {
+                substs.types().any(|t| Self::type_contains_reference(t))
+            }
+            _ => false,
+        }
+    }
+
+    /// Check whether a null-guard place (from `any(Null(p), ...)`) is null.
+    fn is_guard_null<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        guard_key: &crate::verify::def_use::PlaceKey,
+    ) -> bool {
+        use crate::verify::def_use::PlaceBaseKey;
+        let local = match guard_key.base {
+            PlaceBaseKey::Local(n) => Local::from_usize(n),
+            PlaceBaseKey::Arg(n) => {
+                checkpoint.args.get(n)
+                    .and_then(|op| match op {
+                        Operand::Copy(place) | Operand::Move(place) => Some(place.local),
+                        _ => None,
+                    })
+                    .unwrap_or(Local::from_usize(n + 1))
+            }
+            PlaceBaseKey::Return => Local::from_usize(0),
+        };
+        let val = if guard_key.fields.is_empty() {
+            vm_state.local_value(local).cloned()
+        } else {
+            vm_state.field_value(local, &guard_key.fields).cloned()
+        };
+        match val {
+            Some(v) => {
+                if v.provenance.is_none() && !v.invariants.non_null {
+                    return true;
+                }
+                if let Some(term_zero) = v.term.simplify().as_u64() {
+                    if term_zero == 0 {
+                        return true;
+                    }
+                }
+                false
+            }
+            None => true,
+        }
+    }
+
+    // ── SMT helper ─────────────────────────────────────────────
+
+    fn smt_check<'ctx>(&self, solver: &Solver<'ctx>, condition: &Bool<'ctx>) -> CheckResult {
+        solver.push();
+        solver.assert(condition);
+        let r = match solver.check() { SatResult::Unsat => CheckResult::Proved, SatResult::Sat => CheckResult::Failed, SatResult::Unknown => CheckResult::Unknown };
+        solver.pop(1);
+        r
+    }
+
+    /// Resolve a property arg into a Z3 Int term suitable as an element count.
+    /// Handles both `PropertyArg::Place` and `PropertyArg::Expr(ContractExpr::Place(...))`
+    /// wrappers, mapping Local/Arg bases to checkpoint operands or VM locals.
+    fn resolve_arg_term<'ctx, 'tcx>(
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        arg: &PropertyArg<'tcx>,
+    ) -> Option<Int<'ctx>> {
+        match arg {
+            PropertyArg::Expr(ContractExpr::Const(n)) if *n <= u64::MAX as u128 => {
+                Some(Int::from_u64(vm_state.ctx, *n as u64))
+            }
+            PropertyArg::Expr(ContractExpr::Place(cp))
+            | PropertyArg::Place(cp) => {
+                match cp.base {
+                    PlaceBase::Arg(n) => {
+                        let op = checkpoint.args.get(n)?;
+                        Some(vm_state.value_of_operand(op).term)
+                    }
+                    PlaceBase::Local(n) => {
+                        // The Local(N) refers to the callee's parameter.
+                        // Map to the callsite's corresponding Arg(N-1).
+                        let arg_idx = n.saturating_sub(1);
+                        if arg_idx < checkpoint.args.len() {
+                            let op = &checkpoint.args[arg_idx];
+                            Some(vm_state.value_of_operand(op).term)
+                        } else {
+                            vm_state.local_value(Local::from_usize(n)).map(|v| v.term.clone())
+                        }
+                    }
+                    PlaceBase::Return => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Access size in bytes for `ty_arg`-typed elements × `count_arg` elements.
+    /// Falls back to the target value's type size when the type arg can't be resolved.
+    /// Resolves symbolic count args from the checkpoint's actual operands.
+    fn access_bytes<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        property: &Property<'tcx>, ty_arg: usize, count_arg: usize,
+        checkpoint: &Checkpoint<'tcx>, _value: &VmValue<'ctx, 'tcx>) -> Int<'ctx>
+    {
+        let elem_size = property.args.get(ty_arg)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(vm_state.size_of_ty(*ty)) } else { None })
+            .unwrap_or(0);
+        // When the contract uses a generic T (size_of returns 0), infer the
+        // concrete element type from the checkpoint's target argument's pointee.
+        let elem_size = if elem_size == 0 {
+            checkpoint.args.first()
+                .map(|op| {
+                    let arg_val = vm_state.value_of_operand(op);
+                    vm_state.pointee_elem_size(arg_val.ty)
+                })
+                .unwrap_or(0)
+        } else {
+            elem_size
+        };
+        let elem_size_term = Int::from_u64(vm_state.ctx, (elem_size as u64).max(1));
+
+        let count_term = property.args.get(count_arg)
+            .and_then(|a| Self::resolve_arg_term(vm_state, checkpoint, a))
+            .unwrap_or_else(|| Int::from_u64(vm_state.ctx, 1));
+        // Simplify the multiplication for concrete count and elem_size
+        if let (Some(elem), Some(count)) = (Some(elem_size), count_term.simplify().as_u64()) {
+            return Int::from_u64(vm_state.ctx, (elem as u64).max(1) * count.max(1));
+        }
+        Int::mul(vm_state.ctx, &[&elem_size_term, &count_term])
+    }
+
+    // ── check_align ────────────────────────────────────────────
+
+    fn check_align<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+
+        let required_ty = property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        if self.is_zst_type(vm_state, checkpoint, required_ty) { return CheckResult::Proved; }
+        if self.is_concrete_zst(vm_state, value.ty) { return CheckResult::Proved; }
+        let align = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(vm_state.align_of_ty(*ty)) } else { None }).unwrap_or(1);
+        let align = if align <= 1 {
+            property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a {
+                let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, *ty);
+                let resolved_align = vm_state.align_of_ty(resolved);
+                if resolved_align > 1 {
+                    Some(resolved_align)
+                } else {
+                    let min_a = vm_state.min_align_of_generic_param(resolved);
+                    if min_a > 1 { Some(min_a) } else { None }
+                }
+            } else { None }).unwrap_or(align)
+        } else {
+            align
+        };
+        if align <= 1 { return CheckResult::Proved; }
+        // Check allocation base alignment with concrete offset
+        if let Some(ref prov) = value.provenance {
+            if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == prov.alloc_id) {
+                let off_u64 = prov.offset.as_u64()
+                    .or_else(|| prov.offset.simplify().as_u64());
+                if let Some(off) = off_u64 {
+                    if alloc.align >= align {
+                        if off % align == 0 {
+                            return CheckResult::Proved;
+                        }
+                        if off % align != 0 {
+                            return CheckResult::Failed;
+                        }
+                    }
+                }
+            }
+        }
+        if value.invariants.aligned {
+            if let Some(known_align) = value.invariants.align_n {
+                if known_align >= align && known_align % align == 0 {
+                    return CheckResult::Proved;
+                }
+            }
+        } else if let Some(known_align) = value.invariants.align_n {
+            if known_align >= align && known_align % align == 0 {
+                return CheckResult::Proved;
+            }
+        }
+        // Packed-struct fast-path: if the allocation is less aligned than
+        // required, the concrete offset alone determines alignment.
+        if let Some(ref prov) = value.provenance {
+            if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == prov.alloc_id) {
+                if alloc.align < align {
+                    if let Some(off) = prov.offset.as_u64() {
+                        if off % align != 0 {
+                            return CheckResult::Failed;
+                        }
+                    }
+                }
+            }
+        }
+        let align_term = Int::from_u64(vm_state.ctx, align);
+        let zero = Int::from_u64(vm_state.ctx, 0);
+        let local = Solver::new(vm_state.ctx);
+        local.push();
+        if let Some(ref prov) = value.provenance {
+            if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == prov.alloc_id) {
+                local.assert(&value.term._eq(&Int::add(vm_state.ctx, &[&alloc.base, &prov.offset])));
+                local.assert(&alloc.base._eq(&zero).not());
+                local.assert(&alloc.base.ge(&zero));
+                if alloc.align > 1 {
+                    let a = Int::from_u64(vm_state.ctx, alloc.align);
+                    local.assert(&alloc.base.rem(&a)._eq(&zero));
+                }
+            }
+        }
+        if let Some(known_align) = value.invariants.align_n {
+            let n = Int::from_u64(vm_state.ctx, known_align);
+            local.assert(&value.term.rem(&n)._eq(&zero));
+        }
+        for cond in &vm_state.path_conditions {
+            local.assert(cond);
+        }
+        let negated = value.term.rem(&align_term)._eq(&zero).not();
+        local.assert(&negated);
+        let r = match local.check() {
+            z3::SatResult::Sat => CheckResult::Failed,
+            z3::SatResult::Unsat => CheckResult::Proved,
+            z3::SatResult::Unknown => CheckResult::Unknown,
+        };
+        local.pop(1);
+        if matches!(r, CheckResult::Failed) {
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
+                use std::io::Write;
+                let _ = writeln!(f, "align=Failed vterm={} align_n={:?} aligned={} off={}",
+                    value.term.to_string(), value.invariants.align_n, value.invariants.aligned,
+                    value.provenance.as_ref().map(|p| p.offset.to_string()).unwrap_or_default());
+            }
+        }
+        r
+    }
+
+    /*
+    fn check_align_old<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        if value.invariants.aligned { return CheckResult::Proved; }
+        let align = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(vm_state.align_of_ty(*ty)) } else { None }).unwrap_or(1);
+        if align <= 1 { return CheckResult::Proved; }
+
+        // Fast path: value has a known alignment constraint that satisfies the requirement
+        if let Some(known_align) = value.invariants.align_n {
+            if known_align >= align && known_align % align == 0 {
+                return CheckResult::Proved;
+            }
+        }
+
+        // Concrete offset check: if the provenance offset is a concrete integer
+        // that doesn't satisfy the alignment, fail immediately.
+        if let Some(ref prov) = value.provenance {
+            if let Some(off) = prov.offset.as_u64() {
+                if off % align != 0 {
+                    return CheckResult::Failed;
+                }
+            }
+        }
+
+        let align_term = Int::from_u64(vm_state.ctx, align);
+        let zero = Int::from_u64(vm_state.ctx, 0);
+        let local = Solver::new(vm_state.ctx);
+        local.push();
+        if let Some(ref prov) = value.provenance {
+            if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == prov.alloc_id) {
+                local.assert(&value.term._eq(&Int::add(vm_state.ctx, &[&alloc.base, &prov.offset])));
+                local.assert(&alloc.base._eq(&zero).not());
+                local.assert(&alloc.base.ge(&zero));
+                if alloc.align > 1 {
+                    let a = Int::from_u64(vm_state.ctx, alloc.align);
+                    local.assert(&alloc.base.rem(&a)._eq(&zero));
+                }
+            }
+        }
+        // Assert the value's own alignment constraint as a Z3 condition
+        if let Some(known_align) = value.invariants.align_n {
+            let n = Int::from_u64(vm_state.ctx, known_align);
+            local.assert(&value.term.rem(&n)._eq(&zero));
+        }
+        for cond in &vm_state.path_conditions {
+            local.assert(cond);
+        }
+        let negated = value.term.rem(&align_term)._eq(&zero).not();
+        local.assert(&negated);
+        let r = match local.check() {
+            z3::SatResult::Sat => CheckResult::Failed,
+            z3::SatResult::Unsat => CheckResult::Proved,
+            z3::SatResult::Unknown => CheckResult::Unknown,
+        };
+        local.pop(1);
+        r
+    }
+    */
+
+    // ── check_non_null ─────────────────────────────────────────
+
+    fn check_non_null<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        if value.invariants.non_null { return CheckResult::Proved; }
+        let zero = Int::from_u64(vm_state.ctx, 0);
+        self.smt_check(solver, &value.term._eq(&zero))
+    }
+
+    // ── check_allocated ────────────────────────────────────────
+
+    fn check_allocated<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+
+        let required_ty = property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        if self.is_zst_type(vm_state, checkpoint, required_ty) { return CheckResult::Proved; }
+        if self.is_concrete_zst(vm_state, value.ty) { return CheckResult::Proved; }
+
+        let Some(alloc_id) = value.provenance_alloc_id() else { return CheckResult::Unknown };
+
+        if vm_state.dead_allocations.contains(&alloc_id) {
+            // as_ptr/as_mut_ptr on MaybeUninit in a loop: the slicer omits
+            // StorageLive, making the alloc appear dead. Skip dead check.
+            let is_maybe_uninit_ptr = value.invariants.init && value.invariants.non_null
+                && value.invariants.aligned && matches!(value.ty.kind(), TyKind::RawPtr(..))
+                && vm_state.allocations.iter().any(|a| {
+                    a.id == alloc_id && !a.is_external && a.element_ty.map_or(false, |ty| {
+                        if let TyKind::Adt(adt, _) = ty.kind() {
+                            vm_state.tcx.def_path_str(adt.did()).contains("::MaybeUninit")
+                        } else { false }
+                    })
+                });
+            if !is_maybe_uninit_ptr {
+                return CheckResult::Failed;
+            }
+        }
+
+        let (Some(base), Some(size)) = (vm_state.allocation_base(alloc_id).cloned(), vm_state.allocation_size(alloc_id).cloned()) else {
+            return CheckResult::Unknown;
+        };
+
+        if vm_state.allocations.iter().any(|a| a.id == alloc_id && a.is_external) {
+            return CheckResult::Proved;
+        }
+
+        let access = self.access_bytes(vm_state, property, 1, 2, checkpoint, &value);
+
+        if let (Some(size_val), Some(access_val)) = (size.as_u64(), access.as_u64()) {
+            if size_val < access_val {
+                return CheckResult::Failed;
+            }
+            return CheckResult::Proved;
+        }
+
+        let solver = Solver::new(vm_state.ctx);
+        solver.push();
+        vm_state.assert_all(&solver);
+        let bound = Int::add(vm_state.ctx, &[&base, &size]);
+        let covered = Int::add(vm_state.ctx, &[&value.term, &access]);
+        solver.assert(&covered.le(&bound).not());
+        let r = match solver.check() {
+            SatResult::Unsat => CheckResult::Proved,
+            SatResult::Sat => CheckResult::Failed,
+            _ => CheckResult::Unknown,
+        };
+        solver.pop(1);
+        r
+    }
+
+    fn is_zst_type<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, checkpoint: &Checkpoint<'tcx>,
+        ty: Option<Ty<'tcx>>) -> bool
+    {
+        let ty = match ty {
+            Some(t) => t,
+            None => return false,
+        };
+        if self.is_concrete_zst(vm_state, ty) { return true; }
+        let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, ty);
+        if resolved != ty {
+            return self.is_concrete_zst(vm_state, resolved);
+        }
+        false
+    }
+
+    // ── check_in_bound ─────────────────────────────────────────
+
+    fn check_in_bound<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        if let Some(PropertyArg::Expr(ContractExpr::IndexAccess { index: _, .. }))
+            = property.args.first()
+        {
+            return self.check_in_bound_slice(vm_state, solver, checkpoint, property);
+        }
+
+        let required_ty = property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        if self.is_zst_type(vm_state, checkpoint, required_ty) {
+            return CheckResult::Proved;
+        }
+
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else {
+            return CheckResult::Unknown;
+        };
+        if self.is_concrete_zst(vm_state, value.ty) {
+            return CheckResult::Proved;
+        }
+        if value.invariants.in_bounds {
+            return CheckResult::Proved;
+        }
+        let Some(alloc_id) = value.provenance_alloc_id() else {
+            return CheckResult::Unknown;
+        };
+        let (Some(base), Some(size)) = (vm_state.allocation_base(alloc_id).cloned(), vm_state.allocation_size(alloc_id).cloned()) else {
+            return CheckResult::Unknown;
+        };
+
+        // External allocations have unbounded size.
+        if vm_state.allocations.iter().any(|a| a.id == alloc_id && a.is_external) {
+            return CheckResult::Proved;
+        }
+
+        let access = self.access_bytes(vm_state, property, 1, 2, checkpoint, &value);
+        solver.push();
+        let bound = Int::add(vm_state.ctx, &[&base, &size]);
+        let covered = Int::add(vm_state.ctx, &[&value.term, &access]);
+        // Upper bound: value + access > base + size
+        let above_negated = covered.le(&bound).not();
+        // Lower bound: value < base (pointer below allocation start)
+        let below_negated = value.term.lt(&base);
+        solver.assert(&z3::ast::Bool::or(vm_state.ctx, &[&above_negated, &below_negated]));
+        let r = match solver.check() {
+            SatResult::Unsat => CheckResult::Proved,
+            SatResult::Sat => CheckResult::Failed,
+            _ => CheckResult::Unknown,
+        };
+        solver.pop(1);
+        r
+    }
+
+    fn check_in_bound_slice<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, _property: &Property<'tcx>) -> CheckResult
+    {
+        let slice_val = match checkpoint.args.get(0) {
+            Some(op) => vm_state.value_of_operand(op),
+            None => return CheckResult::Unknown,
+        };
+
+        let (index_val, is_range) = match checkpoint.args.get(1) {
+            Some(op) => {
+                if let Some(end_val) = self.extract_range_end(vm_state, op, checkpoint) {
+                    (end_val, true)
+                } else {
+                    (vm_state.value_of_operand(op), false)
+                }
+            }
+            None => return CheckResult::Unknown,
+        };
+
+        let data_alloc_id = slice_val.provenance_alloc_id();
+        let Some(data_alloc_id) = data_alloc_id else { return CheckResult::Unknown };
+
+        let Some(size) = vm_state.allocation_size(data_alloc_id).cloned() else { return CheckResult::Unknown };
+
+        let elem_size = vm_state.allocations.iter()
+            .find(|a| a.id == data_alloc_id)
+            .and_then(|a| a.element_ty)
+            .map(|ty| vm_state.size_of_ty(ty) as u64)
+            .unwrap_or(1);
+
+        let elem_sz = Int::from_u64(vm_state.ctx, elem_size);
+        let len = size.div(&elem_sz);
+
+        solver.push();
+        let negated = if is_range {
+            // For range-based InBound (start..end), check end <= len
+            index_val.term.le(&len).not()
+        } else {
+            // For single-element InBound (index), check index + 1 <= len
+            let one = Int::from_u64(vm_state.ctx, 1);
+            let index_plus_one = Int::add(vm_state.ctx, &[&index_val.term, &one]);
+            index_plus_one.le(&len).not()
+        };
+        solver.assert(&negated);
+        let r = match solver.check() { SatResult::Unsat => CheckResult::Proved, SatResult::Sat => CheckResult::Failed, _ => CheckResult::Unknown };
+        solver.pop(1);
+        r
+    }
+
+    /// If `op` is a Move/Copy of a local whose type is Range<usize>,
+    /// scan the MIR body for the Aggregate that constructed it
+    /// and return the VmValue of the `end` field (second operand).
+    fn extract_range_end<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        op: &Operand<'tcx>, _checkpoint: &Checkpoint<'tcx>) -> Option<VmValue<'ctx, 'tcx>>
+    {
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return None,
+        };
+        if !place.projection.is_empty() { return None; }
+        let range_local = place.local;
+        let ty = vm_state.body.local_decls[range_local].ty;
+        let is_range = format!("{:?}", ty.kind()).contains("Range");
+        if !is_range { return None; }
+        for block in vm_state.body.basic_blocks.iter() {
+            for stmt in &block.statements {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (dest, rvalue) = &**assign;
+                    if dest.local == range_local && dest.projection.is_empty() {
+                        if let Rvalue::Aggregate(_kind, operands) = rvalue {
+                            let end_idx = rustc_abi::FieldIdx::from_usize(1);
+                            if let Some(end_op) = operands.get(end_idx) {
+                                return Some(self.trace_value(vm_state, end_op));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Trace a value back through simple assignments to find the ultimate source.
+    fn trace_value<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        op: &Operand<'tcx>) -> VmValue<'ctx, 'tcx>
+    {
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return vm_state.value_of_operand(op),
+        };
+        if !place.projection.is_empty() { return vm_state.value_of_operand(op); }
+        let local = place.local;
+        // If this local is a parameter (arg), use it directly
+        if local.as_usize() <= vm_state.body.arg_count {
+            return vm_state.value_of_operand(op);
+        }
+        // Trace through simple Use assignments
+        for block in vm_state.body.basic_blocks.iter() {
+            for stmt in &block.statements {
+                if let StatementKind::Assign(assign) = &stmt.kind {
+                    let (dest, rvalue) = &**assign;
+                    if dest.local == local && dest.projection.is_empty() {
+                        #[cfg(rapx_rvalue_use_with_retag)]
+                        if let Rvalue::Use(src_op, _) = rvalue {
+                            return self.trace_value(vm_state, src_op);
+                        }
+                        #[cfg(not(rapx_rvalue_use_with_retag))]
+                        if let Rvalue::Use(src_op) = rvalue {
+                            return self.trace_value(vm_state, src_op);
+                        }
+                    }
+                }
+            }
+        }
+        vm_state.value_of_operand(op)
+    }
+
+    // ── check_init ─────────────────────────────────────────────
+
+    fn check_init<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let required_ty = property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        if self.is_zst_type(vm_state, checkpoint, required_ty) { return CheckResult::Proved; }
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        if self.is_concrete_zst(vm_state, value.ty) { return CheckResult::Proved; }
+
+        // Compute the required init range: count * sizeof(T) bytes
+        let access = if property.args.len() >= 3 {
+            Some(self.access_bytes(vm_state, property, 1, 2, checkpoint, &value))
+        } else {
+            None
+        };
+
+        if let Some(id) = value.provenance_alloc_id() {
+            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
+                use std::io::Write;
+                let _ = writeln!(f, "check_init: alloc={} init_set={} access={:?}",
+                    id.0, vm_state.init_allocations.contains(&id),
+                    access.as_ref().and_then(|a| a.as_u64()));
+            }
+            if vm_state.dead_allocations.contains(&id) { return CheckResult::Failed; }
+            // Verify the entire access range is covered
+            if let Some(ref access_term) = access {
+                if let (Some(access_val), Some(prov)) = (access_term.as_u64(), &value.provenance) {
+                    if let Some(prov_off) = prov.offset.as_u64() {
+                        let end = prov_off + access_val;
+                        let all_init = (prov_off as usize..end as usize).all(|off| vm_state.is_byte_init(id, off));
+                        if all_init && access_val > 0 {
+                            return CheckResult::Proved;
+                        }
+                    }
+                }
+            }
+            if vm_state.init_allocations.contains(&id) {
+                if let (Some(ref access_term), Some(ref size)) = (access, vm_state.allocation_size(id)) {
+                    if let (Some(access_val), Some(size_val)) = (access_term.as_u64(), size.as_u64()) {
+                        if access_val > size_val {
+                            return CheckResult::Failed;
+                        }
+                    }
+                    if access_term.as_u64().is_some() && size.as_u64().is_some() {
+                        return CheckResult::Proved;
+                    }
+                }
+                return CheckResult::Proved;
+            }
+            // as_ptr/as_mut_ptr on MaybeUninit → write operations don't need pre-init.
+            if value.invariants.init && value.invariants.non_null && value.invariants.aligned
+                && matches!(value.ty.kind(), TyKind::RawPtr(..))
+                && !vm_state.dead_allocations.contains(&id)
+            {
+                if let Some(callee) = checkpoint.callee {
+                    let p = vm_state.tcx.def_path_str(callee);
+                    if p.contains("copy_nonoverlapping") || p == "copy" || p.ends_with("::copy")
+                        || p.contains("ptr::copy") || p.contains("write_bytes") || p.contains("ptr::write")
+                    {
+                        return CheckResult::Proved;
+                    }
+                }
+            }
+            // Check byte-level init: if all bytes in range are initialized
+            if let Some(size) = vm_state.allocation_size(id).cloned() {
+                if let Some(size_val) = size.as_u64() {
+                    let size_usize = (size_val as usize).min(4096);
+                    let all_init = (0..size_usize).all(|off| vm_state.is_byte_init(id, off));
+                    if all_init && size_val > 0 {
+                        return CheckResult::Proved;
+                    }
+                }
+            }
+        }
+        // Check field-level init for aggregate types
+        if let Some(origin_op) = checkpoint.args.first() {
+            let origin_val = vm_state.value_of_operand(origin_op);
+            if let Some(prov) = &origin_val.provenance {
+                if vm_state.init_allocations.contains(&prov.alloc_id) {
+                    if let Some(ref access_term) = access {
+                        if let Some(size) = vm_state.allocation_size(prov.alloc_id) {
+                            if let (Some(access_val), Some(size_val)) = (access_term.as_u64(), size.as_u64()) {
+                                if access_val <= size_val {
+                                    return CheckResult::Proved;
+                                }
+                                // Required bytes exceed allocation → not fully init
+                            } else {
+                                return CheckResult::Proved;
+                            }
+                        } else {
+                            return CheckResult::Proved;
+                        }
+                    }
+                    // access=None: can't verify size, fall through
+                }
+            }
+            if let Operand::Copy(place) | Operand::Move(place) = origin_op {
+                for alloc_id in self.trace_alloc_ids(vm_state, place.local) {
+                    if vm_state.init_allocations.contains(&alloc_id) {
+                        if let Some(ref access_term) = access {
+                            if let Some(size) = vm_state.allocation_size(alloc_id) {
+                                if let (Some(access_val), Some(size_val)) = (access_term.as_u64(), size.as_u64()) {
+                                    if access_val <= size_val {
+                                        return CheckResult::Proved;
+                                    }
+                                } else {
+                                    return CheckResult::Proved;
+                                }
+                            } else {
+                                return CheckResult::Proved;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        CheckResult::Unknown
+    }
+
+    fn trace_alloc_ids<'ctx, 'tcx>(
+        &self, vm_state: &VmState<'ctx, 'tcx>, local: Local,
+    ) -> Vec<AllocId> {
+        let mut result = Vec::new();
+        if let Some(id) = vm_state.local_alloc_ids.get(&local) {
+            result.push(*id);
+        }
+        let mut worklist = vec![local];
+        let mut visited = FxHashSet::default();
+        visited.insert(local);
+        while let Some(cur) = worklist.pop() {
+            for block in vm_state.body.basic_blocks.iter() {
+                for stmt in &block.statements {
+                    if let StatementKind::Assign(assign) = &stmt.kind {
+                        let (dest, rvalue) = &**assign;
+                        if dest.local != cur || !dest.projection.is_empty() {
+                            continue;
+                        }
+                        let src_local = match rvalue {
+                            #[cfg(rapx_rvalue_use_with_retag)]
+                            Rvalue::Use(Operand::Copy(p) | Operand::Move(p), _)
+                                if p.projection.is_empty() => Some(p.local),
+                            #[cfg(not(rapx_rvalue_use_with_retag))]
+                            Rvalue::Use(Operand::Copy(p) | Operand::Move(p))
+                                if p.projection.is_empty() => Some(p.local),
+                            Rvalue::CopyForDeref(p) if p.projection.is_empty() => Some(p.local),
+                            Rvalue::Cast(_, Operand::Copy(p) | Operand::Move(p), _)
+                                if p.projection.is_empty() => Some(p.local),
+                            Rvalue::RawPtr(_, p) if p.projection.is_empty() => Some(p.local),
+                            _ => None,
+                        };
+                        if let Some(src) = src_local {
+                            if visited.insert(src) {
+                                if let Some(id) = vm_state.local_alloc_ids.get(&src) {
+                                    result.push(*id);
+                                }
+                                worklist.push(src);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    // ── check_typed ────────────────────────────────────────────
+
+    fn check_typed<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        let expected = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        if let Some(expected_ty) = expected {
+            let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, expected_ty);
+            let expected_ty = if resolved != expected_ty { resolved } else { expected_ty };
+
+            let value_elem_ty = match value.ty.kind() {
+                TyKind::RawPtr(inner, _) | TyKind::Ref(_, inner, _) => *inner,
+                _ => value.ty,
+            };
+
+            // Check provenance: does the allocation's element type match the expected type?
+            if let Some(alloc_id) = value.provenance_alloc_id() {
+                if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == alloc_id) {
+                    if let Some(mut elem_ty) = alloc.element_ty {
+                        // Resolve generic type param to concrete callsite type.
+                        elem_ty = self.resolve_ty_params(vm_state, checkpoint, elem_ty);
+                        if matches!(elem_ty.kind(), TyKind::Param(_)) {
+                            let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, elem_ty);
+                            if resolved != elem_ty {
+                                elem_ty = resolved;
+                            }
+                        }
+                        if elem_ty == expected_ty {
+                            return CheckResult::Proved;
+                        }
+                        // MaybeUninit<T> accessed via raw pointer from as_mut_ptr:
+                        // treat as T for write ops where caller will initialize it.
+                        if let TyKind::Adt(adt_def, substs) = elem_ty.kind() {
+                            let dp = vm_state.tcx.def_path_str(adt_def.did());
+                            if dp.contains("::MaybeUninit")
+                                && matches!(value.ty.kind(), TyKind::RawPtr(..))
+                            {
+                                if let Some(inner) = substs.first().and_then(|s| s.as_type()) {
+                                    if inner == expected_ty {
+                                        if let Some(c) = checkpoint.callee {
+                                            let cp = vm_state.tcx.def_path_str(c);
+                                            if cp.contains("write_bytes") || cp.contains("ptr::write")
+                                                || cp.contains("copy_nonoverlapping") || cp == "copy"
+                                                || cp.contains("ptr::copy")
+                                            { return CheckResult::Proved; }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Struct/enum field: check if expected_ty matches a field at the provenance offset.
+                        if let TyKind::Adt(adt_def, substs) = elem_ty.kind() {
+                            if !adt_def.is_enum() {
+                                let off_u64 = value.provenance.as_ref()
+                                    .and_then(|p| p.offset.simplify().as_u64());
+                                let variant = adt_def.non_enum_variant();
+                                let mut accum: u64 = 0;
+                                for (i, field_def) in variant.fields.iter().enumerate() {
+                                    let field_off = vm_state.field_offset_in_bytes(elem_ty, i);
+                                    if i > 0 && field_off == 0 {
+                                        accum = 0;
+                                    }
+                                    let field_ty: Ty<'tcx> = field_def.ty(vm_state.tcx, substs).skip_norm_wip();
+                                    if field_ty == expected_ty {
+                                        if off_u64 == Some(accum) {
+                                            if value.invariants.init {
+                                                return CheckResult::Proved;
+                                            }
+                                            return CheckResult::Failed;
+                                        }
+                                    } else if off_u64 == Some(accum) {
+                                        // Unwrap ManuallyDrop<T> → T for unions like MaybeUninit.
+                                        if let TyKind::Adt(wrap_adt, wrap_substs) = field_ty.kind() {
+                                            if !wrap_adt.is_enum() {
+                                                let did = format!("{:?}", wrap_adt.did());
+                                                if (did.contains("ManuallyDrop") || did.contains("UnsafeCell"))
+                                                    && wrap_substs.first().and_then(|s| s.as_type()) == Some(expected_ty)
+                                                {
+                                                    if vm_state.init_allocations.contains(&alloc_id) {
+                                                        return CheckResult::Proved;
+                                                    }
+                                                    return CheckResult::Failed;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    accum += vm_state.size_of_ty(field_ty).max(1);
+                                }
+                            }
+                        }
+                        // Non-ADT element type that doesn't match → Failed.
+                        if !matches!(elem_ty.kind(), TyKind::Adt(..)) {
+                            return CheckResult::Failed;
+                        }
+                        // ADT type with no matching field and no init → Failed.
+                        if !value.invariants.init {
+                            return CheckResult::Failed;
+                        }
+                    }
+                }
+            }
+
+            // No provenance: fall back to init and size checks.
+            if value.invariants.init {
+                if vm_state.size_of_ty(value_elem_ty) > 0
+                    && vm_state.size_of_ty(expected_ty) > 0
+                    && vm_state.size_of_ty(value_elem_ty) == vm_state.size_of_ty(expected_ty)
+                {
+                    return CheckResult::Proved;
+                }
+            }
+
+            let vs = vm_state.size_of_ty(value_elem_ty);
+            let es = vm_state.size_of_ty(expected_ty);
+            if vs > 0 && es > 0 && vs != es {
+                return CheckResult::Failed;
+            }
+        }
+        CheckResult::Unknown
+    }
+
+    // ── check_alias ────────────────────────────────────────────
+
+    fn check_alias<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        match super::vm::alias::check_alias_vm(vm_state, checkpoint, property) {
+            super::vm::alias::VmAliasResult::Proved => CheckResult::Proved,
+            super::vm::alias::VmAliasResult::Failed(_msg) => CheckResult::Failed,
+            super::vm::alias::VmAliasResult::Unknown => CheckResult::Unknown,
+        }
+    }
+
+    // ── check_owning ───────────────────────────────────────────
+
+    fn check_owning<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        if let Some(id) = value.provenance_alloc_id() {
+            if vm_state.dead_allocations.contains(&id) { return CheckResult::Failed; }
+            return CheckResult::Proved;
+        }
+        CheckResult::Unknown
+    }
+
+    // ── check_alive ────────────────────────────────────────────
+
+    fn check_alive<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        if let Some(id) = value.provenance_alloc_id() {
+            if vm_state.dead_allocations.contains(&id) { return CheckResult::Failed; }
+            if let Some(origin) = vm_state.resolve_origin(&value) {
+                let is_raw_ptr = matches!(origin.kind,
+                    super::vm::alias::VmOriginKind::RawMutPtr
+                    | super::vm::alias::VmOriginKind::RawConstPtr);
+                if is_raw_ptr {
+                    // Only fail for raw pointer struct fields when the
+                    // return type has an explicit named lifetime (from
+                    // struct generics) that is not grounded in &self.
+                    let is_field = origin.local.as_usize() > vm_state.body.arg_count;
+                    if is_field {
+                        let ret_ty = &vm_state.body.local_decls[Local::from_usize(0)].ty;
+                        let is_named = match ret_ty.kind() {
+                            rustc_middle::ty::TyKind::Ref(r, _, _) => {
+                                !matches!(r.kind(), rustc_middle::ty::RegionKind::ReErased)
+                            }
+                            _ => false,
+                        };
+                        if is_named || signature_return_has_lifetime(
+                            vm_state.tcx, vm_state.caller_def_id)
+                            .map_or(false, |(_, t)| t.contains('\''))
+                        {
+                            // Named/explicit return lifetime: check whether
+                            // a reference parameter pointee is an ADT that
+                            // carries NO lifetime parameters.  When the
+                            // struct has no lifetimes of its own, the
+                            // returned view's lifetime is guaranteed to be
+                            // caller-chosen and tied to the borrow (e.g.
+                            // &self).  In that case the pointer field's
+                            // provenance is grounded in a live reference.
+                            let body = vm_state.body;
+                            let adt_no_lifetime = (1..=body.arg_count).any(|i| {
+                                let param_ty = body.local_decls[Local::from_usize(i)].ty;
+                                if let rustc_middle::ty::TyKind::Ref(_, pointee, _) = param_ty.kind() {
+                                    if let rustc_middle::ty::TyKind::Adt(_adt_def, substs) = pointee.kind() {
+                                        return !substs.types().any(|t| {
+                                            matches!(t.kind(), rustc_middle::ty::TyKind::Param(_))
+                                        })
+                                        && !substs.iter().any(|g| matches!(g.kind(),
+                                            GenericArgKind::Lifetime(_)));
+                                    }
+                                }
+                                false
+                            });
+                            if !adt_no_lifetime {
+                                return CheckResult::Failed;
+                            }
+                        }
+                        return CheckResult::Proved;
+                    }
+                    // Raw pointer param: check if any ref param shares provenance.
+                    let body = vm_state.body;
+                    let matches_ref_param = (1..=body.arg_count).any(|i| {
+                        let param_local = Local::from_usize(i);
+                        let param_ty = body.local_decls[param_local].ty;
+                        if !matches!(param_ty.kind(), rustc_middle::ty::TyKind::Ref(..)) {
+                            return false;
+                        }
+                        vm_state.local_value(param_local)
+                            .and_then(|v| v.provenance_alloc_id())
+                            .is_some_and(|pid| pid == id)
+                    });
+                    if !matches_ref_param && !vm_state.alive_assumed.contains(&id) {
+                        return CheckResult::Failed;
+                    }
+                }
+                return CheckResult::Proved;
+            }
+            return CheckResult::Proved;
+        }
+        if value.invariants.non_null || value.invariants.init { return CheckResult::Proved; }
+        CheckResult::Unknown
+    }
+
+    // ── check_non_overlap ──────────────────────────────────────
+
+    fn check_non_overlap<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let Some(v1) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        // Get the second pointer from the property args (not from checkpoint directly).
+        // The property may reference the two pointers in any order (e.g. dst at args[0]).
+        let v2 = property.args.get(1)
+            .and_then(|a| {
+                let cp = match a {
+                    PropertyArg::Place(cp) => cp.clone(),
+                    PropertyArg::Expr(ContractExpr::Place(cp)) => cp.clone(),
+                    _ => return None,
+                };
+                match cp.base {
+                    PlaceBase::Arg(n) => checkpoint.args.get(n).map(|op| vm_state.value_of_operand(op)),
+                    PlaceBase::Local(n) => vm_state.local_value(Local::from_usize(n)).cloned(),
+                    _ => None,
+                }
+            })
+            .or_else(|| checkpoint.args.get(1).map(|op| vm_state.value_of_operand(op)));
+        let Some(v2) = v2 else {
+            if v1.provenance.is_some() { return CheckResult::Proved; }
+            return CheckResult::Unknown;
+        };
+        if v1.provenance_alloc_id() != v2.provenance_alloc_id() { return CheckResult::Proved; }
+
+        // Try range-based overlap detection when count and element size are available.
+        if let Some(count_term) = checkpoint.args.get(2).map(|op| vm_state.value_of_operand(op).term) {
+            // Use the pointee element size from either pointer type.
+            let elem_size = vm_state.pointee_elem_size(v1.ty).max(vm_state.pointee_elem_size(v2.ty)).max(1) as u64;
+            let _elem_size_term = Int::from_u64(vm_state.ctx, elem_size);
+            if let Some(count) = count_term.simplify().as_u64() {
+                let range = Int::from_u64(vm_state.ctx, elem_size * count.max(1));
+                let src_end = Int::add(vm_state.ctx, &[&v1.term, &range]);
+                let dst_end = Int::add(vm_state.ctx, &[&v2.term, &range]);
+                solver.push();
+                let overlap = Bool::and(vm_state.ctx, &[
+                    &v1.term.lt(&dst_end),
+                    &v2.term.lt(&src_end),
+                ]);
+                solver.assert(&overlap);
+                let r = match solver.check() {
+                    SatResult::Unsat => CheckResult::Proved,
+                    SatResult::Sat => CheckResult::Failed,
+                    _ => CheckResult::Unknown,
+                };
+                solver.pop(1);
+                return r;
+            }
+        }
+
+        // Fallback: check pointer-distinctness.
+        solver.push();
+        let ne = v1.term._eq(&v2.term).not();
+        solver.assert(&ne);
+        let r = match solver.check() { SatResult::Unsat => CheckResult::Proved, SatResult::Sat => CheckResult::Failed, _ => CheckResult::Unknown };
+        solver.pop(1);
+        r
+    }
+
+    /// Check whether all predicates are slice-size invariants that hold trivially
+    /// because the count comes from an existing `&[T]` reference parameter.
+    fn all_predicates_are_slice_size_invariant<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        predicates: &[crate::verify::contract::NumericPredicate<'tcx>],
+    ) -> bool {
+        !predicates.is_empty() && predicates.iter().all(|p| {
+            self.predicate_is_slice_size_invariant(vm_state, checkpoint, p)
+        })
+    }
+
+    fn predicate_is_slice_size_invariant<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        pred: &crate::verify::contract::NumericPredicate<'tcx>,
+    ) -> bool {
+        if !matches!(pred.op, RelOp::Le | RelOp::Lt) {
+            return false;
+        }
+        // rhs must be >= isize::MAX (the language invaraint bound)
+        let ContractExpr::Const(bound) = &pred.rhs else { return false };
+        if *bound < i64::MAX as u128 {
+            return false;
+        }
+        // lhs must be size_of(T) * count
+        let ContractExpr::Binary { op: NumericOp::Mul, lhs, rhs } = &pred.lhs else {
+            return false;
+        };
+        let (size_ty, count_expr) = match (lhs.as_ref(), rhs.as_ref()) {
+            (ContractExpr::SizeOf(ty), count) => (*ty, count),
+            (count, ContractExpr::SizeOf(ty)) => (*ty, count),
+            _ => return false,
+        };
+        // Resolve SizeOf type via callsite substitutions
+        let resolved_ty = self.instantiate_callsite_ty(vm_state, checkpoint, size_ty);
+        // count must be a Place referencing a callsite arg
+        self.count_derives_from_slice_param(vm_state, checkpoint, count_expr, resolved_ty)
+    }
+
+    /// Check if `count` (a len argument at the callsite) derives from a
+    /// slice reference parameter of the calling function.
+    fn count_derives_from_slice_param<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        count_expr: &ContractExpr<'tcx>,
+        elem_ty: Ty<'tcx>,
+    ) -> bool {
+        // Must be a Place, not a constant literal
+        let ContractExpr::Place(cp) = count_expr else { return false };
+        if !cp.projections.is_empty() { return false; }
+        let Some(local) = cp.local_base() else { return false };
+        if local == 0 { return false; }
+        let Some(callee) = checkpoint.callee else { return false };
+        let Some(arg_idx) = crate::helpers::mir_utils::callee_param_index_for_local(
+            vm_state.tcx, callee, local) else { return false };
+        // Reject constant literal arguments (like usize::MAX)
+        if matches!(checkpoint.args.get(arg_idx), Some(Operand::Constant(_))) {
+            return false;
+        }
+        // Check caller has a matching slice reference parameter.
+        let body = vm_state.body;
+        let has_slice_param = (1..=body.arg_count).any(|i| {
+            let param_ty = body.local_decls[Local::from_usize(i)].ty;
+            self.is_slice_ref_with_elem(param_ty, elem_ty, vm_state, checkpoint)
+        });
+        if has_slice_param {
+            return true;
+        }
+        // No direct slice param — check if the pointer has provenance from
+        // an external allocation (raw pointer params get this in init_parameters).
+        if let Some(op) = checkpoint.args.first() {
+            let target_val = vm_state.value_of_operand(op);
+            if target_val.provenance.is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Check whether a type is `&[T]` or `&mut [T]` with given element type.
+    fn is_slice_ref_with_elem<'ctx, 'tcx>(&self, ty: Ty<'tcx>, elem_ty: Ty<'tcx>,
+        vm_state: &VmState<'ctx, 'tcx>, checkpoint: &Checkpoint<'tcx>) -> bool
+    {
+        let rustc_middle::ty::TyKind::Ref(_, inner, _) = ty.kind() else { return false };
+        match inner.kind() {
+            rustc_middle::ty::TyKind::Slice(slice_elem) => {
+                let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, *slice_elem);
+                self.same_erased_ty(vm_state, resolved, elem_ty)
+            }
+            _ => false,
+        }
+    }
+
+    fn same_erased_ty<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        a: Ty<'tcx>, b: Ty<'tcx>,
+    ) -> bool {
+        vm_state.size_of_ty(a) > 0 && vm_state.size_of_ty(b) > 0
+            && vm_state.size_of_ty(a) == vm_state.size_of_ty(b)
+    }
+
+    /// Check whether a `Param` type belongs to the caller's own generic parameters.
+    fn is_caller_type_param<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, ty: Ty<'tcx>) -> bool {
+        let rustc_middle::ty::TyKind::Param(param_ty) = ty.kind() else { return false };
+        let generics = vm_state.tcx.generics_of(vm_state.caller_def_id);
+        generics.own_params.iter().any(|p| {
+            matches!(p.kind, rustc_middle::ty::GenericParamDefKind::Type { .. })
+                && p.name == param_ty.name
+        })
+    }
+
+    // ── check_valid_num ────────────────────────────────────────
+
+    fn check_valid_num<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        if let Some(PropertyArg::Predicates(predicates)) = property.args.first() {
+            if self.all_predicates_are_slice_size_invariant(vm_state, checkpoint, predicates) {
+                return CheckResult::Proved;
+            }
+            for pred in predicates {
+                if let Some(r) = self.eval_numeric_predicate(vm_state, solver, Some(checkpoint), pred) {
+                    if !matches!(r, CheckResult::Proved) {
+                        return r;
+                    }
+                }
+            }
+            return CheckResult::Proved;
+        }
+        let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
+        let ty = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        if let Some(ty) = ty {
+            let size_bits = vm_state.size_of_ty(ty) * 8;
+            if size_bits > 0 && size_bits < 128 {
+                if let TyKind::Int(_) = ty.kind() {
+                    let half = 1u128 << (size_bits - 1);
+                    let min = -(half as i128);
+                    let max = (half - 1) as i128;
+                    solver.push();
+                    let below = value.term.lt(&Int::from_i64(vm_state.ctx, min as i64));
+                    let above = value.term.gt(&Int::from_i64(vm_state.ctx, max as i64));
+                    solver.assert(&Bool::or(vm_state.ctx, &[&below, &above]));
+                    let r = match solver.check() {
+                        SatResult::Unsat => CheckResult::Proved,
+                        SatResult::Sat => CheckResult::Failed,
+                        _ => CheckResult::Unknown,
+                    };
+                    solver.pop(1);
+                    return r;
+                }
+                let max = Int::from_u64(vm_state.ctx, ((1u128 << size_bits) - 1).min(u64::MAX as u128) as u64);
+                solver.push();
+                solver.assert(&value.term.gt(&max));
+                let r = match solver.check() { SatResult::Unsat => CheckResult::Proved, SatResult::Sat => CheckResult::Failed, _ => CheckResult::Unknown };
+                solver.pop(1);
+                return r;
+            }
+            return CheckResult::Proved;
+        }
+        CheckResult::Proved
+    }
+
+    fn eval_numeric_predicate<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: Option<&Checkpoint<'tcx>>,
+        pred: &crate::verify::contract::NumericPredicate<'tcx>) -> Option<CheckResult>
+    {
+        let lhs = self.eval_contract_expr(vm_state, checkpoint, &pred.lhs)?;
+        let rhs = self.eval_contract_expr(vm_state, checkpoint, &pred.rhs)?;
+        let condition = match pred.op {
+            RelOp::Le => lhs.le(&rhs),
+            RelOp::Lt => lhs.lt(&rhs),
+            RelOp::Ge => lhs.ge(&rhs),
+            RelOp::Gt => lhs.gt(&rhs),
+            RelOp::Eq => lhs._eq(&rhs),
+            RelOp::Ne => lhs._eq(&rhs).not(),
+        };
+        solver.push();
+        solver.assert(&condition.not());
+        let r = match solver.check() { SatResult::Unsat => Some(CheckResult::Proved), SatResult::Sat => Some(CheckResult::Failed), _ => None };
+        solver.pop(1);
+        r
+    }
+
+    fn eval_contract_expr<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: Option<&Checkpoint<'tcx>>,
+        expr: &ContractExpr<'tcx>) -> Option<Int<'ctx>>
+    {
+        match expr {
+            ContractExpr::Const(n) => Some(Int::from_u64(vm_state.ctx, *n as u64)),
+            ContractExpr::SizeOf(ty) => {
+                let mut size = vm_state.size_of_ty(*ty);
+                if size == 0 && matches!(ty.kind(), rustc_middle::ty::TyKind::Param(_)) {
+                    size = vm_state.size_of_generic_param(*ty);
+                    if size == 0 {
+                        if let Some(ck) = checkpoint {
+                            if let Some(_callee) = ck.callee {
+                                if !self.is_caller_type_param(vm_state, *ty) {
+                                    let resolved = self.instantiate_callsite_ty(vm_state, ck, *ty);
+                                    if resolved != *ty {
+                                        size = vm_state.size_of_ty(resolved);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                if size > 0 {
+                    Some(Int::from_u64(vm_state.ctx, size as u64))
+                } else {
+                    Some(Int::from_u64(vm_state.ctx, 0))
+                }
+            }
+            ContractExpr::AlignOf(ty) => {
+                let align = vm_state.align_of_ty(*ty) as u64;
+                if align > 0 {
+                    Some(Int::from_u64(vm_state.ctx, align.max(1)))
+                } else {
+                    Some(Int::from_u64(vm_state.ctx, 0))
+                }
+            }
+            ContractExpr::Place(cp) => self.eval_contract_place(vm_state, checkpoint, cp),
+            ContractExpr::Binary { op, lhs, rhs } => {
+                let l = self.eval_contract_expr(vm_state, checkpoint, lhs)?;
+                let r = self.eval_contract_expr(vm_state, checkpoint, rhs)?;
+                match op {
+                    NumericOp::Add => Some(Int::add(vm_state.ctx, &[&l, &r])),
+                    NumericOp::Sub => Some(Int::sub(vm_state.ctx, &[&l, &r])),
+                    NumericOp::Mul => Some(Int::mul(vm_state.ctx, &[&l, &r])),
+                    NumericOp::Div => Some(l.div(&r)),
+                    NumericOp::Rem => {
+                        let q = l.div(&r);
+                        Some(Int::sub(vm_state.ctx, &[&l, &Int::mul(vm_state.ctx, &[&q, &r])]))
+                    }
+                    _ => None,
+                }
+            }
+            ContractExpr::Unary { op, expr: inner } => {
+                let v = self.eval_contract_expr(vm_state, checkpoint, inner)?;
+                match op {
+                    crate::verify::contract::NumericUnaryOp::Not => {
+                        Some(v._eq(&Int::from_u64(vm_state.ctx, 0))
+                            .ite(&Int::from_u64(vm_state.ctx, 1), &Int::from_u64(vm_state.ctx, 0)))
+                    }
+                    crate::verify::contract::NumericUnaryOp::Neg => {
+                        let zero = Int::from_u64(vm_state.ctx, 0);
+                        Some(Int::sub(vm_state.ctx, &[&zero, &v]))
+                    }
+                }
+            }
+            ContractExpr::Min { a, b } => {
+                let a_val = self.eval_contract_expr(vm_state, checkpoint, a)?;
+                let b_val = self.eval_contract_expr(vm_state, checkpoint, b)?;
+                Some(a_val.le(&b_val).ite(&a_val, &b_val))
+            }
+            ContractExpr::Max { a, b } => {
+                let a_val = self.eval_contract_expr(vm_state, checkpoint, a)?;
+                let b_val = self.eval_contract_expr(vm_state, checkpoint, b)?;
+                Some(a_val.ge(&b_val).ite(&a_val, &b_val))
+            }
+            ContractExpr::Len(inner) => {
+                let val = self.eval_contract_expr_to_value(vm_state, checkpoint, inner)?;
+                let alloc_id = val.provenance_alloc_id()?;
+                let alloc = vm_state.allocations.iter().find(|a| a.id == alloc_id)?;
+                let elem_ty = alloc.element_ty?;
+                let elem_size = vm_state.size_of_ty(elem_ty).max(1) as u64;
+                if elem_size == 1 {
+                    return Some(alloc.size.clone());
+                }
+                let elem_term = Int::from_u64(vm_state.ctx, elem_size);
+                Some(alloc.size.div(&elem_term))
+            }
+            ContractExpr::ConstParam { index, name: _ } => {
+                self.instantiate_callsite_const(vm_state, checkpoint?, *index)
+                    .and_then(|v| u64::try_from(v).ok())
+                    .map(|v| Int::from_u64(vm_state.ctx, v))
+            }
+            _ => None,
+        }
+    }
+
+    fn eval_contract_expr_to_value<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: Option<&Checkpoint<'tcx>>,
+        expr: &ContractExpr<'tcx>) -> Option<VmValue<'ctx, 'tcx>>
+    {
+        match expr {
+            ContractExpr::Place(cp) => {
+                match cp.base {
+                    PlaceBase::Arg(n) => {
+                        checkpoint?.args.get(n).map(|op| vm_state.value_of_operand(op))
+                    }
+                    PlaceBase::Local(n) => {
+                        let ck = checkpoint?;
+                        if let Some(callee) = ck.callee {
+                            if let Some(idx) = crate::helpers::mir_utils::callee_param_index_for_local(
+                                vm_state.tcx, callee, n)
+                            {
+                                if let Some(op) = ck.args.get(idx) {
+                                    return Some(vm_state.value_of_operand(op));
+                                }
+                            }
+                        }
+                        vm_state.local_value(Local::from_usize(n)).cloned()
+                    }
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
+    /// Resolve a contract `Place` expression against the VM state and checkpoint.
+    fn eval_contract_place<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: Option<&Checkpoint<'tcx>>,
+        cp: &crate::verify::contract::ContractPlace<'tcx>) -> Option<Int<'ctx>>
+    {
+        match cp.base {
+            PlaceBase::Return => {
+                vm_state.local_value(Local::from_usize(0)).map(|v| v.term.clone())
+            }
+            PlaceBase::Arg(n) => {
+                checkpoint.and_then(|ck| {
+                    let op = ck.args.get(n)?;
+                    self.eval_contract_operand(vm_state, op)
+                })
+            }
+            PlaceBase::Local(n) => {
+                if let Some(ck) = checkpoint {
+                    if let Some(callee) = ck.callee {
+                        if let Some(idx) = crate::helpers::mir_utils::callee_param_index_for_local(
+                            vm_state.tcx, callee, n)
+                        {
+                            if let Some(op) = ck.args.get(idx) {
+                                if let Some(v) = self.eval_contract_operand(vm_state, op) {
+                                    return Some(v);
+                                }
+                            }
+                        }
+                    }
+                }
+                let local = Local::from_usize(n);
+                vm_state.local_value(local).map(|v| v.term.clone())
+            }
+        }
+    }
+
+    /// Evaluate a checkpoint operand to a Z3 term.
+    fn eval_contract_operand<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        op: &Operand<'tcx>) -> Option<Int<'ctx>>
+    {
+        match op {
+            Operand::Constant(c) => {
+                let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
+                if let Ok(val) = c.const_.eval(vm_state.tcx, typing_env, rustc_span::DUMMY_SP) {
+                    if let Some(scalar) = val.try_to_scalar_int() {
+                        return Some(Int::from_u64(vm_state.ctx,
+                            scalar.to_bits(scalar.size()) as u64));
+                    }
+                }
+                super::vm::state::const_int_from_debug(&format!("{:?}", c.const_))
+                    .map(|v| Int::from_u64(vm_state.ctx, v))
+            }
+            Operand::Copy(p) | Operand::Move(p)
+                if p.projection.is_empty()
+            => {
+                vm_state.local_value(p.local).map(|v| v.term.clone())
+            }
+            _ => None,
+        }
+    }
+
+    /// Try to resolve a generic type param to its concrete type at the callsite.
+    /// Uses the FnDef's type arguments from the call terminator to substitute
+    /// generic parameters.
+    /// Recursively resolve generic type parameters inside a type.
+    /// E.g. `Node<Param(T)>` → `Node<ConcreteType>` by resolving T at the callsite.
+    fn resolve_ty_params<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        ty: Ty<'tcx>,
+    ) -> Ty<'tcx> {
+        match ty.kind() {
+            TyKind::Param(_) => self.instantiate_callsite_ty(vm_state, checkpoint, ty),
+            TyKind::Adt(adt_def, substs) => {
+                let mut changed = false;
+                let resolved_substs: Vec<_> = substs.iter().map(|arg| {
+                    match arg.kind() {
+                        GenericArgKind::Type(t) => {
+                            let resolved = self.resolve_ty_params(vm_state, checkpoint, t);
+                            if resolved != t {
+                                changed = true;
+                                GenericArg::from(resolved)
+                            } else {
+                                arg.clone()
+                            }
+                        }
+                        _ => arg.clone(),
+                    }
+                }).collect();
+                if changed {
+                    Ty::new_adt(vm_state.tcx, *adt_def, vm_state.tcx.mk_args(&resolved_substs))
+                } else {
+                    ty
+                }
+            }
+            _ => ty,
+        }
+    }
+
+    fn instantiate_callsite_ty<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        ty: Ty<'tcx>,
+    ) -> Ty<'tcx> {
+        let TyKind::Param(param) = ty.kind() else {
+            return ty;
+        };
+
+        let body = vm_state.body;
+        let terminator = body.basic_blocks[checkpoint.block].terminator();
+        let TerminatorKind::Call { func, .. } = &terminator.kind else {
+            return ty;
+        };
+        let Operand::Constant(func_constant) = func else {
+            return ty;
+        };
+        let TyKind::FnDef(_, args) = func_constant.const_.ty().kind() else {
+            return ty;
+        };
+        let Some(arg) = crate::compat::args_get(args, param.index as usize) else {
+            return ty;
+        };
+        match arg.kind() {
+            GenericArgKind::Type(actual_ty) => actual_ty,
+            _ => ty,
+        }
+    }
+
+    fn instantiate_callsite_const<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        index: u32,
+    ) -> Option<u128> {
+        let body = vm_state.body;
+        let terminator = body.basic_blocks[checkpoint.block].terminator();
+        let TerminatorKind::Call { func, .. } = &terminator.kind else {
+            return None;
+        };
+        let Operand::Constant(func_constant) = func else {
+            return None;
+        };
+        let TyKind::FnDef(_, args) = func_constant.const_.ty().kind() else {
+            return None;
+        };
+        let arg = crate::compat::args_get(args, index as usize)?;
+        match arg.kind() {
+            GenericArgKind::Const(actual_const) => actual_const
+                .try_to_target_usize(vm_state.tcx)
+                .map(|value| value as u128)
+                .or_else(|| crate::verify::vm::state::const_int_from_debug(
+                    &format!("{actual_const:?}")
+                ).map(|v| v as u128)),
+            _ => None,
+        }
+    }
+
+    /// Check if a type is a concrete (non-generic) ZST.
+    fn is_concrete_zst<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, ty: Ty<'tcx>) -> bool {
+        match ty.kind() {
+            TyKind::Param(_) | TyKind::Alias(..) | TyKind::Error(_) => false,
+            _ => vm_state.size_of_ty(ty) == 0,
+        }
+    }
+
+    // ── check_valid_cstr ───────────────────────────────────────
+
+    fn check_valid_cstr<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let value = self.target_value(vm_state, checkpoint, property)
+            .or_else(|| {
+                checkpoint.destination.and_then(|d| vm_state.local_value(d).cloned())
+            });
+        let Some(value) = value else { return CheckResult::Unknown };
+
+        // If we have provenace, check liveness and byte-level tracking
+        if let Some(alloc_id) = value.provenance_alloc_id() {
+            if vm_state.dead_allocations.contains(&alloc_id) {
+                return CheckResult::Failed;
+            }
+
+            let alloc_size = vm_state.allocation_size(alloc_id).cloned();
+
+            // Starting offset within the allocation (for pointer arithmetic like .add(2))
+            let start_offset = value.provenance.as_ref()
+                .and_then(|p| p.offset.as_u64())
+                .map(|v| v as usize)
+                .unwrap_or(0);
+
+            // 1. Try fast-path: concrete byte-level check from known_nul / known_non_nul
+            if let Some(r) = self.check_valid_cstr_from_known_nul(vm_state, alloc_id, start_offset) {
+                return r;
+            }
+
+            // 2. Try byte_value-based symbolic check via SMT
+            if let Some(size) = alloc_size {
+                if let Some(r) = self.check_valid_cstr_from_byte_values(vm_state, solver, alloc_id, &size) {
+                    return r;
+                }
+            }
+        }
+
+        // 3. MIR-level fallback: scan the body for constant byte assignments
+        //    (mirrors the legacy checker's approach for promoted constants)
+        if let Some(r) = self.check_valid_cstr_from_mir_constants(vm_state, checkpoint, property) {
+            return r;
+        }
+
+        // 4. Fallback: if the constructor requires strict NUL-termination
+        //    (from_bytes_with_nul_unchecked, from_vec_with_nul_unchecked)
+        //    and we can't verify all bytes, return Unknown.
+        let is_strict = checkpoint.callee.as_ref().map_or(false, |callee| {
+            let name = vm_state.tcx.def_path_str(*callee);
+            name.contains("from_bytes_with_nul_unchecked")
+                || name.contains("from_vec_with_nul_unchecked")
+        });
+        if is_strict {
+            CheckResult::Unknown
+        } else {
+            CheckResult::Proved
+        }
+    }
+
+    /// Fast-path: check NUL termination using known_nul_offsets / known_non_nul_offsets.
+    /// This handles constant byte strings like `b"hello\0"` and aggregate initializers
+    /// where all element operands are constants.
+    /// `start_offset` is the byte offset within the allocation where the C string begins
+    /// (non-zero when pointer arithmetic like `.add(n)` is used).
+    fn check_valid_cstr_from_known_nul<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        alloc_id: AllocId,
+        start_offset: usize,
+    ) -> Option<CheckResult> {
+        // Collect all concrete offsets where we know what the byte is
+        let known_offsets: Vec<usize> = vm_state.known_nul_offsets.iter()
+            .filter(|(aid, _)| *aid == alloc_id)
+            .map(|(_, off)| *off)
+            .chain(
+                vm_state.known_non_nul_offsets.iter()
+                    .filter(|(aid, _)| *aid == alloc_id)
+                    .map(|(_, off)| *off)
+            )
+            .collect();
+
+        if known_offsets.is_empty() {
+            return None; // no byte-level info
+        }
+
+        let max_known = known_offsets.iter().max().copied().unwrap_or(0);
+
+        // Find the NUL byte at or after start_offset
+        let nul_offsets: Vec<usize> = vm_state.known_nul_offsets.iter()
+            .filter(|(aid, _)| *aid == alloc_id)
+            .map(|(_, off)| *off)
+            .filter(|off| *off >= start_offset && *off <= max_known)
+            .collect();
+
+        if nul_offsets.is_empty() {
+            // No NUL in tracked range — might be in untracked region.
+            if let Some(size) = vm_state.allocation_size(alloc_id) {
+                if let Some(size_val) = size.as_u64() {
+                    if max_known + 1 < size_val as usize {
+                        return None;
+                    }
+                }
+            }
+            return Some(CheckResult::Failed);
+        }
+
+        // Check if there's exactly one NUL at the end of the known range
+        let min_nul = nul_offsets.iter().min().copied().unwrap_or(0);
+
+        // All offsets between start_offset and min_nul must be known non-NUL
+        for off in start_offset..min_nul {
+            if vm_state.known_nul_offsets.contains(&(alloc_id, off)) {
+                // Interior NUL found before the first NUL after start_offset
+                return Some(CheckResult::Failed);
+            }
+            if !vm_state.known_non_nul_offsets.contains(&(alloc_id, off)) {
+                // Unknown byte — can't prove valid
+                return None;
+            }
+        }
+
+        // If multiple NUL offsets exist and the first NUL is not at the last
+        // tracked position, there is an interior NUL → invalid C string.
+        if nul_offsets.len() > 1 && min_nul < max_known {
+            return Some(CheckResult::Failed);
+        }
+
+        // All bytes between start_offset and the first NUL are known non-NUL,
+        // and the NUL itself is known. This is a valid C string for the tracked range.
+        Some(CheckResult::Proved)
+    }
+
+    /// Check NUL termination using per-byte symbolic values tracked in `byte_values`.
+    /// Uses the SMT solver to verify that a NUL-terminated byte sequence is possible.
+    fn check_valid_cstr_from_byte_values<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        solver: &Solver<'ctx>,
+        alloc_id: AllocId,
+        alloc_size: &Int<'ctx>,
+    ) -> Option<CheckResult> {
+        let byte_pairs = vm_state.alloc_byte_values(alloc_id);
+        if byte_pairs.is_empty() {
+            return None;
+        }
+
+        let zero = Int::from_u64(vm_state.ctx, 0);
+        let size_u64 = alloc_size.as_u64();
+
+        if size_u64.is_none() {
+            return None; // symbolic-size allocations need different handling
+        }
+
+        for &(nul_off, nul_term) in &byte_pairs {
+            solver.push();
+            solver.assert(&nul_term._eq(&zero));
+
+            for &(off, term) in &byte_pairs {
+                if off < nul_off {
+                    solver.assert(&term._eq(&zero).not());
+                }
+            }
+
+            let r = solver.check();
+            solver.pop(1);
+
+            if r == z3::SatResult::Sat {
+                let mut interior_safe = true;
+                for &(off, term) in &byte_pairs {
+                    if off < nul_off {
+                        solver.push();
+                        solver.assert(&term._eq(&zero));
+                        let inner = solver.check();
+                        solver.pop(1);
+                        if inner != z3::SatResult::Unsat {
+                            interior_safe = false;
+                            break;
+                        }
+                    }
+                }
+                if interior_safe {
+                    return Some(CheckResult::Proved);
+                }
+            }
+        }
+
+        // If no valid NUL position found, check if the last byte is tracked
+        // and no NUL exists among tracked bytes
+        let has_nul_in_tracked = byte_pairs.iter().any(|&(_, term)| {
+            solver.push();
+            solver.assert(&term._eq(&zero));
+            let r = solver.check();
+            solver.pop(1);
+            r == z3::SatResult::Sat
+        });
+
+        if !has_nul_in_tracked {
+            let last_off = byte_pairs.last().map(|(off, _)| *off).unwrap_or(0);
+            if let Some(size) = size_u64 {
+                if last_off + 1 >= size as usize {
+                    return Some(CheckResult::Failed);
+                }
+            }
+        }
+
+        None
+    }
+
+    /// Scan MIR blocks for a single `0_u8` store into the target buffer.
+    /// When exactly one nul-store exists among all constant stores, we
+    /// can prove ValidCStr even without VM-level byte tracking.  This
+    /// mirrors the legacy `nul_store_before_checkpoint` logic.
+    fn check_valid_cstr_nul_store<'tcx>(
+        vm_state: &VmState<'_, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+    ) -> Option<CheckResult> {
+        let target_local = checkpoint.args.get(0).and_then(|op| match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Some(p.local),
+            _ => None,
+        })?;
+        let body = vm_state.body;
+        let tcx = vm_state.tcx;
+
+        // Build parent map (same as legacy)
+        let parents = crate::verify::valid_cstr_util::body_parents(tcx, body);
+        let root = crate::verify::valid_cstr_util::resolve_through_casts(
+            body,
+            crate::verify::valid_cstr_util::follow_parents(&parents, target_local),
+        );
+
+        let mut buffer_locals: rustc_hash::FxHashSet<Local> = rustc_hash::FxHashSet::default();
+        let mut seen = rustc_hash::FxHashSet::default();
+        let mut work = vec![root];
+        while let Some(local) = work.pop() {
+            if !seen.insert(local) {
+                continue;
+            }
+            for data in body.basic_blocks.iter() {
+                for stmt in &data.statements {
+                    let StatementKind::Assign(assign) = &stmt.kind else { continue };
+                    let (target, rvalue) = &**assign;
+                    if target.local != local || !target.projection.is_empty() { continue; }
+                    if let Rvalue::Ref(_, _, place) = rvalue {
+                        buffer_locals.insert(place.local);
+                    }
+                    #[cfg(rapx_rvalue_use_with_retag)]
+                    if let Rvalue::Use(Operand::Copy(p) | Operand::Move(p), _) = rvalue {
+                        work.push(p.local);
+                    }
+                    #[cfg(not(rapx_rvalue_use_with_retag))]
+                    if let Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) = rvalue {
+                        work.push(p.local);
+                    }
+                    if let Rvalue::Cast(_, Operand::Copy(p) | Operand::Move(p), _) = rvalue {
+                        if p.projection.is_empty() { work.push(p.local); }
+                    }
+                }
+            }
+        }
+
+        let mut nul_store_count = 0u32;
+        for data in body.basic_blocks.iter() {
+            for stmt in &data.statements {
+                let StatementKind::Assign(assign) = &stmt.kind else { continue };
+                let (target, rvalue) = &**assign;
+                let target_root = crate::verify::valid_cstr_util::follow_parents(&parents, target.local);
+                if target_root != root && !buffer_locals.contains(&target_root) {
+                    continue;
+                }
+                if target.projection.is_empty() {
+                    continue;
+                }
+                #[cfg(rapx_rvalue_use_with_retag)]
+                let Rvalue::Use(Operand::Constant(c), _) = rvalue else { continue };
+                #[cfg(not(rapx_rvalue_use_with_retag))]
+                let Rvalue::Use(Operand::Constant(c)) = rvalue else { continue };
+                if c.const_.try_to_scalar_int()
+                    .map_or(false, |s| s.to_uint(s.size()) == 0)
+                {
+                    nul_store_count += 1;
+                }
+            }
+        }
+
+        if nul_store_count == 1 {
+            Some(CheckResult::Proved)
+        } else if nul_store_count > 1 {
+            Some(CheckResult::Failed)
+        } else {
+            None
+        }
+    }
+
+    /// Fallback: scan the MIR body for constant byte assignments to the target
+    /// pointer's root local. Uses worklist-based analysis (handles as_ptr chains
+    /// and branches), falling back to simple local chain for Aggregate cases.
+    fn check_valid_cstr_from_mir_constants<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        _property: &Property<'tcx>,
+    ) -> Option<CheckResult> {
+        let target_local = checkpoint.args.get(0).and_then(|op| match op {
+            Operand::Copy(p) | Operand::Move(p) if p.projection.is_empty() => Some(p.local),
+            _ => None,
+        })?;
+
+        let body = vm_state.body;
+        let tcx = vm_state.tcx;
+
+        // 1. Use worklist-based analysis for as_ptr() chains and branch cases
+        let all_bytes = crate::verify::valid_cstr_util::collect_all_const_bytes_worklist(tcx, body, target_local);
+        if !all_bytes.is_empty() {
+            let any_invalid = all_bytes.iter().any(|bytes| {
+                !(bytes.last() == Some(&0) && !bytes[..bytes.len().saturating_sub(1)].contains(&0))
+            });
+            if any_invalid {
+                return Some(CheckResult::Failed);
+            }
+            let all_valid = all_bytes.iter().all(|bytes| {
+                bytes.last() == Some(&0) && !bytes[..bytes.len().saturating_sub(1)].contains(&0)
+            });
+            if all_valid {
+                return Some(CheckResult::Proved);
+            }
+        }
+
+        // 2. Fallback: simple constant byte chain for Aggregate locals
+        if let Some(bytes) = crate::verify::valid_cstr_util::const_bytes_for_local(tcx, body, target_local) {
+            let valid = bytes.last() == Some(&0) && !bytes[..bytes.len().saturating_sub(1)].contains(&0);
+            return if valid { Some(CheckResult::Proved) } else { Some(CheckResult::Failed) };
+        }
+
+        // 3. Scan MIR for a single 0_u8 store into the target buffer
+        //    (mirrors legacy nul_store_before_checkpoint logic)
+        if let Some(r) = Self::check_valid_cstr_nul_store(vm_state, checkpoint) {
+            return Some(r);
+        }
+
+        None
+    }
+
+    // ── check_valid_transmute ──────────────────────────────────
+
+    fn check_valid_transmute<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        _checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let src = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        let dst = property.args.get(2).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        match (src, dst) {
+            (Some(s), Some(d)) if vm_state.size_of_ty(s) == vm_state.size_of_ty(d) => CheckResult::Proved,
+            (Some(_), Some(_)) => CheckResult::Failed,
+            _ => CheckResult::Unknown,
+        }
+    }
+
+    // ── check_trait ────────────────────────────────────────────
+
+    fn check_trait<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        let ty = match property.args.first() {
+            Some(PropertyArg::Ty(ty)) => *ty,
+            _ => return CheckResult::Unknown,
+        };
+        let trait_name = match property.args.get(1) {
+            Some(PropertyArg::Ident(name)) => name.as_str(),
+            _ => return CheckResult::Unknown,
+        };
+
+        let tcx = vm_state.tcx;
+
+        if trait_name == "Copy" {
+            let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, checkpoint.caller);
+            if tcx.type_is_copy_modulo_regions(typing_env, ty) {
+                return CheckResult::Proved;
+            }
+            // Resolve generic param to concrete type via FnDef args
+            let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, ty);
+            if resolved != ty && tcx.type_is_copy_modulo_regions(typing_env, resolved) {
+                return CheckResult::Proved;
+            }
+        }
+
+        if trait_name == "Sized" {
+            if !ty.is_sized(tcx, rustc_middle::ty::TypingEnv::post_analysis(tcx, checkpoint.caller)) {
+                return CheckResult::Failed;
+            }
+            return CheckResult::Proved;
+        }
+
+        let predicates = crate::compat::predicates_of(tcx, checkpoint.caller);
+        #[cfg(not(rapx_rustc_ge_199))]
+        let pred_iter = predicates.predicates.iter();
+        #[cfg(rapx_rustc_ge_199)]
+        let pred_iter = predicates.clauses.iter();
+        for (predicate, _span) in pred_iter {
+            if let rustc_middle::ty::ClauseKind::Trait(trait_ref) = predicate.kind().skip_binder() {
+                if trait_ref.self_ty() == ty {
+                    let def_path = tcx.def_path_str(trait_ref.def_id());
+                    let short_name = def_path.rsplit("::").next().unwrap_or(&def_path);
+                    if short_name == trait_name {
+                        return CheckResult::Proved;
+                    }
+                }
+            }
+        }
+
+        CheckResult::Unknown
+    }
+
+    // ── check_split_transmute ──────────────────────────────────
+
+    fn check_split_transmute<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
+    {
+        if vm_state.split_transmute_asserted {
+            return CheckResult::Proved;
+        }
+        let src = property.args.get(0).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        let dst = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        let src = src.map(|ty| self.instantiate_callsite_ty(vm_state, checkpoint, ty));
+        let dst = dst.map(|ty| self.instantiate_callsite_ty(vm_state, checkpoint, ty));
+        match (src, dst) {
+            (Some(s), Some(d)) => {
+                let src_sz = Self::ty_size(vm_state, s);
+                let dst_sz = Self::ty_size(vm_state, d);
+                if src_sz == 0 || dst_sz == 0 { return CheckResult::Failed; }
+                if src_sz >= dst_sz && Self::all_bit_patterns_valid(d) {
+                    return CheckResult::Proved;
+                }
+                CheckResult::Failed
+            }
+            _ => CheckResult::Failed,
+        }
+    }
+
+    /// Compute type size, trying different typing environments.
+    fn ty_size<'ctx, 'tcx>(vm_state: &VmState<'ctx, 'tcx>, ty: Ty<'tcx>) -> u64 {
+        let sz = vm_state.size_of_ty(ty);
+        if sz > 0 { return sz; }
+        // Fallback: try with the monomorphized environment.
+        let typing_env = rustc_middle::ty::TypingEnv::post_analysis(
+            vm_state.tcx, vm_state.caller_def_id);
+        vm_state.tcx.layout_of(
+            rustc_middle::ty::PseudoCanonicalInput { typing_env, value: ty }
+        ).map(|l| l.size.bytes()).unwrap_or(0)
+    }
+
+    /// Returns true for integer and float types that accept all possible bit patterns
+    /// as valid values.  Types like bool, char, and enums have restricted validity.
+    fn all_bit_patterns_valid(ty: Ty<'_>) -> bool {
+        match ty.kind() {
+            rustc_middle::ty::TyKind::Uint(_) => true,
+            rustc_middle::ty::TyKind::Int(_) => true,
+            rustc_middle::ty::TyKind::Float(_) => true,
+            rustc_middle::ty::TyKind::RawPtr(..) => true,
+            _ => false,
+        }
+    }
+}
+
+/// Check if the source-level function signature has a named lifetime in return type.
+fn signature_return_has_lifetime(tcx: rustc_middle::ty::TyCtxt<'_>, def_id: rustc_hir::def_id::DefId) -> Option<(String, String)> {
+    let local = def_id.as_local()?;
+    let hir_id = tcx.local_def_id_to_hir_id(local);
+    let span = tcx.hir_span(hir_id);
+    let snippet = tcx.sess.source_map().span_to_snippet(span).ok()?;
+    let start = snippet.find("fn ")?;
+    let rest = &snippet[start..];
+    let end = rest.find('{').unwrap_or(rest.len());
+    let sig = &rest[..end];
+    // Extract return type after "->"
+    let ret = sig.split("->").nth(1)?;
+    let ret = ret.split("where").next()?.trim();
+    Some((sig.to_string(), ret.to_string()))
+}

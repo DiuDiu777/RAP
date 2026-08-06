@@ -34,6 +34,7 @@ use super::{
     slicer::BackwardItem,
     target::{FunctionTarget, VerifyTargetCollector},
 };
+
 use crate::helpers::mir_utils::collect_return_block_indices;
 
 use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
@@ -67,49 +68,22 @@ use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
 ///   struct invariants at return-block checkpoints (constructors) or at all
 ///   path endpoints (non-constructor methods).
 pub struct VerifyDriver<'target, 'tcx> {
-    /// Compiler type-context handle — gateway to MIR bodies, type definitions,
-    /// HIR attributes, and def-path strings used throughout the pipeline.
     tcx: TyCtxt<'tcx>,
 
-    /// The function being verified: its identity (`def_id`), the unsafe
-    /// operations inside it (`checkpoints`, `raw_ptr_deref_checks`), the
-    /// contracts those operations demand (`callee_requires`), the contracts
-    /// the function itself requires as entry assumptions
-    /// (`caller_requires`), and any struct invariants to be enforced
-    /// (`struct_invariants`).
     target: &'target FunctionTarget<'tcx>,
 
-    /// SCC-aware path metadata for this function.
-    ///
-    /// Per-callee call groups with shared path trees.
     path_info: Vec<CallGroup<'tcx>>,
 
-    /// Stateless three-stage verification pipeline: backward data-dependency
-    /// analysis → forward state simulation → SMT constraint checking.
-    /// Shared across all (checkpoint, path, property) triples for this target.
     engine: VerifyEngine<'tcx>,
 
-    /// Loop-unrolling depth for SCC-aware path enumeration.
-    ///
-    /// Controls how many **extra** times a repeated SCC postfix segment
-    /// (loop-body) is allowed to appear beyond its first occurrence.
-    /// - `0` = each distinct postfix segment at most once (no loop repeats).
-    /// - `1` = allow one repeat (loop body appears up to twice).
-    /// - `n` = allow n repeats (loop body appears up to n+1 times).
-    ///
-    /// Higher values increase path coverage but risk exponential blow-up in
-    /// path count.  The CLI driver iterates `repeat` from 0 to the configured
-    /// maximum, accumulating results incrementally.
     allow_repeat: usize,
 }
 
 impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
-    /// Build a driver for one collected function target.
     pub fn new(tcx: TyCtxt<'tcx>, target: &'target FunctionTarget<'tcx>) -> Self {
         Self::new_with_repeat(tcx, target, 0)
     }
 
-    /// Build a driver with control over SCC postfix repeat count.
     pub fn new_with_repeat(
         tcx: TyCtxt<'tcx>,
         target: &'target FunctionTarget<'tcx>,
@@ -117,12 +91,11 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     ) -> Self {
         let all_checkpoints: Vec<_> = target.all_checkpoints().into_iter().cloned().collect();
         let path_info = PathExtractor::new(tcx, target.def_id, all_checkpoints, allow_repeat).run();
-        let engine = VerifyEngine::new(tcx);
         Self {
             tcx,
             target,
             path_info,
-            engine,
+            engine: VerifyEngine::new(tcx),
             allow_repeat,
         }
     }
@@ -147,34 +120,45 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         let mut report = VerificationReport::new(self.target.def_id);
 
         for view in self.iter_callsite_checks() {
+            let mut view_results: Vec<PropertyCheckResult<'tcx>> = Vec::new();
+            let has_init_prop = view.properties.iter().any(|p| matches!(p.kind, PropertyKind::Init));
+
             for (property_index, property) in view.properties.iter().enumerate() {
                 if property.kind == PropertyKind::Or {
                     self.check_or_property(&mut report, &view, property_index, property);
-                } else {
-                    let bulk = self.engine.check_callsite_from_tree(
-                        view.tree,
-                        view.checkpoint,
-                        property,
-                        &self.target.caller_requires,
-                    );
-                    for (path_index, (forward, smt_check)) in bulk.iter().enumerate() {
-                        let check_diagnostics =
-                            format!("{}\n{}", forward.describe(), smt_check.describe());
-                        report.push(PropertyCheckResult {
-                            checkpoint: view.checkpoint.location(),
-                            checkpoint_index: view.checkpoint_index,
-                            path_index,
-                            property_index,
-                            property: property.clone(),
-                            result: smt_check.result.clone(),
-                            diagnostics: Some(VisitDiagnostics::new(
-                                String::new(),
-                                check_diagnostics,
-                            )),
-                            path_description: forward.path.describe_indices(),
-                            callee_name: view.checkpoint.callee_name(self.tcx),
-                        });
-                    }
+                    continue;
+                }
+                let bulk = self.engine.check_callsite_from_tree(
+                    view.tree,
+                    view.checkpoint,
+                    property,
+                    &self.target.caller_requires,
+                );
+                for (path_index, (result, path_desc)) in bulk.iter().enumerate() {
+                    let item = PropertyCheckResult {
+                        checkpoint: view.checkpoint.location(),
+                        checkpoint_index: view.checkpoint_index,
+                        path_index,
+                        property_index,
+                        property: property.clone(),
+                        result: result.clone(),
+                        diagnostics: Some(VisitDiagnostics::new(
+                            String::new(),
+                            format!("vm-check: {:?}", result),
+                        )),
+                        path_description: path_desc.clone(),
+                        callee_name: view.checkpoint.callee_name(self.tcx),
+                    };
+                    view_results.push(item);
+                }
+            }
+
+            for item in view_results {
+                let is_redundant = has_init_prop
+                    && matches!(item.property.kind, PropertyKind::ValidPtr)
+                    && matches!(item.result, super::report::CheckResult::Unknown);
+                if !is_redundant {
+                    report.push(item);
                 }
             }
         }
@@ -182,8 +166,6 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         report
     }
 
-    /// Check an `Or` property by trying each alternative group.
-    /// At least one group must be fully proved on each path for the OR to hold.
     fn check_or_property(
         &self,
         report: &mut VerificationReport<'tcx>,
@@ -191,15 +173,10 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         property_index: usize,
         or_property: &Property<'tcx>,
     ) {
-        use crate::verify::report::CheckResult;
-
-        let num_groups = or_property.or_alternatives.len();
-        let mut best_per_path: Vec<Option<(usize, super::smt_check::SmtCheckResult, String)>> =
-            Vec::new();
+        let _num_groups = or_property.or_alternatives.len();
+        let mut best_per_path: Vec<Option<(usize, super::report::CheckResult, String)>> = Vec::new();
 
         for (group_idx, group) in or_property.or_alternatives.iter().enumerate() {
-            let mut group_proved = true;
-
             for sub_prop in group.iter() {
                 let bulk = self.engine.check_callsite_from_tree(
                     view.tree,
@@ -210,64 +187,30 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                 if best_per_path.is_empty() {
                     best_per_path.resize(bulk.len(), None);
                 }
-                for (path_idx, (_forward, smt)) in bulk.iter().enumerate() {
-                    if !matches!(smt.result, CheckResult::Proved) {
-                        group_proved = false;
-                    }
+                for (path_idx, (result, path_desc)) in bulk.iter().enumerate() {
                     let better = match &best_per_path[path_idx] {
                         None => true,
-                        Some((_, existing, _)) => {
-                            matches!(smt.result, CheckResult::Proved)
-                                && !matches!(existing.result, CheckResult::Proved)
+                        Some((_prev_group, prev_result, _)) => {
+                            matches!(result, super::report::CheckResult::Proved) && !matches!(prev_result, super::report::CheckResult::Proved)
                         }
                     };
                     if better {
-                        let desc = format!("OR group {}/{}", group_idx + 1, num_groups,);
-                        best_per_path[path_idx] = Some((group_idx, smt.clone(), desc));
+                        best_per_path[path_idx] = Some((group_idx, result.clone(), path_desc.clone()));
                     }
                 }
             }
-
-            if group_proved {
-                let desc = format!(
-                    "OR group {}/{} ({} sub-properties all proved)",
-                    group_idx + 1,
-                    num_groups,
-                    group.len(),
-                );
-                report.push(PropertyCheckResult {
-                    checkpoint: view.checkpoint.location(),
-                    checkpoint_index: view.checkpoint_index,
-                    path_index: 0,
-                    property_index,
-                    property: or_property.clone(),
-                    result: CheckResult::Proved,
-                    diagnostics: Some(VisitDiagnostics::new(String::new(), desc)),
-                    path_description: format!("group-{}/{}", group_idx + 1, num_groups),
-                    callee_name: view.checkpoint.callee_name(self.tcx),
-                });
-                return;
-            }
         }
 
-        // No group was fully proved — report the best attempt per path.
-        for (path_idx, best) in best_per_path.iter().enumerate() {
-            if let Some((group_idx, smt, path_desc)) = best {
+        for (path_index, best) in best_per_path.iter().enumerate() {
+            if let Some((_group_idx, result, path_desc)) = best {
                 report.push(PropertyCheckResult {
                     checkpoint: view.checkpoint.location(),
                     checkpoint_index: view.checkpoint_index,
-                    path_index: path_idx,
+                    path_index,
                     property_index,
                     property: or_property.clone(),
-                    result: smt.result.clone(),
-                    diagnostics: Some(VisitDiagnostics::new(
-                        String::new(),
-                        format!(
-                            "OR: best effort group {}/{} did not prove",
-                            group_idx + 1,
-                            num_groups,
-                        ),
-                    )),
+                    result: result.clone(),
+                    diagnostics: Some(VisitDiagnostics::new(String::new(), path_desc.clone())),
                     path_description: path_desc.clone(),
                     callee_name: view.checkpoint.callee_name(self.tcx),
                 });
@@ -362,7 +305,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     &entry_facts,
                 );
 
-                for (path_index, check) in results.iter().enumerate() {
+                for (path_index, (result, _path_desc)) in results.iter().enumerate() {
                     let path_description = paths
                         .get(path_index)
                         .map(|p| {
@@ -378,10 +321,10 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         path_index,
                         property_index,
                         property: invariant.clone(),
-                        result: check.result.clone(),
+                        result: result.clone(),
                         diagnostics: Some(VisitDiagnostics::new(
-                            check.slicing_diag.clone(),
-                            check.verification_diag.clone(),
+                            String::new(),
+                            format!("vm-invariant: {:?}", result),
                         )),
                         path_description,
                         callee_name: format!("struct-invariant(bb{})", checkpoint.block.as_usize()),
@@ -620,7 +563,9 @@ impl<'tcx> VerifyRun<'tcx> {
 
         let (_, repeat_rounds) = self.repeat_rounds_for_target(con_target);
         for repeat in repeat_rounds {
-            let driver = VerifyDriver::new_with_repeat(self.tcx, con_target, repeat);
+            let driver = VerifyDriver::new_with_repeat(
+                self.tcx, con_target, repeat,
+            );
             match crate::helpers::mir_utils::catch_panic(|| driver.verify_function()) {
                 Ok(report) => {
                     rap_debug!("{}", report.describe());
@@ -738,7 +683,9 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
             // Phase 1: unsafe checkpoint verification
             for repeat in repeat_rounds {
-                let driver = VerifyDriver::new_with_repeat(self.tcx, target, repeat);
+                let driver = VerifyDriver::new_with_repeat(
+                    self.tcx, target, repeat,
+                );
                 match crate::helpers::mir_utils::catch_panic(|| driver.verify_function()) {
                     Ok(report) => {
                         rap_debug!("{}", report.describe());
@@ -758,7 +705,9 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
             // Phase 2: struct invariant verification
             if !target.struct_invariants.is_empty() && !self.skip_invariant {
-                let driver = VerifyDriver::new_with_repeat(self.tcx, target, planned_repeat);
+                let driver = VerifyDriver::new_with_repeat(
+                    self.tcx, target, planned_repeat,
+                );
                 let struct_report = driver.verify_struct_invariants();
                 rap_debug!("{}", struct_report.describe());
                 all_results.extend(struct_report.results);

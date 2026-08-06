@@ -1,7 +1,7 @@
 use std::collections::VecDeque;
 
 use crate::compat::{FxHashMap, FxHashSet};
-use crate::verify::def_use::{PlaceBaseKey, PlaceKey};
+use crate::helpers::def_use::{PlaceBaseKey, PlaceKey};
 
 use super::slot::{AbstractLoc, Slot};
 

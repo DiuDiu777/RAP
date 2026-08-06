@@ -606,9 +606,8 @@ fn collect_statement_uses<'tcx>(
         // enumeration.
         if let rustc_middle::mir::Rvalue::Ref(_, _, place)
         | rustc_middle::mir::Rvalue::RawPtr(_, place) = rvalue
-            && crate::verify::def_use::is_from_tuple_field(flow, place.local)
         {
-            uses.extend(super::super::def_use::place_uses(place));
+            uses.insert_local(place.local);
         }
     }
 

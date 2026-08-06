@@ -661,7 +661,10 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         id: LocalDefId,
     ) -> Self::Result {
         if matches!(self.mode, VerifyMode::Targeted) && !has_rapx_verify_attr(self.tcx, id) {
-            return;
+            // Drop impls on structs with invariants are implicitly verified.
+            if !is_drop_impl(self.tcx, id.to_def_id()) {
+                return;
+            }
         }
 
         // HIR pre-filter: skip functions that have nothing to verify.
@@ -1073,7 +1076,7 @@ fn collect_properties_from_named_attrs<'tcx>(
             continue;
         }
 
-        let attr_str = rustc_hir_pretty::attribute_to_string(&tcx, attr);
+        let attr_str = crate::compat::attribute_to_string(tcx, attr);
         let parsed = match parse_rapx_attr(attr_str.as_str(), attr_name) {
             Ok(parsed) => parsed,
             Err(err) => {
@@ -1154,21 +1157,6 @@ fn get_struct_invariants_from_annotation<'tcx>(
         "invariant",
     ));
     invariants
-}
-
-/// Parses the struct-level `#[rapx::invariant(...)]` annotations of
-/// `struct_def_id` using the struct itself as the name-resolution context.
-///
-/// Field names resolve against the struct's own definition, so the result is
-/// usable outside the struct's methods (e.g. when a checker instantiates the
-/// invariants of a *pointee* type).  Only the projection path and the
-/// type/count arguments of the returned properties are meaningful; the place
-/// base is a placeholder.
-pub(crate) fn get_struct_invariants_for_adt<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    struct_def_id: DefId,
-) -> StructInvariants<'tcx> {
-    get_struct_invariants_from_annotation(tcx, struct_def_id, struct_def_id)
 }
 
 /// Parses trait safety contracts from `#[rapx::ensures(...)]` on unsafe trait

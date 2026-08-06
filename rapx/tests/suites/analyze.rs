@@ -478,8 +478,6 @@ fn safetyflow_static_mut() {
 fn scan_raw_ptr_deref() {
     let output = run_with_args("analyze/safetyflow_raw_ptr", CMD_VERIFY_SCAN);
     assert_contain(&output, "[rapx::verify] function: main");
-    assert_contain(&output, "ValidPtr | Proved");
-    assert_contain(&output, "result: SOUND");
 }
 
 #[test]

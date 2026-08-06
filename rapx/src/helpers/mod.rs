@@ -1,4 +1,5 @@
 pub mod def_path;
+pub mod def_use;
 pub mod draw_dot;
 pub mod fn_info;
 pub mod mir_scan;
