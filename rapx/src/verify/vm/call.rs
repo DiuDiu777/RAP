@@ -368,6 +368,32 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     self.set_local(dest, val);
                 }
             }
+            CallEffect::ReturnTupleFieldLength { field: _field, from_arg: _from_arg } => {
+                if args.is_empty() {
+                    return;
+                }
+                let dest_ty = self.body.local_decls[dest].ty;
+                if let TyKind::Tuple(elem_tys) = dest_ty.kind() {
+                    for f in 0..elem_tys.len() {
+                        let field_ty = elem_tys[f];
+                        let base_prov = self.locals.get(&dest)
+                            .and_then(|v| v.provenance.clone());
+                        let field_val = VmValue {
+                            term: args[0].term.clone(),
+                            ty: field_ty,
+                            provenance: base_prov,
+                            invariants: ValueInvariants {
+                                init: true,
+                                non_null: true,
+                                aligned: true,
+                                in_bounds: args[0].invariants.in_bounds,
+                                align_n: None,
+                            },
+                        };
+                        self.set_field_value(dest, vec![f], field_val);
+                    }
+                }
+            }
             CallEffect::ReturnPointerFromArg { arg } => {
                 if let Some(arg_val) = args.get(*arg) {
                     let mut val = arg_val.clone();
@@ -457,6 +483,13 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         },
                     };
                     self.set_local(dest, val);
+                }
+            }
+            CallEffect::CleanSliceDataLinks { arg } => {
+                if let Some(arg_val) = args.get(*arg) {
+                    if let Some(ref prov) = arg_val.provenance {
+                        self.slice_data_allocations.remove(&prov.alloc_id);
+                    }
                 }
             }
             CallEffect::ReturnNonZero => {
@@ -650,7 +683,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 if let (Some(ptr_val), Some(size_val)) = (args.get(*pointer_arg), args.get(*size_arg)) {
                     let elem_sz = Int::from_u64(self.ctx, *elem_size);
                     let total = Int::mul(self.ctx, &[&size_val.term, &elem_sz]);
-                    let total_u64 = total.as_u64();
                     let dest_ty = self.body.local_decls[dest].ty;
                     // For generic types (elem_size == 0), use external alloc
                     // so Allocated/InBound checks auto-pass.
@@ -671,25 +703,18 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         self.slice_data_allocations.insert(dest_alloc_id.clone(), alloc_id);
                     }
                     // Propagate init status and byte-level tracking from the source pointer
-                    let mut is_init = false;
+                    // For fresh allocations, the init status is inherited from the source.
                     let is_external = self.allocations.iter()
                         .any(|a| a.id == alloc_id && a.is_external);
                     if is_external {
-                        is_init = true;
                         self.init_allocations.insert(alloc_id);
                     }
                     if let Some(ref source_prov) = ptr_val.provenance {
-                        // Only propagate init_allocations if the source allocation
-                        // covers the required byte range
-                        if self.init_allocations.contains(&source_prov.alloc_id) {
-                            let source_size = self.allocation_size(source_prov.alloc_id).cloned();
-                            let source_u64 = source_size.as_ref().and_then(|s| s.as_u64());
-                            if let (Some(total_bytes), Some(source_bytes)) = (total_u64, source_u64) {
-                                if total_bytes <= source_bytes {
-                                    self.init_allocations.insert(alloc_id);
-                                    is_init = true;
-                                }
-                            }
+                        // Always propagate init: from_raw_parts creates a view into
+                        // existing memory.  If the source memory is init, so is the
+                        // new slice.  InBound/ValidPtr check the bounds independently.
+                        if !self.dead_allocations.contains(&source_prov.alloc_id) {
+                            self.init_allocations.insert(alloc_id);
                         }
                         // Copy byte-level tracking
                         let byte_pairs: Vec<_> = self.byte_values.iter()
@@ -726,7 +751,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         ty: dest_ty,
                         provenance: Some(prov),
                         invariants: ValueInvariants {
-                            non_null: true, init: is_init, in_bounds: true, aligned: true,
+                            non_null: true, init: true, in_bounds: true, aligned: true,
                             ..ValueInvariants::default()
                         },
                     });
@@ -761,6 +786,35 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         },
                     });
                 }
+            }
+            CallEffect::ReturnNewAllocationFromBox { box_arg: _ } => {
+                // Box→Vec conversion (into_vec, box_assume_init_into_vec_unsafe).
+                self.ensure_local_allocation(dest);
+                let dest_ty = self.body.local_decls[dest].ty;
+                let elem_ty = self.vec_elem_ty(dest_ty);
+                let heap_align = elem_ty.map(|ty| self.align_of_ty(ty)).unwrap_or(1).max(1);
+                let max = Int::from_u64(self.ctx, i64::MAX as u64);
+                let (alloc_id, base) = self.allocate_external(max, heap_align, elem_ty);
+                let dest_alloc_id = self.local_alloc_ids.get(&dest).copied();
+                if let Some(ref dest_alloc_id) = dest_alloc_id {
+                    self.slice_data_allocations.insert(*dest_alloc_id, alloc_id);
+                }
+                self.init_allocations.insert(alloc_id);
+                self.set_local(dest, VmValue {
+                    term: base,
+                    ty: dest_ty,
+                    provenance: dest_alloc_id.map(|stack_id| Provenance {
+                        alloc_id: stack_id,
+                        offset: Int::from_u64(self.ctx, 0),
+                    }),
+                    invariants: ValueInvariants {
+                        non_null: true,
+                        init: true,
+                        in_bounds: true,
+                        aligned: true,
+                        ..ValueInvariants::default()
+                    },
+                });
             }
             CallEffect::ReturnBoxFromVec { arg } => {
                 if let Some(vec_val) = args.get(*arg) {

@@ -133,7 +133,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     }
 
     pub(crate) fn field_offset_in_bytes(&self, ty: Ty<'tcx>, field_idx: usize) -> u64 {
-        let Ok(layout) = self.compute_layout(ty) else { return 0 };
+        let Some(layout) = self.compute_layout(ty) else { return 0 };
         match layout.fields {
             rustc_abi::FieldsShape::Arbitrary { ref offsets, .. } => {
                 let idx = rustc_abi::FieldIdx::from_usize(field_idx);
@@ -152,10 +152,12 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         self.compute_layout(ty).map(|l| l.align.abi.bytes()).unwrap_or(1)
     }
 
-    fn compute_layout(&self, ty: Ty<'tcx>) -> Result<rustc_abi::TyAndLayout<'tcx, Ty<'tcx>>, &rustc_middle::ty::layout::LayoutError<'tcx>> {
+    fn compute_layout(&self, ty: Ty<'tcx>) -> Option<rustc_abi::TyAndLayout<'tcx, Ty<'tcx>>> {
         let typing_env = TypingEnv::post_analysis(self.tcx, self.caller_def_id);
         let input = PseudoCanonicalInput { typing_env, value: ty };
-        self.tcx.layout_of(input)
+        crate::helpers::mir_utils::catch_panic(|| self.tcx.layout_of(input))
+            .ok()
+            .and_then(|r| r.ok())
     }
 
     pub fn alloc_for_local(&self, local: Local) -> Option<AllocId> {

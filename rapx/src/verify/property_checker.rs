@@ -152,6 +152,12 @@ impl PropertyChecker {
             }
             PropertyArg::Predicates(_) | PropertyArg::Ty(_) | PropertyArg::Ident(_) => return None,
             PropertyArg::Expr(ContractExpr::Place(cp)) => cp.clone(),
+            PropertyArg::Expr(ContractExpr::IndexAccess { slice, .. }) => {
+                match slice.as_ref() {
+                    ContractExpr::Place(cp) => cp.clone(),
+                    _ => return None,
+                }
+            }
             _ => return None,
         };
         if cp.projections.is_empty() {
@@ -692,9 +698,6 @@ impl PropertyChecker {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else {
             return CheckResult::Unknown;
         };
-        if self.is_concrete_zst(vm_state, value.ty) {
-            return CheckResult::Proved;
-        }
         if value.invariants.in_bounds {
             return CheckResult::Proved;
         }
@@ -728,15 +731,42 @@ impl PropertyChecker {
         r
     }
 
+    fn resolve_index_access_args(
+        property: &Property<'_>,
+    ) -> (Option<usize>, Option<usize>) {
+        if let Some(PropertyArg::Expr(ContractExpr::IndexAccess { slice, index })) = property.args.first() {
+            let slice_idx = Self::extract_place_arg_index(slice);
+            let index_idx = Self::extract_place_arg_index(index);
+            (slice_idx, index_idx)
+        } else {
+            (Some(0), Some(1))
+        }
+    }
+
+    fn extract_place_arg_index(expr: &ContractExpr<'_>) -> Option<usize> {
+        match expr {
+            ContractExpr::Place(cp) => match cp.base {
+                PlaceBase::Arg(n) => Some(n),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
     fn check_in_bound_slice<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
-        checkpoint: &Checkpoint<'tcx>, _property: &Property<'tcx>) -> CheckResult
+        checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
     {
-        let slice_val = match checkpoint.args.get(0) {
+        let (slice_arg_idx, index_arg_idx) = Self::resolve_index_access_args(property);
+
+        let slice_val = match slice_arg_idx.and_then(|idx| checkpoint.args.get(idx)) {
             Some(op) => vm_state.value_of_operand(op),
             None => return CheckResult::Unknown,
         };
+        if slice_val.invariants.in_bounds {
+            return CheckResult::Proved;
+        }
 
-        let (index_val, is_range) = match checkpoint.args.get(1) {
+        let (index_val, is_range) = match index_arg_idx.and_then(|idx| checkpoint.args.get(idx)) {
             Some(op) => {
                 if let Some(end_val) = self.extract_range_end(vm_state, op, checkpoint) {
                     (end_val, true)
@@ -1515,10 +1545,123 @@ impl PropertyChecker {
             RelOp::Ne => lhs._eq(&rhs).not(),
         };
         solver.push();
+        // NIA helper: inject Euclidean division identity for div operands
+        // to help Z3 prove (X/N)*N <= X via X = (X/N)*N + X%N, X%N >= 0.
+        self.inject_nia_axioms(vm_state, solver, checkpoint, &pred.lhs);
+        self.inject_nia_axioms(vm_state, solver, checkpoint, &pred.rhs);
         solver.assert(&condition.not());
-        let r = match solver.check() { SatResult::Unsat => Some(CheckResult::Proved), SatResult::Sat => Some(CheckResult::Failed), _ => None };
+        let r0 = solver.check();
+        let mut r = match r0 { SatResult::Unsat => Some(CheckResult::Proved), SatResult::Sat => Some(CheckResult::Failed), _ => None };
+        // If Le/Ge check failed, inject a path-condition-level NIA axiom
+        // based on the VM's binary op sources and retry.
+        if matches!(r, Some(CheckResult::Failed)) && matches!(pred.op, RelOp::Le | RelOp::Ge) {
+            solver.pop(1);
+            solver.push();
+            self.inject_nia_axioms(vm_state, solver, checkpoint, &pred.lhs);
+            self.inject_nia_axioms(vm_state, solver, checkpoint, &pred.rhs);
+            self.inject_vm_div_axioms(vm_state, solver, &pred.lhs);
+            self.inject_vm_div_axioms(vm_state, solver, &pred.rhs);
+            solver.assert(&condition.not());
+            r = match solver.check() { SatResult::Unsat => Some(CheckResult::Proved), SatResult::Sat => Some(CheckResult::Failed), _ => r };
+        }
         solver.pop(1);
         r
+    }
+
+    fn inject_nia_axioms<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
+        solver: &Solver<'ctx>, checkpoint: Option<&Checkpoint<'tcx>>,
+        expr: &ContractExpr<'tcx>)
+    {
+        match expr {
+            ContractExpr::Binary { op: NumericOp::Div, lhs, rhs } => {
+                if let (Some(l), Some(r)) = (
+                    self.eval_contract_expr(vm_state, checkpoint, lhs),
+                    self.eval_contract_expr(vm_state, checkpoint, rhs),
+                ) {
+                    let zero = Int::from_u64(vm_state.ctx, 0);
+                    let mul_term = Int::mul(vm_state.ctx, &[&l.div(&r), &r]);
+                    let rem_term = l.rem(&r);
+                    let sum_term = Int::add(vm_state.ctx, &[&mul_term, &rem_term]);
+                    solver.assert(&l._eq(&sum_term));
+                    solver.assert(&rem_term.ge(&zero));
+                }
+            }
+            ContractExpr::Binary { op: NumericOp::Mul, lhs, rhs } => {
+                // Recurse into mul operands in case one is a div
+                self.inject_nia_axioms(vm_state, solver, checkpoint, lhs);
+                self.inject_nia_axioms(vm_state, solver, checkpoint, rhs);
+            }
+            ContractExpr::Binary { lhs, rhs, .. } => {
+                self.inject_nia_axioms(vm_state, solver, checkpoint, lhs);
+                self.inject_nia_axioms(vm_state, solver, checkpoint, rhs);
+            }
+            ContractExpr::Unary { expr: inner, .. } => {
+                self.inject_nia_axioms(vm_state, solver, checkpoint, inner);
+            }
+            _ => {}
+        }
+    }
+
+    /// Walk the VM's binary-op source map and inject Euclidean division
+    /// identities for any Div/Rem operations whose results are used in
+    /// the predicate being checked.  This catches Div patterns that are
+    /// only visible in the MIR (e.g. `self.len() / N * N`) and not in the
+    /// ContractExpr tree.
+    fn inject_vm_div_axioms<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        solver: &Solver<'ctx>,
+        expr: &ContractExpr<'tcx>,
+    ) {
+        let Some(val) = self.eval_contract_expr(vm_state, None, expr) else { return };
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
+            use std::io::Write;
+            let _ = writeln!(f, "inject_vm_div_axioms: num_binary_ops={}", vm_state.binary_op_sources.len());
+        }
+        self.inject_div_axioms_for_term(vm_state, solver, &val, 4);
+    }
+
+    fn inject_div_axioms_for_term<'ctx, 'tcx>(&self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        solver: &Solver<'ctx>,
+        target: &Int<'ctx>,
+        depth: usize,
+    ) {
+        if depth == 0 { return; }
+        // Search locals and binary_op_sources for terms matching `target`
+        // and inject NIA for any Div/Rem ancestors.
+        for (dest_pk, (lhs_pk, rhs_pk)) in &vm_state.binary_op_sources {
+            let Some(dest_local) = dest_pk.local() else { continue };
+            let Some(dest_val) = vm_state.local_value(dest_local) else { continue };
+            if dest_val.term != *target { continue }
+
+            let Some(lhs_pk) = lhs_pk else { continue };
+            let Some(rhs_pk) = rhs_pk else { continue };
+            let Some(lhs_local) = lhs_pk.local() else { continue };
+            let Some(rhs_local) = rhs_pk.local() else { continue };
+            let Some(lhs_val) = vm_state.local_value(lhs_local) else { continue };
+            let Some(rhs_val) = vm_state.local_value(rhs_local) else { continue };
+
+            // Check if this is a Div/Rem in the source chain
+            if let Some((div_lhs_pk, div_rhs_pk)) = vm_state.binary_op_sources.get(lhs_pk).cloned() {
+                let Some(div_lhs_local) = div_lhs_pk.and_then(|pk| pk.local()) else { continue };
+                let Some(div_rhs_local) = div_rhs_pk.and_then(|pk| pk.local()) else { continue };
+                let Some(div_lhs_val) = vm_state.local_value(div_lhs_local) else { continue };
+                let Some(div_rhs_val) = vm_state.local_value(div_rhs_local) else { continue };
+
+                let quot = div_lhs_val.term.div(&div_rhs_val.term);
+                let rem = div_lhs_val.term.rem(&div_rhs_val.term);
+                let mul_term = Int::mul(vm_state.ctx, &[&quot, &div_rhs_val.term]);
+                let sum_term = Int::add(vm_state.ctx, &[&mul_term, &rem]);
+                solver.assert(&div_lhs_val.term._eq(&sum_term));
+                let zero = Int::from_u64(vm_state.ctx, 0);
+                solver.assert(&rem.ge(&zero));
+                solver.assert(&mul_term.le(&div_lhs_val.term));
+            }
+
+            // Recurse into operands
+            self.inject_div_axioms_for_term(vm_state, solver, &lhs_val.term, depth - 1);
+            self.inject_div_axioms_for_term(vm_state, solver, &rhs_val.term, depth - 1);
+        }
     }
 
     fn eval_contract_expr<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>,
@@ -2239,7 +2382,34 @@ impl PropertyChecker {
         let src = src.map(|ty| self.instantiate_callsite_ty(vm_state, checkpoint, ty));
         let dst = dst.map(|ty| self.instantiate_callsite_ty(vm_state, checkpoint, ty));
         match (src, dst) {
-            (Some(s), Some(d)) => {
+            (Some(mut s), Some(mut d)) => {
+                // If the type is a slice (e.g. `[T]` from contract parsing), unwrap
+                // to the element type.  `unwrap_array_expr` strips the array expr
+                // in the parser, but some paths (e.g. `parse_type` fallback) may
+                // keep the slice wrapper.
+                if let TyKind::Slice(elem) = s.kind() {
+                    s = *elem;
+                }
+                if let TyKind::Slice(elem) = d.kind() {
+                    d = *elem;
+                }
+
+                // If the source and destination element types are the same,
+                // transmute is trivially valid.
+                if s == d {
+                    return CheckResult::Proved;
+                }
+
+                // If the destination is a SIMD vector with a matching lane type,
+                // the transmute is valid by the standard library contract.
+                if Self::is_simd_vector(vm_state, d) {
+                    if let TyKind::Adt(_, args) = d.kind() {
+                        if args.iter().any(|a| matches!(a.kind(), GenericArgKind::Type(t) if t == s)) {
+                            return CheckResult::Proved;
+                        }
+                    }
+                }
+
                 let src_sz = Self::ty_size(vm_state, s);
                 let dst_sz = Self::ty_size(vm_state, d);
                 if src_sz == 0 || dst_sz == 0 { return CheckResult::Failed; }
@@ -2252,16 +2422,35 @@ impl PropertyChecker {
         }
     }
 
+    /// Return true if `ty` is `core::simd::Simd<T, N>`.
+    fn is_simd_vector<'ctx, 'tcx>(vm_state: &VmState<'ctx, 'tcx>, ty: Ty<'tcx>) -> bool {
+        if let TyKind::Adt(adt_def, _) = ty.kind() {
+            let name = vm_state.tcx.item_name(adt_def.did());
+            if name.as_str() == "Simd" {
+                let path = vm_state.tcx.def_path_str(adt_def.did());
+                return path.contains("::simd::");
+            }
+        }
+        false
+    }
+
     /// Compute type size, trying different typing environments.
     fn ty_size<'ctx, 'tcx>(vm_state: &VmState<'ctx, 'tcx>, ty: Ty<'tcx>) -> u64 {
         let sz = vm_state.size_of_ty(ty);
         if sz > 0 { return sz; }
-        // Fallback: try with the monomorphized environment.
+        // Fallback 1: try with the monomorphized environment.
         let typing_env = rustc_middle::ty::TypingEnv::post_analysis(
             vm_state.tcx, vm_state.caller_def_id);
-        vm_state.tcx.layout_of(
-            rustc_middle::ty::PseudoCanonicalInput { typing_env, value: ty }
-        ).map(|l| l.size.bytes()).unwrap_or(0)
+        let sz = crate::helpers::mir_utils::catch_panic(|| {
+            vm_state.tcx.layout_of(
+                rustc_middle::ty::PseudoCanonicalInput { typing_env, value: ty }
+            )
+        }).ok().and_then(|r| r.ok()).map(|l| l.size.bytes()).unwrap_or(0);
+        if sz > 0 { return sz; }
+        // Fallback 2: for generic type params, enumerate impl sizes.
+        let generic_sz = vm_state.size_of_generic_param(ty);
+        if generic_sz > 0 { return generic_sz; }
+        0
     }
 
     /// Returns true for integer and float types that accept all possible bit patterns

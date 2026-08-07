@@ -353,23 +353,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         Int::new_const(self.ctx, name.as_str())
     }
 
-    /// Push the current function context onto the stack and switch
-    /// to a callee's body. The caller's locals/field state is preserved
-    /// on the stack for later restoration via [`pop_context`].
-    pub(crate) fn push_context(&mut self, callee_def_id: DefId, callee_body: &'ctx Body<'tcx>) {
-        self.body_stack.push((self.body, self.caller_def_id));
-        self.body = callee_body;
-        self.caller_def_id = callee_def_id;
-    }
-
-    /// Pop the function context stack, restoring the caller's body.
-    pub(crate) fn pop_context(&mut self) {
-        if let Some((saved_body, saved_caller)) = self.body_stack.pop() {
-            self.body = saved_body;
-            self.caller_def_id = saved_caller;
-        }
-    }
-
     /// Record a value definition for diagnostics.
     pub fn record_definition(
         &mut self,
@@ -480,12 +463,20 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let mut max_size: u64 = 0;
             for impl_def_id in self.tcx.all_impls(trait_def_id) {
                 let impl_ty = self.tcx.type_of(impl_def_id).skip_binder();
-                let Ok(layout) = self.tcx.layout_of(
-                    rustc_middle::ty::PseudoCanonicalInput {
-                        typing_env,
-                        value: impl_ty,
-                    }
-                ) else { continue };
+                if crate::helpers::mir_utils::ty_has_param_const(impl_ty) {
+                    continue;
+                }
+                let layout = match crate::helpers::mir_utils::catch_panic(|| {
+                    self.tcx.layout_of(
+                        rustc_middle::ty::PseudoCanonicalInput {
+                            typing_env,
+                            value: impl_ty,
+                        }
+                    )
+                }) {
+                    Ok(Ok(l)) => l,
+                    _ => continue,
+                };
                 max_size = max_size.max(layout.size.bytes());
             }
             return max_size;
@@ -512,12 +503,20 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let mut min_align: u64 = u64::MAX;
             for impl_def_id in self.tcx.all_impls(trait_def_id) {
                 let impl_ty = self.tcx.type_of(impl_def_id).skip_binder();
-                let Ok(layout) = self.tcx.layout_of(
-                    rustc_middle::ty::PseudoCanonicalInput {
-                        typing_env,
-                        value: impl_ty,
-                    }
-                ) else { continue };
+                if crate::helpers::mir_utils::ty_has_param_const(impl_ty) {
+                    continue;
+                }
+                let layout = match crate::helpers::mir_utils::catch_panic(|| {
+                    self.tcx.layout_of(
+                        rustc_middle::ty::PseudoCanonicalInput {
+                            typing_env,
+                            value: impl_ty,
+                        }
+                    )
+                }) {
+                    Ok(Ok(l)) => l,
+                    _ => continue,
+                };
                 min_align = min_align.min(layout.align.abi.bytes());
             }
             return if min_align == u64::MAX { 0 } else { min_align };

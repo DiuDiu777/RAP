@@ -353,7 +353,9 @@ pub(super) fn try_from_raw_parts_wrapper_effect<'tcx>(
                 rustc_middle::ty::TyKind::Slice(elem) => {
                     let typing_env = rustc_middle::ty::TypingEnv::post_analysis(tcx, callee);
                     let input = rustc_middle::ty::PseudoCanonicalInput { typing_env, value: *elem };
-                    tcx.layout_of(input)
+                    crate::helpers::mir_utils::catch_panic(|| {
+                        tcx.layout_of(input)
+                    }).ok().and_then(|r| r.ok())
                         .map(|l| l.size.bytes())
                         .unwrap_or(1)
                 }

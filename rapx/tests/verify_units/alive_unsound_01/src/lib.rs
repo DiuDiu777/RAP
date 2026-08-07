@@ -14,6 +14,7 @@ pub struct DangerousAliaser<'a, T> {
 }
 
 impl<'a, T> DangerousAliaser<'a, T> {
+    #[rapx::verify]
     pub fn new(data: &'a mut [T]) -> Self {
         Self {
             ptr: data.as_mut_ptr(),
@@ -22,12 +23,12 @@ impl<'a, T> DangerousAliaser<'a, T> {
         }
     }
 
-    // SOUND: `PhantomData<&'a mut [T]>` ties `'a` to `data`'s lifetime,
-    // and `&mut self` prevents concurrent calls.  Alive | Failed is a
-    // verifier limitation (PhantomData lifetime not propagated).
-    // NonNull / ValidPtr / Init are unproved due to type mismatch
-    // between struct invariant `ValidPtr(ptr, T, len)` and
-    // from_raw_parts_mut which needs `ValidPtr(ptr, u8, len * size_of::<T>())`.
+    // UNSOUND: `&self` has no lifetime binding — its anonymous borrow
+    // lifetime is independent of struct param `'a`.  The struct's `'a`
+    // only binds the struct itself and its fields together, not `&self`.
+    // Therefore `Alive(ptr, 'a')` cannot be proved: `'a` is unbounded at
+    // the call site, and the verifier cannot guarantee the allocation
+    // outlives an unconstrained lifetime.
     #[rapx::verify]
     pub fn get_mut(&mut self) -> &'a mut [T] {
         unsafe { std::slice::from_raw_parts_mut(self.ptr, self.len) }

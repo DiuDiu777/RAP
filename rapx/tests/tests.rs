@@ -208,7 +208,6 @@ const CMD_VERIFY_SCAN: &[&str] = &["verify", "--mode", "scan"];
 // ── Verify backend ──────────────────────────────────────────────
 const CMD_VERIFY_VM: &[&str] = &["verify", "--mode", "targeted"];
 const CMD_VERIFY_TARGETED_VM: &[&str] = &["verify", "--mode", "targeted"];
-const CMD_VERIFY_REPEAT_0_VM: &[&str] = &["verify", "--mode", "targeted", "--postfix-repeat", "0"];
 const CMD_VERIFY_REPEAT_1_VM: &[&str] = &["verify", "--mode", "targeted", "--postfix-repeat", "1"];
 const CMD_VERIFY_REPEAT_2_VM: &[&str] = &["verify", "--mode", "targeted", "--postfix-repeat", "2"];
 const CMD_VERIFY_SKIP_INVARIANT_VM: &[&str] = &["verify", "--skip-invariant"];

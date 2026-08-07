@@ -336,6 +336,17 @@ impl<'tcx> VerifyEngine<'tcx> {
                             Self::rebind_place(place, checkpoint),
                         ))
                     }
+                    super::contract::PropertyArg::Expr(expr) => {
+                        super::contract::PropertyArg::Expr(Self::rebind_contract_expr(expr, checkpoint))
+                    }
+                    super::contract::PropertyArg::Predicates(predicates) => {
+                        let rebound: Vec<_> = predicates.iter().map(|p| {
+                            let lhs = Self::rebind_contract_expr(&p.lhs, checkpoint);
+                            let rhs = Self::rebind_contract_expr(&p.rhs, checkpoint);
+                            super::contract::NumericPredicate::new(lhs, p.op, rhs)
+                        }).collect();
+                        super::contract::PropertyArg::Predicates(rebound)
+                    }
                     _ => a.clone(),
                 }
             })
@@ -375,6 +386,54 @@ impl<'tcx> VerifyEngine<'tcx> {
         super::contract::ContractPlace {
             base: new_base,
             projections: place.projections.clone(),
+        }
+    }
+
+    fn rebind_contract_expr(
+        expr: &super::contract::ContractExpr<'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+    ) -> super::contract::ContractExpr<'tcx> {
+        match expr {
+            super::contract::ContractExpr::Place(place) => {
+                super::contract::ContractExpr::Place(Self::rebind_place(place, checkpoint))
+            }
+            super::contract::ContractExpr::Len(inner) => {
+                super::contract::ContractExpr::Len(Box::new(Self::rebind_contract_expr(inner, checkpoint)))
+            }
+            super::contract::ContractExpr::SizeOf(_) | super::contract::ContractExpr::AlignOf(_)
+            | super::contract::ContractExpr::Const(_) | super::contract::ContractExpr::ConstParam { .. }
+            | super::contract::ContractExpr::Unknown => expr.clone(),
+            super::contract::ContractExpr::IndexAccess { slice, index } => {
+                super::contract::ContractExpr::IndexAccess {
+                    slice: Box::new(Self::rebind_contract_expr(slice, checkpoint)),
+                    index: Box::new(Self::rebind_contract_expr(index, checkpoint)),
+                }
+            }
+            super::contract::ContractExpr::Binary { op, lhs, rhs } => {
+                super::contract::ContractExpr::Binary {
+                    op: *op,
+                    lhs: Box::new(Self::rebind_contract_expr(lhs, checkpoint)),
+                    rhs: Box::new(Self::rebind_contract_expr(rhs, checkpoint)),
+                }
+            }
+            super::contract::ContractExpr::Unary { op, expr: inner } => {
+                super::contract::ContractExpr::Unary {
+                    op: *op,
+                    expr: Box::new(Self::rebind_contract_expr(inner, checkpoint)),
+                }
+            }
+            super::contract::ContractExpr::Min { a, b } => {
+                super::contract::ContractExpr::Min {
+                    a: Box::new(Self::rebind_contract_expr(a, checkpoint)),
+                    b: Box::new(Self::rebind_contract_expr(b, checkpoint)),
+                }
+            }
+            super::contract::ContractExpr::Max { a, b } => {
+                super::contract::ContractExpr::Max {
+                    a: Box::new(Self::rebind_contract_expr(a, checkpoint)),
+                    b: Box::new(Self::rebind_contract_expr(b, checkpoint)),
+                }
+            }
         }
     }
 

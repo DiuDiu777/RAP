@@ -475,7 +475,7 @@ fn alive_unsound_02() {
     assert_unproved_exclusive(
         &output,
         "slice_tied_to_unrelated_host",
-        &["Alive", "ValidPtr", "Init", "NonNull", "Alias"],
+        &["ValidNum", "Alive", "ValidPtr", "Init", "NonNull", "Alias"],
     );
 }
 

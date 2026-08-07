@@ -26,7 +26,7 @@ use crate::{
     },
 };
 
-use super::state::{Provenance, VmState, VmValue, ValueInvariants};
+use super::state::{AllocId, Provenance, VmState, VmValue, ValueInvariants};
 
 impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// Execute all retained MIR items in path order.
@@ -275,6 +275,17 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     if let rustc_middle::ty::TyKind::Slice(elem_ty) = pointee_ty.kind() {
                         let elem_size = self.size_of_ty(*elem_ty) as u64;
                         let len = self.fresh_int(&format!("slice_len_{}", local_idx));
+                        let zero = Int::from_u64(self.ctx, 0);
+                        self.path_conditions.push(len.ge(&zero));
+                        let isize_max = Int::from_i64(self.ctx, i64::MAX);
+                        let elem_sz = if elem_size > 0 {
+                            elem_size
+                        } else {
+                            self.size_of_generic_param(*elem_ty).max(1)
+                        };
+                        let elem_sz_term = Int::from_u64(self.ctx, elem_sz);
+                        self.path_conditions.push(
+                            Int::mul(self.ctx, &[&len, &elem_sz_term]).le(&isize_max));
                         let data_size = Int::mul(self.ctx, &[
                             &len,
                             &Int::from_u64(self.ctx, elem_size.max(1)),
@@ -841,12 +852,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         if place.projection.is_empty() {
             let mut value = value;
             value.invariants.init = true;
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "exec_assign local_{} <- term={} prov={:?}",
-                    place.local.as_usize(), value.term.to_string(),
-                    value.provenance.is_some());
-            }
             self.set_local(place.local, value);
         } else if !has_deref {
             // Field projection (no Deref): update field_values for the base local.
@@ -1045,15 +1050,15 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         .and_then(|p| self.allocations.iter().find(|a| a.id == p.alloc_id))
                         .map(|a| a.align)
                         .filter(|&a| a > 1);
+                    let source_in_bounds = self.locals.get(&place.local)
+                        .map_or(false, |v| v.invariants.in_bounds);
                     let val = VmValue {
                         term: addr.term,
                         ty: dest_ty,
                         provenance: addr.provenance,
                         invariants: ValueInvariants {
                             non_null: true,
-                            // Only propagate alloc_align, NOT pointee type align.
-                            // Pointee alignment doesn't guarantee the pointer is
-                            // actually aligned (e.g., packed struct fields).
+                            in_bounds: source_in_bounds,
                             align_n: alloc_align,
                             ..Default::default()
                         },
@@ -1080,6 +1085,21 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 let lhs_pk = operand_to_place_key(lhs_op);
                 let rhs_pk = operand_to_place_key(rhs_op);
                 self.binary_op_sources.insert(dest_pk, (lhs_pk, rhs_pk));
+                // Add Euclidean division identity for Div and Rem:
+                //   lhs == (lhs/rhs)*rhs + lhs%rhs  ∧  lhs%rhs >= 0
+                // Also add (lhs/rhs)*rhs <= lhs directly for Div for robustness.
+                // This lets later checks prove (x/N)*N <= x and x%N >= 0.
+                if matches!(*op, BinOp::Div | BinOp::Rem) {
+                    let quot = lhs.term.div(&rhs.term);
+                    let rem = lhs.term.rem(&rhs.term);
+                    let mul_term = Int::mul(self.ctx, &[&quot, &rhs.term]);
+                    let sum_term = Int::add(self.ctx, &[&mul_term, &rem]);
+                    self.path_conditions.push(lhs.term._eq(&sum_term));
+                    let zero = Int::from_u64(self.ctx, 0);
+                    self.path_conditions.push(rem.ge(&zero));
+                    // Direct inequality: (lhs/rhs)*rhs <= lhs
+                    self.path_conditions.push(mul_term.le(&lhs.term));
+                }
                 // For tuple-returning binary ops (AddWithOverflow, MulWithOverflow),
                 // populate field_values so that .0 (result) and .1 (overflow flag)
                 // are properly tracked. Without this, field access falls through
@@ -1460,6 +1480,9 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 
     fn exec_storage_live(&mut self, local: Local) {
         self.local_address(local);
+        if let Some(alloc_id) = self.local_alloc_ids.get(&local).copied() {
+            self.dead_allocations.remove(&alloc_id);
+        }
     }
 
     fn exec_storage_dead(&mut self, local: Local) {
@@ -1478,6 +1501,17 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             self.dead_allocations.insert(alloc_id);
             if let Some(block) = self.current_block {
                 self.dead_alloc_blocks.insert(alloc_id, block);
+            }
+            // Cascade to heap data allocations (see exec_storage_dead).
+            let mut worklist: Vec<AllocId> = vec![alloc_id];
+            while let Some(id) = worklist.pop() {
+                if let Some(data_id) = self.slice_data_allocations.get(&id).copied() {
+                    self.dead_allocations.insert(data_id);
+                    if let Some(block) = self.current_block {
+                        self.dead_alloc_blocks.insert(data_id, block);
+                    }
+                    worklist.push(data_id);
+                }
             }
         }
         self.notes.push(format!("drop: {:?}", place));
@@ -1856,12 +1890,17 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let cp = match property.args.first()? {
             PropertyArg::Place(cp) => cp,
             PropertyArg::Expr(ContractExpr::Place(cp)) => cp,
+            PropertyArg::Expr(ContractExpr::IndexAccess { slice, .. }) => {
+                match slice.as_ref() {
+                    ContractExpr::Place(cp) => cp,
+                    _ => return None,
+                }
+            }
             _ => return None,
         };
         match cp.base {
             PlaceBase::Local(n) => Some(Local::from_usize(n)),
             PlaceBase::Arg(n) => {
-                // Map Arg(N) to Local(N+1) in the function body
                 Some(Local::from_usize(n + 1))
             }
             PlaceBase::Return => Some(Local::from_usize(0)),

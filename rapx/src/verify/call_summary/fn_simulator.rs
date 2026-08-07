@@ -55,7 +55,7 @@ const ALL: &[usize] = &[];
 
 static REGISTRY: &[Entry] = &[
     // ── Pass-through / no-effect calls ──────────────────────────────
-    E!(mem_forget_capacity,   dep0!(),  false,  none!(),  eff_none),
+    E!(mem_forget_capacity,   dep0!(),  false,  none!(),  eff_forget),
     E!(transmute,             dep0!(),  false,  none!(),  eff_none),
     E!(is_maybe_uninit_uninit,none!(),  false,  none!(),  eff_none),
     E!(is_maybe_uninit_assume_init,dep0!(), false, none!(), eff_none),
@@ -101,6 +101,7 @@ static REGISTRY: &[Entry] = &[
 
     // ── Vec / collection constructors ────────────────────────────────
     E!(is_vec_alloc_constructor, dep01!(), false, none!(), eff_new_allocation),
+    E!(is_vec_from_box,          dep0!(),  false, none!(), eff_vec_from_box),
     E!(is_vec_with_capacity,     dep0!(),  false, none!(), eff_new_allocation_from_cap),
     E!(is_into_boxed_slice,      dep0!(),  false, none!(), eff_box_from_vec),
 
@@ -299,6 +300,18 @@ fn eff_new_allocation_from_cap(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     ]
 }
 
+fn eff_vec_from_box(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    vec![
+        CallEffect::ReturnNewAllocationFromBox { box_arg: 0 },
+    ]
+}
+
+fn eff_forget(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    vec![
+        CallEffect::CleanSliceDataLinks { arg: 0 },
+    ]
+}
+
 fn eff_layout_const(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     layout_constant_effect(ctx.tcx, ctx.caller, ctx.func, ctx.name)
         .into_iter()
@@ -446,10 +459,13 @@ fn layout_call_ty<'tcx>(func: &Operand<'tcx>) -> Option<Ty<'tcx>> {
 fn type_layout<'tcx>(tcx: TyCtxt<'tcx>, caller: DefId, ty: Ty<'tcx>) -> Option<(u64, u64)> {
     if ty_has_param_const(ty) { return None }
     let env = rustc_middle::ty::TypingEnv::post_analysis(tcx, caller);
-    match tcx.layout_of(PseudoCanonicalInput { typing_env: env, value: ty }) {
-        Ok(l) => Some((l.align.abi.bytes(), l.size.bytes())),
-        Err(_) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
-        Err(_) => None,
+    let result = crate::helpers::mir_utils::catch_panic(|| {
+        tcx.layout_of(PseudoCanonicalInput { typing_env: env, value: ty })
+    });
+    match result {
+        Ok(Ok(l)) => Some((l.align.abi.bytes(), l.size.bytes())),
+        Ok(Err(_)) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
+        _ => None,
     }
 }
 
@@ -563,6 +579,11 @@ fn vec_element_size(tcx: TyCtxt<'_>, caller: DefId, dest: Option<Local>) -> u64 
 pub fn is_vec_alloc_constructor(name: &str) -> bool {
     name.contains("::vec::from_elem")
         || name == "from_elem"
+}
+
+pub fn is_vec_from_box(name: &str) -> bool {
+    name.contains("::into_vec")
+        || name.contains("box_assume_init_into_vec_unsafe")
 }
 
 pub fn is_vec_with_capacity(name: &str) -> bool {

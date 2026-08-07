@@ -315,7 +315,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
         items: &mut Vec<BackwardItem<'tcx>>,
         keep_invalidations: bool,
     ) {
-        if keep_invalidations && matches!(statement.kind, StatementKind::StorageDead(_))
+        if keep_invalidations && matches!(statement.kind, StatementKind::StorageDead(_) | StatementKind::StorageLive(_))
         {
             items.push(BackwardItem::Statement {
                 block,

@@ -128,6 +128,10 @@ pub enum CallEffect {
     /// this does not require a pointer argument — used for constructors like
     /// `Vec::from_elem(init, count)` that allocate fresh memory.
     ReturnNewAllocation { size_arg: usize, elem_size: u64 },
+    /// Like ReturnNewAllocation but the length is carried by the argument
+    /// itself (a Box fat pointer) rather than a separate count argument.
+    /// Used for `into_vec` / `box_assume_init_into_vec_unsafe`.
+    ReturnNewAllocationFromBox { box_arg: usize },
     /// The call transfers a Vec's backing allocation into a Box (e.g.
     /// `Vec::into_boxed_slice`). Looks up the current heap allocation from
     /// `slice_data_allocations` via the argument's stack provenance.
@@ -155,6 +159,9 @@ pub enum CallEffect {
     ReturnLcmSplit { receiver_arg: usize },
     /// Facts about an argument must be forgotten conservatively.
     ForgetArgFacts { arg: usize, reason: ForgetReason },
+    /// Remove `slice_data_allocations` links for the argument's stack
+    /// alloc_id — used for `mem::forget` which prevents a drop cascade.
+    CleanSliceDataLinks { arg: usize },
 }
 
 /// Return dependency information for a MIR call terminator.

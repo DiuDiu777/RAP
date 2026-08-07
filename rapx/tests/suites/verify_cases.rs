@@ -101,9 +101,7 @@ fn std_challenge_18() {
 
 #[test]
 fn std_challenge_02() {
-    // FIXME: when backward slicer SCC prefix replay is implemented,
-    // switch back to CMD_VERIFY_TARGETED_VM.
-    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_REPEAT_0_VM);
+    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_TARGETED_VM);
     assert!(
         !output.contains("UNSOUND"),
         "unexpected UNSOUND in std-challenge-02"
