@@ -605,7 +605,7 @@ impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
     }
 }
 
-#[cfg(rapx_rustc_ge_193)]
+#[cfg(all(rapx_rustc_ge_193, not(rapx_rustc_ge_199)))]
 impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
     type Domain = AliasDomain;
 
@@ -633,6 +633,45 @@ impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
         _location: Location,
     ) -> TerminatorEdges<'mir, 'tcx> {
         apply_terminator_effect(self, state, terminator)
+    }
+
+    fn apply_call_return_effect(
+        &self,
+        _state: &mut Self::Domain,
+        _block: rustc_middle::mir::BasicBlock,
+        _return_places: CallReturnPlaces<'_, 'tcx>,
+    ) {
+    }
+}
+
+#[cfg(rapx_rustc_ge_199)]
+impl<'tcx> Analysis<'tcx> for FnAliasAnalyzer<'tcx> {
+    type Domain = AliasDomain;
+
+    const NAME: &'static str = "FnAliasAnalyzer";
+
+    fn bottom_value(&self, _body: &Body<'tcx>) -> Self::Domain {
+        AliasDomain::new(self.place_info.num_places())
+    }
+
+    fn initialize_start_block(&self, _body: &Body<'tcx>, _state: &mut Self::Domain) {}
+
+    fn apply_primary_statement_effect(
+        &self,
+        state: &mut Self::Domain,
+        statement: &Statement<'tcx>,
+        _location: Location,
+    ) {
+        apply_statement_effect(self, state, statement)
+    }
+
+    fn apply_primary_terminator_effect<'mir>(
+        &self,
+        state: &mut Self::Domain,
+        terminator: &'mir Terminator<'tcx>,
+        _location: Location,
+    ) {
+        apply_terminator_effect(self, state, terminator);
     }
 
     fn apply_call_return_effect(

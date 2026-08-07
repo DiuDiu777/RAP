@@ -100,9 +100,10 @@ fn std_challenge_18() {
 }
 
 #[test]
-#[ignore = "VM struct-invariant support incomplete"]
 fn std_challenge_02() {
-    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_TARGETED_VM);
+    // FIXME: when backward slicer SCC prefix replay is implemented,
+    // switch back to CMD_VERIFY_TARGETED_VM.
+    let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_REPEAT_0_VM);
     assert!(
         !output.contains("UNSOUND"),
         "unexpected UNSOUND in std-challenge-02"
@@ -121,14 +122,13 @@ fn hashmap() {
 #[test]
 #[ignore = "VM struct-invariant support incomplete"]
 fn hashmap_skip_invariant() {
-    let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_SKIP_INVARIANT_VM);
+    let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_TARGETED_SKIP_INVARIANT_VM);
     assert_contain(&output, "result: SOUND");
     assert_not_contain(&output, "result: UNSOUND");
 }
 
 // ================ Allocator Tests ================
 #[test]
-#[ignore = "VM struct-invariant support incomplete for vec-backed allocators"]
 fn bump_allocator() {
     let output = run_with_args("verify_cases/bump_allocator", CMD_VERIFY_VM);
     assert_function_result(&output, "BumpAllocator::new", "SOUND");

@@ -220,6 +220,14 @@ pub struct VmState<'ctx, 'tcx> {
 
     /// Name of the most recent call (for context-aware effects like Vec push).
     pub(crate) last_call_name: String,
+
+    /// Stack of nested function contexts for cross-function inline.
+    /// Top of stack is the currently executing function.
+    /// Each entry is (body, def_id).
+    pub(crate) body_stack: Vec<(&'ctx Body<'tcx>, DefId)>,
+
+    /// Saved caller locals during callee inline (CalleeEntry/CalleeExit).
+    pub(crate) saved_caller_locals: Option<FxHashMap<Local, VmValue<'ctx, 'tcx>>>,
 }
 
 impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
@@ -262,6 +270,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             notes: Vec::new(),
             path: None,
             last_call_name: String::new(),
+            body_stack: Vec::new(),
+            saved_caller_locals: None,
         }
     }
 
@@ -341,6 +351,23 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     pub fn fresh_int(&self, prefix: &str) -> Int<'ctx> {
         let name = format!("{}_{}", prefix, self.definitions.len());
         Int::new_const(self.ctx, name.as_str())
+    }
+
+    /// Push the current function context onto the stack and switch
+    /// to a callee's body. The caller's locals/field state is preserved
+    /// on the stack for later restoration via [`pop_context`].
+    pub(crate) fn push_context(&mut self, callee_def_id: DefId, callee_body: &'ctx Body<'tcx>) {
+        self.body_stack.push((self.body, self.caller_def_id));
+        self.body = callee_body;
+        self.caller_def_id = callee_def_id;
+    }
+
+    /// Pop the function context stack, restoring the caller's body.
+    pub(crate) fn pop_context(&mut self) {
+        if let Some((saved_body, saved_caller)) = self.body_stack.pop() {
+            self.body = saved_body;
+            self.caller_def_id = saved_caller;
+        }
     }
 
     /// Record a value definition for diagnostics.

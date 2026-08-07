@@ -11,7 +11,8 @@ use crate::verify::{
     path_extractor::{Path, PathStep},
 };
 use crate::helpers::mir_scan::CheckpointLocation;
-use rustc_middle::mir::BasicBlock;
+use rustc_hir::def_id::DefId;
+use rustc_middle::mir::{BasicBlock, Local};
 
 /// MIR items relevant to one `(checkpoint, path, property)` item.
 #[derive(Clone, Debug)]
@@ -58,6 +59,19 @@ pub enum BackwardItem<'tcx> {
     ContractFact { property: contract::Property<'tcx> },
     /// A conservative loss of precision for relevant state.
     Forget { reason: ForgetReason },
+    /// Enter a callee's MIR body. Subsequent Statement/Terminator items
+    /// are interpreted in the callee's context until `CalleeExit`.
+    /// `args` holds the caller's Local indices for each callee parameter
+    /// (arg 0 → callee local_1, arg 1 → callee local_2, ...).
+    CalleeEntry {
+        callee: DefId,
+        args: Vec<Local>,
+    },
+    /// Return from a callee's MIR body. Writes `local_0` (callee return)
+    /// to the caller's `dest` local. Restores the caller's function context.
+    CalleeExit {
+        dest: Local,
+    },
 }
 
 /// Why a retained item is relevant.

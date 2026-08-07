@@ -109,7 +109,6 @@ fn item_belongs_to_step(item: &BackwardItem<'_>, step: &PathStep) -> bool {
         (BackwardItem::Terminator { block, kind }, PathStep::Checkpoint(location)) => {
             *kind == KeepReason::Checkpoint && *block == location.block
         }
-
         (
             BackwardItem::PathStep {
                 step: item_step, ..
@@ -158,6 +157,12 @@ fn describe_backward_item(item: &BackwardItem<'_>, body: &rustc_middle::mir::Bod
             )
         }
         BackwardItem::Forget { reason } => format!("forget {:?}", reason),
+        BackwardItem::CalleeEntry { callee, args } => {
+            format!("callee-entry {:?} args={:?}", callee, args)
+        }
+        BackwardItem::CalleeExit { dest } => {
+            format!("callee-exit dest=_{}", dest.as_usize())
+        }
     }
 }
 

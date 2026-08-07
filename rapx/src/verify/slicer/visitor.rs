@@ -206,7 +206,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
             for (mut child_path, child_items, child_relevant) in child_results {
                 let mut relevant = child_relevant;
                 let mut items = child_items;
-                // Always thread through so the backward chain reaches
                 // function entry even for child (deeper SCC) paths,
                 // otherwise allocation/initialization facts are missing.
                 visitor.visit_terminator(

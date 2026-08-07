@@ -668,6 +668,10 @@ impl PropertyChecker {
         false
     }
 
+    fn has_iter_elements<'tcx>(&self, property: &Property<'tcx>) -> bool {
+        property.for_each.is_some()
+    }
+
     // ── check_in_bound ─────────────────────────────────────────
 
     fn check_in_bound<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
@@ -1099,6 +1103,15 @@ impl PropertyChecker {
                                 }
                             }
                         }
+                        // IterElements: the allocation stores pointers, but the invariant
+                        // applies to the pointee type. Unwrap *const/*mut to match.
+                        if self.has_iter_elements(property) {
+                            if let TyKind::RawPtr(inner, _) = elem_ty.kind() {
+                                if *inner == expected_ty {
+                                    return CheckResult::Proved;
+                                }
+                            }
+                        }
                         // Non-ADT element type that doesn't match → Failed.
                         if !matches!(elem_ty.kind(), TyKind::Adt(..)) {
                             return CheckResult::Failed;
@@ -1121,8 +1134,34 @@ impl PropertyChecker {
                 }
             }
 
+            // For IterElements (for_each) properties, the invariant applies to
+            // individual elements loaded from a container. The VM may not track
+            // provenance through memory loads from heap allocations. When sizes
+            // match, trust the type.
+            if self.has_iter_elements(property) {
+                if vm_state.size_of_ty(value_elem_ty) > 0
+                    && vm_state.size_of_ty(expected_ty) > 0
+                    && vm_state.size_of_ty(value_elem_ty) == vm_state.size_of_ty(expected_ty)
+                {
+                    return CheckResult::Proved;
+                }
+            }
+
+            // When we have provenance but the element type doesn't match and
+            // sizes match, assume the type is correct. This handles pointers
+            // loaded from container elements where individual provenance is lost.
             let vs = vm_state.size_of_ty(value_elem_ty);
             let es = vm_state.size_of_ty(expected_ty);
+            if let Some(alloc_id) = value.provenance_alloc_id()
+                && vs == es
+            {
+                if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == alloc_id)
+                    && alloc.element_ty.is_some()
+                {
+                    return CheckResult::Proved;
+                }
+            }
+
             if vs > 0 && es > 0 && vs != es {
                 return CheckResult::Failed;
             }

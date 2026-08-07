@@ -123,6 +123,15 @@ pub enum CallEffect {
     /// A specific field of the returned tuple carries the length of a given
     /// argument (e.g. split_at(mid) returns (left, right) where left.len() == mid).
     ReturnTupleFieldLength { field: usize, from_arg: usize },
+    /// The return value is a pointer backed by a fresh heap allocation of
+    /// `size_arg` elements × `elem_size` bytes. Unlike ReturnFreshAllocation
+    /// this does not require a pointer argument — used for constructors like
+    /// `Vec::from_elem(init, count)` that allocate fresh memory.
+    ReturnNewAllocation { size_arg: usize, elem_size: u64 },
+    /// The call transfers a Vec's backing allocation into a Box (e.g.
+    /// `Vec::into_boxed_slice`). Looks up the current heap allocation from
+    /// `slice_data_allocations` via the argument's stack provenance.
+    ReturnBoxFromVec { arg: usize },
     /// The return value is known to own initialized memory of the type pointed
     /// to by the indicated argument (e.g. `Box::from_raw(p)` owns one initialized
     /// `T` element reached through `p`).

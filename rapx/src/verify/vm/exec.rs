@@ -13,6 +13,7 @@ use rustc_middle::{
 };
 #[cfg(not(rapx_has_skip_norm_wip))]
 use crate::compat::SkipNormWip;
+use rustc_hir::def_id::DefId;
 use z3::ast::{Ast, Bool, Int};
 
 use crate::{
@@ -74,9 +75,86 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 BackwardItem::Forget { reason } => {
                     self.notes.push(format!("forget: {:?}", reason));
                 }
+                BackwardItem::CalleeEntry { callee, args } => {
+                    self.handle_callee_entry(*callee, args);
+                }
+                BackwardItem::CalleeExit { dest } => {
+                    self.handle_callee_exit(*dest);
+                }
             }
         }
         Ok(())
+    }
+
+    /// Enter a callee's function context during sliced inline execution.
+    /// Saves the caller's locals state, pushes the callee body onto the
+    /// context stack, and binds caller args to callee parameters.
+    fn handle_callee_entry(
+        &mut self,
+        callee_def_id: DefId,
+        arg_locals: &[Local],
+    ) {
+        let callee_body = self.tcx.optimized_mir(callee_def_id);
+
+        // Save caller's locals
+        let saved_locals = std::mem::take(&mut self.locals);
+
+        // Clone the arg values we need before pushing context
+        let arg_vals: Vec<Option<VmValue<'ctx, 'tcx>>> = arg_locals.iter()
+            .map(|&local| saved_locals.get(&local).cloned())
+            .collect();
+
+        self.saved_caller_locals = Some(saved_locals);
+
+        // Push callee context
+        self.body_stack.push((self.body, self.caller_def_id));
+        self.body = callee_body;
+        self.caller_def_id = callee_def_id;
+
+        // Bind args from saved caller state
+        for (i, arg_val) in arg_vals.into_iter().enumerate() {
+            let callee_local = Local::from_usize(i + 1);
+            if let Some(val) = arg_val {
+                self.ensure_local_allocation(callee_local);
+                self.set_local(callee_local, val);
+            }
+        }
+    }
+
+    /// Exit a callee's function context. Captures the return value from
+    /// callee's local_0, restores the caller's locals and body, and writes
+    /// the return value to the caller's dest local.
+    fn handle_callee_exit(
+        &mut self,
+        dest: Local,
+    ) {
+        let return_val = self.locals.get(&Local::from_usize(0)).cloned();
+
+        // Restore caller context
+        if let Some((saved_body, saved_caller)) = self.body_stack.pop() {
+            self.body = saved_body;
+            self.caller_def_id = saved_caller;
+        }
+
+        // Restore caller's locals
+        if let Some(saved) = self.saved_caller_locals.take() {
+            self.locals = saved;
+        }
+
+        // Write return value
+        if let Some(mut val) = return_val {
+            let dest_ty = self.body.local_decls[dest].ty;
+            val.ty = dest_ty;
+            if let Some(ref prov) = val.provenance {
+                if prov.offset.as_u64() == Some(0) {
+                    val.invariants.non_null = true;
+                    val.invariants.init = true;
+                    val.invariants.aligned = true;
+                    self.init_allocations.insert(prov.alloc_id);
+                }
+            }
+            self.set_local(dest, val);
+        }
     }
 
     // ── Initialization ──────────────────────────────────────────
@@ -703,7 +781,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 
     // ── Statement executors ──────────────────────────────────────
 
-    fn exec_statement(
+    pub(crate) fn exec_statement(
         &mut self,
         block: BasicBlock,
         statement_index: usize,
@@ -1394,7 +1472,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         }
     }
 
-    fn exec_drop(&mut self, place: &Place<'tcx>) {
+    pub(crate) fn exec_drop(&mut self, place: &Place<'tcx>) {
         self.dropped_locals.insert(place.local);
         if let Some(alloc_id) = self.local_alloc_ids.get(&place.local).copied() {
             self.dead_allocations.insert(alloc_id);
@@ -1470,7 +1548,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 
         // Determine which target block is taken along the path.
         if let Some(ref path) = self.path {
-            if let Some(chosen) = chosen_successor(path, block) {
+            if let Some(chosen) = chosen_successor(path, block, occurrence) {
                 for (value, target) in targets.iter() {
                     if target == chosen {
                         let val_term = Int::from_u64(self.ctx, value as u64);
@@ -1528,7 +1606,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     }
 
     /// Infer alignment constraints from guards of the form `(x % n) == 0`.
-    fn infer_guard_align(&mut self, cond: &Operand<'tcx>, expected: bool) {
+    pub(crate) fn infer_guard_align(&mut self, cond: &Operand<'tcx>, expected: bool) {
         if !expected { return; }
         let place = match cond {
             Operand::Copy(p) | Operand::Move(p) => p,
@@ -1565,7 +1643,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     }
 
     /// Infer non_null invariants from branch guards.
-    fn infer_guard_non_null(&mut self, cond: &Operand<'tcx>, expected: bool) {
+    pub(crate) fn infer_guard_non_null(&mut self, cond: &Operand<'tcx>, expected: bool) {
         if !expected { return; }
         let place = match cond {
             Operand::Copy(p) | Operand::Move(p) => p,
@@ -1692,9 +1770,50 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }
             }
             PropertyKind::Allocated => {
-                if let Some(val) = self.contract_target_value(property) {
-                    if let Some(alloc_id) = val.provenance_alloc_id() {
-                        self.dead_allocations.remove(&alloc_id);
+                if let Some(local) = self.contract_target_local(property) {
+                    if let Some(val) = self.locals.get(&local).cloned() {
+                        if let Some(alloc_id) = val.provenance_alloc_id() {
+                            self.dead_allocations.remove(&alloc_id);
+                        }
+                        // For raw-pointer parameters with Allocated contracts,
+                        // create a proper external allocation matching the contract
+                        // size (count * sizeof(T)). The stack allocation created by
+                        // init_parameters is only sizeof(ptr) bytes — too small for
+                        // pointer arithmetic like x.add(i).
+                        let elem_ty = property.args.get(1)
+                            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+                        let count_term = property.args.get(2).and_then(|a| self.resolve_contract_count(a));
+                        if let (Some(elem_ty), Some(count_term)) = (elem_ty, count_term) {
+                            let elem_sz_raw = self.size_of_ty(elem_ty);
+                            let heap_align = self.align_of_ty(elem_ty).max(1);
+                            let (heap_id, heap_base) = if elem_sz_raw == 0 {
+                                // Generic type param: size unknown. Use a large external
+                                // alloc so bounds checks auto-pass.
+                                let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                self.allocate_external(max_size, heap_align, Some(elem_ty))
+                            } else {
+                                let elem_sz = Int::from_u64(self.ctx, elem_sz_raw as u64);
+                                let total = Int::mul(self.ctx, &[&count_term, &elem_sz]);
+                                self.allocate_external(total, heap_align, Some(elem_ty))
+                            };
+                            self.init_allocations.insert(heap_id);
+                            let v = VmValue {
+                                term: heap_base,
+                                ty: val.ty,
+                                provenance: Some(Provenance {
+                                    alloc_id: heap_id,
+                                    offset: Int::from_u64(self.ctx, 0),
+                                }),
+                                invariants: ValueInvariants {
+                                    non_null: true,
+                                    init: true,
+                                    in_bounds: true,
+                                    aligned: true,
+                                    align_n: if heap_align > 1 { Some(heap_align) } else { None },
+                                },
+                            };
+                            self.set_local(local, v);
+                        }
                     }
                 }
             }
@@ -1753,6 +1872,25 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     fn contract_target_value(&mut self, property: &Property<'tcx>) -> Option<VmValue<'ctx, 'tcx>> {
         let local = self.contract_target_local(property)?;
         self.locals.get(&local).cloned()
+    }
+
+    /// Resolve a contract count argument to a Z3 term by looking up
+    /// the corresponding function parameter in the VM state.
+    fn resolve_contract_count(&self, arg: &PropertyArg<'tcx>) -> Option<Int<'ctx>> {
+        match arg {
+            PropertyArg::Expr(ContractExpr::Const(n)) => {
+                Some(Int::from_u64(self.ctx, *n as u64))
+            }
+            PropertyArg::Expr(ContractExpr::Place(cp)) | PropertyArg::Place(cp) => {
+                let local = match cp.base {
+                    PlaceBase::Local(n) => Local::from_usize(n),
+                    PlaceBase::Arg(n) => Local::from_usize(n + 1),
+                    PlaceBase::Return => return None,
+                };
+                self.locals.get(&local).map(|v| v.term.clone())
+            }
+            _ => None,
+        }
     }
 
     /// Evaluate a numeric predicate to a Z3 Bool for path-condition assertion.
@@ -2124,13 +2262,17 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 }
 
 /// Return the next MIR block after `block` in a finite verification path.
-fn chosen_successor(path: &Path, block: BasicBlock) -> Option<BasicBlock> {
+fn chosen_successor(path: &Path, block: BasicBlock, occurrence: usize) -> Option<BasicBlock> {
+    let mut count = 0;
     let mut previous = None;
     for step in path.steps.iter() {
         match step {
             PathStep::Block(current) => {
                 if previous == Some(block) {
-                    return Some(*current);
+                    count += 1;
+                    if count == occurrence {
+                        return Some(*current);
+                    }
                 }
                 previous = Some(*current);
             }

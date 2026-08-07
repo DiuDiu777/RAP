@@ -3,18 +3,28 @@
 //! Bridges the existing call summary infrastructure (`call_summary`)
 //! with the new symbolic VM state. The `exec_call` method is called
 //! from `exec.rs` when a `Call` terminator is encountered.
+//!
+//! When the callee has MIR available, the VM recursively inlines the
+//! callee's body to achieve context-sensitive precision. Otherwise it
+//! falls back to the summary-based approach.
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::{BasicBlock, Local, Operand};
+use rustc_middle::mir::{BasicBlock, Local, Operand, TerminatorKind};
+use rustc_middle::ty::{Ty, TyKind};
 use z3::ast::{Ast, Int};
 
-use crate::compat::Spanned;
+use crate::compat::{FxHashSet, Spanned};
 use crate::verify::call_summary::{self, CallEffect};
 
 use super::state::{AllocId, Provenance, VmState, VmValue, ValueInvariants};
 
+const MAX_INLINE_DEPTH: usize = 5;
+
 impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
-    /// Execute a call terminator using call summaries.
+    /// Execute a call terminator. Summary takes priority (fn_simulator →
+    /// interprocedural) for their hand-crafted invariants. Inline execution
+    /// is tried as a fallback when the summary is unsupported and the callee
+    /// has available MIR (including dependency crates).
     pub fn exec_call(
         &mut self,
         func: &Operand<'tcx>,
@@ -29,6 +39,28 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             .map(|arg| self.value_of_operand(&arg.node))
             .collect();
 
+        // Try inline for callees with available MIR, unless fn_simulator
+        // has a precise summary (memory allocation, intrinsics, known ptr
+        // arithmetic, etc.). The summary path handles these with
+        // hand-crafted invariants that are more precise than BFS inline.
+        let callee = crate::helpers::mir_utils::dep_callee_def_id(func);
+        let mut tried_inline = false;
+        if let Some(c) = callee {
+            if self.tcx.is_mir_available(c) {
+                let name = crate::helpers::mir_utils::call_name(self.tcx, func);
+                let has_fn_sim = crate::verify::call_summary::fn_simulator::lookup_effect(
+                    self.tcx, caller_def_id, Some(c), &name, func, destination,
+                ).is_some();
+                if !has_fn_sim {
+                    if self.exec_inline_call(c, &arg_values, destination, 0) {
+                        self.materialize_const_bytes_after_call(args, destination);
+                        return;
+                    }
+                    tried_inline = true;
+                }
+            }
+        }
+
         let summary = call_summary::effect_summary(
             self.tcx,
             caller_def_id,
@@ -38,7 +70,27 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 
         self.last_call_name = summary.name.clone();
 
-        if summary.unsupported {
+        if !summary.unsupported {
+            for effect in &summary.effects {
+                self.apply_call_effect(effect, &arg_values, destination);
+            }
+        } else {
+            if !tried_inline {
+                let callee = crate::helpers::mir_utils::dep_callee_def_id(func);
+                let inlined = callee
+                    .and_then(|c| {
+                        if self.tcx.is_mir_available(c) {
+                            Some(self.exec_inline_call(c, &arg_values, destination, 0))
+                        } else {
+                            None
+                        }
+                    })
+                    .unwrap_or(false);
+                if inlined {
+                    self.materialize_const_bytes_after_call(args, destination);
+                    return;
+                }
+            }
             self.notes.push(format!("unsupported call: {}", summary.name));
             let dest_ty = self.body.local_decls[destination].ty;
             self.set_local(
@@ -53,13 +105,14 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             return;
         }
 
-        for effect in &summary.effects {
-            self.apply_call_effect(effect, &arg_values, destination);
-        }
+        self.materialize_const_bytes_after_call(args, destination);
+    }
 
-        // After applying call effects, try to materialize constant bytes
-        // from the source operands (e.g. as_ptr() on a constant byte array).
-        // This enables byte-level ValidCStr checks for static byte strings.
+    fn materialize_const_bytes_after_call(
+        &mut self,
+        args: &[Spanned<Operand<'tcx>>],
+        destination: Local,
+    ) {
         if let Some(mut dv) = self.locals.get(&destination).cloned() {
             let dest_ty = dv.ty;
             let pointee_is_byte_like = match dest_ty.kind() {
@@ -84,6 +137,214 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         self.set_local(destination, dv);
                         break;
                     }
+                }
+            }
+        }
+    }
+
+    /// Recursively execute a callee's MIR body inline.
+    ///
+    /// Binds the caller's argument values to the callee's parameters,
+    /// executes the callee's MIR, and writes the return value to
+    /// the caller's destination local. Returns `false` if inline
+    /// is not possible (e.g., recursion limit reached, callee has
+    /// branches, or the callee is too large).
+    fn exec_inline_call(
+        &mut self,
+        callee_def_id: DefId,
+        arg_values: &[VmValue<'ctx, 'tcx>],
+        dest: Local,
+        depth: usize,
+    ) -> bool {
+        if depth >= MAX_INLINE_DEPTH {
+            return false;
+        }
+
+        let callee_body = self.tcx.optimized_mir(callee_def_id);
+
+        // Only inline small, linear functions. Branching functions
+        // require state forking which we don't do yet; the summary
+        // system provides better precision for those cases.
+        if callee_body.basic_blocks.len() > 3 || arg_values.len() > 4 {
+            return false;
+        }
+
+        // Check that the callee has no SwitchInt terminators (linear CFG).
+        for bb_data in callee_body.basic_blocks.iter() {
+            if matches!(bb_data.terminator().kind, TerminatorKind::SwitchInt { .. }) {
+                return false;
+            }
+        }
+        
+        // Count return points — if > 1, the inline is imprecise.
+        let return_count = callee_body.basic_blocks.iter()
+            .filter(|bb| matches!(bb.terminator().kind, TerminatorKind::Return))
+            .count();
+        if return_count > 1 {
+            return false;
+        }
+
+        // ── Save caller context ──
+        let saved_body = self.body;
+        let saved_caller = self.caller_def_id;
+        let saved_locals = std::mem::take(&mut self.locals);
+        let saved_field_values = std::mem::take(&mut self.field_values);
+        let saved_field_init = std::mem::take(&mut self.field_init);
+        let saved_local_addresses = std::mem::take(&mut self.local_addresses);
+        let saved_local_alloc_ids = std::mem::take(&mut self.local_alloc_ids);
+        let saved_binary_op_sources = std::mem::take(&mut self.binary_op_sources);
+        let saved_dropped_locals = std::mem::take(&mut self.dropped_locals);
+
+        // ── Switch to callee context ──
+        self.body = callee_body;
+        self.caller_def_id = callee_def_id;
+
+        // Bind args to callee locals (local_1..local_N are function params)
+        for (i, arg_val) in arg_values.iter().enumerate() {
+            let callee_local = Local::from_usize(i + 1);
+            self.ensure_local_allocation(callee_local);
+            self.set_local(callee_local, arg_val.clone());
+        }
+
+        // ── BFS execution of callee MIR ──
+        self.inline_execute_body();
+
+        // ── Capture return value ──
+        let return_val = self.locals.get(&Local::from_usize(0)).cloned();
+
+        // ── Restore caller context ──
+        self.body = saved_body;
+        self.caller_def_id = saved_caller;
+        self.locals = saved_locals;
+        self.field_values = saved_field_values;
+        self.field_init = saved_field_init;
+        self.local_addresses = saved_local_addresses;
+        self.local_alloc_ids = saved_local_alloc_ids;
+        self.binary_op_sources = saved_binary_op_sources;
+        self.dropped_locals = saved_dropped_locals;
+
+        // ── Write return value to caller destination ──
+        let dest_ty = self.body.local_decls[dest].ty;
+        match return_val {
+            Some(mut val) => {
+                val.ty = dest_ty;
+                // Infer invariants: a non-null provenance with offset=0
+                // means the return value is valid and initialized.
+                if let Some(ref prov) = val.provenance {
+                    if prov.offset.as_u64() == Some(0) {
+                        val.invariants.non_null = true;
+                        val.invariants.init = true;
+                        val.invariants.aligned = true;
+                        self.init_allocations.insert(prov.alloc_id);
+                    }
+                }
+                self.set_local(dest, val);
+            }
+            None => {
+                return false;
+            }
+        }
+
+        true
+    }
+
+    /// BFS-execute the callee's MIR body.
+    fn inline_execute_body(&mut self) {
+        let mut visited = FxHashSet::default();
+        let mut queue: Vec<BasicBlock> = Vec::new();
+        queue.push(BasicBlock::from_usize(0));
+
+        while let Some(block) = queue.pop() {
+            if !visited.insert(block) {
+                continue;
+            }
+
+            let bb_data = &self.body.basic_blocks[block];
+
+            // Execute statements
+            for (si, stmt) in bb_data.statements.iter().enumerate() {
+                self.current_block = Some(block);
+                self.current_statement_index = Some(si);
+                if let Err(reason) = self.exec_statement(block, si, stmt) {
+                    self.notes.push(format!(
+                        "inline: unsupported stmt at bb{}#{}: {}",
+                        block.as_usize(), si, reason.message,
+                    ));
+                }
+            }
+
+            // Process terminator
+            let terminator = bb_data.terminator();
+            self.current_block = Some(block);
+            self.current_statement_index = None;
+
+            match &terminator.kind {
+                TerminatorKind::Goto { target } => {
+                    queue.push(*target);
+                }
+                TerminatorKind::Return => {
+                    // Return value captured in local_0
+                }
+                TerminatorKind::Assert { cond, expected, target, .. } => {
+                    let cond_val = self.value_of_operand(cond);
+                    if *expected {
+                        let zero = Int::from_u64(self.ctx, 0);
+                        self.path_conditions.push(cond_val.term._eq(&zero).not());
+                    } else {
+                        let zero = Int::from_u64(self.ctx, 0);
+                        self.path_conditions.push(cond_val.term._eq(&zero));
+                    }
+                    // Guard inference for inline callee
+                    self.infer_guard_non_null(cond, *expected);
+                    self.infer_guard_align(cond, *expected);
+                    queue.push(*target);
+                }
+                TerminatorKind::SwitchInt { discr, targets } => {
+                    // Conservative: add path conditions for all branches,
+                    // but since we don't fork state, we follow all targets.
+                    // This loses precision for overwritten locals but is sound.
+                    for (value, target) in targets.iter() {
+                        let discr_val = self.value_of_operand(discr);
+                        let val_term = Int::from_u64(self.ctx, value as u64);
+                        self.path_conditions.push(discr_val.term._eq(&val_term));
+                        queue.push(target);
+                    }
+                    let otherwise = targets.otherwise();
+                    queue.push(otherwise);
+                }
+                TerminatorKind::Call {
+                    func,
+                    args,
+                    destination,
+                    target,
+                    ..
+                } => {
+                    self.exec_call(
+                        func,
+                        args,
+                        destination.local,
+                        *target,
+                        None,
+                        self.caller_def_id,
+                    );
+                    if let Some(t) = target {
+                        queue.push(*t);
+                    }
+                }
+                TerminatorKind::Drop { place, target, .. } => {
+                    self.exec_drop(place);
+                    queue.push(*target);
+                }
+                TerminatorKind::Unreachable
+                | TerminatorKind::UnwindResume
+                | TerminatorKind::UnwindTerminate(_)
+                | TerminatorKind::Yield { .. }
+                | TerminatorKind::CoroutineDrop
+                | TerminatorKind::FalseEdge { .. }
+                | TerminatorKind::FalseUnwind { .. }
+                | TerminatorKind::InlineAsm { .. }
+                | TerminatorKind::TailCall { .. } => {
+                    // Dead-end or unsupported — stop traversal at this block.
                 }
             }
         }
@@ -322,16 +583,21 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         let is_external = self.allocations.iter()
                             .any(|a| a.id == prov.alloc_id && a.is_external);
                         if is_vec && !is_external {
+                            let elem_ty = match arg_val.ty.kind() {
+                                TyKind::Ref(_, inner, _) | TyKind::RawPtr(inner, _) => self.vec_elem_ty(*inner),
+                                _ => self.vec_elem_ty(arg_val.ty),
+                            };
+                            let heap_align = elem_ty.map(|ty| self.align_of_ty(ty)).unwrap_or(1).max(1);
                             if let Some(old_data) = self.slice_data_allocations.get(&prov.alloc_id).copied() {
                                 // Subsequent mutation: invalidate old heap data.
                                 self.dead_allocations.insert(old_data);
                                 let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
-                                let (data_alloc, _) = self.allocate_external(max_size, 1, None);
+                                let (data_alloc, _) = self.allocate_external(max_size, heap_align, elem_ty);
                                 self.slice_data_allocations.insert(prov.alloc_id, data_alloc);
                             } else {
                                 // First mutation: create heap data allocation.
                                 let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
-                                let (data_alloc, _) = self.allocate_external(max_size, 1, None);
+                                let (data_alloc, _) = self.allocate_external(max_size, heap_align, elem_ty);
                                 self.slice_data_allocations.insert(prov.alloc_id, data_alloc);
                             }
                         }
@@ -385,8 +651,15 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     let elem_sz = Int::from_u64(self.ctx, *elem_size);
                     let total = Int::mul(self.ctx, &[&size_val.term, &elem_sz]);
                     let total_u64 = total.as_u64();
-                    let (alloc_id, _base) = self.allocate(total, *elem_size, None);
                     let dest_ty = self.body.local_decls[dest].ty;
+                    // For generic types (elem_size == 0), use external alloc
+                    // so Allocated/InBound checks auto-pass.
+                    let (alloc_id, _base) = if *elem_size == 0 {
+                        let max = Int::from_u64(self.ctx, i64::MAX as u64);
+                        self.allocate_external(max, 1, None)
+                    } else {
+                        self.allocate(total, *elem_size, None)
+                    };
                     let prov = Provenance {
                         alloc_id,
                         offset: ptr_val.provenance.as_ref()
@@ -399,17 +672,18 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     }
                     // Propagate init status and byte-level tracking from the source pointer
                     let mut is_init = false;
+                    let is_external = self.allocations.iter()
+                        .any(|a| a.id == alloc_id && a.is_external);
+                    if is_external {
+                        is_init = true;
+                        self.init_allocations.insert(alloc_id);
+                    }
                     if let Some(ref source_prov) = ptr_val.provenance {
                         // Only propagate init_allocations if the source allocation
                         // covers the required byte range
                         if self.init_allocations.contains(&source_prov.alloc_id) {
                             let source_size = self.allocation_size(source_prov.alloc_id).cloned();
                             let source_u64 = source_size.as_ref().and_then(|s| s.as_u64());
-                            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
-                                use std::io::Write;
-                                let _ = writeln!(f, "ReturnFreshAlloc: total={:?} source_size={:?} match={}",
-                                    total_u64, source_u64, total_u64.map_or(false, |t| source_u64.map_or(false, |s| t <= s)));
-                            }
                             if let (Some(total_bytes), Some(source_bytes)) = (total_u64, source_u64) {
                                 if total_bytes <= source_bytes {
                                     self.init_allocations.insert(alloc_id);
@@ -456,6 +730,62 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             ..ValueInvariants::default()
                         },
                     });
+                }
+            }
+            CallEffect::ReturnNewAllocation { size_arg, elem_size } => {
+                if let Some(size_val) = args.get(*size_arg) {
+                    let elem_sz = Int::from_u64(self.ctx, *elem_size);
+                    let total = Int::mul(self.ctx, &[&size_val.term, &elem_sz]);
+                    let dest_ty = self.body.local_decls[dest].ty;
+                    let elem_ty = self.vec_elem_ty(dest_ty);
+                    let heap_align = elem_ty.map(|ty| self.align_of_ty(ty)).unwrap_or(1).max(1);
+                    let (alloc_id, base) = self.allocate_external(total, heap_align, elem_ty);
+                    let dest_alloc_id = self.local_alloc_ids.get(&dest).copied();
+                    if let Some(dest_alloc_id) = dest_alloc_id {
+                        self.slice_data_allocations.insert(dest_alloc_id, alloc_id);
+                    }
+                    self.init_allocations.insert(alloc_id);
+                    self.set_local(dest, VmValue {
+                        term: base,
+                        ty: dest_ty,
+                        provenance: dest_alloc_id.map(|stack_id| Provenance {
+                            alloc_id: stack_id,
+                            offset: Int::from_u64(self.ctx, 0),
+                        }),
+                        invariants: ValueInvariants {
+                            non_null: true,
+                            init: true,
+                            in_bounds: true,
+                            aligned: true,
+                            ..ValueInvariants::default()
+                        },
+                    });
+                }
+            }
+            CallEffect::ReturnBoxFromVec { arg } => {
+                if let Some(vec_val) = args.get(*arg) {
+                    if let Some(ref prov) = vec_val.provenance {
+                        if let Some(heap_alloc_id) = self.slice_data_allocations.get(&prov.alloc_id).copied() {
+                            if let Some(heap_base) = self.allocation_base(heap_alloc_id).cloned() {
+                                let dest_ty = self.body.local_decls[dest].ty;
+                                self.set_local(dest, VmValue {
+                                    term: heap_base,
+                                    ty: dest_ty,
+                                    provenance: Some(Provenance {
+                                        alloc_id: heap_alloc_id,
+                                        offset: Int::from_u64(self.ctx, 0),
+                                    }),
+                                    invariants: ValueInvariants {
+                                        non_null: true,
+                                        init: true,
+                                        in_bounds: true,
+                                        aligned: true,
+                                        ..ValueInvariants::default()
+                                    },
+                                });
+                            }
+                        }
+                    }
                 }
             }
             CallEffect::OwnsInitMemory { arg } => {
@@ -555,5 +885,16 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             self.init_allocations.insert(alloc_id);
         }
+    }
+
+    /// Extract the element type from a Vec<T>'s type, e.g. Vec<*mut Entry> → *mut Entry.
+    fn vec_elem_ty(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+        if let TyKind::Adt(adt_def, substs) = ty.kind() {
+            let name = self.tcx.def_path_str(adt_def.did());
+            if name.ends_with("::Vec") || name == "Vec" {
+                return substs.first().and_then(|s| s.as_type());
+            }
+        }
+        None
     }
 }

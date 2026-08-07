@@ -99,6 +99,11 @@ static REGISTRY: &[Entry] = &[
     E!(split_at,              dep01!(), false,  none!(),  eff_split_at),
     E!(is_from_raw_parts,     dep01!(), false,  none!(),  eff_from_raw_parts),
 
+    // ── Vec / collection constructors ────────────────────────────────
+    E!(is_vec_alloc_constructor, dep01!(), false, none!(), eff_new_allocation),
+    E!(is_vec_with_capacity,     dep0!(),  false, none!(), eff_new_allocation_from_cap),
+    E!(is_into_boxed_slice,      dep0!(),  false, none!(), eff_box_from_vec),
+
     // ── Layout constants ────────────────────────────────────────────
     E!(is_layout_constant,    none!(),  false,  none!(),  eff_layout_const),
 
@@ -272,6 +277,26 @@ fn eff_from_raw_parts(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
         eff.push(CallEffect::ReturnAligned { align: a, ty_name: n });
     }
     eff
+}
+
+fn eff_new_allocation(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    let elem = vec_element_size(ctx.tcx, ctx.caller, ctx.dest);
+    vec![
+        CallEffect::ReturnNewAllocation {
+            size_arg: 1,
+            elem_size: elem,
+        },
+    ]
+}
+
+fn eff_new_allocation_from_cap(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    let elem = vec_element_size(ctx.tcx, ctx.caller, ctx.dest);
+    vec![
+        CallEffect::ReturnNewAllocation {
+            size_arg: 0,
+            elem_size: elem,
+        },
+    ]
 }
 
 fn eff_layout_const(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
@@ -510,4 +535,45 @@ fn layout_constant_effect<'tcx>(
     } else {
         None
     }
+}
+
+fn vec_element_size(tcx: TyCtxt<'_>, caller: DefId, dest: Option<Local>) -> u64 {
+    let d = match dest {
+        Some(d) => d,
+        None => return 1,
+    };
+    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
+    let elem = match ty.kind() {
+        TyKind::Adt(adt_def, substs) => {
+            let name = tcx.def_path_str(adt_def.did());
+            if name.ends_with("::Vec") || name == "Vec" {
+                substs.first().map(|s| s.as_type()).flatten()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    match elem {
+        Some(elem_ty) => type_layout(tcx, caller, elem_ty).map(|(_, s)| s).unwrap_or(1),
+        None => 1,
+    }
+}
+
+pub fn is_vec_alloc_constructor(name: &str) -> bool {
+    name.contains("::vec::from_elem")
+        || name == "from_elem"
+}
+
+pub fn is_vec_with_capacity(name: &str) -> bool {
+    (name.contains("::Vec") && name.ends_with("::with_capacity"))
+        || name == "with_capacity"
+}
+
+pub fn is_into_boxed_slice(name: &str) -> bool {
+    name.ends_with("::into_boxed_slice")
+}
+
+fn eff_box_from_vec(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    vec![CallEffect::ReturnBoxFromVec { arg: 0 }]
 }
