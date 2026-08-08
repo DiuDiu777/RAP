@@ -81,8 +81,13 @@ impl PropertyChecker {
             }
             PropertyKind::Layout => self.check_decomposed(vm_state, solver, checkpoint, property,
                 &[PropertyKind::Allocated]),
-            PropertyKind::ValidPtr => self.check_decomposed(vm_state, solver, checkpoint, property,
-                &[PropertyKind::Allocated, PropertyKind::InBound, PropertyKind::Init, PropertyKind::Align]),
+            PropertyKind::ValidPtr => {
+                if self.valid_ptr_array_decomp_fast_path(vm_state, checkpoint, property) {
+                    return CheckResult::Proved;
+                }
+                self.check_decomposed(vm_state, solver, checkpoint, property,
+                    &[PropertyKind::Allocated, PropertyKind::InBound, PropertyKind::Init, PropertyKind::Align])
+            }
             PropertyKind::Or => self.check_or(vm_state, solver, checkpoint, property),
 
             PropertyKind::Align => self.check_align(vm_state, solver, checkpoint, property),
@@ -627,6 +632,14 @@ impl PropertyChecker {
             }
         }
 
+        if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == alloc_id) {
+            if let (Some(alloc_elem_ty), Some(req_ty)) = (alloc.element_ty, required_ty) {
+                if self.alloc_elem_is_array_of(alloc_elem_ty, req_ty) {
+                    return CheckResult::Proved;
+                }
+            }
+        }
+
         let (Some(base), Some(size)) = (vm_state.allocation_base(alloc_id).cloned(), vm_state.allocation_size(alloc_id).cloned()) else {
             return CheckResult::Unknown;
         };
@@ -674,6 +687,60 @@ impl PropertyChecker {
         false
     }
 
+    /// Fast-path for `ValidPtr`: when the pointer's provenance allocation stores
+    /// `[T; N]` arrays and the contract requires `T` elements, Rust's layout
+    /// guarantee `sizeof([T; N]) = N * sizeof(T)` ensures the allocation always
+    /// has enough room regardless of concrete sizes.
+    fn valid_ptr_array_decomp_fast_path<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+    ) -> bool {
+        // Step 1: required_ty
+        let required_ty = match property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None })
+        {
+            Some(t) => t,
+            None => return false,
+        };
+        // Step 2: value
+        let value = match self.target_value(vm_state, checkpoint, property) {
+            Some(v) => v,
+            None => return false,
+        };
+        // Step 3: alloc_id
+        let alloc_id = match value.provenance_alloc_id() {
+            Some(id) => id,
+            None => return false,
+        };
+        // Step 4: alloc
+        let alloc = match vm_state.allocations.iter().find(|a| a.id == alloc_id) {
+            Some(a) => a,
+            None => return false,
+        };
+        // Step 5: check inner type matches required type
+        match alloc.element_ty {
+            Some(ty) => self.alloc_elem_is_array_of(ty, required_ty),
+            None => false,
+        }
+    }
+
+    /// Returns true when the allocation's element type is `[T; N]` and the
+    /// contract's required type is `T`.  Rust guarantees `sizeof([T; N]) = N *
+    /// sizeof(T)`, so an allocation for `L` array elements always has room for
+    /// `L * N` inner elements regardless of the concrete size of `T`.
+    fn alloc_elem_is_array_of<'tcx>(&self, alloc_elem_ty: Ty<'tcx>, required_ty: Ty<'tcx>) -> bool {
+        match alloc_elem_ty.kind() {
+            TyKind::Array(inner_ty, _) => {
+                *inner_ty == required_ty
+                || matches!((inner_ty.kind(), required_ty.kind()),
+                    (TyKind::Param(_), TyKind::Param(_)))
+            },
+            _ => false,
+        }
+    }
+
     fn has_iter_elements<'tcx>(&self, property: &Property<'tcx>) -> bool {
         property.for_each.is_some()
     }
@@ -707,6 +774,14 @@ impl PropertyChecker {
         let (Some(base), Some(size)) = (vm_state.allocation_base(alloc_id).cloned(), vm_state.allocation_size(alloc_id).cloned()) else {
             return CheckResult::Unknown;
         };
+
+        if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == alloc_id) {
+            if let (Some(alloc_elem_ty), Some(req_ty)) = (alloc.element_ty, required_ty) {
+                if self.alloc_elem_is_array_of(alloc_elem_ty, req_ty) {
+                    return CheckResult::Proved;
+                }
+            }
+        }
 
         // External allocations have unbounded size.
         if vm_state.allocations.iter().any(|a| a.id == alloc_id && a.is_external) {
