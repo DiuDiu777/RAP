@@ -212,6 +212,15 @@ pub struct VmState<'ctx, 'tcx> {
     /// Bytes known to have been explicitly written (initialized at byte level).
     pub(crate) byte_init: FxHashSet<(AllocId, usize)>,
 
+    /// Records calls that performed index bounds & disjointness validation.
+    /// Each entry is (indices_array_alloc_id, len_value_term).
+    /// The property checker uses this to automatically pass InBound checks
+    /// that were already validated by a prior call.
+    pub(crate) checked_bounds_disjoint: Vec<(AllocId, Int<'ctx>)>,
+    /// Whether a ChecksIndexBoundsDisjoint call was processed in any
+    /// checkpoint of this function (accumulated across checkpoints).
+    pub(crate) has_checked_bounds: bool,
+
     /// Notes from unsupported operations.
     pub(crate) notes: Vec<String>,
 
@@ -267,6 +276,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             known_non_nul_offsets: FxHashSet::default(),
             byte_values: FxHashMap::default(),
             byte_init: FxHashSet::default(),
+            checked_bounds_disjoint: Vec::new(),
+            has_checked_bounds: false,
             notes: Vec::new(),
             path: None,
             last_call_name: String::new(),
@@ -593,7 +604,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 let term = if let Some(v) = int_val {
                     Int::from_u64(self.ctx, v)
                 } else {
-                    self.fresh_int("const")
+                    // Create a deterministic name for const generics so
+                    // multiple uses of the same parameter share one term.
+                    let name = format!("const_{}", text.replace([':', '#', ' '], "_"));
+                    Int::new_const(self.ctx, name.as_str())
                 };
                 let ty = constant.const_.ty();
                 VmValue {
@@ -707,6 +721,53 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         // Fall back to type-level resolution with single-element projections
         if place.projection.len() == 1 {
             if let Some(proj) = place.projection.first() {
+                match proj {
+                    ProjectionElem::Index(local) => {
+                        if let Some(ref prov) = base.provenance {
+                            let alloc_id = prov.alloc_id;
+                            let byte_vals: Vec<_> = self.alloc_byte_values(alloc_id);
+                            if !byte_vals.is_empty() {
+                                let inner_ty = match base.ty.kind() {
+                                    rustc_middle::ty::TyKind::Array(inner, _) => *inner,
+                                    _ => return Some(base.clone()),
+                                };
+                                let elem_sz = self.size_of_ty(inner_ty) as usize;
+                                let step = elem_sz.max(1);
+                                if let Some(index_val) = self.locals.get(local) {
+                                    if let Some(concrete_idx) = index_val.term.as_u64() {
+                                        let offset = concrete_idx as usize * step;
+                                        let term = self
+                                            .get_byte_value(alloc_id, offset)
+                                            .cloned()
+                                            .unwrap_or_else(|| self.fresh_int("arr_elem"));
+                                        return Some(VmValue {
+                                            term,
+                                            ty: place.ty(self.body, self.tcx).ty,
+                                            provenance: None,
+                                            invariants: ValueInvariants::default(),
+                                        });
+                                    } else {
+                                        let mut chain = self.fresh_int("arr_elem");
+                                        for (offset, term) in byte_vals.iter().rev() {
+                                            let vidx = offset / step;
+                                            let idx_term = Int::from_u64(self.ctx, vidx as u64);
+                                            let cond = index_val.term._eq(&idx_term);
+                                            chain = Bool::ite(&cond, term, &chain);
+                                        }
+                                        return Some(VmValue {
+                                            term: chain,
+                                            ty: place.ty(self.body, self.tcx).ty,
+                                            provenance: None,
+                                            invariants: ValueInvariants::default(),
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        return Some(base.clone());
+                    }
+                    _ => {}
+                }
                 match proj.kind() {
                     ProjectionElem::Deref => {
                         let mut val = base.clone();
@@ -717,9 +778,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         let val = base.clone();
                         return Some(val);
                     }
-                ProjectionElem::Index(_local) => {
-                    return Some(base.clone());
-                }
                 _ => {
                     // Downcast or other unsupported projection: still return
                     // the base with updated type so provenance propagates.
@@ -749,11 +807,15 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// Create an unknown value for a place.
     pub(crate) fn unknown_value_for_place(&self, place: &Place<'tcx>) -> VmValue<'ctx, 'tcx> {
         let ty = place.ty(self.body, self.tcx).ty;
+        let is_raw_ptr = matches!(ty.kind(), rustc_middle::ty::TyKind::RawPtr(..));
         VmValue {
             term: self.fresh_int("unknown"),
             ty,
             provenance: None,
-            invariants: ValueInvariants::default(),
+            invariants: ValueInvariants {
+                non_null: is_raw_ptr,
+                ..Default::default()
+            },
         }
     }
 }

@@ -56,6 +56,14 @@ impl<'tcx> VerifyEngine<'tcx> {
         let cfg = Config::new();
         let ctx = z3::Context::new(&cfg);
 
+        // Accumulate checked-bounds facts across checkpoints.
+        // A ChecksIndexBoundsDisjoint call in an earlier checkpoint
+        // can discharge InBound checks in a later checkpoint.
+        let mut accumulated_has_checked: bool = false;
+
+        // Process checkpoints in forward (MIR) order so that facts
+        // collected by earlier calls are available to later checks.
+        let backward_items: Vec<_> = backward_items.into_iter().rev().collect();
         for backward in backward_items {
             let path_desc = backward.path.describe_indices();
 
@@ -86,6 +94,13 @@ impl<'tcx> VerifyEngine<'tcx> {
                     continue;
                 }
             };
+
+            // Accumulate checked bounds/disjointness facts across
+            // checkpoints so that a validator called in one checkpoint
+            // can discharge InBound checks in a later checkpoint.
+            accumulated_has_checked = accumulated_has_checked || vm_state.has_checked_bounds;
+            let mut vm_state = vm_state;
+            vm_state.has_checked_bounds = accumulated_has_checked;
 
             let result = self.checker.check(&vm_state, checkpoint, &bound_property);
             results.push((result, path_desc));

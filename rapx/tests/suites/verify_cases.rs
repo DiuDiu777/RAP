@@ -80,7 +80,6 @@ fn linked_list_rawptr_unsound() {
 
 // ================ Std Challenge Cases ================
 #[test]
-#[ignore = "VM struct-invariant support incomplete"]
 fn std_challenge_17() {
     let output = run_with_args("verify_cases/std-challenge-17", CMD_VERIFY_TARGETED_VM);
     assert!(

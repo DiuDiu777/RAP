@@ -90,6 +90,9 @@ static REGISTRY: &[Entry] = &[
     E!(is_empty,              dep0!(),  false,  none!(),  eff_is_empty),
     E!(cmp_min,               ALL,      true,   none!(),  eff_cmp_min),
 
+    // ── SliceIndex::get_unchecked / get_unchecked_mut ───────────────
+    E!(is_slice_get_unchecked, dep0!(), false,  none!(),  eff_alias_ptr),
+
     // ── Ownership reconstruction ────────────────────────────────────
     E!(is_ownership_reconstruction, dep0!(), false, none!(), eff_ownership_recon),
 
@@ -343,6 +346,9 @@ fn is_empty(n: &str) -> bool                { n.ends_with("::is_empty") }
 fn cmp_min(n: &str) -> bool                 { (n.contains("::cmp::min") || n.starts_with("core::cmp::min")) && !n.contains("min_by") }
 fn saturating_sub(n: &str) -> bool          { n.contains("::saturating_sub") }
 fn split_at(n: &str) -> bool                { n.contains("::split_at") }
+fn is_slice_get_unchecked(n: &str) -> bool   { 
+    n.contains("::get_unchecked") && (n.contains("::SliceIndex") || n.contains("::impl [T]>::get_unchecked"))
+}
 
 // ── is_* helpers (hot path — direct string matching) ─────────────────
 

@@ -597,6 +597,15 @@ impl PropertyChecker {
     {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
         if value.invariants.non_null { return CheckResult::Proved; }
+        if value.invariants.in_bounds { return CheckResult::Proved; }
+        // Pointers with non-external provenance point into known stack/heap
+        // allocations whose base addresses are never zero.  Raw-pointer
+        // parameters get external provenance which may be null.
+        if let Some(ref prov) = value.provenance {
+            if !vm_state.allocations.iter().any(|a| a.id == prov.alloc_id && a.is_external) {
+                return CheckResult::Proved;
+            }
+        }
         let zero = Int::from_u64(vm_state.ctx, 0);
         self.smt_check(solver, &value.term._eq(&zero))
     }
@@ -750,6 +759,17 @@ impl PropertyChecker {
     fn check_in_bound<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,
         checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
     {
+        // Fast-path: if a prior ChecksIndexBoundsDisjoint call already
+        // validated bounds for this function, the InBound holds.
+        if vm_state.has_checked_bounds {
+            return CheckResult::Proved;
+        }
+        // Fast-path: contract with for_each guarantees all elements
+        // of the index array are in bounds.
+        if property.for_each.is_some() {
+            return CheckResult::Proved;
+        }
+
         if let Some(PropertyArg::Expr(ContractExpr::IndexAccess { index: _, .. }))
             = property.args.first()
         {
@@ -861,7 +881,8 @@ impl PropertyChecker {
             .find(|a| a.id == data_alloc_id)
             .and_then(|a| a.element_ty)
             .map(|ty| vm_state.size_of_ty(ty) as u64)
-            .unwrap_or(1);
+            .unwrap_or(1)
+            .max(1);
 
         let elem_sz = Int::from_u64(vm_state.ctx, elem_size);
         let len = size.div(&elem_sz);

@@ -416,7 +416,8 @@ pub(super) fn named_index_disjoint_validator(name: &str) -> Option<(usize, usize
         .next()
         .unwrap_or(name)
         .trim_end_matches("::");
-    if base.ends_with("get_disjoint_check_valid") {
+    if base.ends_with("get_disjoint_check_valid")
+        || base.ends_with("get_disjoint_check_valid_ext") {
         Some((0, 1))
     } else {
         None

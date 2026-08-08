@@ -156,13 +156,19 @@ impl<'tcx> Property<'tcx> {
                     {
                         return Self::new_simple(PropertyKind::Unknown);
                     }
-                    Self::new_with_args(
-                        PropertyKind::InBound,
-                        vec![PropertyArg::Expr(ContractExpr::IndexAccess {
+                    // Auto-detect array index for for_each
+                    let for_each = Self::detect_array_for_each(tcx, def_id, index_expr);
+                    Property {
+                        kind: PropertyKind::InBound,
+                        args: vec![PropertyArg::Expr(ContractExpr::IndexAccess {
                             slice: Box::new(slice),
                             index: Box::new(index),
                         })],
-                    )
+                        contract_kind: ContractKind::Precond,
+                        null_guard: None,
+                        or_alternatives: vec![],
+                        for_each,
+                    }
                 }
                 _ => {
                     Self::check_arg_length(exprs.len(), 3, "InBound");
@@ -514,7 +520,47 @@ impl<'tcx> Property<'tcx> {
             }
             clean_args.push(clean);
         }
+        // Auto-detect array arguments: if no explicit .iter() was used
+        // but an argument is an array type [T; N], automatically set
+        // for_each so the property is checked per-element.
+        if for_each.is_none() {
+            let fn_sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
+            for (i, arg_ty) in fn_sig.inputs().iter().enumerate() {
+                if let rustc_middle::ty::TyKind::Array(..) = arg_ty.kind() {
+                    for_each = Some(crate::verify::contract::ContractPlace {
+                        base: PlaceBase::Arg(i),
+                        projections: vec![],
+                    });
+                    break;
+                }
+            }
+        }
         (clean_args, for_each)
+    }
+
+    /// Check if the given expression refers to a function parameter whose
+    /// type is an array. If so, return a ContractPlace for that parameter
+    /// to be used as the for_each container.
+    fn detect_array_for_each(tcx: TyCtxt<'tcx>, def_id: DefId, expr: &Expr) -> Option<ContractPlace<'tcx>> {
+        let place = Self::parse_contract_place(tcx, def_id, expr)?;
+        let param_idx = match place.base {
+            PlaceBase::Arg(n) => n,
+            PlaceBase::Local(n) => {
+                // Local 0 = return, locals 1.. = parameters
+                n.checked_sub(1)?
+            }
+            _ => return None,
+        };
+        let fn_sig = tcx.fn_sig(def_id).instantiate_identity().skip_binder();
+        if let Some(arg_ty) = fn_sig.inputs().get(param_idx) {
+            if matches!(arg_ty.kind(), rustc_middle::ty::TyKind::Array(..)) {
+                return Some(crate::verify::contract::ContractPlace {
+                    base: PlaceBase::Arg(param_idx),
+                    projections: vec![],
+                });
+            }
+        }
+        None
     }
 
     fn check_arg_length(expr_len: usize, required_len: usize, sp: &str) -> bool {

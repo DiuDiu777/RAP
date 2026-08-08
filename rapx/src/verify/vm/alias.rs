@@ -177,12 +177,30 @@ pub fn check_alias_vm<'ctx, 'tcx>(
                     return VmAliasResult::Proved;
                 }
             }
-            // Raw pointer accessed in a function with `&self` → alias-safe.
-            for decl in &vm_state.body.local_decls {
-                if matches!(decl.ty.kind(), rustc_middle::ty::TyKind::Ref(_, _, rustc_middle::ty::Mutability::Not)) {
+            // Pointer has provenance: check if it's safe.
+            if let Some(prov) = &origin_val.provenance {
+                let is_external = vm_state.allocations.iter()
+                    .any(|a| a.id == prov.alloc_id && a.is_external);
+                if !is_external {
+                    return VmAliasResult::Proved;
+                }
+                // External provenance: safe for shared ref, unsafe for mut ref.
+                let has_shared_ref = vm_state.body.local_decls.iter().any(|d| {
+                    matches!(d.ty.kind(), rustc_middle::ty::TyKind::Ref(_, _, rustc_middle::ty::Mutability::Not))
+                });
+                if has_shared_ref {
                     return VmAliasResult::Proved;
                 }
             }
+            // Without provenance: fall back to any reference parameter.
+            if origin_val.provenance.is_none() {
+                for decl in &vm_state.body.local_decls {
+                    if matches!(decl.ty.kind(), rustc_middle::ty::TyKind::Ref(..)) {
+                        return VmAliasResult::Proved;
+                    }
+                }
+            }
+            return VmAliasResult::Unknown;
             return VmAliasResult::Unknown;
         }
     };

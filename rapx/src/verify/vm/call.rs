@@ -449,10 +449,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         ty: self.body.local_decls[dest].ty,
                         provenance: adjusted_provenance,
                         invariants: ValueInvariants {
+                            non_null: base.invariants.non_null,
                             aligned: align_n.is_some() && base.invariants.aligned,
                             in_bounds: base.invariants.in_bounds,
                             align_n,
-                            ..base.invariants
+                            init: base.invariants.init,
                         },
                     };
                     self.set_local(dest, val);
@@ -476,10 +477,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         ty: self.body.local_decls[dest].ty,
                         provenance: adjusted_provenance,
                         invariants: ValueInvariants {
+                            non_null: base.invariants.non_null,
                             aligned: align_n.is_some() && base.invariants.aligned,
                             in_bounds: base.invariants.in_bounds,
                             align_n,
-                            ..base.invariants
+                            init: base.invariants.init,
                         },
                     };
                     self.set_local(dest, val);
@@ -853,6 +855,55 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     val.invariants.non_null = true;
                     self.set_local(dest, val);
                 }
+            }
+            CallEffect::ChecksIndexBoundsDisjoint { indices_arg, len_arg } => {
+                let indices = args.get(*indices_arg);
+                let len_val = args.get(*len_arg);
+                if let (Some(indices_val), Some(len_val)) = (indices, len_val) {
+                    let arr_ty = match indices_val.ty.kind() {
+                        rustc_middle::ty::TyKind::Ref(_, inner, _) => *inner,
+                        _ => indices_val.ty,
+                    };
+                    if let rustc_middle::ty::TyKind::Array(_elem_ty, _const_len) = arr_ty.kind() {
+                        let alloc_id = indices_val.provenance_alloc_id()
+                            .or_else(|| {
+                                // Slicer may have dropped the &indices
+                                // assignment, losing provenance.  Fall back
+                                 let fallback = self.locals.values().find_map(|v| {
+                                    if v.ty == arr_ty { v.provenance_alloc_id() }
+                                    else { None }
+                                });
+                                fallback
+                            });
+                        if let Some(alloc_id) = alloc_id {
+                            self.checked_bounds_disjoint
+                                .push((alloc_id, len_val.term.clone()));
+                            self.has_checked_bounds = true;
+                            let zero = Int::from_u64(self.ctx, 0);
+                            let mut byte_offsets: Vec<(usize, Int)> = self
+                                .byte_values
+                                .iter()
+                                .filter(|((aid, _), _)| *aid == alloc_id)
+                                .map(|((_, off), term)| (*off, term.clone()))
+                                .collect();
+                            byte_offsets.sort_by_key(|(off, _)| *off);
+                            for (_, term) in &byte_offsets {
+                                self.path_conditions.push(term.ge(&zero));
+                                self.path_conditions.push(term.lt(&len_val.term));
+                            }
+                            for i in 0..byte_offsets.len() {
+                                for j in (i + 1)..byte_offsets.len() {
+                                    let ti = &byte_offsets[i].1;
+                                    let tj = &byte_offsets[j].1;
+                                    self.path_conditions.push(ti._eq(tj).not());
+                                }
+                            }
+                        }
+                    }
+                }
+                let dest_ty = self.body.local_decls[dest].ty;
+                let term = self.fresh_int(&format!("ck_ok_{}", dest.as_usize()));
+                self.set_local( dest, VmValue { term, ty: dest_ty, provenance: None, invariants: ValueInvariants::default() });
             }
             _ => {
                 self.notes.push(format!("unhandled call effect: {:?}", effect));

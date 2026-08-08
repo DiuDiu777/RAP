@@ -443,6 +443,67 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     });
                     continue;
                 }
+                // ── Array parameter ([usize; N], etc.) ──
+                // Give every array parameter a real allocation with provenance so
+                // that downstream call effects (e.g. ChecksIndexBoundsDisjoint)
+                // can record the alloc_id and property checker can match it later.
+                if let rustc_middle::ty::TyKind::Array(elem_ty, const_len) = ty.kind() {
+                    let n: Option<usize> =
+                        super::state::const_int_from_debug(&format!("{:?}", const_len))
+                            .map(|v| v as usize);
+                    let elem_size = self.size_of_ty(*elem_ty) as u64;
+                    let step = (elem_size.max(1)) as usize;
+                    let align = self.align_of_ty(*elem_ty);
+                    let (alloc_id, base) = if let Some(n) = n {
+                        let total = Int::from_u64(self.ctx, (step as u64).saturating_mul(n as u64));
+                        self.allocate(total, align, Some(*elem_ty))
+                    } else {
+                        // Generic N: unbounded external allocation
+                        let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                        self.allocate_external(max_size, align, Some(*elem_ty))
+                    };
+                    self.init_allocations.insert(alloc_id);
+                    self.local_alloc_ids.insert(local, alloc_id);
+                    if let Some(n) = n {
+                        for i in 0..n {
+                            let off = i * step;
+                            let elem_term = self.fresh_int(&format!(
+                                "array_{}_idx_{}",
+                                local_idx, i
+                            ));
+                            self.record_byte_value(alloc_id, off, elem_term);
+                        }
+                    } else {
+                        // Generic N: create placeholder byte_values so that
+                        // downstream Index projection ITE chains and
+                        // assert_in_bound_for_each can add constraints.
+                        let m = 16usize;
+                        for i in 0..m {
+                            let off = i * step;
+                            let elem_term = self.fresh_int(&format!(
+                                "array_{}_idx_{}",
+                                local_idx, i
+                            ));
+                            self.record_byte_value(alloc_id, off, elem_term);
+                        }
+                    }
+                    self.set_local(
+                        local,
+                        VmValue {
+                            term: base,
+                            ty,
+                            provenance: Some(Provenance {
+                                alloc_id,
+                                offset: Int::from_u64(self.ctx, 0),
+                            }),
+                            invariants: ValueInvariants {
+                                init: true,
+                                ..invariants
+                            },
+                        },
+                    );
+                    continue;
+                }
                 // ── Struct / other parameter ──
                 let term = self.fresh_int(&format!("param_{}", local_idx));
                 self.set_local(local, VmValue {
@@ -1070,7 +1131,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         term,
                         ty: dest_ty,
                         provenance: None,
-                        invariants: ValueInvariants::default(),
+                        invariants: ValueInvariants {
+                            non_null: true,
+                            ..Default::default()
+                        },
                     })
                 }
             }
@@ -1802,6 +1866,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 if let Some(val) = self.contract_target_value(property) {
                     self.set_in_bounds_for_value(property, val);
                 }
+                if let Some(ref fe_place) = property.for_each {
+                    self.assert_in_bound_for_each(property, fe_place);
+                    self.has_checked_bounds = true;
+                }
             }
             PropertyKind::Allocated => {
                 if let Some(local) = self.contract_target_local(property) {
@@ -1984,6 +2052,69 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         val.invariants.in_bounds = true;
         if let Some(local) = self.contract_target_local(property) {
             self.set_local(local, val);
+        }
+    }
+
+    fn assert_in_bound_for_each(&mut self, property: &Property<'tcx>, fe_place: &crate::verify::contract::ContractPlace<'tcx>) {
+        let fe_local = match fe_place.base {
+            PlaceBase::Arg(n) => Local::from_usize(n + 1),
+            PlaceBase::Local(n) => Local::from_usize(n),
+            _ => return,
+        };
+        let fe_val = match self.locals.get(&fe_local).cloned() {
+            Some(v) => v,
+            None => return,
+        };
+        let fe_alloc_id = match fe_val.provenance_alloc_id() {
+            Some(id) => id,
+            None => return,
+        };
+        let byte_vals: Vec<(usize, Int<'ctx>)> = self
+            .alloc_byte_values(fe_alloc_id)
+            .into_iter()
+            .map(|(off, term)| (off, term.clone()))
+            .collect();
+        if byte_vals.is_empty() {
+            return;
+        }
+        let slice_local = match property.args.first() {
+            Some(PropertyArg::Expr(ContractExpr::IndexAccess { slice, .. })) => {
+                match slice.as_ref() {
+                    ContractExpr::Place(cp) => match cp.base {
+                        PlaceBase::Arg(n) => Some(Local::from_usize(n + 1)),
+                        PlaceBase::Local(n) => Some(Local::from_usize(n)),
+                        _ => None,
+                    },
+                    _ => None,
+                }
+            }
+            Some(PropertyArg::Place(cp)) => match cp.base {
+                PlaceBase::Arg(n) => Some(Local::from_usize(n + 1)),
+                PlaceBase::Local(n) => Some(Local::from_usize(n)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let data_size = slice_local
+            .and_then(|loc| self.locals.get(&loc))
+            .and_then(|sl_val| sl_val.provenance_alloc_id())
+            .and_then(|da_id| self.allocations.iter().find(|a| a.id == da_id))
+            .map(|da| da.size.clone());
+        let elem_sz = slice_local
+            .and_then(|loc| self.locals.get(&loc))
+            .and_then(|sl_val| sl_val.provenance_alloc_id())
+            .and_then(|da_id| self.allocations.iter().find(|a| a.id == da_id))
+            .and_then(|da| da.element_ty)
+            .map(|ty| self.size_of_ty(ty) as u64)
+            .unwrap_or(1)
+            .max(1);
+        let Some(data_size) = data_size else { return };
+        let elem_sz_term = Int::from_u64(self.ctx, elem_sz);
+        let len = data_size.div(&elem_sz_term);
+        let zero = Int::from_u64(self.ctx, 0);
+        for (_, term) in &byte_vals {
+            self.path_conditions.push(term.ge(&zero));
+            self.path_conditions.push(term.lt(&len));
         }
     }
 
