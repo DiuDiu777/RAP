@@ -178,6 +178,11 @@ pub struct VmState<'ctx, 'tcx> {
     /// Binary op sources for guard inference: destination → (lhs, rhs) place keys.
     pub(crate) binary_op_sources: FxHashMap<PlaceKey, (Option<PlaceKey>, Option<PlaceKey>)>,
 
+    /// Non-binary-op sources (select_unpredictable, etc.): destination → (lhs, rhs)
+    /// place keys.  Kept separately from `binary_op_sources` so guard inference
+    /// (infer_guard_non_null) does not treat these as pointer comparisons.
+    pub(crate) other_op_sources: FxHashMap<PlaceKey, (Option<PlaceKey>, Option<PlaceKey>)>,
+
     /// Allocations that have been written to (initialized via write/MaybeUninit).
     pub(crate) init_allocations: FxHashSet<AllocId>,
 
@@ -266,6 +271,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             dead_alloc_blocks: FxHashMap::default(),
             dropped_locals: FxHashSet::default(),
             binary_op_sources: FxHashMap::default(),
+            other_op_sources: FxHashMap::default(),
             init_allocations: FxHashSet::default(),
             alive_assumed: FxHashSet::default(),
             split_transmute_asserted: false,

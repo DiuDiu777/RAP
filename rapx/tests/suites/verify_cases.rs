@@ -109,7 +109,6 @@ fn std_challenge_02() {
 
 // ================ HashMap Tests ================
 #[test]
-#[ignore = "VM struct-invariant support incomplete"]
 fn hashmap() {
     let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_TARGETED_VM);
     assert_contain(&output, "result: SOUND");
@@ -117,7 +116,6 @@ fn hashmap() {
 }
 
 #[test]
-#[ignore = "VM struct-invariant support incomplete"]
 fn hashmap_skip_invariant() {
     let output = run_with_args("verify_cases/hashmap", CMD_VERIFY_TARGETED_SKIP_INVARIANT_VM);
     assert_contain(&output, "result: SOUND");

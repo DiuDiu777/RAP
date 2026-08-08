@@ -1,8 +1,5 @@
 use crate::compat::FxHashMap;
 use crate::compat::Spanned;
-#[cfg(not(rapx_has_skip_norm_wip))]
-use crate::compat::SkipNormWip;
-
 use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{

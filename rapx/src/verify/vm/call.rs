@@ -11,10 +11,12 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{BasicBlock, Local, Operand, TerminatorKind};
 use rustc_middle::ty::{Ty, TyKind};
-use z3::ast::{Ast, Int};
+use z3::ast::{Ast, Bool, Int};
 
 use crate::compat::{FxHashSet, Spanned};
 use crate::verify::call_summary::{self, CallEffect};
+use crate::verify::def_use::{PlaceBaseKey, PlaceKey};
+use crate::helpers::mir_utils::operand_place;
 
 use super::state::{AllocId, Provenance, VmState, VmValue, ValueInvariants};
 
@@ -39,6 +41,33 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             .map(|arg| self.value_of_operand(&arg.node))
             .collect();
 
+        let name = crate::helpers::mir_utils::call_name(self.tcx, func);
+
+        // ── select_unpredictable: result ∈ {x, y} ─────────────────────
+        if name.contains("select_unpredictable") && arg_values.len() >= 3 {
+            let term = self.fresh_int(&format!("selunpred_{}", destination.as_usize()));
+            let dest_ty = self.body.local_decls[destination].ty;
+            let eq1 = term._eq(&arg_values[1].term);
+            let eq2 = term._eq(&arg_values[2].term);
+            self.path_conditions.push(Bool::or(self.ctx, &[&eq1, &eq2]));
+            let prov = arg_values[1].provenance.clone()
+                .or_else(|| arg_values[2].provenance.clone());
+            // Track operand chain for inject_div_axioms_for_term so that
+            // division axioms reachable through select_unpredictable
+            // can be found even across Use / Cast chains.
+            let dest_pk = PlaceKey { base: PlaceBaseKey::Local(destination.as_usize()), fields: vec![] };
+            let lhs_pk = args.get(1).and_then(|a| operand_place(&a.node));
+            let rhs_pk = args.get(2).and_then(|a| operand_place(&a.node));
+            self.other_op_sources.insert(dest_pk, (lhs_pk, rhs_pk));
+            self.set_local(destination, VmValue {
+                term,
+                ty: dest_ty,
+                provenance: prov,
+                invariants: ValueInvariants::default(),
+            });
+            return;
+        }
+
         // Try inline for callees with available MIR, unless fn_simulator
         // has a precise summary (memory allocation, intrinsics, known ptr
         // arithmetic, etc.). The summary path handles these with
@@ -47,7 +76,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let mut tried_inline = false;
         if let Some(c) = callee {
             if self.tcx.is_mir_available(c) {
-                let name = crate::helpers::mir_utils::call_name(self.tcx, func);
                 let has_fn_sim = crate::verify::call_summary::fn_simulator::lookup_effect(
                     self.tcx, caller_def_id, Some(c), &name, func, destination,
                 ).is_some();
@@ -93,10 +121,27 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             self.notes.push(format!("unsupported call: {}", summary.name));
             let dest_ty = self.body.local_decls[destination].ty;
+            let term = self.fresh_int(&format!("callret_{}", destination.as_usize()));
+            if let TyKind::Adt(adt_def, _) = dest_ty.kind() {
+                let path = self.tcx.def_path_str(adt_def.did());
+                if path == "std::cmp::Ordering" || path == "core::cmp::Ordering" {
+                    let minus_one = Int::from_i64(self.ctx, -1);
+                    let one = Int::from_i64(self.ctx, 1);
+                    self.path_conditions.push(term.ge(&minus_one));
+                    self.path_conditions.push(term.le(&one));
+                }
+            }
+            // bool return (bool, Result::ok/err, etc.) — constrain to {0, 1}
+            if dest_ty.is_bool() {
+                let zero = Int::from_u64(self.ctx, 0);
+                let one = Int::from_u64(self.ctx, 1);
+                self.path_conditions.push(term.ge(&zero));
+                self.path_conditions.push(term.le(&one));
+            }
             self.set_local(
                 destination,
                 VmValue {
-                    term: self.fresh_int(&format!("callret_{}", destination.as_usize())),
+                    term,
                     ty: dest_ty,
                     provenance: None,
                     invariants: ValueInvariants::default(),
@@ -193,6 +238,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let saved_local_addresses = std::mem::take(&mut self.local_addresses);
         let saved_local_alloc_ids = std::mem::take(&mut self.local_alloc_ids);
         let saved_binary_op_sources = std::mem::take(&mut self.binary_op_sources);
+        let saved_other_op_sources = std::mem::take(&mut self.other_op_sources);
         let saved_dropped_locals = std::mem::take(&mut self.dropped_locals);
 
         // ── Switch to callee context ──
@@ -221,6 +267,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         self.local_addresses = saved_local_addresses;
         self.local_alloc_ids = saved_local_alloc_ids;
         self.binary_op_sources = saved_binary_op_sources;
+        self.other_op_sources = saved_other_op_sources;
         self.dropped_locals = saved_dropped_locals;
 
         // ── Write return value to caller destination ──
@@ -369,25 +416,83 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }
             }
             CallEffect::ReturnTupleFieldLength { field: _field, from_arg: _from_arg } => {
-                if args.is_empty() {
+                if args.len() < 2 {
                     return;
                 }
+                let self_val = &args[0]; // &[T]
+                let mid_val = &args[1];  // usize
+
                 let dest_ty = self.body.local_decls[dest].ty;
                 if let TyKind::Tuple(elem_tys) = dest_ty.kind() {
+                    // Look up the source allocation from self's provenance.
+                    let src_alloc_id = self_val.provenance.as_ref().map(|p| p.alloc_id);
+                    let src_offset = self_val.provenance.as_ref()
+                        .map(|p| p.offset.clone())
+                        .unwrap_or_else(|| Int::from_u64(self.ctx, 0));
+
+                    let (elem_ty, elem_sz, alloc_size) = src_alloc_id
+                        .and_then(|id| self.allocations.iter().find(|a| a.id == id))
+                        .map(|a| {
+                            let ty = a.element_ty;
+                            let sz = self.size_of_ty(ty.unwrap_or(self_val.ty)).max(1) as u64;
+                            (ty, sz, a.size.clone())
+                        })
+                        .unwrap_or((None, 1, Int::from_u64(self.ctx, 1)));
+
+                    let elem_sz_term = Int::from_u64(self.ctx, elem_sz);
+                    let total_len = alloc_size.div(&elem_sz_term); // self.len()
+
+                    // mid (field 0 length)
+                    let mid = mid_val.term.clone();
+                    // self.len() - mid (field 1 length)
+                    let rest_len = Int::sub(self.ctx, &[&total_len, &mid]);
+
+                    // mid byte offset for field 1 pointer
+                    let mid_bytes = Int::mul(self.ctx, &[&mid, &elem_sz_term]);
+                    let ptr1 = Int::add(self.ctx, &[&self_val.term, &mid_bytes]);
+
                     for f in 0..elem_tys.len() {
                         let field_ty = elem_tys[f];
-                        let base_prov = self.locals.get(&dest)
-                            .and_then(|v| v.provenance.clone());
+                        let (field_len, field_ptr) = if f == 0 {
+                            (mid.clone(), self_val.term.clone())
+                        } else {
+                            (rest_len.clone(), ptr1.clone())
+                        };
+                        let field_size = Int::mul(self.ctx, &[&field_len, &elem_sz_term]);
+                        let field_alloc_align = self_val.provenance.as_ref()
+                            .and_then(|p| self.allocations.iter().find(|a| a.id == p.alloc_id))
+                            .map(|a| a.align)
+                            .unwrap_or(1);
+
+                        let (alloc_id, _base) = self.allocate(
+                            field_size, field_alloc_align, elem_ty,
+                        );
+                        self.init_allocations.insert(alloc_id);
+                        if let Some(ref_dest_alloc_id) = self.local_alloc_ids.get(&dest).copied() {
+                            self.slice_data_allocations.insert(ref_dest_alloc_id, alloc_id);
+                        }
+
+                        let field_offset = if f == 0 {
+                            src_offset.clone()
+                        } else {
+                            Int::add(self.ctx, &[&src_offset, &mid_bytes])
+                        };
+
+                        let field_prov = Provenance {
+                            alloc_id,
+                            offset: field_offset,
+                        };
+
                         let field_val = VmValue {
-                            term: args[0].term.clone(),
+                            term: field_ptr,
                             ty: field_ty,
-                            provenance: base_prov,
+                            provenance: Some(field_prov),
                             invariants: ValueInvariants {
                                 init: true,
                                 non_null: true,
                                 aligned: true,
-                                in_bounds: args[0].invariants.in_bounds,
-                                align_n: None,
+                                in_bounds: true,
+                                align_n: Some(field_alloc_align),
                             },
                         };
                         self.set_field_value(dest, vec![f], field_val);

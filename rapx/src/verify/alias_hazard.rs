@@ -9,9 +9,6 @@
 
 use std::collections::{HashMap, HashSet};
 
-#[cfg(not(rapx_has_skip_norm_wip))]
-use crate::compat::SkipNormWip;
-
 use rustc_hir::{Safety, def::DefKind, def_id::DefId};
 use rustc_middle::{
     mir::{

@@ -744,7 +744,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     provenance: src_val.provenance,
                     invariants: ValueInvariants {
                         aligned: src_val.invariants.aligned,
-                        in_bounds: false,
+                        in_bounds: src_val.invariants.in_bounds,
                         align_n: if is_cast || is_ptr_arith { src_val.invariants.align_n } else { None },
                         ..src_val.invariants
                     },
@@ -789,12 +789,30 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     .and_then(|p| self.allocations.iter().find(|a| a.id == p.alloc_id))
                     .map(|a| a.align)
                     .filter(|&a| a > 1);
+                let has_deref = place.projection.iter().any(|p| {
+                    matches!(p.kind(), rustc_middle::mir::ProjectionElem::Deref)
+                });
+                let src_ty = self.body.local_decls[place.local].ty;
+                let is_from_raw_parts_like = matches!(src_ty.kind(),
+                    rustc_middle::ty::TyKind::RawPtr(_, _));
+                let is_slice_ref = if let rustc_middle::ty::TyKind::Ref(_, inner, _) = dest_ty.kind() {
+                    matches!(inner.kind(), rustc_middle::ty::TyKind::Slice(_))
+                } else {
+                    false
+                };
+                let src_in_bounds = if is_slice_ref && is_from_raw_parts_like && has_deref {
+                    addr.provenance.is_some()
+                } else {
+                    self.locals.get(&place.local)
+                        .map_or(false, |v| v.invariants.in_bounds)
+                };
                 self.set_local(dest_local, VmValue {
                     term: addr.term,
                     ty: dest_ty,
                     provenance: addr.provenance,
                     invariants: ValueInvariants {
-                        non_null: true, aligned: true, init: true, in_bounds: false,
+                        non_null: true, aligned: true, init: true,
+                        in_bounds: src_in_bounds,
                         align_n: alloc_align,
                     },
                 });
@@ -810,12 +828,14 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     .and_then(|p| self.allocations.iter().find(|a| a.id == p.alloc_id))
                     .map(|a| a.align)
                     .filter(|&a| a > 1);
+                let src_in_bounds = self.locals.get(&place.local)
+                    .map_or(false, |v| v.invariants.in_bounds);
                 self.set_local(dest_local, VmValue {
                     term: addr.term,
                     ty: dest_ty,
                     provenance: addr.provenance,
                     invariants: ValueInvariants {
-                        non_null: true, in_bounds: false, align_n: alloc_align, ..Default::default()
+                        non_null: true, in_bounds: src_in_bounds, align_n: alloc_align, ..Default::default()
                     },
                 });
             }
@@ -1050,6 +1070,20 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         }
     }
 
+    /// Inject layout constraints (>= 1) for generic AlignOf/SizeOf constants.
+    fn inject_layout_constraints(&mut self, operand: &Operand<'tcx>, val: &VmValue<'ctx, 'tcx>) {
+        if let Operand::Constant(constant) = operand {
+            let text = format!("{:?}", constant.const_);
+            if super::state::const_int_from_debug(&text).is_none() {
+                let is_align_or_size = text.starts_with("AlignOf(") || text.starts_with("SizeOf(");
+                if is_align_or_size {
+                    let one = Int::from_u64(self.ctx, 1);
+                    self.path_conditions.push(val.term.ge(&one));
+                }
+            }
+        }
+    }
+
     /// Evaluate an Rvalue into a VmValue.
     fn eval_rvalue(
         &mut self,
@@ -1063,12 +1097,14 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             Rvalue::Use(operand, _retag) => {
                 let mut val = self.value_of_operand(operand);
                 self.try_materialize_const_bytes(&mut val, operand);
+                self.inject_layout_constraints(operand, &val);
                 Ok(val)
             }
             #[cfg(not(rapx_rvalue_use_with_retag))]
             Rvalue::Use(operand) => {
                 let mut val = self.value_of_operand(operand);
                 self.try_materialize_const_bytes(&mut val, operand);
+                self.inject_layout_constraints(operand, &val);
                 Ok(val)
             }
             Rvalue::Ref(_, _borrow_kind, place) => {
@@ -1077,6 +1113,26 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         .and_then(|p| self.allocations.iter().find(|a| a.id == p.alloc_id))
                         .map(|a| a.align)
                         .filter(|&a| a > 1);
+                    // Inherit in_bounds. For &[T] created via Deref of a
+                    // fat raw ptr (inlined from_raw_parts), set in_bounds
+                    // like ReturnFreshAllocation does in fn_simulator.
+                    let has_deref = place.projection.iter().any(|p| {
+                        matches!(p.kind(), rustc_middle::mir::ProjectionElem::Deref)
+                    });
+                    let src_ty = self.body.local_decls[place.local].ty;
+                    let is_from_raw_parts_like = matches!(src_ty.kind(),
+                        rustc_middle::ty::TyKind::RawPtr(_, _));
+                    let is_slice_ref = if let rustc_middle::ty::TyKind::Ref(_, inner, _) = dest_ty.kind() {
+                        matches!(inner.kind(), rustc_middle::ty::TyKind::Slice(_))
+                    } else {
+                        false
+                    };
+                    let src_in_bounds = if is_slice_ref && is_from_raw_parts_like && has_deref {
+                        addr.provenance.is_some()
+                    } else {
+                        self.locals.get(&place.local)
+                            .map_or(false, |v| v.invariants.in_bounds)
+                    };
                     let val = VmValue {
                         term: addr.term,
                         ty: dest_ty,
@@ -1085,7 +1141,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             non_null: true,
                             aligned: self.check_place_alignment(place),
                             init: true,
-                            in_bounds: false,
+                            in_bounds: src_in_bounds,
                             align_n: alloc_align,
                         },
                     };
@@ -1153,16 +1209,32 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 //   lhs == (lhs/rhs)*rhs + lhs%rhs  ∧  lhs%rhs >= 0
                 // Also add (lhs/rhs)*rhs <= lhs directly for Div for robustness.
                 // This lets later checks prove (x/N)*N <= x and x%N >= 0.
+                // IMPORTANT: use `term` (returned by eval_binary_op) as the
+                // quotient, NOT a separate `lhs.div(&rhs)` call, so that the
+                // axiom constrains the SAME Z3 term used in subsequent ops.
                 if matches!(*op, BinOp::Div | BinOp::Rem) {
-                    let quot = lhs.term.div(&rhs.term);
+                    let quot = if matches!(*op, BinOp::Div) { &term } else { &lhs.term.div(&rhs.term) };
                     let rem = lhs.term.rem(&rhs.term);
-                    let mul_term = Int::mul(self.ctx, &[&quot, &rhs.term]);
+                    let mul_term = Int::mul(self.ctx, &[quot, &rhs.term]);
                     let sum_term = Int::add(self.ctx, &[&mul_term, &rem]);
                     self.path_conditions.push(lhs.term._eq(&sum_term));
                     let zero = Int::from_u64(self.ctx, 0);
                     self.path_conditions.push(rem.ge(&zero));
                     // Direct inequality: (lhs/rhs)*rhs <= lhs
                     self.path_conditions.push(mul_term.le(&lhs.term));
+                    // Quotient strict bound: for rhs >= 2 and lhs >= 2,
+                    // quot + 1 <= lhs (hence quot < lhs). E.g. X/2 < X for X>1.
+                    if rhs.term.as_u64().map_or(false, |r| r >= 2) {
+                        let one = Int::from_u64(self.ctx, 1);
+                        let qp1 = Int::add(self.ctx, &[quot, &one]);
+                        // qp1 <= lhs is equivalent to quot < lhs for integers
+                        self.path_conditions.push(qp1.le(&lhs.term));
+                    } else {
+                        // For rhs >= 1: quot <= lhs
+                        if rhs.term.as_u64().map_or(false, |r| r >= 1) {
+                            self.path_conditions.push(quot.le(&lhs.term));
+                        }
+                    }
                 }
                 // For tuple-returning binary ops (AddWithOverflow, MulWithOverflow),
                 // populate field_values so that .0 (result) and .1 (overflow flag)
@@ -1292,8 +1364,29 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     invariants: ValueInvariants::default(),
                 })
             }
-            Rvalue::Discriminant(_place) => {
+            Rvalue::Discriminant(place) => {
                 let term = self.fresh_int("discriminant");
+                // For Ordering (repr i8, values: Less=-1 Equal=0 Greater=1),
+                // the discriminant index equals the repr value + 1.
+                // Connect the fresh discriminant term to the ADT value so
+                // that SwitchInt constraints propagate to the stored value.
+                let place_val = self.value_of_place(place)
+                    .or_else(|| self.local_value(place.local).cloned());
+                if let Some(ref pv) = place_val {
+                    if let rustc_middle::ty::TyKind::Adt(adt_def, _) = pv.ty.kind() {
+                        let def_path = self.tcx.def_path_str(adt_def.did());
+                        if def_path.contains("cmp::Ordering") && adt_def.is_enum() {
+                            let one = Int::from_u64(self.ctx, 1);
+                            let discr_minus_one = Int::sub(self.ctx, &[&term, &one]);
+                            self.path_conditions.push(pv.term._eq(&discr_minus_one));
+                            // Also bound the discriminant to {0, 1, 2}
+                            let zero = Int::from_u64(self.ctx, 0);
+                            let two = Int::from_u64(self.ctx, 2);
+                            self.path_conditions.push(term.ge(&zero));
+                            self.path_conditions.push(term.le(&two));
+                        }
+                    }
+                }
                 Ok(VmValue {
                     term,
                     ty: dest_ty,
@@ -1346,6 +1439,13 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             #[cfg(not(rapx_rustc_ge_196))]
             Rvalue::NullaryOp(_op) => {
                 let term = self.fresh_int("nullary");
+                let op_debug = format!("{:?}", _op);
+                let is_align_of = op_debug.contains("AlignOf") || op_debug.contains("min_align_of");
+                let is_size_of = op_debug.contains("SizeOf");
+                if is_align_of || is_size_of {
+                    let one = Int::from_u64(self.ctx, 1);
+                    self.path_conditions.push(term.ge(&one));
+                }
                 Ok(VmValue {
                     term,
                     ty: dest_ty,
@@ -1657,14 +1757,12 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         return;
                     }
                 }
-                // Otherwise branch with single value → the remaining value
-                if targets.otherwise() == chosen && targets.iter().count() == 1 {
-                    let explicit = targets.iter().next().unwrap().0;
-                    let other = if explicit == 0 { 1 } else { 0 };
-                    let val_term = Int::from_u64(self.ctx, other);
-                    self.path_conditions.push(discr_val.term._eq(&val_term));
-                    if other != 0 {
-                        self.infer_switch_guard(discr);
+                // Otherwise branch: the discrim is NOT any of the explicit values.
+                if targets.otherwise() == chosen {
+                    // Negate every explicit target value.
+                    for (value, _) in targets.iter() {
+                        let val_term = Int::from_u64(self.ctx, value as u64);
+                        self.path_conditions.push(discr_val.term._eq(&val_term).not());
                     }
                     return;
                 }
@@ -2003,9 +2101,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// Evaluate a numeric predicate to a Z3 Bool for path-condition assertion.
     fn eval_predicate_as_bool(&self, pred: &crate::verify::contract::NumericPredicate<'tcx>) -> Option<Bool<'ctx>> {
         use crate::verify::contract::{ContractExpr, RelOp};
-        let ContractExpr::Const(rhs_val) = &pred.rhs else { return None };
         let lhs = self.eval_contract_expr_simple(&pred.lhs)?;
-        let rhs = Int::from_u64(self.ctx, *rhs_val as u64);
+        let rhs = match &pred.rhs {
+            ContractExpr::Const(v) => Int::from_u64(self.ctx, *v as u64),
+            _ => self.eval_contract_expr_simple(&pred.rhs)?,
+        };
         Some(match pred.op {
             RelOp::Le => lhs.le(&rhs),
             RelOp::Lt => lhs.lt(&rhs),
@@ -2030,12 +2130,38 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     _ => None,
                 }
             }
+            ContractExpr::Len(inner) => {
+                let val = self.eval_contract_expr_simple_value(inner)?;
+                let alloc_id = val.provenance_alloc_id()?;
+                let alloc = self.allocations.iter().find(|a| a.id == alloc_id)?;
+                let elem_ty = alloc.element_ty?;
+                let elem_size = self.size_of_ty(elem_ty).max(1) as u64;
+                if elem_size == 1 {
+                    return Some(alloc.size.clone());
+                }
+                let elem_term = Int::from_u64(self.ctx, elem_size);
+                Some(alloc.size.div(&elem_term))
+            }
             ContractExpr::Binary { op: NumericOp::Mul, lhs, rhs } => {
                 let l = self.eval_contract_expr_simple(lhs)?;
                 let r = self.eval_contract_expr_simple(rhs)?;
                 Some(Int::mul(self.ctx, &[&l, &r]))
             }
             ContractExpr::Const(n) => Some(Int::from_u64(self.ctx, *n as u64)),
+            _ => None,
+        }
+    }
+
+    fn eval_contract_expr_simple_value(&self, expr: &crate::verify::contract::ContractExpr<'tcx>) -> Option<VmValue<'ctx, 'tcx>> {
+        match expr {
+            ContractExpr::Place(cp) => {
+                match cp.base {
+                    PlaceBase::Local(n) => {
+                        self.local_value(Local::from_usize(n)).cloned()
+                    }
+                    _ => None,
+                }
+            }
             _ => None,
         }
     }

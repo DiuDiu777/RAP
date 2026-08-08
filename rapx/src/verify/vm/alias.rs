@@ -7,9 +7,6 @@
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{Local, Operand, ProjectionElem, Rvalue, StatementKind};
-#[cfg(not(rapx_has_skip_norm_wip))]
-use crate::compat::SkipNormWip;
-
 use crate::verify::{
     alias_hazard::{self, AliasProducer, HazardKind},
     contract::Property,
@@ -200,7 +197,6 @@ pub fn check_alias_vm<'ctx, 'tcx>(
                     }
                 }
             }
-            return VmAliasResult::Unknown;
             return VmAliasResult::Unknown;
         }
     };

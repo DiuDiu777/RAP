@@ -82,6 +82,15 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     let pointed = self.locals.get(&place.local)?;
                     term = pointed.term.clone();
                     provenance = pointed.provenance.clone();
+                    // For fat pointers (aggregates without provenance),
+                    // use the first field's provenance (the data pointer).
+                    if provenance.is_none()
+                        && matches!(pointed.ty.kind(), TyKind::RawPtr(..))
+                    {
+                        if let Some(field0) = self.field_value(place.local, &[0]) {
+                            provenance = field0.provenance.clone();
+                        }
+                    }
                     if let TyKind::Ref(_, deref_ty, _) = current_ty.kind() {
                         current_ty = *deref_ty;
                     }
