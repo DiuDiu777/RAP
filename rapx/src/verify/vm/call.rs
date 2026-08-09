@@ -426,7 +426,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 if let TyKind::Tuple(elem_tys) = dest_ty.kind() {
                     // Look up the source allocation from self's provenance.
                     let src_alloc_id = self_val.provenance.as_ref().map(|p| p.alloc_id);
-                    let src_offset = self_val.provenance.as_ref()
+                    let _src_offset = self_val.provenance.as_ref()
                         .map(|p| p.offset.clone())
                         .unwrap_or_else(|| Int::from_u64(self.ctx, 0));
 
@@ -486,11 +486,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             self.slice_data_allocations.insert(ref_dest_alloc_id, alloc_id);
                         }
 
-                        let field_offset = if f == 0 {
-                            src_offset.clone()
-                        } else {
-                            Int::add(self.ctx, &[&src_offset, &mid_bytes])
-                        };
+                        let field_offset = Int::from_u64(self.ctx, 0);
 
                         let field_prov = Provenance {
                             alloc_id,

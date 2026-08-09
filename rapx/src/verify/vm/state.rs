@@ -593,6 +593,15 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
         }
         for value in self.field_values.values() {
+            if value.invariants.non_null {
+                solver.assert(&value.term._eq(&zero).not());
+            }
+            if let Some(ref prov) = value.provenance {
+                if let Some(alloc) = self.allocations.iter().find(|a| a.id == prov.alloc_id) {
+                    let expected = Int::add(self.ctx, &[&alloc.base, &prov.offset]);
+                    solver.assert(&value.term._eq(&expected));
+                }
+            }
             if matches!(value.ty.kind(),
                 rustc_middle::ty::TyKind::Uint(_)
                 | rustc_middle::ty::TyKind::Bool
