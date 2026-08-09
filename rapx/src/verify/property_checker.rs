@@ -382,6 +382,7 @@ impl PropertyChecker {
     /// Handles both `PropertyArg::Place` and `PropertyArg::Expr(ContractExpr::Place(...))`
     /// wrappers, mapping Local/Arg bases to checkpoint operands or VM locals.
     fn resolve_arg_term<'ctx, 'tcx>(
+        &self,
         vm_state: &VmState<'ctx, 'tcx>,
         checkpoint: &Checkpoint<'tcx>,
         arg: &PropertyArg<'tcx>,
@@ -411,6 +412,7 @@ impl PropertyChecker {
                     PlaceBase::Return => None,
                 }
             }
+            PropertyArg::Expr(expr) => self.eval_contract_expr(vm_state, Some(checkpoint), expr),
             _ => None,
         }
     }
@@ -440,7 +442,7 @@ impl PropertyChecker {
         let elem_size_term = Int::from_u64(vm_state.ctx, (elem_size as u64).max(1));
 
         let count_term = property.args.get(count_arg)
-            .and_then(|a| Self::resolve_arg_term(vm_state, checkpoint, a))
+            .and_then(|a| self.resolve_arg_term(vm_state, checkpoint, a))
             .unwrap_or_else(|| Int::from_u64(vm_state.ctx, 1));
         // Simplify the multiplication for concrete count and elem_size
         if let (Some(elem), Some(count)) = (Some(elem_size), count_term.simplify().as_u64()) {
@@ -663,7 +665,18 @@ impl PropertyChecker {
                     })
                 });
             if !is_maybe_uninit_ptr {
-                return CheckResult::Failed;
+                // When the origin is a by-value function parameter,
+                // the caller's reference guarantees the allocation is
+                // alive.  The backward slicer may incorrectly mark it
+                // dead when the parameter is not a &T / &mut T.
+                let is_param_ref = vm_state.resolve_origin(&value)
+                    .map_or(false, |origin| {
+                        origin.local.as_usize() <= vm_state.body.arg_count
+                            && origin.local != Local::from_usize(0)
+                    });
+                if !is_param_ref {
+                    return CheckResult::Failed;
+                }
             }
         }
 
@@ -859,6 +872,17 @@ impl PropertyChecker {
         if value.invariants.in_bounds {
             return CheckResult::Proved;
         }
+        // When the contract expression for the element count evaluates to
+        // zero (e.g. div-by-sizeof for ZST generic params), the byte-level
+        // access is zero and limits checking is trivial.
+        let count_term = property.args.get(2)
+            .and_then(|a| self.resolve_arg_term(vm_state, checkpoint, a));
+        if let Some(ref ct) = count_term {
+            if ct.as_u64() == Some(0) {
+                return CheckResult::Proved;
+            }
+        }
+        let access = self.access_bytes(vm_state, property, 1, 2, checkpoint, &value);
         let Some(alloc_id) = value.provenance_alloc_id() else {
             return CheckResult::Unknown;
         };
@@ -878,8 +902,6 @@ impl PropertyChecker {
         if vm_state.allocations.iter().any(|a| a.id == alloc_id && a.is_external) {
             return CheckResult::Proved;
         }
-
-        let access = self.access_bytes(vm_state, property, 1, 2, checkpoint, &value);
 
         let alloc_elem_is_generic = vm_state.allocations.iter()
             .any(|a| a.id == alloc_id && a.element_ty.map_or(false, |ty| matches!(ty.kind(), TyKind::Param(_))));
@@ -1405,7 +1427,16 @@ impl PropertyChecker {
     {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
         if let Some(id) = value.provenance_alloc_id() {
-            if vm_state.dead_allocations.contains(&id) { return CheckResult::Failed; }
+            if vm_state.dead_allocations.contains(&id) {
+                if let Some(origin) = vm_state.resolve_origin(&value) {
+                    let is_param = origin.local.as_usize() <= vm_state.body.arg_count
+                        && origin.local != Local::from_usize(0);
+                    if is_param {
+                        return CheckResult::Proved;
+                    }
+                }
+                return CheckResult::Failed;
+            }
             if let Some(origin) = vm_state.resolve_origin(&value) {
                 let is_raw_ptr = matches!(origin.kind,
                     super::vm::alias::VmOriginKind::RawMutPtr
@@ -1958,10 +1989,20 @@ impl PropertyChecker {
                     NumericOp::Add => Some(Int::add(vm_state.ctx, &[&l, &r])),
                     NumericOp::Sub => Some(Int::sub(vm_state.ctx, &[&l, &r])),
                     NumericOp::Mul => Some(Int::mul(vm_state.ctx, &[&l, &r])),
-                    NumericOp::Div => Some(l.div(&r)),
-                    NumericOp::Rem => {
-                        let q = l.div(&r);
-                        Some(Int::sub(vm_state.ctx, &[&l, &Int::mul(vm_state.ctx, &[&q, &r])]))
+                    NumericOp::Div | NumericOp::Rem => {
+                        // Z3 division by zero yields unconstrained results,
+                        // leading to unsound proofs downstream. When the
+                        // divisor is zero (e.g. size_of::<T>() for generic
+                        // or ZST params), return zero so that subsequent
+                        // access_bytes computes 0 * elem_size == 0.
+                        if r.as_u64() == Some(0) {
+                            Some(Int::from_u64(vm_state.ctx, 0))
+                        } else if matches!(op, NumericOp::Div) {
+                            Some(l.div(&r))
+                        } else {
+                            let q = l.div(&r);
+                            Some(Int::sub(vm_state.ctx, &[&l, &Int::mul(vm_state.ctx, &[&q, &r])]))
+                        }
                     }
                     _ => None,
                 }
