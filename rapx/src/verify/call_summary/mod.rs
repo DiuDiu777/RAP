@@ -289,6 +289,11 @@ pub fn effect_summary<'tcx>(
             // If the callee does pointer arithmetic, don't produce ReturnAliasArg
             // since the offset might have been changed (e.g. wrapping_add(1)).
             if !interprocedural::callee_contains_pointer_arithmetic(tcx, callee) {
+                // If the callee transitively calls functions that may write
+                // through &mut args, ReturnAliasArg alone is insufficient —
+                // the writes are lost. Mark as unsupported so CalleeEntry
+                // DFS can inline the full body.
+                let has_nested_calls = interprocedural::callee_calls_other_local(tcx, callee);
                 return CallEffectSummary {
                     callee: Some(callee),
                     name,
@@ -297,7 +302,7 @@ pub fn effect_summary<'tcx>(
                         .into_iter()
                         .map(|arg| CallEffect::ReturnAliasArg { arg })
                         .collect(),
-                    unsupported: false,
+                    unsupported: has_nested_calls,
                 };
             }
         }

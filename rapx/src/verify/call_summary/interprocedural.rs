@@ -570,3 +570,17 @@ fn write_args_on_path<'tcx>(
     }
     writes
 }
+
+/// Return true if the callee body contains any Call terminator (to local functions
+/// that may have side effects), meaning the callee is not self-contained.
+pub(super) fn callee_calls_other_local(tcx: TyCtxt<'_>, callee: DefId) -> bool {
+    let body = tcx.optimized_mir(callee);
+    for bb in body.basic_blocks.iter() {
+        if matches!(bb.terminator().kind,
+            rustc_middle::mir::TerminatorKind::Call { .. }
+        ) {
+            return true;
+        }
+    }
+    false
+}
