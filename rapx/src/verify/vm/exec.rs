@@ -1225,6 +1225,13 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     self.path_conditions.push(lhs.term._eq(&sum_term));
                     let zero = Int::from_u64(self.ctx, 0);
                     self.path_conditions.push(rem.ge(&zero));
+                    // Remainder and quotient bounds help prove length constraints
+                    // involving % and / in the SMT solver.
+                    if rhs.term.as_u64().map_or(true, |r| r >= 1) {
+                        self.path_conditions.push(rem.lt(&rhs.term));
+                    }
+                    self.path_conditions.push(rem.le(&lhs.term));
+                    self.path_conditions.push(quot.ge(&zero));
                     // Direct inequality: (lhs/rhs)*rhs <= lhs
                     self.path_conditions.push(mul_term.le(&lhs.term));
                     // Quotient strict bound: for rhs >= 2 and lhs >= 2,
@@ -2189,6 +2196,21 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 let l = self.eval_contract_expr_simple(lhs)?;
                 let r = self.eval_contract_expr_simple(rhs)?;
                 Some(Int::mul(self.ctx, &[&l, &r]))
+            }
+            ContractExpr::Binary { op: NumericOp::Add, lhs, rhs } => {
+                let l = self.eval_contract_expr_simple(lhs)?;
+                let r = self.eval_contract_expr_simple(rhs)?;
+                Some(Int::add(self.ctx, &[&l, &r]))
+            }
+            ContractExpr::Binary { op: NumericOp::Sub, lhs, rhs } => {
+                let l = self.eval_contract_expr_simple(lhs)?;
+                let r = self.eval_contract_expr_simple(rhs)?;
+                Some(Int::sub(self.ctx, &[&l, &r]))
+            }
+            ContractExpr::Binary { op: NumericOp::Div, lhs, rhs } => {
+                let l = self.eval_contract_expr_simple(lhs)?;
+                let r = self.eval_contract_expr_simple(rhs)?;
+                Some(l.div(&r))
             }
             ContractExpr::Const(n) => Some(Int::from_u64(self.ctx, *n as u64)),
             _ => None,
