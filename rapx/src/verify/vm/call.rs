@@ -442,6 +442,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     let elem_sz_term = Int::from_u64(self.ctx, elem_sz);
                     let total_len = alloc_size.div(&elem_sz_term); // self.len()
 
+                    let zero = Int::from_u64(self.ctx, 0);
+                    self.path_conditions.push(mid_val.term.ge(&zero));
+                    self.path_conditions.push(mid_val.term.le(&total_len));
+
                     // mid (field 0 length)
                     let mid = mid_val.term.clone();
                     // self.len() - mid (field 1 length)
@@ -465,9 +469,19 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             .unwrap_or(1);
 
                         let (alloc_id, _base) = self.allocate(
-                            field_size, field_alloc_align, elem_ty,
+                            field_size.clone(), field_alloc_align, elem_ty,
                         );
+                        let src_bytes = Int::mul(self.ctx, &[&total_len, &elem_sz_term]);
+                        if f == 0 {
+                            self.path_conditions.push(field_size._eq(&mid_bytes));
+                        } else {
+                            let remaining = Int::sub(self.ctx, &[&src_bytes, &mid_bytes]);
+                            self.path_conditions.push(field_size._eq(&remaining));
+                        }
                         self.init_allocations.insert(alloc_id);
+                        if let Some(ref source_prov) = self_val.provenance {
+                            self.sub_alloc_parent.insert(alloc_id, source_prov.alloc_id);
+                        }
                         if let Some(ref_dest_alloc_id) = self.local_alloc_ids.get(&dest).copied() {
                             self.slice_data_allocations.insert(ref_dest_alloc_id, alloc_id);
                         }
@@ -793,7 +807,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     let dest_ty = self.body.local_decls[dest].ty;
                     // For generic types (elem_size == 0), use external alloc
                     // so Allocated/InBound checks auto-pass.
-                    let (alloc_id, _base) = if *elem_size == 0 {
+                    let (alloc_id, base) = if *elem_size == 0 {
                         let max = Int::from_u64(self.ctx, i64::MAX as u64);
                         self.allocate_external(max, 1, None)
                     } else {
@@ -801,9 +815,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     };
                     let prov = Provenance {
                         alloc_id,
-                        offset: ptr_val.provenance.as_ref()
-                            .map(|p| p.offset.clone())
-                            .unwrap_or_else(|| Int::from_u64(self.ctx, 0)),
+                        offset: Int::from_u64(self.ctx, 0),
                     };
                     // If return is a reference, register slice/pointee data
                     if let Some(ref dest_alloc_id) = self.local_alloc_ids.get(&dest).copied() {
@@ -817,11 +829,9 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         self.init_allocations.insert(alloc_id);
                     }
                     if let Some(ref source_prov) = ptr_val.provenance {
-                        // Always propagate init: from_raw_parts creates a view into
-                        // existing memory.  If the source memory is init, so is the
-                        // new slice.  InBound/ValidPtr check the bounds independently.
                         if !self.dead_allocations.contains(&source_prov.alloc_id) {
                             self.init_allocations.insert(alloc_id);
+                            self.sub_alloc_parent.insert(alloc_id, source_prov.alloc_id);
                         }
                         // Copy byte-level tracking
                         let byte_pairs: Vec<_> = self.byte_values.iter()
@@ -853,12 +863,18 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             self.known_non_nul_offsets.insert((alloc_id, off));
                         }
                     }
+                    let result_align_n = ptr_val.invariants.align_n.or_else(|| {
+                        ptr_val.provenance.as_ref()
+                            .and_then(|p| self.allocations.iter().find(|a| a.id == p.alloc_id))
+                            .map(|a| a.align)
+                    });
                     self.set_local(dest, VmValue {
-                        term: ptr_val.term.clone(),
+                        term: base,
                         ty: dest_ty,
                         provenance: Some(prov),
                         invariants: ValueInvariants {
                             non_null: true, init: true, in_bounds: true, aligned: true,
+                            align_n: result_align_n,
                             ..ValueInvariants::default()
                         },
                     });

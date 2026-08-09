@@ -92,10 +92,7 @@ fn std_challenge_17() {
 #[ignore = "VM backend: Z3 non-linear integer arithmetic hang on Rem (len % chunk_size) in ChunksMut::next_back"]
 fn std_challenge_18() {
     let output = run_with_args("verify_cases/std-challenge-18", CMD_VERIFY_TARGETED_VM);
-    assert!(
-        !output.contains("UNSOUND"),
-        "unexpected UNSOUND in std-challenge-18"
-    );
+    assert!(!output.contains("UNSOUND"), "unexpected UNSOUND in std-challenge-18");
 }
 
 #[test]

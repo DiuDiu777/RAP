@@ -169,6 +169,11 @@ pub struct VmState<'ctx, 'tcx> {
     /// Allocations that have been freed (StorageDead, Drop).
     pub(crate) dead_allocations: FxHashSet<AllocId>,
 
+    /// Parent allocation for sub-allocations created by split_at / from_raw_parts.
+    /// When resolve_origin cannot find a matching local for a sub-allocation,
+    /// the chain is followed to the root allocation for provenance tracing.
+    pub(crate) sub_alloc_parent: FxHashMap<AllocId, AllocId>,
+
     /// Block where each dead allocation was killed (for per-block liveness tracking).
     pub(crate) dead_alloc_blocks: FxHashMap<AllocId, BasicBlock>,
 
@@ -269,6 +274,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             block_occurrences: FxHashMap::default(),
             dead_allocations: FxHashSet::default(),
             dead_alloc_blocks: FxHashMap::default(),
+            sub_alloc_parent: FxHashMap::default(),
             dropped_locals: FxHashSet::default(),
             binary_op_sources: FxHashMap::default(),
             other_op_sources: FxHashMap::default(),
@@ -553,6 +559,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             if !alloc.is_external {
                 solver.assert(&alloc.base._eq(&zero).not());
             }
+            solver.assert(&alloc.size.ge(&zero));
             if alloc.align > 1 {
                 let align_term = Int::from_u64(self.ctx, alloc.align);
                 solver.assert(&alloc.base.rem(&align_term)._eq(&zero));
@@ -569,14 +576,37 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     solver.assert(&value.term._eq(&expected));
                 }
             }
-            if local.as_usize() >= 1 && local.as_usize() <= arg_count {
-                if matches!(value.ty.kind(),
-                    rustc_middle::ty::TyKind::Uint(_)
-                    | rustc_middle::ty::TyKind::Bool
-                    | rustc_middle::ty::TyKind::Char
-                ) {
-                    solver.assert(&value.term.ge(&zero));
-                }
+            if matches!(value.ty.kind(),
+                rustc_middle::ty::TyKind::Uint(_)
+                | rustc_middle::ty::TyKind::Bool
+                | rustc_middle::ty::TyKind::Char
+            ) {
+                solver.assert(&value.term.ge(&zero));
+            }
+            if matches!(value.ty.kind(), rustc_middle::ty::TyKind::Bool) {
+                let one = Int::from_u64(self.ctx, 1);
+                solver.assert(&value.term.le(&one));
+            }
+            if matches!(value.ty.kind(), rustc_middle::ty::TyKind::Char) {
+                let max = Int::from_u64(self.ctx, 0x10FFFF);
+                solver.assert(&value.term.le(&max));
+            }
+        }
+        for value in self.field_values.values() {
+            if matches!(value.ty.kind(),
+                rustc_middle::ty::TyKind::Uint(_)
+                | rustc_middle::ty::TyKind::Bool
+                | rustc_middle::ty::TyKind::Char
+            ) {
+                solver.assert(&value.term.ge(&zero));
+            }
+            if matches!(value.ty.kind(), rustc_middle::ty::TyKind::Bool) {
+                let one = Int::from_u64(self.ctx, 1);
+                solver.assert(&value.term.le(&one));
+            }
+            if matches!(value.ty.kind(), rustc_middle::ty::TyKind::Char) {
+                let max = Int::from_u64(self.ctx, 0x10FFFF);
+                solver.assert(&value.term.le(&max));
             }
         }
     }

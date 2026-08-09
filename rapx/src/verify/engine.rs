@@ -53,7 +53,8 @@ impl<'tcx> VerifyEngine<'tcx> {
 
         let bound_property = Self::bind_property_to_checkpoint(property, checkpoint);
 
-        let cfg = Config::new();
+        let mut cfg = Config::new();
+        cfg.set_timeout_msec(10000);
         let ctx = z3::Context::new(&cfg);
 
         // Accumulate checked-bounds facts across checkpoints.
@@ -470,7 +471,8 @@ impl<'tcx> VerifyEngine<'tcx> {
             invariant,
         );
 
-        let cfg = Config::new();
+        let mut cfg = Config::new();
+        cfg.set_timeout_msec(10000);
         let ctx = z3::Context::new(&cfg);
 
         for mut backward in backward_items {

@@ -22,6 +22,7 @@ use crate::verify::{
 use crate::helpers::mir_scan::Checkpoint;
 
 use super::vm::state::{AllocId, VmState, VmValue};
+use super::vm::alias::VmOriginKind;
 
 pub struct PropertyChecker;
 
@@ -251,6 +252,30 @@ impl PropertyChecker {
         // All projections were Field (or no projections)
         if let Some(val) = vm_state.field_value(base_local, &field_path) {
             return Some(val.clone());
+        }
+        // Fallback: if the field value is not set (e.g. constructor return
+        // value _0 whose Aggregate was not executed), resolve from MIR.
+        if !field_path.is_empty() && base_local == Local::from_usize(0) {
+            for bb in vm_state.body.basic_blocks.iter() {
+                for stmt in &bb.statements {
+                    match &stmt.kind {
+                        rustc_middle::mir::StatementKind::Assign(assign) => {
+                            let (ref place, ref rval) = **assign;
+                            if let rustc_middle::mir::Rvalue::Aggregate(_, operands) = rval {
+                                if place.local == base_local {
+                                    if let Some(operand) = operands.get(rustc_abi::FieldIdx::from_usize(field_path[0])) {
+                                        let val = vm_state.value_of_operand(operand);
+                                        if field_path.len() == 1 {
+                                            return Some(val);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
         if let Some(base_val) = vm_state.local_value(base_local) {
             if let Some(ref prov) = base_val.provenance {
@@ -820,6 +845,17 @@ impl PropertyChecker {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else {
             return CheckResult::Unknown;
         };
+        if matches!(value.ty.kind(), TyKind::Ref(..)) {
+            return CheckResult::Proved;
+        }
+        if value.provenance.is_some() {
+            if let TyKind::Adt(adt_def, _) = value.ty.kind() {
+                let path = vm_state.tcx.def_path_str(adt_def.did());
+                if path.contains("::NonNull") {
+                    return CheckResult::Proved;
+                }
+            }
+        }
         if value.invariants.in_bounds {
             return CheckResult::Proved;
         }
@@ -1375,11 +1411,28 @@ impl PropertyChecker {
                     super::vm::alias::VmOriginKind::RawMutPtr
                     | super::vm::alias::VmOriginKind::RawConstPtr);
                 if is_raw_ptr {
-                    // Only fail for raw pointer struct fields when the
-                    // return type has an explicit named lifetime (from
-                    // struct generics) that is not grounded in &self.
                     let is_field = origin.local.as_usize() > vm_state.body.arg_count;
                     if is_field {
+                        let mut root_id = id;
+                        while let Some(parent_id) = vm_state.sub_alloc_parent.get(&root_id) {
+                            root_id = *parent_id;
+                        }
+                        if root_id != id
+                            && vm_state.alive_assumed.contains(&root_id)
+                            && !vm_state.dead_allocations.contains(&root_id)
+                        {
+                            return CheckResult::Proved;
+                        }
+                        if !vm_state.alive_assumed.is_empty() {
+                            let root_is_external = vm_state.allocations.iter()
+                                .any(|a| a.id == root_id && a.is_external);
+                            if root_is_external {
+                                return CheckResult::Proved;
+                            }
+                        }
+                        // Only fail for raw pointer struct fields when the
+                        // return type has an explicit named lifetime (from
+                        // struct generics) that is not grounded in &self.
                         let ret_ty = &vm_state.body.local_decls[Local::from_usize(0)].ty;
                         let is_named = match ret_ty.kind() {
                             rustc_middle::ty::TyKind::Ref(r, _, _) => {

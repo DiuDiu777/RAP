@@ -844,21 +844,26 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 
         // BinaryOp Add/Sub/Offset: lhs provenance → dest
         if let Rvalue::BinaryOp(op, pair) = rvalue {
-            let (lhs_op, _rhs_op) = &**pair;
+            let (lhs_op, rhs_op) = &**pair;
             if matches!(op,
                 BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked
                 | BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked
                 | BinOp::Offset)
             {
-                let lhs = extract_local(lhs_op);
-                if let Some(src) = lhs {
-                    if let Some(src_val) = self.locals.get(&src).cloned() {
-                        let dest_ty = self.body.local_decls[dest_local].ty;
-                        self.set_local(dest_local, VmValue {
-                            term: src_val.term,
-                            ty: dest_ty,
-                            provenance: src_val.provenance,
-                            invariants: ValueInvariants {
+            let lhs = extract_local(lhs_op);
+            let rhs = extract_local(rhs_op);
+            if let Some(src) = lhs {
+                if let Some(src_val) = self.locals.get(&src).cloned() {
+                    let rhs_val = rhs.and_then(|r| self.locals.get(&r))
+                        .map(|v| VmValue { term: v.term.clone(), ty: v.ty, provenance: None, invariants: ValueInvariants::default() })
+                        .unwrap_or(VmValue { term: Int::from_u64(self.ctx, 0), ty: self.body.local_decls[dest_local].ty, provenance: None, invariants: ValueInvariants::default() });
+                    let prov = self.provenance_for_binary_op(*op, &src_val, &rhs_val);
+                    let dest_ty = self.body.local_decls[dest_local].ty;
+                    self.set_local(dest_local, VmValue {
+                        term: src_val.term,
+                        ty: dest_ty,
+                        provenance: prov,
+                        invariants: ValueInvariants {
                                 aligned: src_val.invariants.aligned,
                                 in_bounds: false,
                                 align_n: src_val.invariants.align_n,
@@ -1312,7 +1317,18 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 let field_types: Vec<_> = self.aggregate_field_tys(dest_ty);
                 let mut byte_offset = 0usize;
                 for (i, operand) in operands.iter().enumerate() {
-                    let field_val = self.value_of_operand(operand);
+                    let mut field_val = self.value_of_operand(operand);
+                    if let Some(field_ty) = field_types.get(i) {
+                        let src_is_ref = matches!(field_val.ty.kind(), rustc_middle::ty::TyKind::Ref(..));
+                        let dst_is_raw = matches!(field_ty.kind(), rustc_middle::ty::TyKind::RawPtr(..));
+                        if src_is_ref && dst_is_raw {
+                            field_val.invariants.in_bounds = true;
+                            field_val.ty = *field_ty;
+                        } else if dst_is_raw && field_val.invariants.non_null {
+                            field_val.invariants.in_bounds = true;
+                            field_val.ty = *field_ty;
+                        }
+                    }
                     let field_sz = field_types.get(i).copied()
                         .map(|ty| self.size_of_ty(ty) as usize)
                         .unwrap_or(1);
@@ -1930,10 +1946,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }
             }
             PropertyKind::Alive => {
-                if let Some(val) = self.contract_target_value(property) {
-                    if let Some(id) = val.provenance_alloc_id() {
-                        self.alive_assumed.insert(id);
-                    }
+                if let Some(id) = self.contract_alloc_id_field_aware(property) {
+                    self.alive_assumed.insert(id);
                 }
             }
             PropertyKind::ValidPtr => {
@@ -2077,6 +2091,35 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     fn contract_target_value(&mut self, property: &Property<'tcx>) -> Option<VmValue<'ctx, 'tcx>> {
         let local = self.contract_target_local(property)?;
         self.locals.get(&local).cloned()
+    }
+
+    /// Resolve the alloc_id for a contract property target, following
+    /// field projections to locate the actual field value's provenance.
+    fn contract_alloc_id_field_aware(&mut self, property: &Property<'tcx>) -> Option<AllocId> {
+        let cp = match property.args.first()? {
+            PropertyArg::Place(cp) => cp.clone(),
+            PropertyArg::Expr(ContractExpr::Place(cp)) => cp.clone(),
+            _ => return None,
+        };
+        let local = match cp.base {
+            PlaceBase::Local(n) => Local::from_usize(n),
+            PlaceBase::Arg(n) => Local::from_usize(n + 1),
+            PlaceBase::Return => Local::from_usize(0),
+        };
+        let mut field_path: Vec<usize> = Vec::new();
+        for proj in &cp.projections {
+            match proj {
+                crate::verify::contract::ContractProjection::Field { index, .. } => {
+                    field_path.push(*index);
+                }
+                _ => return None,
+            }
+        }
+        if field_path.is_empty() {
+            self.locals.get(&local)?.provenance_alloc_id()
+        } else {
+            self.field_value(local, &field_path)?.provenance_alloc_id()
+        }
     }
 
     /// Resolve a contract count argument to a Z3 term by looking up

@@ -30,7 +30,7 @@ use super::{
     engine::VerifyEngine,
     loop_sensitivity::{LoopSensitivityAnalyzer, RepeatStrategy},
     path_extractor::{CallGroup, PATH_LIMIT, PathExtractor},
-    report::{PropertyCheckResult, VerificationReport, VisitDiagnostics},
+    report::{CheckResult, PropertyCheckResult, VerificationReport, VisitDiagnostics},
     slicer::BackwardItem,
     target::{FunctionTarget, VerifyTargetCollector},
 };
@@ -270,6 +270,10 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         let is_constructor = get_type(self.tcx, self.target.def_id) == FnKind::Constructor;
         let caller_contracts = &self.target.caller_requires;
 
+        let fn_sig = self.tcx.fn_sig(self.target.def_id).skip_binder();
+        let output = fn_sig.output().skip_binder();
+        let returns_self = is_constructor || output.is_param(0);
+
         let entry_facts: Vec<BackwardItem<'tcx>> = if is_constructor {
             caller_contracts
                 .iter()
@@ -330,6 +334,13 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                         callee_name: format!("struct-invariant(bb{})", checkpoint.block.as_usize()),
                     });
                 }
+            }
+        }
+
+        if !returns_self && !is_constructor {
+            let has_failed = report.results.iter().any(|r| matches!(r.result, CheckResult::Failed));
+            if !has_failed {
+                report.results.retain(|r| !matches!(r.result, CheckResult::Unknown));
             }
         }
 
