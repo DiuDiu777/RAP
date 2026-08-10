@@ -344,7 +344,6 @@ pub enum PropertyKind {
 
 #[derive(Clone, Debug)]
 pub enum PropertyArg<'tcx> {
-    Place(ContractPlace<'tcx>),
     Ty(Ty<'tcx>),
     Expr(ContractExpr<'tcx>),
     Predicates(Vec<NumericPredicate<'tcx>>),
@@ -431,7 +430,6 @@ impl<'tcx> PropertyArg<'tcx> {
         fn_def_id: Option<DefId>,
     ) -> String {
         match self {
-            PropertyArg::Place(place) => place.display_user_friendly(tcx, struct_def_id, fn_def_id),
             PropertyArg::Ty(ty) => format!("{}", ty),
             PropertyArg::Expr(expr) => {
                 display_expr_user_friendly(expr, tcx, struct_def_id, fn_def_id)

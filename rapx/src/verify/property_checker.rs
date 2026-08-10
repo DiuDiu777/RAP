@@ -149,7 +149,6 @@ impl PropertyChecker {
         checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> Option<VmValue<'ctx, 'tcx>>
     {
         let cp = match property.args.first()? {
-            PropertyArg::Place(cp) => cp.clone(),
             PropertyArg::Expr(ContractExpr::Const(n)) => {
                 let idx = usize::try_from(*n).ok()?;
                 crate::verify::contract::ContractPlace {
@@ -300,7 +299,6 @@ impl PropertyChecker {
         property: &Property<'tcx>,
     ) -> bool {
         let cp = match property.args.first() {
-            Some(PropertyArg::Place(cp)) => cp,
             Some(PropertyArg::Expr(crate::verify::contract::ContractExpr::Place(cp))) => cp,
             _ => return false,
         };
@@ -379,8 +377,7 @@ impl PropertyChecker {
     }
 
     /// Resolve a property arg into a Z3 Int term suitable as an element count.
-    /// Handles both `PropertyArg::Place` and `PropertyArg::Expr(ContractExpr::Place(...))`
-    /// wrappers, mapping Local/Arg bases to checkpoint operands or VM locals.
+    /// Maps Local/Arg bases in ContractExpr::Place wrappers to checkpoint operands or VM locals.
     fn resolve_arg_term<'ctx, 'tcx>(
         &self,
         vm_state: &VmState<'ctx, 'tcx>,
@@ -391,8 +388,7 @@ impl PropertyChecker {
             PropertyArg::Expr(ContractExpr::Const(n)) if *n <= u64::MAX as u128 => {
                 Some(Int::from_u64(vm_state.ctx, *n as u64))
             }
-            PropertyArg::Expr(ContractExpr::Place(cp))
-            | PropertyArg::Place(cp) => {
+            PropertyArg::Expr(ContractExpr::Place(cp)) => {
                 match cp.base {
                     PlaceBase::Arg(n) => {
                         let op = checkpoint.args.get(n)?;
@@ -458,14 +454,13 @@ impl PropertyChecker {
     {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
 
-        let required_ty = property.args.get(1)
-            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
-        if self.is_zst_type(vm_state, checkpoint, required_ty) { return CheckResult::Proved; }
+        if self.zst_guard(vm_state, checkpoint, property) { return CheckResult::Proved; }
         if self.is_concrete_zst(vm_state, value.ty) { return CheckResult::Proved; }
-        let align = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(vm_state.align_of_ty(*ty)) } else { None }).unwrap_or(1);
+        let ty_arg = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        let align = ty_arg.map(|ty| vm_state.align_of_ty(ty)).unwrap_or(1);
         let align = if align <= 1 {
-            property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a {
-                let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, *ty);
+            ty_arg.and_then(|ty| {
+                let resolved = self.instantiate_callsite_ty(vm_state, checkpoint, ty);
                 let resolved_align = vm_state.align_of_ty(resolved);
                 if resolved_align > 1 {
                     Some(resolved_align)
@@ -473,7 +468,7 @@ impl PropertyChecker {
                     let min_a = vm_state.min_align_of_generic_param(resolved);
                     if min_a > 1 { Some(min_a) } else { None }
                 }
-            } else { None }).unwrap_or(align)
+            }).unwrap_or(align)
         } else {
             align
         };
@@ -550,12 +545,9 @@ impl PropertyChecker {
         };
         local.pop(1);
         if matches!(r, CheckResult::Failed) {
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "align=Failed vterm={} align_n={:?} aligned={} off={}",
-                    value.term.to_string(), value.invariants.align_n, value.invariants.aligned,
-                    value.provenance.as_ref().map(|p| p.offset.to_string()).unwrap_or_default());
-            }
+            rap_debug!("align=Failed vterm={} align_n={:?} aligned={} off={}",
+                value.term.to_string(), value.invariants.align_n, value.invariants.aligned,
+                value.provenance.as_ref().map(|p| p.offset.to_string()).unwrap_or_default());
         }
         r
     }
@@ -587,16 +579,12 @@ impl PropertyChecker {
     {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
 
-        let required_ty = property.args.get(1)
-            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
-        if self.is_zst_type(vm_state, checkpoint, required_ty) { return CheckResult::Proved; }
+        if self.zst_guard(vm_state, checkpoint, property) { return CheckResult::Proved; }
         if self.is_concrete_zst(vm_state, value.ty) { return CheckResult::Proved; }
 
         let Some(alloc_id) = value.provenance_alloc_id() else { return CheckResult::Unknown };
 
         if vm_state.dead_allocations.contains(&alloc_id) {
-            // as_ptr/as_mut_ptr on MaybeUninit in a loop: the slicer omits
-            // StorageLive, making the alloc appear dead. Skip dead check.
             let is_maybe_uninit_ptr = value.invariants.init && value.invariants.non_null
                 && value.invariants.aligned && matches!(value.ty.kind(), TyKind::RawPtr(..))
                 && vm_state.allocations.iter().any(|a| {
@@ -607,10 +595,6 @@ impl PropertyChecker {
                     })
                 });
             if !is_maybe_uninit_ptr {
-                // When the origin is a by-value function parameter,
-                // the caller's reference guarantees the allocation is
-                // alive.  The backward slicer may incorrectly mark it
-                // dead when the parameter is not a &T / &mut T.
                 let is_param_ref = vm_state.resolve_origin(&value)
                     .map_or(false, |origin| {
                         origin.local.as_usize() <= vm_state.body.arg_count
@@ -621,6 +605,9 @@ impl PropertyChecker {
                 }
             }
         }
+
+        let required_ty = property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
 
         if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == alloc_id) {
             if let (Some(alloc_elem_ty), Some(req_ty)) = (alloc.element_ty, required_ty) {
@@ -711,6 +698,17 @@ impl PropertyChecker {
         false
     }
 
+    fn zst_guard<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        property: &Property<'tcx>,
+    ) -> bool {
+        let required_ty = property.args.get(1)
+            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
+        self.is_zst_type(vm_state, checkpoint, required_ty)
+    }
+
     /// Fast-path for `ValidPtr`: when the pointer's provenance allocation stores
     /// `[T; N]` arrays and the contract requires `T` elements, Rust's layout
     /// guarantee `sizeof([T; N]) = N * sizeof(T)` ensures the allocation always
@@ -793,7 +791,7 @@ impl PropertyChecker {
 
         let required_ty = property.args.get(1)
             .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
-        if self.is_zst_type(vm_state, checkpoint, required_ty) {
+        if self.zst_guard(vm_state, checkpoint, property) {
             return CheckResult::Proved;
         }
 
@@ -1018,9 +1016,7 @@ impl PropertyChecker {
     fn check_init<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
         checkpoint: &Checkpoint<'tcx>, property: &Property<'tcx>) -> CheckResult
     {
-        let required_ty = property.args.get(1)
-            .and_then(|a| if let PropertyArg::Ty(ty) = a { Some(*ty) } else { None });
-        if self.is_zst_type(vm_state, checkpoint, required_ty) { return CheckResult::Proved; }
+        if self.zst_guard(vm_state, checkpoint, property) { return CheckResult::Proved; }
         let Some(value) = self.target_value(vm_state, checkpoint, property) else { return CheckResult::Unknown };
         if self.is_concrete_zst(vm_state, value.ty) { return CheckResult::Proved; }
 
@@ -1032,12 +1028,9 @@ impl PropertyChecker {
         };
 
         if let Some(id) = value.provenance_alloc_id() {
-            if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open("/tmp/vm_debug.log") {
-                use std::io::Write;
-                let _ = writeln!(f, "check_init: alloc={} init_set={} access={:?}",
-                    id.0, vm_state.init_allocations.contains(&id),
-                    access.as_ref().and_then(|a| a.as_u64()));
-            }
+            rap_debug!("check_init: alloc={} init_set={} access={:?}",
+                id.0, vm_state.init_allocations.contains(&id),
+                access.as_ref().and_then(|a| a.as_u64()));
             if vm_state.dead_allocations.contains(&id) { return CheckResult::Failed; }
             // Verify the entire access range is covered
             if let Some(ref access_term) = access {
@@ -1480,7 +1473,6 @@ impl PropertyChecker {
         let v2 = property.args.get(1)
             .and_then(|a| {
                 let cp = match a {
-                    PropertyArg::Place(cp) => cp.clone(),
                     PropertyArg::Expr(ContractExpr::Place(cp)) => cp.clone(),
                     _ => return None,
                 };

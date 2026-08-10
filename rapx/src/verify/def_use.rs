@@ -86,7 +86,6 @@ impl RelevantPlaces {
     /// Collect all roots mentioned by a property argument.
     fn collect_property_arg(&mut self, arg: &PropertyArg<'_>) {
         match arg {
-            PropertyArg::Place(place) => self.insert_contract_place(place),
             PropertyArg::Expr(expr) => self.collect_contract_expr(expr),
             PropertyArg::Predicates(predicates) => {
                 for predicate in predicates {

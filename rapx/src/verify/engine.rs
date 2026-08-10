@@ -38,6 +38,12 @@ impl<'tcx> VerifyEngine<'tcx> {
         }
     }
 
+    fn new_z3_context() -> z3::Context {
+        let mut cfg = Config::new();
+        cfg.set_timeout_msec(10000);
+        z3::Context::new(&cfg)
+    }
+
     pub fn check_callsite_from_tree(
         &self,
         tree: &PathTree,
@@ -53,9 +59,7 @@ impl<'tcx> VerifyEngine<'tcx> {
 
         let bound_property = Self::bind_property_to_checkpoint(property, checkpoint);
 
-        let mut cfg = Config::new();
-        cfg.set_timeout_msec(10000);
-        let ctx = z3::Context::new(&cfg);
+        let ctx = Self::new_z3_context();
 
         // Accumulate checked-bounds facts across checkpoints.
         // A ChecksIndexBoundsDisjoint call in an earlier checkpoint
@@ -126,6 +130,20 @@ impl<'tcx> VerifyEngine<'tcx> {
         }
     }
 
+    fn callee_is_simple(tcx: TyCtxt<'_>, callee_def_id: DefId) -> bool {
+        if !tcx.is_mir_available(callee_def_id) {
+            return false;
+        }
+        let body = tcx.optimized_mir(callee_def_id);
+        body.basic_blocks.len() <= 3
+            && !body.basic_blocks.iter().any(|bb| {
+                matches!(bb.terminator().kind, TerminatorKind::SwitchInt { .. })
+            })
+            && body.basic_blocks.iter()
+                .filter(|bb| matches!(bb.terminator().kind, TerminatorKind::Return))
+                .count() <= 1
+    }
+
     /// Scan the backward items for unsupported Call terminators whose callee
     /// has available MIR. For each such call, inject `CalleeEntry` + callee
     /// MIR items + `CalleeExit`, replacing the original terminator.
@@ -153,30 +171,17 @@ impl<'tcx> VerifyEngine<'tcx> {
                                 let summary = crate::verify::call_summary::effect_summary(
                                     tcx, caller_def_id, func, destination.local,
                                 );
-                                let callee_body = tcx.optimized_mir(callee);
-                                let is_simple = callee_body.basic_blocks.len() <= 3
-                                    && !callee_body.basic_blocks.iter().any(|bb| {
-                                        matches!(bb.terminator().kind, TerminatorKind::SwitchInt { .. })
-                                    })
-                                    && callee_body.basic_blocks.iter()
-                                        .filter(|bb| matches!(bb.terminator().kind, TerminatorKind::Return))
-                                        .count() <= 1;
 
-                                if summary.unsupported && is_simple {
-                                    // Extract caller arg locals
+                                if summary.unsupported && Self::callee_is_simple(tcx, callee) {
                                     let arg_locals: Vec<rustc_middle::mir::Local> = args.iter()
-                                        .filter_map(|arg| {
-                                            match &arg.node {
-                                                rustc_middle::mir::Operand::Copy(p)
-                                                | rustc_middle::mir::Operand::Move(p)
-                                                    if p.projection.is_empty() => Some(p.local),
-                                                _ => None,
-                                            }
+                                        .filter_map(|arg| match &arg.node {
+                                            rustc_middle::mir::Operand::Copy(p)
+                                            | rustc_middle::mir::Operand::Move(p)
+                                                if p.projection.is_empty() => Some(p.local),
+                                            _ => None,
                                         })
                                         .collect();
-
                                     if arg_locals.len() == args.len() {
-                                        // Build callee items recursively
                                         let callee_items = self.build_callee_items(callee, depth - 1);
                                         result.push(BackwardItem::CalleeEntry {
                                             callee,
@@ -241,27 +246,16 @@ impl<'tcx> VerifyEngine<'tcx> {
                             let summary = crate::verify::call_summary::effect_summary(
                                 tcx, callee_def_id, func, destination.local,
                             );
-                            let inner_body = tcx.optimized_mir(inner_callee);
-                            let is_simple = inner_body.basic_blocks.len() <= 3
-                                && !inner_body.basic_blocks.iter().any(|bb| {
-                                    matches!(bb.terminator().kind, TerminatorKind::SwitchInt { .. })
-                                })
-                                && inner_body.basic_blocks.iter()
-                                    .filter(|bb| matches!(bb.terminator().kind, TerminatorKind::Return))
-                                    .count() <= 1;
 
-                            if summary.unsupported && is_simple && depth > 0 {
+                            if summary.unsupported && Self::callee_is_simple(tcx, inner_callee) && depth > 0 {
                                 let arg_locals: Vec<rustc_middle::mir::Local> = args.iter()
-                                    .filter_map(|arg| {
-                                        match &arg.node {
-                                            rustc_middle::mir::Operand::Copy(p)
-                                            | rustc_middle::mir::Operand::Move(p)
-                                                if p.projection.is_empty() => Some(p.local),
-                                            _ => None,
-                                        }
+                                    .filter_map(|arg| match &arg.node {
+                                        rustc_middle::mir::Operand::Copy(p)
+                                        | rustc_middle::mir::Operand::Move(p)
+                                            if p.projection.is_empty() => Some(p.local),
+                                        _ => None,
                                     })
                                     .collect();
-
                                 if arg_locals.len() == args.len() {
                                     let inner_items = self.build_callee_items(inner_callee, depth - 1);
                                     items.push(BackwardItem::CalleeEntry {
@@ -344,14 +338,6 @@ impl<'tcx> VerifyEngine<'tcx> {
         let new_args: Vec<super::contract::PropertyArg<'tcx>> = property.args.iter()
             .map(|a| {
                 match a {
-                    super::contract::PropertyArg::Place(place) => {
-                        super::contract::PropertyArg::Place(Self::rebind_place(place, checkpoint))
-                    }
-                    super::contract::PropertyArg::Expr(super::contract::ContractExpr::Place(place)) => {
-                        super::contract::PropertyArg::Expr(super::contract::ContractExpr::Place(
-                            Self::rebind_place(place, checkpoint),
-                        ))
-                    }
                     super::contract::PropertyArg::Expr(expr) => {
                         super::contract::PropertyArg::Expr(Self::rebind_contract_expr(expr, checkpoint))
                     }
@@ -471,9 +457,7 @@ impl<'tcx> VerifyEngine<'tcx> {
             invariant,
         );
 
-        let mut cfg = Config::new();
-        cfg.set_timeout_msec(10000);
-        let ctx = z3::Context::new(&cfg);
+        let ctx = Self::new_z3_context();
 
         for mut backward in backward_items {
             let path_desc = backward.path.describe_indices();

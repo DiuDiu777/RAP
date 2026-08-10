@@ -116,9 +116,10 @@ Usage: cargo rapx verify [OPTIONS]
 
 Options:
       --prepare-targets            identify #[rapx::verify] functions and list their safety contracts
-      --postfix-repeat <N>       number of extra SCC postfix repetitions during path enumeration (default 0)
+      --postfix-repeat <N|auto>  number of extra SCC postfix repetitions during path enumeration; `auto` enables automatic loop-depth detection (default auto)
       --mode <MODE>               verification mode: scan, targeted (default scan)
       --skip-invariant            skip struct invariant checks and derive safety via constructor-mutator-method chains
+      --debug-contracts          print expanded contract assertions for debug purposes
       --crate <CRATE>             filter verification targets to a specific crate (Rust crate name or Cargo package name)
       --module <MODULE_PATH>     filter verification targets to a specific module path within the crate
   -h, --help                      Print help
@@ -202,7 +203,7 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | safety-tag     | Example                     | Supported |
 |----------------|-----------------------------|:---------:|
 | `Align`        | Align(p, T)                 |     ✅    |
-| `Size`         | Size(T, c)                  |     ✅    |
+| `Size`         | Size(T, c)                  |     —     |
 | `NoPadding`    | !Padding(T)                 |     —     |
 | `NonNull`      | !Null(p)                    |     ✅    |
 | `Allocated`    | Allocated(p, T, len, A)     |     ✅    |
@@ -214,6 +215,8 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | `Init`         | Init(p, T, len)             |     ✅    |
 | `Unwrap`       | Unwrap(x, T)                |     —     |
 | `Typed`        | Typed(p, T)                 |     ✅    |
+| `ValidTransmute` \*† | ValidTransmute(T, U)   |     ✅    |
+| `SplitTransmute` \*†  | SplitTransmute(T, U)   |     ✅    |
 | `Owning`       | Owning(p)                   |     ✅    |
 | `Alias`        | Alias(p1, p2)               |     ✅    |
 | `Alive`        | Alive(p, l)                 |     ✅    |
@@ -225,9 +228,11 @@ This checklist maps RAPx's contract verification to the [Primitive Safety Proper
 | `ValidPtr` \*  | ValidPtr(p, T, len)         |     ✅    |
 | `Deref` \*     | Deref(p, T, len)            |     ✅    |
 | `Ptr2Ref` \*   | Ptr2Ref(p, T)               |     ✅    |
-| `Layout` \*    | Layout(p, layout)           |     —     |
+| `Layout` \*    | Layout(p, layout)           |     ✅    |
 
 > \* Compound safety properties are composed from primitive SPs: `ValidPtr(p, T, len) = Size(T, 0) || (!Size(T, 0) && Deref(p, T, len))`, `Deref(p, T, len) = Allocated(p, T, len) && InBound(p, T, len)`, and `Ptr2Ref(p, T) = Init(p, T, 1) && Align(p, T) && Alias(p, 0)`.
+>
+> \*† `ValidTransmute` and `SplitTransmute` are specializations of `Typed` for transmute operations: `ValidTransmute(T, U)` checks that a `T`-typed value is a valid bit-pattern of `U`, while `SplitTransmute` checks that every `size_of(U)`-byte contiguous chunk of a `T`-typed value is a valid `U` bit-pattern.
 
 RAPx ships with a curated set of `std` library safety contracts (`std-contracts.json`) that annotate standard library functions with property tags. This enables contract-based verification for common `std`/`core` APIs without requiring user annotations.
 

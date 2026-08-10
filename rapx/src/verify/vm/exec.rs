@@ -2304,7 +2304,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// Get the local referenced by a contract property's target.
     fn contract_target_local(&self, property: &Property<'tcx>) -> Option<Local> {
         let cp = match property.args.first()? {
-            PropertyArg::Place(cp) => cp,
             PropertyArg::Expr(ContractExpr::Place(cp)) => cp,
             PropertyArg::Expr(ContractExpr::IndexAccess { slice, .. }) => {
                 match slice.as_ref() {
@@ -2333,7 +2332,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// field projections to locate the actual field value's provenance.
     fn contract_alloc_id_field_aware(&mut self, property: &Property<'tcx>) -> Option<AllocId> {
         let cp = match property.args.first()? {
-            PropertyArg::Place(cp) => cp.clone(),
             PropertyArg::Expr(ContractExpr::Place(cp)) => cp.clone(),
             _ => return None,
         };
@@ -2365,7 +2363,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             PropertyArg::Expr(ContractExpr::Const(n)) => {
                 Some(Int::from_u64(self.ctx, *n as u64))
             }
-            PropertyArg::Expr(ContractExpr::Place(cp)) | PropertyArg::Place(cp) => {
+            PropertyArg::Expr(ContractExpr::Place(cp)) => {
                 let local = match cp.base {
                     PlaceBase::Local(n) => Local::from_usize(n),
                     PlaceBase::Arg(n) => Local::from_usize(n + 1),
@@ -2637,7 +2635,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     _ => None,
                 }
             }
-            Some(PropertyArg::Place(cp)) => match cp.base {
+            Some(PropertyArg::Expr(ContractExpr::Place(cp))) => match cp.base {
                 PlaceBase::Arg(n) => Some(Local::from_usize(n + 1)),
                 PlaceBase::Local(n) => Some(Local::from_usize(n)),
                 _ => None,

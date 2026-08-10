@@ -275,6 +275,24 @@ pub struct VerifyTargetCollector<'tcx> {
 }
 
 impl<'tcx> VerifyTargetCollector<'tcx> {
+    /// Collect all verification targets across the current crate and optionally
+    /// external crates (when `crate_filter` is set).
+    pub fn collect_all(
+        tcx: TyCtxt<'tcx>,
+        mode: VerifyMode,
+        skip_invariant: bool,
+        crate_filter: Option<String>,
+        module_filter: Option<String>,
+    ) -> Self {
+        let mut collector = Self::new(tcx, mode, skip_invariant, crate_filter.clone(), module_filter);
+        tcx.hir_visit_all_item_likes_in_crate(&mut collector);
+        if crate_filter.is_some() {
+            collector.collect_extern_crate_targets();
+        }
+        collector.check_module_filter_result();
+        collector
+    }
+
     /// Creates a new collector for the current type context.
     pub fn new(
         tcx: TyCtxt<'tcx>,
@@ -750,23 +768,13 @@ pub struct PrepareTargets<'tcx> {
 
 impl<'tcx> Analysis for PrepareTargets<'tcx> {
     fn run(&mut self) {
-        let mut collector = VerifyTargetCollector::new(
+        let collector = VerifyTargetCollector::collect_all(
             self.tcx,
             self.mode,
             self.skip_invariant,
             self.crate_filter.clone(),
             self.module_filter.clone(),
         );
-        self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
-
-        // When --crate is specified, also scan MIR keys of non-local crates.
-        // hir_visit_all_item_likes_in_crate only visits the local crate, but in a
-        // workspace the target crate (e.g. core) may be compiled as a dependency.
-        if self.crate_filter.is_some() {
-            collector.collect_extern_crate_targets();
-        }
-
-        collector.check_module_filter_result();
 
         // Free functions (no owning struct)
         let free_targets: Vec<_> = collector
@@ -1187,10 +1195,10 @@ fn build_raw_ptr_deref_checks<'tcx>(
     infos
         .into_iter()
         .map(|info| {
-            let target = PropertyArg::Place(ContractPlace {
+            let target = PropertyArg::Expr(ContractExpr::Place(ContractPlace {
                 base: PlaceBase::Arg(0),
                 projections: vec![],
-            });
+            }));
             let ty = PropertyArg::Ty(info.pointee_ty);
             let count = PropertyArg::Expr(ContractExpr::Const(1));
 
@@ -1285,10 +1293,10 @@ fn build_static_mut_checks<'tcx>(
     infos
         .into_iter()
         .map(|info| {
-            let target = PropertyArg::Place(ContractPlace {
+            let target = PropertyArg::Expr(ContractExpr::Place(ContractPlace {
                 base: PlaceBase::Arg(0),
                 projections: vec![],
-            });
+            }));
             let ty = PropertyArg::Ty(info.ty);
             let count = PropertyArg::Expr(ContractExpr::Const(1));
 

@@ -427,7 +427,6 @@ impl<'tcx> Property<'tcx> {
         for (inner_name, inner_args) in conjuncts {
             let mut property = Self::new(tcx, def_id, inner_name, inner_args);
             let inner_place = property.args.first().and_then(|arg| match arg {
-                PropertyArg::Place(place) => Some(place),
                 PropertyArg::Expr(ContractExpr::Place(place)) => Some(place),
                 _ => None,
             });
@@ -600,7 +599,7 @@ impl<'tcx> Property<'tcx> {
             }
         }
         Self::parse_contract_place(tcx, def_id, expr)
-            .map(PropertyArg::Place)
+            .map(|p| PropertyArg::Expr(ContractExpr::Place(p)))
             .unwrap_or_else(|| {
                 PropertyArg::Expr(Self::parse_contract_expr(tcx, def_id, expr, "target"))
             })
@@ -1223,7 +1222,7 @@ impl<'tcx> Property<'tcx> {
 /// Strip `IterElements` from a property arg and return the container place
 /// (without the projection) if `IterElements` was present.
 fn strip_iter_elements<'tcx>(arg: &mut PropertyArg<'tcx>) -> Option<ContractPlace<'tcx>> {
-    if let PropertyArg::Place(place) = arg {
+    if let PropertyArg::Expr(ContractExpr::Place(place)) = arg {
         if place.projections.iter().any(|p| matches!(p, ContractProjection::IterElements)) {
             let mut container = place.clone();
             container.projections.retain(|p| !matches!(p, ContractProjection::IterElements));

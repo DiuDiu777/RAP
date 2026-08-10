@@ -23,7 +23,7 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     contract::Property,
     display::{
-        emit_lines, emit_property_rows, emit_verify_summary, fmt_contract_expanded,
+        emit_lines, emit_property_rows, emit_results_and_verdict, emit_verify_summary, fmt_contract_expanded,
         fmt_fn_path_with_bounds, fmt_fn_path_with_generics, fmt_fn_with_params,
     },
     engine::VerifyEngine,
@@ -606,15 +606,10 @@ impl<'tcx> VerifyRun<'tcx> {
         rap_info!("[rapx::verify] sequence: {chain_label}");
         rap_info!("============================================================");
 
-        let (unproved, hazard_failed) =
-            super::display::emit_results_counts_and_checkpoints(self.tcx, &all_results);
-
         if all_results.is_empty() {
             rap_info!("  result: SOUND (no unsafe checkpoints)");
-        } else if unproved == 0 && hazard_failed == 0 {
-            rap_info!(green, "  result: SOUND");
         } else {
-            rap_warn!("  result: UNSOUND ({unproved} unproved, {hazard_failed} hazard)");
+            emit_results_and_verdict(self.tcx, &all_results);
         }
         rap_info!("");
     }
@@ -628,15 +623,13 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
     /// level. Earlier rounds use fewer loop unrollings; later rounds incrementally
     /// add deeper paths.
     fn run(&mut self) {
-        let mut collector = VerifyTargetCollector::new(
+        let collector = VerifyTargetCollector::collect_all(
             self.tcx,
             self.mode,
             self.skip_invariant,
             self.crate_filter.clone(),
             self.module_filter.clone(),
         );
-        self.tcx.hir_visit_all_item_likes_in_crate(&mut collector);
-        collector.check_module_filter_result();
 
         if self.debug_contracts {
             self.print_contracts_debug(&collector.function_targets);
@@ -1005,7 +998,6 @@ fn property_field_indices(property: &crate::verify::contract::Property<'_>) -> V
     let mut indices = Vec::new();
     for arg in &property.args {
         let place = match arg {
-            PropertyArg::Place(p) => Some(p),
             PropertyArg::Expr(ContractExpr::Place(p)) => Some(p),
             _ => None,
         };
@@ -1036,7 +1028,6 @@ fn remap_constructor_contract<'tcx>(
 
     fn remap_place_arg<'tcx>(arg: &PropertyArg<'tcx>) -> PropertyArg<'tcx> {
         let place = match arg {
-            PropertyArg::Place(p) => p,
             PropertyArg::Expr(ContractExpr::Place(p)) => p,
             _ => return arg.clone(),
         };
@@ -1054,11 +1045,7 @@ fn remap_constructor_contract<'tcx>(
         new_place
             .projections
             .extend(place.projections.iter().cloned());
-        match arg {
-            PropertyArg::Place(_) => PropertyArg::Place(new_place),
-            PropertyArg::Expr(_) => PropertyArg::Expr(ContractExpr::Place(new_place)),
-            _ => unreachable!(),
-        }
+        PropertyArg::Expr(ContractExpr::Place(new_place))
     }
 
     let new_args: Vec<PropertyArg<'tcx>> = property

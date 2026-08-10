@@ -221,7 +221,7 @@ pub fn fmt_contract_expanded(
                     let i = fmt_expr_plain(tcx, local_names, index);
                     format!("0 <= {i} < {s}.len()")
                 }
-                Some(PropertyArg::Place(place)) => {
+                Some(PropertyArg::Expr(ContractExpr::Place(place))) => {
                     let ptr = fmt_place_plain(tcx, place, local_names, struct_def_id);
                     let ty = property
                         .args
@@ -396,9 +396,6 @@ pub fn fmt_arg_plain(
     struct_def_id: Option<rustc_hir::def_id::DefId>,
 ) -> String {
     match arg {
-        crate::verify::contract::PropertyArg::Place(place) => {
-            fmt_place_plain(tcx, place, local_names, struct_def_id)
-        }
         crate::verify::contract::PropertyArg::Ty(ty) => format!("{}", ty),
         crate::verify::contract::PropertyArg::Expr(expr) => fmt_expr_plain(tcx, local_names, expr),
         crate::verify::contract::PropertyArg::Predicates(preds) => {
@@ -706,6 +703,14 @@ pub fn emit_verify_summary<'tcx>(
         }
     }
 
+    emit_results_and_verdict(tcx, all_results);
+    rap_info!("");
+}
+
+pub fn emit_results_and_verdict<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    all_results: &[PropertyCheckResult<'tcx>],
+) {
     let (unproved, hazard_failed) = emit_results_counts_and_checkpoints(tcx, all_results);
 
     if unproved == 0 && hazard_failed == 0 {
@@ -713,8 +718,6 @@ pub fn emit_verify_summary<'tcx>(
     } else {
         rap_warn!("  result: UNSOUND ({unproved} unproved, {hazard_failed} hazard)");
     }
-
-    rap_info!("");
 }
 
 
