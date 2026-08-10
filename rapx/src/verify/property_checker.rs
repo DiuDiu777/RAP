@@ -1768,6 +1768,29 @@ impl PropertyChecker {
         };
         solver.push();
         vm_state.assert_all(solver);
+        // Bridge the iter_ptr_offset (tracked by post_inc_start) to the
+        // predicate's LHS (typically the loop counter `i` in position).
+        // At the assert_unchecked(i < n) point, tracked_offset == i + 1
+        // because post_inc_start(1) was just called before the check.
+        for (_, off) in vm_state.iter_ptr_offset.iter() {
+            let one = Int::from_u64(vm_state.ctx, 1);
+            solver.assert(&off._eq(&Int::add(vm_state.ctx, &[&lhs, &one])));
+            eprintln!("[bridge] off={} lhs={}", off.to_string(), lhs.to_string());
+        }
+        // For Iter/IterMut Le predicates with rhs computed from fields,
+        // inject a lower-bound: the field-based len is >= 1 when the
+        // struct's entry contract contains !self.is_empty().
+        // Without this, Z3 cannot deduce (end-ptr)/sz >= 1 from != 0.
+        if matches!(pred.op, RelOp::Le) {
+            if let Some(term) = self.try_get_iter_len_term(vm_state, &pred.rhs) {
+                if let Some(one) = lhs.as_u64().or(rhs.as_u64()) {
+                    if one == 1 {
+                        let one_term = Int::from_u64(vm_state.ctx, 1);
+                        solver.assert(&term.ge(&one_term));
+                    }
+                }
+            }
+        }
         // NIA helper: inject Euclidean division identity for div operands
         // to help Z3 prove (X/N)*N <= X via X = (X/N)*N + X%N, X%N >= 0.
         self.inject_nia_axioms(vm_state, solver, checkpoint, &pred.lhs);
@@ -2031,6 +2054,11 @@ impl PropertyChecker {
                 Some(a_val.ge(&b_val).ite(&a_val, &b_val))
             }
             ContractExpr::Len(inner) => {
+                if let Some(ck) = checkpoint {
+                    if let Some(term) = self.try_iter_len_from_fields(vm_state, ck, inner) {
+                        return Some(term);
+                    }
+                }
                 let val = self.eval_contract_expr_to_value(vm_state, checkpoint, inner)?;
                 let alloc_id = val.provenance_alloc_id()?;
                 let alloc = vm_state.allocations.iter().find(|a| a.id == alloc_id)?;
@@ -2080,6 +2108,130 @@ impl PropertyChecker {
             }
             _ => None,
         }
+    }
+
+    /// Return the field-based Iter/IterMut len term if the expression
+    /// represents a `self.len()` call and the VM state has field values.
+    fn try_get_iter_len_term<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        expr: &ContractExpr<'tcx>,
+    ) -> Option<Int<'ctx>> {
+        let ContractExpr::Len(_) = expr else { return None };
+        for (_, val) in vm_state.locals.iter() {
+            let is_iter = match val.ty.kind() {
+                TyKind::Ref(_, pointee, _) => match pointee.kind() {
+                    TyKind::Adt(adt_def, _) => {
+                        let name = vm_state.tcx.def_path_str(adt_def.did());
+                        name.ends_with("::Iter") || name == "Iter"
+                            || name.ends_with("::IterMut") || name == "IterMut"
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            if !is_iter { continue; }
+            let alloc_id = val.provenance_alloc_id()?;
+            for (&l, lv) in vm_state.locals.iter() {
+                if lv.provenance_alloc_id() != Some(alloc_id) { continue; }
+                if let (Some(ptr), Some(end)) =
+                    (vm_state.field_value(l, &[0]), vm_state.field_value(l, &[1]))
+                {
+                    if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                        if pp.alloc_id == ep.alloc_id {
+                            let elem_ty = match ptr.ty.kind() {
+                                TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                                _ => None,
+                            };
+                            let elem_size = elem_ty.map(|t| vm_state.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                            let diff = Int::sub(vm_state.ctx, &[&ep.offset, &pp.offset]);
+                            let sz = Int::from_u64(vm_state.ctx, elem_size);
+                            return Some(diff.div(&sz));
+                        }
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// Compute `self.len()` from Iter/IterMut struct fields when the
+    /// contract expression refers to such a type.
+    fn try_iter_len_from_fields<'ctx, 'tcx>(
+        &self,
+        vm_state: &VmState<'ctx, 'tcx>,
+        checkpoint: &Checkpoint<'tcx>,
+        expr: &ContractExpr<'tcx>,
+    ) -> Option<Int<'ctx>> {
+        use rustc_middle::mir::Place;
+        let ContractExpr::Place(cp) = expr else { return None };
+        let op: &Operand<'tcx> = match cp.base {
+            PlaceBase::Arg(n) => checkpoint.args.get(n)?,
+            PlaceBase::Local(n) => {
+                let callee = checkpoint.callee?;
+                let idx = crate::helpers::mir_utils::callee_param_index_for_local(
+                    vm_state.tcx, callee, n)?;
+                checkpoint.args.get(idx)?
+            }
+            _ => return None,
+        };
+        let place: &Place<'tcx> = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return None,
+        };
+        let local = place.local;
+        let local_val = vm_state.locals.get(&local)?;
+        let is_iter = match local_val.ty.kind() {
+            TyKind::Ref(_, pointee, _) => match pointee.kind() {
+                TyKind::Adt(adt_def, _) => {
+                    let name = vm_state.tcx.def_path_str(adt_def.did());
+                    name.ends_with("::Iter") || name == "Iter"
+                        || name.ends_with("::IterMut") || name == "IterMut"
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !is_iter { return None; }
+        // Direct lookup first, then scan by alloc_id for temp copies.
+        if let (Some(ptr), Some(end)) =
+            (vm_state.field_value(local, &[0]), vm_state.field_value(local, &[1]))
+        {
+            if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                if pp.alloc_id == ep.alloc_id {
+                    let elem_ty = match ptr.ty.kind() {
+                        TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                        _ => None,
+                    };
+                    let elem_size = elem_ty.map(|t| vm_state.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                    let diff = Int::sub(vm_state.ctx, &[&ep.offset, &pp.offset]);
+                    let sz = Int::from_u64(vm_state.ctx, elem_size);
+                    return Some(diff.div(&sz));
+                }
+            }
+        }
+        // Fallback: scan all locals for one with same struct alloc.
+        let target_alloc = local_val.provenance_alloc_id()?;
+        for (&scan_local, scan_val) in vm_state.locals.iter() {
+            if scan_val.provenance_alloc_id() != Some(target_alloc) { continue; }
+            if let (Some(ptr), Some(end)) =
+                (vm_state.field_value(scan_local, &[0]), vm_state.field_value(scan_local, &[1]))
+            {
+                if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                    if pp.alloc_id == ep.alloc_id {
+                        let elem_ty = match ptr.ty.kind() {
+                            TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                            _ => None,
+                        };
+                        let elem_size = elem_ty.map(|t| vm_state.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                        let diff = Int::sub(vm_state.ctx, &[&ep.offset, &pp.offset]);
+                        let sz = Int::from_u64(vm_state.ctx, elem_size);
+                        return Some(diff.div(&sz));
+                    }
+                }
+            }
+        }
+        None
     }
 
     /// Resolve a contract `Place` expression against the VM state and checkpoint.

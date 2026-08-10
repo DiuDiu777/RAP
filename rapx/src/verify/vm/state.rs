@@ -205,6 +205,18 @@ pub struct VmState<'ctx, 'tcx> {
     /// Example: `(local_3, [0])` is `local_3.0`, `(local_3, [0, 1])` is `local_3.0.1`.
     pub(crate) field_values: FxHashMap<(Local, Vec<usize>), VmValue<'ctx, 'tcx>>,
 
+    /// Locals set by `iterpreter_iter_is_empty` for Iter/IterMut,
+    /// along with the field-based len expression. When a switchint
+    /// on such local takes the false (!is_empty) branch, we inject
+    /// `len >= 1` as a path condition to help Z3.
+    pub(crate) is_empty_len: FxHashMap<Local, Int<'ctx>>,
+
+    /// Cumulative ptr offset for Iter/IterMut field [0] (ptr).
+    /// Key: (struct_local). When post_inc_start advances the ptr by
+    /// `n` elements, we increment this offset instead of nesting
+    /// symbolic additions. This keeps Z3 expressions compact.
+    pub(crate) iter_ptr_offset: FxHashMap<Local, Int<'ctx>>,
+
     /// Fields that have been explicitly initialized (written to).
     pub(crate) field_init: FxHashSet<(Local, Vec<usize>)>,
 
@@ -283,6 +295,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             split_transmute_asserted: false,
             slice_data_allocations: FxHashMap::default(),
             field_values: FxHashMap::default(),
+            is_empty_len: FxHashMap::default(),
+            iter_ptr_offset: FxHashMap::default(),
             field_init: FxHashSet::default(),
             known_nul_offsets: FxHashSet::default(),
             known_non_nul_offsets: FxHashSet::default(),

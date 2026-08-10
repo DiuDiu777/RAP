@@ -72,7 +72,9 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         // (ptr + end_or_len share the same allocation with per-field
         // offsets).  The generic fn_simulator would return
         // sizeof(Iter)/sizeof(T) which is wrong for generic T.
-        if (name.contains("::Iter<") || name.contains("::IterMut<"))
+        if (name.contains("::Iter<") || name.contains("::IterMut<")
+            || name.ends_with("::Iter::len") || name.ends_with("::IterMut::len")
+            || name.ends_with("::Iter::is_empty") || name.ends_with("::IterMut::is_empty"))
             && (name.ends_with("::len") || name.ends_with("::is_empty"))
             && arg_values.len() >= 1
         {
@@ -122,6 +124,106 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }
             }
             // Fall through to fn_simulator if field access failed
+        }
+
+        // Iter::next() / IterMut::next(): advance ptr by 1 and return old.
+        let is_next = name.contains("::next")
+            && (name.starts_with("Iter::") || name.starts_with("IterMut::")
+                || name.contains("::Iter::") || name.contains("::IterMut::")
+                || name.contains("::Iter<") || name.contains("::IterMut<"));
+        // NOTE: to see if this handler fires
+        // eprintln!("[next_handler] name={name} is_next={is_next}");
+        if is_next
+            && arg_values.len() >= 1
+        {
+            let self_val = &arg_values[0];
+            if let Some(local) = self.find_iter_self_local(self_val) {
+                if let (Some(ptr), Some(end)) = (self.field_value(local, &[0]), self.field_value(local, &[1])) {
+                    if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                        if pp.alloc_id == ep.alloc_id {
+                            let dest_ty = self.body.local_decls[destination].ty;
+                            // Compute is_empty from fields/tracked offset (same as is_empty()).
+                            let elem_ty = match ptr.ty.kind() {
+                                TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                                _ => None,
+                            };
+                            let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                            let sz = Int::from_u64(self.ctx, elem_size);
+                            let ep_offset = ep.offset.clone();
+                            let remaining = if let Some(off) = self.iter_ptr_offset.get(&local) {
+                                let base_len = ep_offset.div(&sz);
+                                let zero = Int::from_u64(self.ctx, 0);
+                                off.gt(&base_len).ite(&zero, &Int::sub(self.ctx, &[&base_len, off]))
+                            } else {
+                                let diff = Int::sub(self.ctx, &[&ep_offset, &pp.offset]);
+                                diff.div(&sz)
+                            };
+                            let is_empty = remaining._eq(&Int::from_u64(self.ctx, 0));
+                            let zero = Int::from_u64(self.ctx, 0);
+                            let one = Int::from_u64(self.ctx, 1);
+                            // If empty, return None (null ptr). Else advance and return old ptr.
+                            let old_ptr_val = VmValue {
+                                term: pp.offset.clone(),
+                                ty: ptr.ty,
+                                provenance: Some(Provenance {
+                                    alloc_id: pp.alloc_id,
+                                    offset: pp.offset.clone(),
+                                }),
+                                invariants: ValueInvariants { non_null: true, init: true, ..Default::default() },
+                            };
+                            // Build None (null) value
+                            let none_val = VmValue {
+                                term: zero.clone(),
+                                ty: dest_ty,
+                                provenance: None,
+                                invariants: ValueInvariants::default(),
+                            };
+                            // Advance ptr when not empty
+                            let one_term = Int::from_u64(self.ctx, 1);
+                            let new_offset = match self.iter_ptr_offset.get(&local) {
+                                Some(prev) => Int::add(self.ctx, &[prev, &one_term]),
+                                None => one_term.clone(),
+                            };
+                            // Assert !is_empty as path condition (remaining > 0)
+                            let zero = Int::from_u64(self.ctx, 0);
+                            self.path_conditions.push(remaining.gt(&zero));
+                            // Push: base_len >= tracked_offset
+                            let base_len = ep_offset.div(&sz);
+                            self.path_conditions.push(new_offset.le(&base_len));
+                            self.iter_ptr_offset.insert(local, new_offset);
+                            // Return None or old ptr
+                            let result_val = VmValue {
+                                term: is_empty.ite(&zero, &old_ptr_val.term),
+                                ty: dest_ty,
+                                provenance: if is_empty.as_bool().unwrap_or(false) { None } else { old_ptr_val.provenance.clone() },
+                                invariants: ValueInvariants::default(),
+                            };
+                            self.set_local(destination, result_val);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+
+        // post_inc_start / pre_dec_end on Iter/IterMut: apply the ptr/end
+        // update as a side effect, then fall through to normal handling.
+        // These callees have SwitchInt (ZST branch) exceeding inline limits,
+        // so the ptr update would otherwise be lost.
+        let callee = crate::helpers::mir_utils::dep_callee_def_id(func);
+        let caller_arg_locals: Vec<Local> = args.iter()
+            .filter_map(|a| a.node.place().map(|p| p.local))
+            .collect();
+        if let Some(c) = callee {
+            if self.tcx.is_mir_available(c) {
+                let cname = self.tcx.def_path_str(c);
+                if (cname.contains("::post_inc_start") || cname.contains("::pre_dec_end"))
+                    && arg_values.len() >= 2
+                {
+                    self.apply_iter_ptr_update(c, &cname, &arg_values, &caller_arg_locals);
+                    // Continue to normal handling (return value is () , ignored).
+                }
+            }
         }
 
         // Try inline for callees with available MIR, unless fn_simulator
@@ -1301,10 +1403,21 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             _ => None,
                         };
                         let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
-                        let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
                         let sz = Int::from_u64(self.ctx, elem_size);
+                        // Use tracked offset to produce compact `base_len - offset`.
+                        let len_term = if let Some(offset) = self.iter_ptr_offset.get(&l) {
+                            let base_len = ep.offset.div(&sz);
+                            let zero = Int::from_u64(self.ctx, 0);
+                            offset.gt(&base_len).ite(
+                                &zero,
+                                &Int::sub(self.ctx, &[&base_len, offset]),
+                            )
+                        } else {
+                            let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
+                            diff.div(&sz)
+                        };
                         let val = VmValue {
-                            term: diff.div(&sz),
+                            term: len_term,
                             ty: dest_ty,
                             provenance: None,
                             invariants: ValueInvariants::default(),
@@ -1325,15 +1438,36 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
                     if pp.alloc_id == ep.alloc_id {
                         let dest_ty = self.body.local_decls[dest].ty;
-                        let eq = pp.offset._eq(&ep.offset);
+                        let elem_size = match ptr.ty.kind() {
+                            TyKind::Adt(_, substs) => substs.first()
+                                .and_then(|s| s.as_type())
+                                .map(|t| self.size_of_ty(t).max(1)),
+                            _ => None,
+                        }.unwrap_or(1) as u64;
+                        let sz = Int::from_u64(self.ctx, elem_size);
+                        // Compute remaining len for is_empty check.
+                        // Use tracked offset for compact Z3 terms.
+                        let remaining = if let Some(offset) = self.iter_ptr_offset.get(&l) {
+                            let base_len = ep.offset.div(&sz);
+                            let zero = Int::from_u64(self.ctx, 0);
+                            offset.gt(&base_len).ite(
+                                &zero,
+                                &Int::sub(self.ctx, &[&base_len, offset]),
+                            )
+                        } else {
+                            let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
+                            diff.div(&sz)
+                        };
+                        let is_empty = remaining._eq(&Int::from_u64(self.ctx, 0));
                         let zero = Int::from_u64(self.ctx, 0);
                         let one = Int::from_u64(self.ctx, 1);
                         let val = VmValue {
-                            term: eq.ite(&one, &zero),
+                            term: is_empty.ite(&one, &zero),
                             ty: dest_ty,
                             provenance: None,
                             invariants: ValueInvariants::default(),
                         };
+                        self.is_empty_len.insert(dest, remaining.clone());
                         self.set_local(dest, val);
                         return true;
                     }
@@ -1341,6 +1475,32 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
         }
         false
+    }
+
+    /// Apply the side effect of post_inc_start / pre_dec_end on Iter/IterMut.
+    /// Only updates the tracked offset (not field values), so that the
+    /// precondition check (which runs before the call executes) sees the
+    /// pre-update state, while subsequent len()/is_empty() calls use
+    /// `base_len - offset` via interpreter_iter_len.
+    fn apply_iter_ptr_update(
+        &mut self,
+        _callee: DefId,
+        cname: &str,
+        arg_values: &[VmValue<'ctx, 'tcx>],
+        _caller_arg_locals: &[Local],
+    ) {
+        let is_inc = cname.contains("::post_inc_start");
+        if !is_inc { return; }  // pre_dec_end not yet supported
+        let self_val = &arg_values[0];
+        let some_local = self.find_iter_self_local(self_val);
+        let Some(local) = some_local else { return };
+        let offset_term = arg_values.get(1).map(|v| v.term.clone())
+            .unwrap_or_else(|| Int::from_u64(self.ctx, 1));
+        let new_offset = match self.iter_ptr_offset.get(&local) {
+            Some(prev) => Int::add(self.ctx, &[prev, &offset_term]),
+            None => offset_term,
+        };
+        self.iter_ptr_offset.insert(local, new_offset);
     }
 
     /// If arg_val is a reference to an Iter or IterMut struct, return the
@@ -1351,8 +1511,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             TyKind::Ref(_, pointee, _) => match pointee.kind() {
                 TyKind::Adt(adt_def, _) => {
                     let name = self.tcx.def_path_str(adt_def.did());
-                    if name.contains("::Iter<") || name == "Iter"
-                        || name.contains("::IterMut<") || name == "IterMut"
+                    if name.ends_with("::Iter") || name == "Iter"
+                        || name.ends_with("::IterMut") || name == "IterMut"
                     {
                         return Some(Local::from_usize(1));
                     }

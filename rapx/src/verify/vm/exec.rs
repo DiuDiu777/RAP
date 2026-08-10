@@ -145,6 +145,15 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     ) {
         let return_val = self.locals.get(&Local::from_usize(0)).cloned();
 
+        // Check if the callee was post_inc_start / pre_dec_end
+        // on an Iter/IterMut. If so, track the ptr offset change.
+        if let Some((_, saved_callee)) = self.body_stack.last() {
+            let name = self.tcx.def_path_str(*saved_callee);
+            if name.contains("::post_inc_start") || name.contains("::pre_dec_end") {
+                self.track_iter_ptr_after_inline();
+            }
+        }
+
         // Restore caller context
         if let Some((saved_body, saved_caller)) = self.body_stack.pop() {
             self.body = saved_body;
@@ -1156,9 +1165,14 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 })
                 .collect();
             if !field_indices.is_empty() {
+                // Track cumulative ptr offset for Iter/IterMut before moving value.
+                let track_iter = field_indices == [0];
                 let mut write_value = value;
                 write_value.invariants.init = true;
                 self.set_field_value(place.local, field_indices, write_value);
+                if track_iter {
+                    self.track_iter_ptr_update(place.local);
+                }
             }
         }
         // For deref projections (`*ptr = val`): do NOT overwrite the base local.
@@ -1984,6 +1998,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         self.path_conditions.push(discr_val.term._eq(&val_term));
                         if value != 0 {
                             self.infer_switch_guard(discr);
+                        } else {
+                            // For !is_empty() on Iter/IterMut (false branch),
+                            // also assert self.len() >= 1 to help Z3.
+                            self.inject_is_empty_len(discr);
                         }
                         return;
                     }
@@ -2267,6 +2285,13 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     for pred in predicates {
                         if let Some(condition) = self.eval_predicate_as_bool(pred) {
                             self.path_conditions.push(condition);
+                            // For !self.is_empty() → self.len() != 0 on
+                            // Iter/IterMut: also assert len >= 1 to help
+                            // Z3 with integer division reasoning.
+                            if let Some(len_term) = self.try_simple_iter_len_from_pred(pred) {
+                                let one = Int::from_u64(self.ctx, 1);
+                                self.path_conditions.push(len_term.ge(&one));
+                            }
                         }
                     }
                 }
@@ -2389,6 +2414,12 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }
             }
             ContractExpr::Len(inner) => {
+                // Try field-based len for Iter/IterMut first.
+                if let Some(val) = self.eval_contract_expr_simple_value(inner) {
+                    if let Some(term) = self.try_simple_iter_len(&val) {
+                        return Some(term);
+                    }
+                }
                 let val = self.eval_contract_expr_simple_value(inner)?;
                 let alloc_id = val.provenance_alloc_id()?;
                 let alloc = self.allocations.iter().find(|a| a.id == alloc_id)?;
@@ -2436,6 +2467,131 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }
             }
             _ => None,
+        }
+    }
+
+    /// Try field-based len for Iter/IterMut references (same logic as
+    /// `interpreter_iter_len` in call.rs). Used by `eval_contract_expr_simple`
+    /// so that ContractFact assertions use the same symbolic term as the
+    /// VM execution path.
+    fn try_simple_iter_len(&self, arg_val: &VmValue<'ctx, 'tcx>) -> Option<Int<'ctx>> {
+        use rustc_middle::ty::TyKind;
+        let is_iter = match arg_val.ty.kind() {
+            TyKind::Ref(_, pointee, _) => match pointee.kind() {
+                TyKind::Adt(adt_def, _) => {
+                    let name = self.tcx.def_path_str(adt_def.did());
+                    name.ends_with("::Iter") || name == "Iter"
+                        || name.ends_with("::IterMut") || name == "IterMut"
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !is_iter { return None; }
+        let local = Local::from_usize(1);
+        let ptr = self.field_value(local, &[0])?;
+        let end = self.field_value(local, &[1])?;
+        let pp = ptr.provenance.as_ref()?;
+        let ep = end.provenance.as_ref()?;
+        if pp.alloc_id != ep.alloc_id { return None; }
+        let elem_ty = match ptr.ty.kind() {
+            TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+            _ => None,
+        };
+        let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+        let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
+        let sz = Int::from_u64(self.ctx, elem_size);
+        Some(diff.div(&sz))
+    }
+
+    /// For a predicate of the form `self.len() != 0` (i.e. `!self.is_empty()`),
+    /// if the self is an Iter/IterMut reference, return the field-based len term
+    /// so that a `len >= 1` constraint can be added.
+    fn try_simple_iter_len_from_pred(
+        &self,
+        pred: &crate::verify::contract::NumericPredicate<'tcx>,
+    ) -> Option<Int<'ctx>> {
+        use crate::verify::contract::{ContractExpr, RelOp};
+        if !matches!(pred.op, RelOp::Ne) { return None; }
+        if !matches!(&pred.rhs, ContractExpr::Const(0)) { return None; }
+        let ContractExpr::Len(inner) = &pred.lhs else { return None; };
+        let val = self.eval_contract_expr_simple_value(inner)?;
+        self.try_simple_iter_len(&val)
+    }
+
+    /// If `discr` is a local that was set by `iterpreter_iter_is_empty`
+    /// for an Iter/IterMut struct, push `len >= 1` as a path condition.
+    fn inject_is_empty_len(&mut self, discr: &Operand<'tcx>) {
+        let place = match discr {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            _ => return,
+        };
+        if let Some(len_expr) = self.is_empty_len.get(&place.local) {
+            let one = Int::from_u64(self.ctx, 1);
+            self.path_conditions.push(len_expr.ge(&one));
+        }
+    }
+
+    /// If `local` is a reference to Iter/IterMut and field 0 (ptr)
+    /// is updated, increment the cumulative ptr offset so that
+    /// `interpreter_iter_len` can express `len = initial_len - offset`
+    /// instead of nested `(end - (ptr + sz + sz + ...)) / sz`.
+    fn track_iter_ptr_update(
+        &mut self,
+        local: Local,
+    ) {
+        let local_val = match self.locals.get(&local) {
+            Some(v) => v,
+            None => return,
+        };
+        let is_iter = match local_val.ty.kind() {
+            rustc_middle::ty::TyKind::Ref(_, pointee, _) => match pointee.kind() {
+                rustc_middle::ty::TyKind::Adt(adt_def, _) => {
+                    let name = self.tcx.def_path_str(adt_def.did());
+                    name.ends_with("::Iter") || name == "Iter"
+                        || name.ends_with("::IterMut") || name == "IterMut"
+                }
+                _ => false,
+            },
+            _ => false,
+        };
+        if !is_iter { return; }
+        let one = Int::from_u64(self.ctx, 1);
+        let new_offset = match self.iter_ptr_offset.get(&local) {
+            Some(prev) => Int::add(self.ctx, &[prev, &one]),
+            None => one,
+        };
+        self.iter_ptr_offset.insert(local, new_offset);
+    }
+
+    /// After inlining post_inc_start/pre_dec_end for Iter/IterMut,
+    /// increment the tracked ptr offset so that `interpreter_iter_len`
+    /// can compute `base_len - offset` compactly.
+    fn track_iter_ptr_after_inline(&mut self) {
+        let mut to_update: Vec<Local> = Vec::new();
+        for (&local, val) in self.locals.iter() {
+            let is_iter = match val.ty.kind() {
+                rustc_middle::ty::TyKind::Ref(_, pointee, _) => match pointee.kind() {
+                    rustc_middle::ty::TyKind::Adt(adt_def, _) => {
+                        let name = self.tcx.def_path_str(adt_def.did());
+                        name.ends_with("::Iter") || name == "Iter"
+                            || name.ends_with("::IterMut") || name == "IterMut"
+                    }
+                    _ => false,
+                },
+                _ => false,
+            };
+            if is_iter {
+                to_update.push(local);
+            }
+        }
+        let one = Int::from_u64(self.ctx, 1);
+        for local in to_update {
+            let new_offset = match self.iter_ptr_offset.get(&local) {
+                Some(prev) => Int::add(self.ctx, &[prev, &one]),
+                None => one.clone(),
+            };
+            self.iter_ptr_offset.insert(local, new_offset);
         }
     }
 
