@@ -13,6 +13,7 @@ use crate::verify::{
     def_use::PlaceKey,
 };
 use crate::helpers::mir_scan::Checkpoint;
+use crate::helpers::api_classify;
 use crate::analysis::alias::collect_local_origins;
 
 use super::state::{AllocId, VmState, VmValue};
@@ -321,9 +322,8 @@ fn check_view_alias<'ctx, 'tcx>(
             let is_reallocatable = match &origin.kind {
                 VmOriginKind::Owned(def_id) => {
                     let def_path = tcx.def_path_str(*def_id);
-                    def_path.ends_with("::Vec") || def_path == "Vec"
-                        || def_path.ends_with("::CString") || def_path == "CString"
-                        || def_path.ends_with("::c_str::CString")
+                    api_classify::is_std_vec(&def_path)
+                        || api_classify::is_std_cstring(&def_path)
                 }
                 _ => false,
             };

@@ -493,8 +493,6 @@ pub(crate) fn body_parents<'tcx>(
     tcx: TyCtxt<'tcx>,
     body: &Body<'tcx>,
 ) -> FxHashMap<Local, Local> {
-    use crate::verify::call_summary::fn_simulator;
-
     let mut parents: FxHashMap<Local, Local> = Default::default();
     for data in body.basic_blocks.iter() {
         for statement in &data.statements {
@@ -527,7 +525,7 @@ pub(crate) fn body_parents<'tcx>(
             continue;
         };
         let name = crate::helpers::mir_utils::call_name(tcx, func);
-        if !fn_simulator::is_as_ptr(&name) {
+        if !crate::helpers::api_classify::is_as_ptr(&name) {
             continue;
         }
         let Some(source) = args.first().and_then(|arg| match &arg.node {

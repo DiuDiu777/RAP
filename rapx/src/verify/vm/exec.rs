@@ -28,6 +28,8 @@ use crate::{
 
 use super::state::{AllocId, Provenance, VmState, VmValue, ValueInvariants};
 
+use crate::helpers::api_classify;
+
 impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// Execute all retained MIR items in path order.
     pub fn execute_items(
@@ -149,7 +151,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         // on an Iter/IterMut. If so, track the ptr offset change.
         if let Some((_, saved_callee)) = self.body_stack.last() {
             let name = self.tcx.def_path_str(*saved_callee);
-            if name.contains("::post_inc_start") || name.contains("::pre_dec_end") {
+            if api_classify::is_iter_ptr_adj(&name) {
                 self.track_iter_ptr_after_inline();
             }
         }
@@ -203,11 +205,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 // ── Box / Vec parameter: heap-allocated pointee ──
                 if let rustc_middle::ty::TyKind::Adt(adt_def, _) = ty.kind() {
                     let def_path = self.tcx.def_path_str(adt_def.did());
-                    let is_vec = def_path.ends_with("::Vec") || def_path == "Vec";
-                    if def_path.ends_with("::Box") || def_path == "Box"
+                    let is_vec = api_classify::is_std_vec(&def_path);
+                    if api_classify::is_std_box(&def_path)
                         || is_vec
-                        || def_path.ends_with("::CString") || def_path == "CString"
-                        || def_path.ends_with("::c_str::CString")
+                        || api_classify::is_std_cstring(&def_path)
                     {
                         let heap_ty = if let rustc_middle::ty::TyKind::Adt(_, substs) = ty.kind() {
                             if let Some(first) = substs.first() {
@@ -912,7 +913,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 // operand's allocation so ValidCStr checks succeed.
                 if self.locals.contains_key(&dest) {
                     let cmpr_name = crate::helpers::mir_utils::call_name(self.tcx, func);
-                    if cmpr_name.contains("::eq") || cmpr_name.contains("PartialEq") {
+                    if api_classify::is_eq_or_partial_eq(&cmpr_name) {
                         self.propagate_const_bytes_to_tracked(args);
                     }
                 }
@@ -1485,12 +1486,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         };
                         self.set_field_value(dest_place.local, vec![0], result_val);
                         let overflow_term = self.fresh_int("overflow_flag");
-                        let overflow_val = VmValue {
-                            term: overflow_term,
-                            ty: fields[1],
-                            provenance: None,
-                            invariants: ValueInvariants::default(),
-                        };
+                        let overflow_val = VmValue::new(overflow_term, fields[1]);
                         self.set_field_value(dest_place.local, vec![1], overflow_val);
                         self.mark_field_init(dest_place.local, vec![0]);
                         self.mark_field_init(dest_place.local, vec![1]);
@@ -1620,7 +1616,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 if let Some(ref pv) = place_val {
                     if let rustc_middle::ty::TyKind::Adt(adt_def, _) = pv.ty.kind() {
                         let def_path = self.tcx.def_path_str(adt_def.did());
-                        if def_path.contains("cmp::Ordering") && adt_def.is_enum() {
+                        if api_classify::is_std_ordering(&def_path) && adt_def.is_enum() {
                             let one = Int::from_u64(self.ctx, 1);
                             let discr_minus_one = Int::sub(self.ctx, &[&term, &one]);
                             self.path_conditions.push(pv.term._eq(&discr_minus_one));
@@ -2480,8 +2476,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             TyKind::Ref(_, pointee, _) => match pointee.kind() {
                 TyKind::Adt(adt_def, _) => {
                     let name = self.tcx.def_path_str(adt_def.did());
-                    name.ends_with("::Iter") || name == "Iter"
-                        || name.ends_with("::IterMut") || name == "IterMut"
+                    api_classify::is_std_iter_or_itermut(&name)
                 }
                 _ => false,
             },
@@ -2548,8 +2543,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             rustc_middle::ty::TyKind::Ref(_, pointee, _) => match pointee.kind() {
                 rustc_middle::ty::TyKind::Adt(adt_def, _) => {
                     let name = self.tcx.def_path_str(adt_def.did());
-                    name.ends_with("::Iter") || name == "Iter"
-                        || name.ends_with("::IterMut") || name == "IterMut"
+                    api_classify::is_std_iter_or_itermut(&name)
                 }
                 _ => false,
             },
@@ -2717,19 +2711,16 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         match ty.kind() {
             TyKind::Adt(adt_def, substs) => {
                 let def_path = self.tcx.def_path_str(adt_def.did());
-                let is_nn = def_path.ends_with("::NonNull") || def_path == "NonNull"
-                    || def_path.contains("::NonNull");
+                let is_nn = api_classify::is_std_nonnull(&def_path);
                 if is_nn {
                     substs.first().and_then(|s| s.as_type())
-                } else if def_path.ends_with("::Option") || def_path == "Option"
-                    || def_path.contains("::Option")
+                } else if api_classify::is_std_option(&def_path)
                 {
                     if let Some(inner) = substs.first().and_then(|s| s.as_type()) {
                         match inner.kind() {
                             TyKind::Adt(ia, is_) => {
                                 let ip = self.tcx.def_path_str(ia.did());
-                                let is_nn_inner = ip.ends_with("::NonNull") || ip == "NonNull"
-                                    || ip.contains("::NonNull");
+                                let is_nn_inner = api_classify::is_std_nonnull(&ip);
                                 if is_nn_inner {
                                     is_.first().and_then(|s| s.as_type())
                                 } else {
@@ -2774,9 +2765,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         first_arg_op: &Operand<'tcx>,
     ) -> bool {
         let name = crate::helpers::mir_utils::call_name(self.tcx, func);
-        if !crate::verify::call_summary::fn_simulator::is_as_ptr(&name)
-            && !name.contains("::as_ptr")
-        {
+        if !api_classify::is_as_ptr(&name) {
             return false;
         }
         let dest_ty = self.body.local_decls[dest].ty;

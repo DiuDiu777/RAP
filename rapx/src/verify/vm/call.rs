@@ -17,8 +17,40 @@ use crate::compat::{FxHashSet, Spanned};
 use crate::verify::call_summary::{self, CallEffect};
 use crate::verify::def_use::{PlaceBaseKey, PlaceKey};
 use crate::helpers::mir_utils::operand_place;
+use crate::helpers::api_classify;
 
 use super::state::{AllocId, Provenance, VmState, VmValue, ValueInvariants};
+
+/// Classification of a call site for dispatch prioritization.
+#[allow(dead_code)]
+enum CallClass {
+    SelectUnpredictable,
+    IterLenOrIsEmpty,
+    IterNext,
+    General,
+}
+
+fn classify_call(name: &str, arg_values: &[VmValue]) -> CallClass {
+    if api_classify::is_select_unpredictable(name) && arg_values.len() >= 3 {
+        return CallClass::SelectUnpredictable;
+    }
+    if (name.contains("::Iter<") || name.contains("::IterMut<")
+        || name.ends_with("::Iter::len") || name.ends_with("::IterMut::len")
+        || name.ends_with("::Iter::is_empty") || name.ends_with("::IterMut::is_empty"))
+        && (name.ends_with("::len") || name.ends_with("::is_empty"))
+        && arg_values.len() >= 1
+    {
+        return CallClass::IterLenOrIsEmpty;
+    }
+    let is_next = name.contains("::next")
+        && (name.starts_with("Iter::") || name.starts_with("IterMut::")
+            || name.contains("::Iter::") || name.contains("::IterMut::")
+            || name.contains("::Iter<") || name.contains("::IterMut<"));
+    if is_next && arg_values.len() >= 1 {
+        return CallClass::IterNext;
+    }
+    CallClass::General
+}
 
 const MAX_INLINE_DEPTH: usize = 5;
 
@@ -44,7 +76,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let name = crate::helpers::mir_utils::call_name(self.tcx, func);
 
         // ── select_unpredictable: result ∈ {x, y} ─────────────────────
-        if name.contains("select_unpredictable") && arg_values.len() >= 3 {
+        if api_classify::is_select_unpredictable(&name) && arg_values.len() >= 3 {
             let term = self.fresh_int(&format!("selunpred_{}", destination.as_usize()));
             let dest_ty = self.body.local_decls[destination].ty;
             let eq1 = term._eq(&arg_values[1].term);
@@ -97,12 +129,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
                                 let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
                                 let sz = Int::from_u64(self.ctx, elem_size);
-                                let val = VmValue {
-                                    term: diff.div(&sz),
-                                    ty: dest_ty,
-                                    provenance: None,
-                                    invariants: ValueInvariants::default(),
-                                };
+                                let val = VmValue::new(diff.div(&sz), dest_ty);
                                 self.set_local(destination, val);
                                 return;
                             } else {
@@ -172,12 +199,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 invariants: ValueInvariants { non_null: true, init: true, ..Default::default() },
                             };
                             // Build None (null) value
-                            let none_val = VmValue {
-                                term: zero.clone(),
-                                ty: dest_ty,
-                                provenance: None,
-                                invariants: ValueInvariants::default(),
-                            };
+                            let none_val = VmValue::new(zero.clone(), dest_ty);
                             // Advance ptr when not empty
                             let one_term = Int::from_u64(self.ctx, 1);
                             let new_offset = match self.iter_ptr_offset.get(&local) {
@@ -217,7 +239,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         if let Some(c) = callee {
             if self.tcx.is_mir_available(c) {
                 let cname = self.tcx.def_path_str(c);
-                if (cname.contains("::post_inc_start") || cname.contains("::pre_dec_end"))
+                if (api_classify::is_iter_ptr_adj(&cname))
                     && arg_values.len() >= 2
                 {
                     self.apply_iter_ptr_update(c, &cname, &arg_values, &caller_arg_locals);
@@ -286,7 +308,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let term = self.fresh_int(&format!("callret_{}", destination.as_usize()));
             if let TyKind::Adt(adt_def, _) = dest_ty.kind() {
                 let path = self.tcx.def_path_str(adt_def.did());
-                if path == "std::cmp::Ordering" || path == "core::cmp::Ordering" {
+                if api_classify::is_std_ordering(&path) {
                     let minus_one = Int::from_i64(self.ctx, -1);
                     let one = Int::from_i64(self.ctx, 1);
                     self.path_conditions.push(term.ge(&minus_one));
@@ -705,8 +727,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     }
                     // For locally-created Vec: redirect as_ptr() from the
                     // struct allocation to the heap data allocation.
-                    let is_vec = self.last_call_name.contains("::Vec")
-                        || self.last_call_name.contains("::CString");
+                    let is_vec = api_classify::is_vec_or_cstring_call(&self.last_call_name);
                     if is_vec {
                         if let Some(ref prov) = val.provenance {
                             if let Some(data_alloc) = self.slice_data_allocations.get(&prov.alloc_id).copied() {
@@ -840,32 +861,17 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             if elem_size > 1 {
                                 if let Some(size) = self.allocation_size(alloc_id) {
                                     let div = Int::from_u64(self.ctx, elem_size);
-                                    let val = VmValue {
-                                        term: size.div(&div),
-                                        ty: dest_ty,
-                                        provenance: None,
-                                        invariants: ValueInvariants::default(),
-                                    };
+                                    let val = VmValue::new(size.div(&div), dest_ty);
                                     self.set_local(dest, val);
                                     return;
                                 }
                             } else if let Some(size) = self.allocation_size(alloc_id) {
-                                let val = VmValue {
-                                    term: size.clone(),
-                                    ty: dest_ty,
-                                    provenance: None,
-                                    invariants: ValueInvariants::default(),
-                                };
+                                let val = VmValue::new(size.clone(), dest_ty);
                                 self.set_local(dest, val);
                                 return;
                             }
                         } else if let Some(size) = self.allocation_size(alloc_id) {
-                            let val = VmValue {
-                                term: size.clone(),
-                                ty: dest_ty,
-                                provenance: None,
-                                invariants: ValueInvariants::default(),
-                            };
+                            let val = VmValue::new(size.clone(), dest_ty);
                             self.set_local(dest, val);
                             return;
                         }
@@ -931,12 +937,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
                         let diff = Int::sub(self.ctx, &[&self_prov.offset, &origin_prov.offset]);
                         let sz = Int::from_u64(self.ctx, elem_size);
-                        let val = VmValue {
-                            term: diff.div(&sz),
-                            ty: dest_ty,
-                            provenance: None,
-                            invariants: ValueInvariants::default(),
-                        };
+                        let val = VmValue::new(diff.div(&sz), dest_ty);
                         self.set_local(dest, val);
                         return;
                     }
@@ -997,7 +998,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         // For locally-created Vec-like types: create a heap data
                         // allocation on first mutation. (Param Vecs already have
                         // an external allocation set by init_parameters.)
-                        let is_vec = crate::verify::call_summary::fn_simulator::is_vec_push(&self.last_call_name);
+                        let is_vec = crate::helpers::api_classify::is_vec_push(&self.last_call_name);
                         let is_external = self.allocations.iter()
                             .any(|a| a.id == prov.alloc_id && a.is_external);
                         if is_vec && !is_external {
@@ -1381,7 +1382,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     fn vec_elem_ty(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
         if let TyKind::Adt(adt_def, substs) = ty.kind() {
             let name = self.tcx.def_path_str(adt_def.did());
-            if name.ends_with("::Vec") || name == "Vec" {
+            if api_classify::is_std_vec(&name) {
                 return substs.first().and_then(|s| s.as_type());
             }
         }
@@ -1416,12 +1417,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
                             diff.div(&sz)
                         };
-                        let val = VmValue {
-                            term: len_term,
-                            ty: dest_ty,
-                            provenance: None,
-                            invariants: ValueInvariants::default(),
-                        };
+                        let val = VmValue::new(len_term, dest_ty);
                         self.set_local(dest, val);
                         return true;
                     }
@@ -1489,7 +1485,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         arg_values: &[VmValue<'ctx, 'tcx>],
         _caller_arg_locals: &[Local],
     ) {
-        let is_inc = cname.contains("::post_inc_start");
+        let is_inc = api_classify::is_post_inc_start(&cname);
         if !is_inc { return; }  // pre_dec_end not yet supported
         let self_val = &arg_values[0];
         let some_local = self.find_iter_self_local(self_val);
@@ -1511,9 +1507,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             TyKind::Ref(_, pointee, _) => match pointee.kind() {
                 TyKind::Adt(adt_def, _) => {
                     let name = self.tcx.def_path_str(adt_def.did());
-                    if name.ends_with("::Iter") || name == "Iter"
-                        || name.ends_with("::IterMut") || name == "IterMut"
-                    {
+                    if api_classify::is_std_iter_or_itermut(&name) {
                         return Some(Local::from_usize(1));
                     }
                     None

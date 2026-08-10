@@ -277,16 +277,14 @@ pub fn operand_uses<'tcx>(operand: &Operand<'tcx>) -> RelevantPlaces {
     uses
 }
 
-/// Collect the base and projection-index roots used by a MIR place.
-pub fn place_uses(place: &Place<'_>) -> RelevantPlaces {
+fn place_uses(place: &Place<'_>) -> RelevantPlaces {
     let mut uses = RelevantPlaces::new();
     uses.insert_mir_place(place);
     uses.extend(place_projection_uses(place));
     uses
 }
 
-/// Collect only the index roots used by a place projection.
-pub fn place_projection_uses(place: &Place<'_>) -> RelevantPlaces {
+fn place_projection_uses(place: &Place<'_>) -> RelevantPlaces {
     let mut uses = RelevantPlaces::new();
     for projection in place.projection {
         if let ProjectionElem::Index(local) = projection {
@@ -324,13 +322,8 @@ pub fn rvalue_operands<'tcx>(rvalue: &'tcx Rvalue<'tcx>) -> Vec<&'tcx Operand<'t
 
 // ── chain-tracing helpers ────────────────────────────────────────────
 
-/// Follow Copy/Move edges in the dataflow graph upward to find the
-/// root real local behind any copy chains (no projections).
-pub fn trace_local_origin(flow: &DataflowGraph, local: Local) -> Local {
-    flow.trace_origin(local)
-}
-
-/// Like [`trace_local_origin`] but on a [`PlaceKey`].
+/// Trace a [`PlaceKey`] through the dataflow graph to resolve
+/// Copy/Move chains back to their origin local.
 pub fn trace_place_origin(flow: &DataflowGraph, key: &PlaceKey) -> PlaceKey {
     let Some(local) = key.local() else {
         return key.clone();
@@ -339,10 +332,4 @@ pub fn trace_place_origin(flow: &DataflowGraph, key: &PlaceKey) -> PlaceKey {
         base: PlaceBaseKey::Local(flow.trace_origin(local).as_usize()),
         fields: key.fields.clone(),
     }
-}
-
-/// True when a local's origin was destructured from a tuple field
-/// (e.g. `(tuple.0, tuple.1)` after a call returning a tuple).
-pub fn is_from_tuple_field(flow: &DataflowGraph, local: Local) -> bool {
-    flow.is_from_tuple_field(local)
 }

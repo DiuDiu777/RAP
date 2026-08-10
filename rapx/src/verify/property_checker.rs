@@ -560,64 +560,6 @@ impl PropertyChecker {
         r
     }
 
-    /*
-    fn check_align_old<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, _solver: &Solver<'ctx>,
-        if value.invariants.aligned { return CheckResult::Proved; }
-        let align = property.args.get(1).and_then(|a| if let PropertyArg::Ty(ty) = a { Some(vm_state.align_of_ty(*ty)) } else { None }).unwrap_or(1);
-        if align <= 1 { return CheckResult::Proved; }
-
-        // Fast path: value has a known alignment constraint that satisfies the requirement
-        if let Some(known_align) = value.invariants.align_n {
-            if known_align >= align && known_align % align == 0 {
-                return CheckResult::Proved;
-            }
-        }
-
-        // Concrete offset check: if the provenance offset is a concrete integer
-        // that doesn't satisfy the alignment, fail immediately.
-        if let Some(ref prov) = value.provenance {
-            if let Some(off) = prov.offset.as_u64() {
-                if off % align != 0 {
-                    return CheckResult::Failed;
-                }
-            }
-        }
-
-        let align_term = Int::from_u64(vm_state.ctx, align);
-        let zero = Int::from_u64(vm_state.ctx, 0);
-        let local = Solver::new(vm_state.ctx);
-        local.push();
-        if let Some(ref prov) = value.provenance {
-            if let Some(alloc) = vm_state.allocations.iter().find(|a| a.id == prov.alloc_id) {
-                local.assert(&value.term._eq(&Int::add(vm_state.ctx, &[&alloc.base, &prov.offset])));
-                local.assert(&alloc.base._eq(&zero).not());
-                local.assert(&alloc.base.ge(&zero));
-                if alloc.align > 1 {
-                    let a = Int::from_u64(vm_state.ctx, alloc.align);
-                    local.assert(&alloc.base.rem(&a)._eq(&zero));
-                }
-            }
-        }
-        // Assert the value's own alignment constraint as a Z3 condition
-        if let Some(known_align) = value.invariants.align_n {
-            let n = Int::from_u64(vm_state.ctx, known_align);
-            local.assert(&value.term.rem(&n)._eq(&zero));
-        }
-        for cond in &vm_state.path_conditions {
-            local.assert(cond);
-        }
-        let negated = value.term.rem(&align_term)._eq(&zero).not();
-        local.assert(&negated);
-        let r = match local.check() {
-            z3::SatResult::Sat => CheckResult::Failed,
-            z3::SatResult::Unsat => CheckResult::Proved,
-            z3::SatResult::Unknown => CheckResult::Unknown,
-        };
-        local.pop(1);
-        r
-    }
-    */
-
     // ── check_non_null ─────────────────────────────────────────
 
     fn check_non_null<'ctx, 'tcx>(&self, vm_state: &VmState<'ctx, 'tcx>, solver: &Solver<'ctx>,

@@ -51,7 +51,7 @@ pub fn get_cleaned_def_path_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
 
 /// Extract the implementing struct name from a `DefId` that belongs to an
 /// associated item (method / associated function).
-pub fn get_struct_name(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
+fn get_struct_name(tcx: TyCtxt<'_>, def_id: DefId) -> Option<String> {
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         if let Some(impl_id) = assoc_item.impl_container(tcx) {
             let ty = tcx.type_of(impl_id).skip_binder();
@@ -99,7 +99,7 @@ pub fn get_struct_self_ty<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Ty<'
 
 /// Return the JSON value loaded from the pre-computed standard-library
 /// signature map (`data/std_sig.json`).
-pub fn get_std_api_signature_json() -> Value {
+fn get_std_api_signature_json() -> Value {
     serde_json::from_str(include_str!("data/std_sig.json")).expect("Unable to parse JSON")
 }
 
@@ -108,7 +108,7 @@ pub fn get_std_api_signature_json() -> Value {
 /// The lookup key is the cleaned `DefId` path (see
 /// `get_cleaned_def_path_name`).  When no names are recorded the list is
 /// filled with numeric defaults (`"0"`, `"1"`, …).
-pub fn get_known_std_names<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<String>> {
+fn get_known_std_names<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Vec<String>> {
     let std_func_name = get_cleaned_def_path_name(tcx, def_id);
     let json_data = get_std_api_signature_json();
 
@@ -140,7 +140,7 @@ fn extract_pat_ident(pat: &rustc_hir::Pat<'_>) -> Option<rustc_span::symbol::Ide
     }
 }
 
-pub fn parse_local_signature<'tcx>(
+fn parse_local_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> (Vec<String>, Vec<Ty<'tcx>>) {
@@ -173,7 +173,7 @@ pub fn parse_local_signature<'tcx>(
 ///
 /// First tries the pre-defined standard-library names; falls back to
 /// numeric indices (`"0"`, `"1"`, …).
-pub fn parse_outside_signature<'tcx>(
+fn parse_outside_signature<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
 ) -> (Vec<String>, Vec<Ty<'tcx>>) {
@@ -327,7 +327,7 @@ fn find_declared_generic_param<'tcx>(
 
 /// Match a string against Rust's primitive types, returning the
 /// corresponding `Ty` from the type context.
-pub fn match_primitive_type<'tcx>(tcx: TyCtxt<'tcx>, type_ident: String) -> Option<Ty<'tcx>> {
+fn match_primitive_type<'tcx>(tcx: TyCtxt<'tcx>, type_ident: String) -> Option<Ty<'tcx>> {
     match type_ident.as_str() {
         "i8" => Some(tcx.types.i8),
         "i16" => Some(tcx.types.i16),
@@ -354,7 +354,7 @@ pub fn match_primitive_type<'tcx>(tcx: TyCtxt<'tcx>, type_ident: String) -> Opti
 
 /// Search function parameters (and the `self` type for methods) for a
 /// generic type whose name matches `type_ident`.
-pub fn find_generic_param<'tcx>(
+fn find_generic_param<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
     type_ident: String,
@@ -386,7 +386,7 @@ pub fn find_generic_param<'tcx>(
 ///
 /// This handles parameter types, pointers, references, slices, arrays,
 /// tuples, and ADT fields.
-pub fn find_generic_in_ty<'tcx>(
+fn find_generic_in_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     ty: Ty<'tcx>,
     type_ident: &str,
@@ -442,4 +442,22 @@ pub fn find_generic_in_ty<'tcx>(
 pub fn short_fn_name(tcx: TyCtxt<'_>, def_id: DefId) -> String {
     let path = tcx.def_path_str(def_id);
     path.rsplit("::").next().unwrap_or(&path).to_string()
+}
+
+pub fn resolve_field_name(
+    tcx: TyCtxt<'_>,
+    index: &usize,
+    struct_def_id: Option<DefId>,
+) -> String {
+    if let Some(struct_def_id) = struct_def_id
+        && let TyKind::Adt(adt_def, _) =
+            tcx.type_of(struct_def_id).skip_binder().kind()
+    {
+        let variant = adt_def.non_enum_variant();
+        let field_idx = rustc_abi::FieldIdx::from_usize(*index);
+        if field_idx.as_usize() < variant.fields.len() {
+            return variant.fields[field_idx].name.to_string();
+        }
+    }
+    index.to_string()
 }

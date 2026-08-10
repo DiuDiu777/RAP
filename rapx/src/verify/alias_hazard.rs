@@ -20,11 +20,9 @@ use rustc_middle::{
 
 use crate::{
     helpers::mir_scan::check_safety,
-    verify::{
-        call_summary::fn_simulator,
-        def_use::{PlaceBaseKey, PlaceKey},
-    },
+    verify::def_use::{PlaceBaseKey, PlaceKey},
 };
+use crate::helpers::fn_info::is_externally_reachable;
 use crate::analysis::alias::{
     collect_local_origins, resolve_place, resolve_self_field_origin, LocalOriginMap,
 };
@@ -261,13 +259,6 @@ pub fn param_index_of_origin(
     }
     let ty = body.local_decls[Local::from_usize(local)].ty;
     matches!(ty.kind(), TyKind::RawPtr(..)).then_some(local - 1)
-}
-
-pub fn is_externally_reachable(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
-    let Some(local) = def_id.as_local() else {
-        return true;
-    };
-    tcx.effective_visibilities(()).is_reachable(local)
 }
 
 // ── Escape analysis ──────────────────────────────────────────────
@@ -839,7 +830,7 @@ pub fn local_hazard_violation_with(
                 } = &terminator.kind
                 {
                     let name = crate::helpers::mir_utils::call_name(tcx, func);
-                    if fn_simulator::is_from_raw_parts(&name) && args.len() >= 1 {
+                    if crate::helpers::api_classify::is_from_raw_parts(&name) && args.len() >= 1 {
                         if let Some(ptr_place) = operand_place(&args[0].node) {
                             let offset_eq = is_ptr_add_offset_eq(
                                 tcx,
@@ -1117,7 +1108,7 @@ fn terminator_writes_origin<'tcx>(
         return false;
     };
     let name = crate::helpers::mir_utils::call_name(tcx, func);
-    if !fn_simulator::is_ptr_write(&name) {
+    if !crate::helpers::api_classify::is_ptr_write(&name) {
         return false;
     }
     let Some(arg0) = args.first() else {
@@ -1169,7 +1160,7 @@ fn terminator_is_benign_origin_use<'tcx>(tcx: TyCtxt<'tcx>, terminator: &Termina
         return true;
     };
     let name = crate::helpers::mir_utils::call_name(tcx, func);
-    fn_simulator::is_as_ptr(&name)
+    crate::helpers::api_classify::is_as_ptr(&name)
         || name.ends_with("::len")
         || name.ends_with("::is_empty")
         || name.ends_with("::is_null")
@@ -1251,7 +1242,7 @@ fn find_as_ptr_receivers(
             continue;
         };
         let name = crate::helpers::mir_utils::call_name(tcx, func);
-        if !fn_simulator::is_as_ptr(&name) {
+        if !crate::helpers::api_classify::is_as_ptr(&name) {
             continue;
         }
         let destination_key = PlaceKey {
@@ -1307,7 +1298,7 @@ fn is_ptr_add_offset_eq(
                 continue;
             }
             let name = crate::helpers::mir_utils::call_name(tcx, func);
-            if fn_simulator::is_pointer_add(&name) && args.len() >= 2 {
+            if crate::helpers::api_classify::is_pointer_add(&name) && args.len() >= 2 {
                 if let Some(offset_place) = operand_place(&args[1].node) {
                     let offset_root = trace_place_root(&origins_map, &offset_place);
                     return offset_root == view_len_root;
@@ -1332,7 +1323,7 @@ fn is_ptr_from_ptr_add(tcx: TyCtxt<'_>, caller: DefId, ptr_place: &PlaceKey) -> 
                 continue;
             }
             let name = crate::helpers::mir_utils::call_name(tcx, func);
-            return fn_simulator::is_pointer_add(&name);
+            return crate::helpers::api_classify::is_pointer_add(&name);
         }
     }
     false
@@ -1549,7 +1540,7 @@ fn places_holding_transferred_pointer(
                 && holders.iter().any(|h| destination_key.overlaps(h))
             {
                 let name = crate::helpers::mir_utils::call_name(tcx, func);
-                if fn_simulator::is_as_ptr(&name)
+                if crate::helpers::api_classify::is_as_ptr(&name)
                     && let Some(arg) = args.first()
                     && let Operand::Copy(place) | Operand::Move(place) = &arg.node
                     && !killed.contains(&place.local)

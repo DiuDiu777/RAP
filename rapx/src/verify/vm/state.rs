@@ -72,6 +72,14 @@ pub struct VmValue<'ctx, 'tcx> {
 }
 
 impl<'ctx, 'tcx> VmValue<'ctx, 'tcx> {
+    pub fn new(term: Int<'ctx>, ty: Ty<'tcx>) -> Self {
+        VmValue { term, ty, provenance: None, invariants: ValueInvariants::default() }
+    }
+
+    pub fn new_prov(term: Int<'ctx>, ty: Ty<'tcx>, provenance: Provenance<'ctx>) -> Self {
+        VmValue { term, ty, provenance: Some(provenance), invariants: ValueInvariants::default() }
+    }
+
     /// Convenience: extract the `AllocId` from provenance, if any.
     pub fn provenance_alloc_id(&self) -> Option<AllocId> {
         self.provenance.as_ref().map(|p| p.alloc_id)
@@ -678,12 +686,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             #[cfg(rapx_rustc_ge_196)]
             Operand::RuntimeChecks(_) => {
-                VmValue {
-                    term: self.fresh_int("runtime_checks"),
-                    ty: self.body.local_decls[Local::from_usize(0)].ty,
-                    provenance: None,
-                    invariants: ValueInvariants::default(),
-                }
+                VmValue::new(self.fresh_int("runtime_checks"), self.body.local_decls[Local::from_usize(0)].ty)
             }
         }
     }

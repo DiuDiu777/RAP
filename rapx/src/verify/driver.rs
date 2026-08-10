@@ -17,7 +17,6 @@ use crate::verify::contract::PropertyKind;
 use crate::verify::target::get_contract_from_annotation;
 
 use crate::compat::{FxHashMap, FxHashSet};
-use indexmap::IndexMap;
 use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::TyCtxt;
 
@@ -607,50 +606,8 @@ impl<'tcx> VerifyRun<'tcx> {
         rap_info!("[rapx::verify] sequence: {chain_label}");
         rap_info!("============================================================");
 
-        let unproved = all_results
-            .iter()
-            .filter(|r| {
-                if r.property.contract_kind == crate::verify::contract::ContractKind::Hazard
-                    || r.property.contract_kind == crate::verify::contract::ContractKind::Option_
-                {
-                    return false;
-                }
-                !matches!(r.result, super::report::CheckResult::Proved)
-            })
-            .count();
-        let hazard_failed = all_results
-            .iter()
-            .filter(|r| {
-                r.property.contract_kind
-                    == crate::verify::contract::ContractKind::Hazard
-                    && !matches!(r.result, super::report::CheckResult::Proved)
-            })
-            .count();
-
-        let mut groups: IndexMap<(CheckpointLocation, String), Vec<&PropertyCheckResult<'_>>> =
-            IndexMap::new();
-        for r in &all_results {
-            groups
-                .entry((r.checkpoint, r.callee_name.clone()))
-                .or_default()
-                .push(r);
-        }
-
-        let checkpoint_groups: Vec<_> = groups
-            .iter()
-            .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
-            .collect();
-
-        if !checkpoint_groups.is_empty() {
-            rap_info!("  --- unsafe checkpoints ---");
-            for ((checkpoint, callee_name), results) in &checkpoint_groups {
-                rap_info!(
-                    "      unsafe checkpoint: bb{} -> {callee_name}",
-                    checkpoint.block.as_usize(),
-                );
-                emit_property_rows(self.tcx, results);
-            }
-        }
+        let (unproved, hazard_failed) =
+            super::display::emit_results_counts_and_checkpoints(self.tcx, &all_results);
 
         if all_results.is_empty() {
             rap_info!("  result: SOUND (no unsafe checkpoints)");

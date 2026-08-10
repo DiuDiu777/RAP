@@ -1,0 +1,158 @@
+#![allow(dead_code)]
+//! Standard-library API name classification helpers.
+//!
+//! Each function matches a specific pattern in a MIR callee's
+//! `def_path_str` to determine what kind of operation it performs
+//! (pointer arithmetic, memory access, ownership transfer, etc.).
+
+pub fn is_ownership_reconstruction(name: &str) -> bool {
+    name.contains("from_raw") && !name.contains("from_raw_parts")
+        && (name.contains("boxed") || name.contains("Box")
+            || name.contains("CString") || name.contains("ffi::c_str"))
+        || name.contains("from_vec_with_nul_unchecked")
+}
+
+pub fn is_as_ptr(name: &str) -> bool {
+    name.contains("::as_ptr") && !name.ends_with("::as_ptr_range")
+        || name.ends_with("::into_raw")
+        || name.contains("::as_mut_ptr") && !name.ends_with("::as_mut_ptr_range")
+        || name.ends_with("::into_raw_mut")
+        || name.contains("::cast") || name.contains("cast_array")
+        || name.contains("cast_const") || name.contains("cast_mut")
+        || name.ends_with("::from") && name.contains("ptr::non_null")
+        || name.ends_with("::new_unchecked") && name.contains("ptr::non_null")
+        || name.ends_with("::as_ref") && name.contains("ptr::non_null")
+        || name.ends_with("::as_mut") && name.contains("ptr::non_null")
+}
+
+pub(crate) fn is_pointer_arithmetic(name: &str) -> bool { is_pointer_add(name) || is_pointer_sub(name) }
+
+pub fn is_pointer_add(name: &str) -> bool {
+    name.ends_with("::add") || name.ends_with("::wrapping_add")
+        || name.contains("::offset") || name.contains("::wrapping_offset")
+        || name.contains("::byte_add") || name.contains("::wrapping_byte_add")
+        || name.contains("::byte_offset") || name.contains("::wrapping_byte_offset")
+}
+
+pub fn is_pointer_sub(name: &str) -> bool {
+    name.ends_with("::sub") || name.ends_with("::wrapping_sub")
+        || name.contains("::byte_sub") || name.contains("::wrapping_byte_sub")
+}
+
+pub(crate) fn is_element_ptr_arith(name: &str) -> bool {
+    name.ends_with("::add") || name.ends_with("::wrapping_add")
+        || name.ends_with("::sub") || name.ends_with("::wrapping_sub")
+        || name.contains("::offset") || name.contains("::wrapping_offset")
+}
+
+pub fn is_byte_ptr_arith(name: &str) -> bool {
+    name.contains("::byte_add") || name.contains("::wrapping_byte_add")
+        || name.contains("::byte_sub") || name.contains("::wrapping_byte_sub")
+        || name.contains("::byte_offset") || name.contains("::wrapping_byte_offset")
+}
+
+pub(crate) fn is_signed_ptr_arith(name: &str) -> bool {
+    name.contains("::offset") || name.contains("::wrapping_offset")
+        || name.contains("::byte_offset") || name.contains("::wrapping_byte_offset")
+}
+
+pub fn is_layout_constant(name: &str) -> bool { name.contains("align_of") || name.contains("size_of") }
+pub(crate) fn is_align_of(name: &str) -> bool { name.contains("align_of") }
+pub(crate) fn is_ptr_cast(name: &str) -> bool {
+    name.contains("::cast") || name.contains("cast_array")
+        || name.contains("cast_const") || name.contains("cast_mut")
+}
+pub fn is_as_ptr_range(name: &str) -> bool { name.ends_with("::as_ptr_range") }
+pub fn is_as_mut_ptr_range(name: &str) -> bool { name.ends_with("::as_mut_ptr_range") }
+pub fn is_ptr_write(name: &str) -> bool {
+    (name.contains("::write") || name.ends_with("write"))
+        && !name.contains("write_bytes") && !name.contains("write_unaligned")
+        && !name.contains("write_volatile")
+}
+pub fn is_maybe_uninit_write(name: &str) -> bool {
+    name.contains("MaybeUninit") && name.ends_with("::write")
+        && !name.contains("write_bytes")
+}
+pub fn is_len(name: &str) -> bool { name.contains("::len") }
+pub fn is_offset_from_unsigned(name: &str) -> bool {
+    name.contains("::offset_from_unsigned") || name.contains("::offset_from")
+}
+pub fn is_numeric_arith(name: &str) -> bool {
+    name.contains("::unchecked_mul") || name.contains("::unchecked_add")
+        || name.contains("::unchecked_sub") || name.contains("::unchecked_div")
+        || name.contains("::unchecked_rem") || name.contains("::exact_div")
+        || name.contains("::checked_mul") || name.contains("::checked_add")
+        || name.contains("::checked_sub")
+}
+pub fn is_option_unwrap(name: &str) -> bool {
+    (name.contains("Option") || name.contains("Result"))
+        && (name.contains("::expect") || name.contains("::unwrap")
+            || name.contains("::unwrap_unchecked"))
+}
+pub fn is_maybe_uninit_uninit(name: &str) -> bool {
+    name.contains("MaybeUninit") && name.ends_with("::uninit")
+}
+pub fn is_maybe_uninit_assume_init(name: &str) -> bool {
+    name.contains("MaybeUninit") && (name.ends_with("::assume_init") || name.ends_with("::assume_init_read"))
+}
+pub fn is_from_raw_parts(name: &str) -> bool { name.contains("::from_raw_parts") }
+pub fn is_cstr_from_ptr(name: &str) -> bool {
+    name.contains("CStr") && name.ends_with("::from_ptr")
+}
+pub fn is_cstr_from_bytes_with_nul_unchecked(name: &str) -> bool {
+    name.contains("CStr") && name.ends_with("::from_bytes_with_nul_unchecked")
+}
+pub fn is_vec_push(name: &str) -> bool {
+    (name.ends_with("::push") || name.ends_with("::reserve") || name.ends_with("::reserve_exact"))
+        && name.contains("Vec")
+}
+pub fn is_vec_alloc_constructor(name: &str) -> bool {
+    name.contains("::vec::from_elem")
+        || name == "from_elem"
+}
+pub fn is_vec_from_box(name: &str) -> bool {
+    name.contains("::into_vec")
+        || name.contains("box_assume_init_into_vec_unsafe")
+}
+pub fn is_vec_with_capacity(name: &str) -> bool {
+    (name.contains("::Vec") && name.ends_with("::with_capacity"))
+        || name == "with_capacity"
+}
+pub fn is_into_boxed_slice(name: &str) -> bool {
+    name.ends_with("::into_boxed_slice")
+}
+
+pub(crate) fn is_nonnull_api(name: &str) -> bool {
+    name.contains("ptr::non_null") || name.contains("ptr::NonNull")
+}
+
+// ── ADT type-name classifiers (match def_path_str of ADT types) ──────
+
+pub fn is_std_vec(name: &str) -> bool { name.ends_with("::Vec") || name == "Vec" }
+pub fn is_std_box(name: &str) -> bool { name.ends_with("::Box") || name == "Box" }
+pub fn is_std_cstring(name: &str) -> bool {
+    name.ends_with("::CString") || name == "CString"
+        || name.ends_with("::c_str::CString")
+}
+pub fn is_std_nonnull(name: &str) -> bool {
+    name.ends_with("::NonNull") || name == "NonNull"
+        || name.contains("::NonNull")
+}
+pub fn is_std_option(name: &str) -> bool {
+    name.ends_with("::Option") || name == "Option"
+        || name.contains("::Option")
+}
+pub fn is_std_iter_or_itermut(name: &str) -> bool {
+    name.ends_with("::Iter") || name == "Iter"
+        || name.ends_with("::IterMut") || name == "IterMut"
+}
+pub fn is_std_ordering(name: &str) -> bool { name.contains("cmp::Ordering") }
+
+// ── Function-name classifiers ────────────────────────────────────────
+
+pub fn is_select_unpredictable(name: &str) -> bool { name.contains("select_unpredictable") }
+pub fn is_post_inc_start(name: &str) -> bool { name.contains("::post_inc_start") }
+pub fn is_pre_dec_end(name: &str) -> bool { name.contains("::pre_dec_end") }
+pub fn is_iter_ptr_adj(name: &str) -> bool { is_post_inc_start(name) || is_pre_dec_end(name) }
+pub fn is_eq_or_partial_eq(name: &str) -> bool { name.contains("::eq") || name.contains("PartialEq") }
+pub fn is_vec_or_cstring_call(name: &str) -> bool { name.contains("::Vec") || name.contains("::CString") }

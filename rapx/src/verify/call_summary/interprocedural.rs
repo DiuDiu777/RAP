@@ -10,8 +10,6 @@ use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::analysis::path::graph::{PathEnumerator, PathGraph};
 use crate::helpers::mir_utils as helpers;
 
-use super::fn_simulator;
-
 use super::CallEffect;
 
 /// Trace backward from an operand (inner call arg) through Copy/Move/Cast
@@ -76,7 +74,7 @@ fn trace_to_callee_arg<'tcx>(
                 continue;
             }
             let name = helpers::call_name(tcx, func);
-            if !fn_simulator::is_as_ptr(&name) {
+            if !crate::helpers::api_classify::is_as_ptr(&name) {
                 continue;
             }
             let Some(source) = args.first().and_then(|arg| match &arg.node {
@@ -128,8 +126,8 @@ pub(super) fn try_pointer_arith_wrapper_effect<'tcx>(
         };
 
         let name = helpers::call_name(tcx, func);
-        let is_add = fn_simulator::is_pointer_add(&name);
-        let is_sub = fn_simulator::is_pointer_sub(&name);
+        let is_add = crate::helpers::api_classify::is_pointer_add(&name);
+        let is_sub = crate::helpers::api_classify::is_pointer_sub(&name);
 
         let inner_effect = if !is_add && !is_sub {
             helpers::dep_callee_def_id(func).and_then(|inner_callee| {
@@ -225,10 +223,10 @@ pub(super) fn try_pointer_arith_wrapper_effect<'tcx>(
 
         let base_arg = trace_to_callee_arg(tcx, body, &args[0].node)?;
         let offset_arg = trace_to_callee_arg(tcx, body, &args[1].node)?;
-        let stride = if fn_simulator::is_byte_ptr_arith(&name) {
+        let stride = if crate::helpers::api_classify::is_byte_ptr_arith(&name) {
             Some(1)
         } else {
-            fn_simulator::destination_stride(tcx, callee, Some(call_dest.local))
+            helpers::destination_stride(tcx, callee, Some(call_dest.local))
         };
 
         return if is_sub {
@@ -258,7 +256,7 @@ pub(super) fn callee_contains_pointer_arithmetic(tcx: TyCtxt<'_>, callee: DefId)
         let Some(terminator) = &bb.terminator else { continue };
         let TerminatorKind::Call { func, .. } = &terminator.kind else { continue };
         let name = helpers::call_name(tcx, func);
-        if fn_simulator::is_pointer_add(&name) || fn_simulator::is_pointer_sub(&name) {
+        if crate::helpers::api_classify::is_pointer_add(&name) || crate::helpers::api_classify::is_pointer_sub(&name) {
             return true;
         }
     }
@@ -311,7 +309,7 @@ pub(super) fn try_from_raw_parts_wrapper_effect<'tcx>(
         } = &terminator.kind else { continue };
 
         let name = helpers::call_name(tcx, func);
-        if !fn_simulator::is_from_raw_parts(&name) {
+        if !crate::helpers::api_classify::is_from_raw_parts(&name) {
             continue;
         }
 
@@ -558,7 +556,7 @@ fn write_args_on_path<'tcx>(
             continue;
         };
         let name = helpers::call_name(tcx, func);
-        if !fn_simulator::is_ptr_write(&name) {
+        if !crate::helpers::api_classify::is_ptr_write(&name) {
             continue;
         }
         if let Some(pointer_arg) = args

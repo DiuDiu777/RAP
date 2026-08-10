@@ -446,7 +446,7 @@ pub fn fmt_place_plain(
             .iter()
             .map(|p| match p {
                 crate::verify::contract::ContractProjection::Field { index, .. } => {
-                    crate::verify::contract::types::resolve_field_name(tcx, index, struct_def_id)
+                    crate::helpers::name::resolve_field_name(tcx, index, struct_def_id)
                 }
                 crate::verify::contract::ContractProjection::Downcast { .. } => {
                     "unwrap_some()".to_string()
@@ -624,41 +624,30 @@ pub fn fmt_pred_plain(
     )
 }
 
-pub fn emit_verify_summary<'tcx>(
+pub fn emit_results_counts_and_checkpoints<'tcx>(
     tcx: TyCtxt<'tcx>,
-    target_path: &str,
-    def_id: rustc_hir::def_id::DefId,
     all_results: &[PropertyCheckResult<'tcx>],
-    skip_invariant: bool,
-) {
+) -> (usize, usize) {
+    use indexmap::IndexMap;
+    use crate::verify::contract::ContractKind;
+    use super::report::CheckResult;
+
     let unproved = all_results
         .iter()
         .filter(|r| {
-            r.property.contract_kind != crate::verify::contract::ContractKind::Hazard
-                && r.property.contract_kind != crate::verify::contract::ContractKind::Option_
-                && !matches!(r.result, super::report::CheckResult::Proved)
+            r.property.contract_kind != ContractKind::Hazard
+                && r.property.contract_kind != ContractKind::Option_
+                && !matches!(r.result, CheckResult::Proved)
         })
         .count();
     let hazard_failed = all_results
         .iter()
         .filter(|r| {
-            r.property.contract_kind == crate::verify::contract::ContractKind::Hazard
-                && !matches!(r.result, super::report::CheckResult::Proved)
+            r.property.contract_kind == ContractKind::Hazard
+                && !matches!(r.result, CheckResult::Proved)
         })
         .count();
 
-    rap_info!("============================================================");
-    rap_info!("[rapx::verify] function: {target_path}");
-    rap_info!("============================================================");
-
-    if skip_invariant {
-        let cons = get_cons(tcx, def_id);
-        for con in &cons {
-            rap_info!("  + constructor: {}", tcx.def_path_str(*con));
-        }
-    }
-
-    // Group results by (checkpoint, callee_name)
     let mut groups: IndexMap<(CheckpointLocation, String), Vec<&PropertyCheckResult<'_>>> =
         IndexMap::new();
     for r in all_results {
@@ -668,7 +657,6 @@ pub fn emit_verify_summary<'tcx>(
             .push(r);
     }
 
-    // Separate into checkpoint groups and struct-invariant groups
     let checkpoint_groups: Vec<_> = groups
         .iter()
         .filter(|((_, name), _)| !name.starts_with("struct-invariant"))
@@ -678,7 +666,6 @@ pub fn emit_verify_summary<'tcx>(
         .filter(|((_, name), _)| name.starts_with("struct-invariant"))
         .collect();
 
-    // Print unsafe checkpoint results
     if !checkpoint_groups.is_empty() {
         rap_info!("  --- unsafe checkpoints ---");
         for ((checkpoint, callee_name), results) in &checkpoint_groups {
@@ -690,14 +677,36 @@ pub fn emit_verify_summary<'tcx>(
         }
     }
 
-    // Print struct invariant results
     if !invariant_groups.is_empty() {
         rap_info!("  --- struct invariants ---");
         for ((checkpoint, _), results) in &invariant_groups {
-            rap_info!("      checkpoint bb{}:", checkpoint.block.as_usize(),);
+            rap_info!("      checkpoint bb{}:", checkpoint.block.as_usize());
             emit_property_rows(tcx, results);
         }
     }
+
+    (unproved, hazard_failed)
+}
+
+pub fn emit_verify_summary<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    target_path: &str,
+    def_id: rustc_hir::def_id::DefId,
+    all_results: &[PropertyCheckResult<'tcx>],
+    skip_invariant: bool,
+) {
+    rap_info!("============================================================");
+    rap_info!("[rapx::verify] function: {target_path}");
+    rap_info!("============================================================");
+
+    if skip_invariant {
+        let cons = get_cons(tcx, def_id);
+        for con in &cons {
+            rap_info!("  + constructor: {}", tcx.def_path_str(*con));
+        }
+    }
+
+    let (unproved, hazard_failed) = emit_results_counts_and_checkpoints(tcx, all_results);
 
     if unproved == 0 && hazard_failed == 0 {
         rap_info!(green, "  result: SOUND");

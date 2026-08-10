@@ -1036,36 +1036,6 @@ fn is_rapx_named_attr(attr: &Attribute, name: &str) -> bool {
     path.len() == 1 && path[0].as_str() == name
 }
 
-/// Collects properties from `#[rapx::requires(...)]` attributes.
-fn collect_properties_from_requires_attrs<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    attrs: impl IntoIterator<Item = &'tcx Attribute>,
-    property_def_id: DefId,
-    parse_error_label: &str,
-) -> Vec<Property<'tcx>> {
-    collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "requires")
-}
-
-/// Collects properties from `#[rapx::invariant(...)]` attributes.
-fn collect_properties_from_invariant_attrs<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    attrs: impl IntoIterator<Item = &'tcx Attribute>,
-    property_def_id: DefId,
-    parse_error_label: &str,
-) -> Vec<Property<'tcx>> {
-    collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "invariant")
-}
-
-/// Collects properties from `#[rapx::ensures(...)]` attributes.
-fn collect_properties_from_ensures_attrs<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    attrs: impl IntoIterator<Item = &'tcx Attribute>,
-    property_def_id: DefId,
-    parse_error_label: &str,
-) -> Vec<Property<'tcx>> {
-    collect_properties_from_named_attrs(tcx, attrs, property_def_id, parse_error_label, "ensures")
-}
-
 fn collect_properties_from_named_attrs<'tcx>(
     tcx: TyCtxt<'tcx>,
     attrs: impl IntoIterator<Item = &'tcx Attribute>,
@@ -1115,12 +1085,11 @@ pub(crate) fn get_contract_from_annotation<'tcx>(
         let hir_id = tcx.local_def_id_to_hir_id(local_def_id);
         let hir_attrs = tcx.hir_attrs(hir_id);
         // hir_attrs is &'tcx [Attribute<'tcx>]; iter yields &'tcx Attribute<'tcx>
-        return collect_properties_from_requires_attrs(tcx, hir_attrs, def_id, "requires");
+        return collect_properties_from_named_attrs(tcx, hir_attrs, def_id, "requires", "requires");
     }
 
-    #[allow(deprecated)]
-    let attrs = tcx.get_all_attrs(def_id);
-    collect_properties_from_requires_attrs(tcx, attrs, def_id, "requires")
+    let attrs = crate::compat::get_all_attrs(tcx, def_id);
+    collect_properties_from_named_attrs(tcx, attrs, def_id, "requires", "requires")
 }
 
 /// Parses struct invariants from source-level RAPx annotations attached to a struct definition.
@@ -1138,26 +1107,22 @@ fn get_struct_invariants_from_annotation<'tcx>(
         return Vec::new();
     }
 
-    let mut invariants = collect_properties_from_requires_attrs(
+    let mut invariants = collect_properties_from_named_attrs(
         tcx,
         {
-            #[allow(deprecated)]
-            {
-                tcx.get_all_attrs(struct_def_id)
-            }
+            crate::compat::get_all_attrs(tcx, struct_def_id)
         },
         context_def_id,
         "invariant",
+        "requires",
     );
-    invariants.extend(collect_properties_from_invariant_attrs(
+    invariants.extend(collect_properties_from_named_attrs(
         tcx,
         {
-            #[allow(deprecated)]
-            {
-                tcx.get_all_attrs(struct_def_id)
-            }
+            crate::compat::get_all_attrs(tcx, struct_def_id)
         },
         context_def_id,
+        "invariant",
         "invariant",
     ));
     invariants
@@ -1195,11 +1160,10 @@ fn get_trait_contracts_from_annotation<'tcx>(
     for trait_item_id in trait_items.iter() {
         let trait_item_def_id = trait_item_id.owner_id.to_def_id();
         let method_name = tcx.def_path_str(trait_item_def_id);
-        #[allow(deprecated)]
-        let attrs = tcx.get_all_attrs(trait_item_def_id);
+        let attrs = crate::compat::get_all_attrs(tcx, trait_item_def_id);
 
         let method_ensures =
-            collect_properties_from_ensures_attrs(tcx, attrs, trait_item_def_id, "trait ensures");
+            collect_properties_from_named_attrs(tcx, attrs, trait_item_def_id, "trait ensures", "ensures");
 
         if !method_ensures.is_empty() {
             ensures.push((method_name, method_ensures));

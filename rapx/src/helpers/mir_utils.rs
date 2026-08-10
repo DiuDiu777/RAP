@@ -5,7 +5,7 @@ use rustc_hir::{
 use rustc_middle::{
     mir::{BasicBlock, ConstValue, Local, Operand, Place, Rvalue, StatementKind, TerminatorKind},
     mir::interpret::{AllocId, GlobalAlloc},
-    ty::{ConstKind, GenericArgKind, Ty, TyCtxt, TyKind},
+    ty::{ConstKind, GenericArgKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind, TypingEnv},
 };
 use rustc_span::Symbol;
 
@@ -470,4 +470,97 @@ pub fn alloc_id_bytes<'tcx>(
             .inspect_with_uninit_and_ptr_outside_interpreter(0..alloc.len())
             .to_vec(),
     )
+}
+
+// ── Type layout helpers ───────────────────────────────────────────
+
+pub fn type_layout<'tcx>(tcx: TyCtxt<'tcx>, caller: DefId, ty: Ty<'tcx>) -> Option<(u64, u64)> {
+    if ty_has_param_const(ty) { return None }
+    let env = TypingEnv::post_analysis(tcx, caller);
+    let result = catch_panic(|| {
+        tcx.layout_of(PseudoCanonicalInput { typing_env: env, value: ty })
+    });
+    match result {
+        Ok(Ok(l)) => Some((l.align.abi.bytes(), l.size.bytes())),
+        Ok(Err(_)) if matches!(ty.kind(), TyKind::Param(_)) => Some((0, 0)),
+        _ => None,
+    }
+}
+
+pub fn destination_stride<'tcx>(
+    tcx: TyCtxt<'tcx>, caller: DefId, dest: Option<Local>,
+) -> Option<u64> {
+    let d = dest?;
+    let pointee = pointee_ty(tcx.optimized_mir(caller).local_decls[d].ty)?;
+    type_layout(tcx, caller, pointee).map(|(_, s)| s)
+}
+
+pub fn pointee_alignment<'tcx>(
+    tcx: TyCtxt<'tcx>, caller: DefId, dest: Option<Local>,
+) -> Option<(u64, String)> {
+    let d = dest?;
+    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
+    let pointee = pointee_ty(ty).or(Some(ty))?;
+    if let Some((a, _)) = type_layout(tcx, caller, pointee) {
+        return Some((a, format!("{pointee:?}")));
+    }
+    if let TyKind::Array(e, _) = pointee.kind()
+        && let Some((a, _)) = type_layout(tcx, caller, *e)
+    {
+        return Some((a, format!("{pointee:?}")));
+    }
+    Some((0, format!("{pointee:?}")))
+}
+
+pub fn nonnull_inner_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    let TyKind::Adt(def, args) = ty.kind() else { return None };
+    if !tcx.def_path_str(def.did()).contains("ptr::non_null::NonNull") { return None }
+    args.iter().find_map(|a| match a.kind() { GenericArgKind::Type(t) => Some(t), _ => None })
+}
+
+pub fn slice_element_size(
+    tcx: TyCtxt<'_>, caller: DefId, _func: &Operand<'_>, dest: Option<Local>,
+) -> u64 {
+    let d = match dest {
+        Some(d) => d,
+        None => return 1,
+    };
+    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
+    let elem = match ty.kind() {
+        TyKind::Ref(_, inner, _) => match inner.kind() {
+            TyKind::Slice(e) => *e,
+            _ => return 1,
+        },
+        TyKind::RawPtr(inner, _) => match inner.kind() {
+            TyKind::Slice(e) => *e,
+            _ => return 1,
+        },
+        _ => return 1,
+    };
+    type_layout(tcx, caller, elem)
+        .map(|(_, s)| s)
+        .unwrap_or(1)
+}
+
+pub fn vec_element_size(tcx: TyCtxt<'_>, caller: DefId, dest: Option<Local>) -> u64 {
+    let d = match dest {
+        Some(d) => d,
+        None => return 1,
+    };
+    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
+    let elem = match ty.kind() {
+        TyKind::Adt(adt_def, substs) => {
+            let name = tcx.def_path_str(adt_def.did());
+            if name.ends_with("::Vec") || name == "Vec" {
+                substs.first().map(|s| s.as_type()).flatten()
+            } else {
+                None
+            }
+        }
+        _ => None,
+    };
+    match elem {
+        Some(elem_ty) => type_layout(tcx, caller, elem_ty).map(|(_, s)| s).unwrap_or(1),
+        None => 1,
+    }
 }

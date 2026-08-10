@@ -1,3 +1,4 @@
+pub mod api_classify;
 pub mod def_path;
 pub mod def_use;
 pub mod draw_dot;

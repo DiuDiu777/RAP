@@ -147,7 +147,7 @@ pub fn get_adt_via_method(tcx: TyCtxt<'_>, method_def_id: DefId) -> Option<AdtIn
     Some(AdtInfo::new(adt_def_id, pub_count == total_count))
 }
 // return all the impls def id of corresponding struct
-pub fn get_impls_for_struct(tcx: TyCtxt<'_>, struct_def_id: DefId) -> Vec<DefId> {
+fn get_impls_for_struct(tcx: TyCtxt<'_>, struct_def_id: DefId) -> Vec<DefId> {
     let mut impls = Vec::new();
     for item_id in tcx.hir_crate_items(()).free_items() {
         let item = tcx.hir_item(item_id);
@@ -179,7 +179,7 @@ pub fn get_adt_def_id_by_adt_method(tcx: TyCtxt<'_>, def_id: DefId) -> Option<De
     None
 }
 
-pub fn has_mut_self_param(tcx: TyCtxt, def_id: DefId) -> bool {
+fn has_mut_self_param(tcx: TyCtxt, def_id: DefId) -> bool {
     if let Some(assoc_item) = tcx.opt_associated_item(def_id) {
         match assoc_item.kind {
             AssocKind::Fn { has_self, .. } => {
@@ -198,7 +198,7 @@ pub fn has_mut_self_param(tcx: TyCtxt, def_id: DefId) -> bool {
 }
 
 // Check each field's visibility, return the public fields vec
-pub fn get_public_fields(tcx: TyCtxt, def_id: DefId) -> HashSet<usize> {
+fn get_public_fields(tcx: TyCtxt, def_id: DefId) -> HashSet<usize> {
     let adt_def = tcx.adt_def(def_id);
     adt_def
         .all_fields()
@@ -410,4 +410,11 @@ pub fn get_mutated_fields(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<usize> {
     }
 
     fields
+}
+
+pub fn is_externally_reachable(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    let Some(local) = def_id.as_local() else {
+        return true;
+    };
+    tcx.effective_visibilities(()).is_reachable(local)
 }
