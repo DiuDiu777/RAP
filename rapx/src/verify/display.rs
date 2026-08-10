@@ -393,7 +393,7 @@ pub fn fmt_arg_plain(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_names: &[String],
     arg: &crate::verify::contract::PropertyArg<'_>,
-    struct_def_id: Option<rustc_hir::def_id::DefId>,
+    _struct_def_id: Option<rustc_hir::def_id::DefId>,
 ) -> String {
     match arg {
         crate::verify::contract::PropertyArg::Ty(ty) => format!("{}", ty),
@@ -625,7 +625,7 @@ pub fn emit_results_counts_and_checkpoints<'tcx>(
     tcx: TyCtxt<'tcx>,
     all_results: &[PropertyCheckResult<'tcx>],
 ) -> (usize, usize) {
-    use indexmap::IndexMap;
+
     use crate::verify::contract::ContractKind;
     use super::report::CheckResult;
 
@@ -728,13 +728,17 @@ pub fn emit_property_rows<'tcx>(
 ) {
     use crate::verify::contract::PropertyKind;
 
-    let mut path_groups: FxHashMap<&str, Vec<_>> = FxHashMap::default();
-    for r in results.iter() {
-        path_groups
-            .entry(r.path_description.as_str())
-            .or_default()
-            .push(r);
-    }
+    let path_groups: Vec<(&str, Vec<_>)> = {
+        let mut map: FxHashMap<&str, Vec<_>> = FxHashMap::default();
+        for r in results.iter() {
+            map.entry(r.path_description.as_str())
+                .or_default()
+                .push(r);
+        }
+        let mut entries: Vec<_> = map.into_iter().collect();
+        entries.sort_by_key(|(desc, _)| desc.matches(',').count());
+        entries
+    };
     for (path_desc, props) in &path_groups {
         rap_info!("        path {path_desc}:");
         // Count identical (kind, hazard, result) groups for dedup.

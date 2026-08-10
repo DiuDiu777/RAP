@@ -39,7 +39,7 @@ impl<'tcx> SSATrans<'tcx> {
 
     pub fn start(&mut self) {
         for local_def_id in self.tcx.iter_local_def_id() {
-            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
+            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn | DefKind::AssocFn) {
                 if self.tcx.hir_maybe_body_owned_by(local_def_id).is_some() {
                     if let Some(def_id) = self
                         .tcx

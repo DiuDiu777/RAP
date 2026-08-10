@@ -22,36 +22,6 @@ use crate::helpers::api_classify;
 use super::state::{AllocId, Provenance, VmState, VmValue, ValueInvariants};
 
 /// Classification of a call site for dispatch prioritization.
-#[allow(dead_code)]
-enum CallClass {
-    SelectUnpredictable,
-    IterLenOrIsEmpty,
-    IterNext,
-    General,
-}
-
-fn classify_call(name: &str, arg_values: &[VmValue]) -> CallClass {
-    if api_classify::is_select_unpredictable(name) && arg_values.len() >= 3 {
-        return CallClass::SelectUnpredictable;
-    }
-    if (name.contains("::Iter<") || name.contains("::IterMut<")
-        || name.ends_with("::Iter::len") || name.ends_with("::IterMut::len")
-        || name.ends_with("::Iter::is_empty") || name.ends_with("::IterMut::is_empty"))
-        && (name.ends_with("::len") || name.ends_with("::is_empty"))
-        && arg_values.len() >= 1
-    {
-        return CallClass::IterLenOrIsEmpty;
-    }
-    let is_next = name.contains("::next")
-        && (name.starts_with("Iter::") || name.starts_with("IterMut::")
-            || name.contains("::Iter::") || name.contains("::IterMut::")
-            || name.contains("::Iter<") || name.contains("::IterMut<"));
-    if is_next && arg_values.len() >= 1 {
-        return CallClass::IterNext;
-    }
-    CallClass::General
-}
-
 const MAX_INLINE_DEPTH: usize = 5;
 
 impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
@@ -186,8 +156,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 diff.div(&sz)
                             };
                             let is_empty = remaining._eq(&Int::from_u64(self.ctx, 0));
-                            let zero = Int::from_u64(self.ctx, 0);
-                            let one = Int::from_u64(self.ctx, 1);
                             // If empty, return None (null ptr). Else advance and return old ptr.
                             let old_ptr_val = VmValue {
                                 term: pp.offset.clone(),
@@ -198,8 +166,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 }),
                                 invariants: ValueInvariants { non_null: true, init: true, ..Default::default() },
                             };
-                            // Build None (null) value
-                            let none_val = VmValue::new(zero.clone(), dest_ty);
                             // Advance ptr when not empty
                             let one_term = Int::from_u64(self.ctx, 1);
                             let new_offset = match self.iter_ptr_offset.get(&local) {

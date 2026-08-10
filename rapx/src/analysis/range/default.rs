@@ -161,7 +161,7 @@ where
 
     fn collect_fn_def_ids(&self) -> Vec<DefId> {
         self.tcx.iter_local_def_id().filter_map(|local_def_id| {
-            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
+            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn | DefKind::AssocFn) {
                 Some(local_def_id.to_def_id())
             } else {
                 None

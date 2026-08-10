@@ -3,7 +3,6 @@ use crate::analysis::safety_flow::root::{
     function_has_struct_invariant, function_has_trait_ensurance, hir_contains_unsafe,
 };
 use crate::cli::VerifyMode;
-use crate::helpers::fn_info::get_cons;
 use crate::helpers::mir_scan::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
 use crate::helpers::name::short_fn_name;
 use rustc_hir::{
@@ -18,6 +17,7 @@ use rustc_hir::attrs::lang_items::LangItem;
 use rustc_middle::{hir::nested_filter, ty::TyCtxt};
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet};
+use crate::compat::FxHashMap;
 
 use super::{
     contract::{ContractExpr, ContractPlace, PlaceBase, Property, PropertyArg, PropertyKind},
@@ -925,27 +925,26 @@ impl<'tcx> PrepareTargets<'tcx> {
                 .collect::<Vec<_>>()
         );
 
-        let cons = get_cons(self.tcx, target.def_id);
-        for con in &cons {
-            rap_info!("      + constructor: {}", self.tcx.def_path_str(*con));
-        }
-
-        self.log_unsafe_callees_and_contracts(target);
-        self.log_checkpoint_paths(target);
+        let path_map = self.build_checkpoint_path_map(target);
+        self.log_unsafe_callees_and_contracts(target, &path_map);
     }
 
     fn log_free_function_unsafe_callees(&self, target: &FunctionTarget<'tcx>) {
-        self.log_unsafe_callees_and_contracts(target);
-        self.log_checkpoint_paths(target);
+        let path_map = self.build_checkpoint_path_map(target);
+        self.log_unsafe_callees_and_contracts(target, &path_map);
     }
 
-    fn log_unsafe_callees_and_contracts(&self, target: &FunctionTarget<'tcx>) {
+    fn log_unsafe_callees_and_contracts(
+        &self,
+        target: &FunctionTarget<'tcx>,
+        path_map: &FxHashMap<DefId, Vec<(usize, Vec<String>)>>,
+    ) {
         if target.callee_requires.is_empty() {
             rap_info!("      unsafe checkpoints: <none>");
             return;
         }
 
-        let mut unsafe_callee_ids: Vec<_> = target.callee_requires.keys().copied().collect();
+            let mut unsafe_callee_ids: Vec<_> = target.callee_requires.keys().copied().collect();
         unsafe_callee_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
 
         for unsafe_callee_def_id in unsafe_callee_ids {
@@ -982,52 +981,61 @@ impl<'tcx> PrepareTargets<'tcx> {
                     }
                 }
             }
+
+            if let Some(path_entries) = path_map.get(&unsafe_callee_def_id) {
+                for (_block_idx, path_strings) in path_entries {
+                    if path_strings.is_empty() {
+                        rap_info!("        path: <none>");
+                    } else {
+                        for desc in path_strings {
+                            rap_info!("        path: shortest path: {desc}");
+                        }
+                    }
+                }
+            }
         }
     }
 
-    fn log_checkpoint_paths(&self, target: &FunctionTarget<'tcx>) {
+    fn build_checkpoint_path_map(
+        &self,
+        target: &FunctionTarget<'tcx>,
+    ) -> FxHashMap<DefId, Vec<(usize, Vec<String>)>> {
+        let mut path_map: FxHashMap<DefId, Vec<(usize, Vec<String>)>> = FxHashMap::default();
+
         if target.checkpoints.is_empty() {
-            return;
+            return path_map;
         }
 
         let groups =
             PathExtractor::new(self.tcx, target.def_id, target.checkpoints.clone(), 0).run();
-        rap_info!("      checkpoint paths:");
-        let mut display_index = 0usize;
+
         for group in &groups {
             for checkpoint in &group.checkpoints {
-                rap_info!(
-                    "        #{} {} at bb{}",
-                    display_index,
-                    checkpoint.callee_name(self.tcx),
-                    checkpoint.block.as_usize(),
-                );
-                display_index += 1;
+                if let Some(callee_def_id) = checkpoint.callee {
+                    let block_idx = checkpoint.block.as_usize();
+                    let mut path_strings: Vec<String> = Vec::new();
+                    let _ = group.tree.walk_prefixes(
+                        checkpoint.block.as_usize(),
+                        &mut |prefix: &[usize]| -> bool {
+                            let desc = prefix
+                                .iter()
+                                .map(usize::to_string)
+                                .collect::<Vec<_>>()
+                                .join(" -> ");
+                            path_strings.push(desc);
+                            true
+                        },
+                    );
 
-                let mut path_strings: Vec<String> = Vec::new();
-                let _ = group.tree.walk_prefixes(
-                    checkpoint.block.as_usize(),
-                    &mut |prefix: &[usize]| -> bool {
-                        let desc = prefix
-                            .iter()
-                            .map(usize::to_string)
-                            .collect::<Vec<_>>()
-                            .join(" -> ");
-                        path_strings.push(desc);
-                        true
-                    },
-                );
-
-                if path_strings.is_empty() {
-                    rap_info!("          paths: <none>");
-                    continue;
-                }
-
-                for (path_idx, desc) in path_strings.iter().enumerate() {
-                    rap_info!("          path {}: {}", path_idx, desc);
+                    path_map
+                        .entry(callee_def_id)
+                        .or_insert_with(Vec::new)
+                        .push((block_idx, path_strings));
                 }
             }
         }
+
+        path_map
     }
 }
 

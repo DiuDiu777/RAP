@@ -22,7 +22,6 @@ use crate::verify::{
 use crate::helpers::mir_scan::Checkpoint;
 
 use super::vm::state::{AllocId, VmState, VmValue};
-use super::vm::alias::VmOriginKind;
 
 pub struct PropertyChecker;
 

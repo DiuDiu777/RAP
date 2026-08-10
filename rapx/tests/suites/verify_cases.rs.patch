@@ -1,9 +1,0 @@
---- a/tests/suites/verify_cases.rs
-+++ b/tests/suites/verify_cases.rs
-@@ -104,6 +104,7 @@
- fn std_challenge_02() {
-     let output = run_with_args("verify_cases/std-challenge-02", CMD_VERIFY_TARGETED_VM);
-+    std::fs::write("/tmp/sc02_out.txt", &output).ok();
-     assert!(
-         !output.contains("UNSOUND"),
-         "unexpected UNSOUND in std-challenge-02"

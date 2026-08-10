@@ -1,19 +1,17 @@
 use super::statistic::Statistics;
-use crate::{rap_debug, rap_info, rap_trace};
 #[cfg(not(rapx_has_skip_norm_wip))]
 use crate::compat::SkipNormWip;
 
 use rustc_hir::{
-    BodyId, BodyOwnerKind, FnDecl,
+    BodyId, FnDecl,
     def_id::{DefId, LocalDefId},
     intravisit::{FnKind, Visitor, walk_block, walk_fn},
 };
 use rustc_middle::{
     hir::nested_filter,
-    ty::{self, FnSig, ParamEnv, Ty, TyCtxt, TyKind},
+    ty::{self, TyCtxt, TyKind},
 };
 use rustc_span::Span;
-use std::io::Write;
 
 pub struct FnVisitor<'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -46,9 +44,9 @@ impl<'tcx> FnVisitor<'tcx> {
     fn work_at_fn<'v>(
         &mut self,
         fk: FnKind<'v>,
-        fd: &'v FnDecl<'v>,
-        b: BodyId,
-        span: Span,
+        _fd: &'v FnDecl<'v>,
+        _b: BodyId,
+        _span: Span,
         id: LocalDefId,
     ) {
         let fn_did = id.to_def_id();
@@ -95,8 +93,7 @@ impl<'tcx> FnVisitor<'tcx> {
         let inputs = inst_fn_sig.inputs_and_output();
         for input in inputs.iter() {
             rap_debug!("param: {:?}", input);
-            let input_ty = input.skip_binder();
-            if let TyKind::Ref(r, ty, _) = input.skip_binder().kind() {
+            if let TyKind::Ref(r, _ty, _) = input.skip_binder().kind() {
                 rap_debug!("region kind: {:?} {:?}", r.type_flags(), r.kind());
                 match r.kind() {
                     ty::ReEarlyParam(re) => {

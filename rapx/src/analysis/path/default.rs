@@ -71,7 +71,7 @@ impl<'tcx> PathAnalyzer<'tcx> {
     /// Analyze all functions with the given postfix-repeat count.
     pub fn analyze_all_repeat(&mut self, postfix_repeat: usize) {
         for local_def_id in self.tcx.iter_local_def_id() {
-            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn) {
+            if matches!(self.tcx.def_kind(local_def_id), DefKind::Fn | DefKind::AssocFn) {
                 let def_id = local_def_id.to_def_id();
                 let _ = self.analyze_repeat(def_id, postfix_repeat);
             }

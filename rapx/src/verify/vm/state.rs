@@ -575,8 +575,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             solver.assert(cond);
         }
         let zero = Int::from_u64(self.ctx, 0);
-        let arg_count = self.body.arg_count;
-
         for alloc in &self.allocations {
             if !alloc.is_external {
                 solver.assert(&alloc.base._eq(&zero).not());
@@ -588,7 +586,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
         }
 
-        for (local, value) in self.locals.iter() {
+        for (_local, value) in self.locals.iter() {
             if value.invariants.non_null {
                 solver.assert(&value.term._eq(&zero).not());
             }

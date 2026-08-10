@@ -23,7 +23,7 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     contract::Property,
     display::{
-        emit_lines, emit_property_rows, emit_results_and_verdict, emit_verify_summary, fmt_contract_expanded,
+        emit_lines, emit_results_and_verdict, emit_verify_summary, fmt_contract_expanded,
         fmt_fn_path_with_bounds, fmt_fn_path_with_generics, fmt_fn_with_params,
     },
     engine::VerifyEngine,
