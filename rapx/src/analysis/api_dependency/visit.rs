@@ -3,7 +3,10 @@ use super::graph::{DepEdge, DepNode};
 use super::is_def_id_public;
 use crate::analysis::api_dependency::mono;
 use crate::{rap_debug, rap_trace};
+#[cfg(not(rapx_rustc_ge_199))]
 use rustc_hir::LangItem;
+#[cfg(rapx_rustc_ge_199)]
+use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::{
     BodyId, BodyOwnerKind, FnDecl,
     def_id::{DefId, LocalDefId},

@@ -1,4 +1,7 @@
+#[cfg(not(rapx_rustc_ge_199))]
 use rustc_hir::LangItem;
+#[cfg(rapx_rustc_ge_199)]
+use rustc_hir::attrs::lang_items::LangItem;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind};
 use rustc_span::sym;
 

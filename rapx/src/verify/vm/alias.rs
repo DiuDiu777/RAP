@@ -13,6 +13,7 @@ use crate::verify::{
     def_use::PlaceKey,
 };
 use crate::helpers::mir_scan::Checkpoint;
+use crate::analysis::alias::collect_local_origins;
 
 use super::state::{AllocId, VmState, VmValue};
 
@@ -194,6 +195,30 @@ pub fn check_alias_vm<'ctx, 'tcx>(
                 for decl in &vm_state.body.local_decls {
                     if matches!(decl.ty.kind(), rustc_middle::ty::TyKind::Ref(..)) {
                         return VmAliasResult::Proved;
+                    }
+                }
+            }
+            // Field-type-aware check: if the raw-ptr-deref operand traces to a
+            // struct field and that field is a shared reference, the view is safe.
+            let tcx = vm_state.tcx;
+            let caller = checkpoint.caller;
+            let arg_place = alias_hazard::operand_mir_place(origin_arg)
+                .map(|p| PlaceKey::from_mir_place(p));
+            if let Some(mir_place) = arg_place {
+                let origin_map = collect_local_origins(tcx, caller);
+                let (root, fields) = alias_hazard::deep_resolve_place(
+                    mir_place.local().map(|l| l.as_usize()).unwrap_or(1),
+                    &origin_map,
+                );
+                if !fields.is_empty() {
+                    let resolved = PlaceKey::from_origin(root, fields);
+                    let sfo = alias_hazard::self_field_origin(tcx, caller, &resolved);
+                    if let Some(sfo) = sfo {
+                        if let Some(is_shared) = is_self_field_shared_ref(tcx, caller, &sfo) {
+                            if is_shared {
+                                return VmAliasResult::Proved;
+                            }
+                        }
                     }
                 }
             }
@@ -592,6 +617,40 @@ fn infer_self_field_from_type<'tcx>(
 
     None
 }
+/// Check whether a self field's type is a shared reference (`&T` or `&[T]`).
+/// Used by raw-ptr-deref alias checks to prove shared views are safe when the
+/// underlying field is a shared reference.
+fn is_self_field_shared_ref(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    caller: DefId,
+    origin: &alias_hazard::SelfFieldOrigin,
+) -> Option<bool> {
+    let body = tcx.optimized_mir(caller);
+    let self_ty = body.local_decls[Local::from_usize(1)].ty;
+    let ((adt_def, args), _) = match self_ty.kind() {
+        rustc_middle::ty::TyKind::Ref(_, inner, _)
+            if matches!(inner.kind(), rustc_middle::ty::TyKind::Adt(..)) =>
+        {
+            let (did, a) = crate::analysis::alias::adt_from_ty(*inner)?;
+            ((did, a), Some(inner))
+        }
+        _ => return None,
+    };
+    if adt_def != origin.struct_def_id {
+        return Some(false);
+    }
+    let adt = tcx.adt_def(adt_def);
+    let field = adt.all_fields().nth(origin.field_index)?;
+    #[cfg(not(rapx_rustc_ge_198))]
+    let field_ty = field.ty(tcx, args);
+    #[cfg(rapx_rustc_ge_198)]
+    let field_ty = field.ty(tcx, args).skip_norm_wip();
+    Some(matches!(
+        field_ty.kind(),
+        rustc_middle::ty::TyKind::Ref(_, _, rustc_middle::ty::Mutability::Not)
+    ))
+}
+
 /// copies/casts (e.g. `_tmp = self.ptr` → `_1.0`).
 fn resolve_origin_place_mir(tcx: rustc_middle::ty::TyCtxt<'_>, caller: DefId, place: &PlaceKey) -> PlaceKey {
     let Some(local) = place.local() else {

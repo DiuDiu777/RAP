@@ -7,10 +7,14 @@ use crate::helpers::fn_info::get_cons;
 use crate::helpers::mir_scan::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
 use crate::helpers::name::short_fn_name;
 use rustc_hir::{
-    Attribute, BodyId, FnDecl, ItemKind, LangItem,
+    Attribute, BodyId, FnDecl, ItemKind,
     def_id::{DefId, LocalDefId},
     intravisit::{FnKind, Visitor},
 };
+#[cfg(not(rapx_rustc_ge_199))]
+use rustc_hir::LangItem;
+#[cfg(rapx_rustc_ge_199)]
+use rustc_hir::attrs::lang_items::LangItem;
 use rustc_middle::{hir::nested_filter, ty::TyCtxt};
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet};

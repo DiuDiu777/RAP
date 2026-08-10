@@ -10,7 +10,10 @@ use rand::seq::SliceRandom;
 #[cfg(not(rapx_has_skip_norm_wip))]
 use crate::compat::SkipNormWip;
 
+#[cfg(not(rapx_rustc_ge_199))]
 use rustc_hir::LangItem;
+#[cfg(rapx_rustc_ge_199)]
+use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def_id::DefId;
 use rustc_infer::infer::DefineOpaqueTypes;
 use rustc_infer::infer::{InferCtxt, TyCtxtInferExt};

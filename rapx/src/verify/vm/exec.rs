@@ -17,7 +17,7 @@ use rustc_hir::def_id::DefId;
 use z3::ast::{Ast, Bool, Int};
 
 use crate::{
-    compat::FxHashSet,
+    compat::{FxHashMap, FxHashSet},
     verify::{
         contract::{ContractExpr, PlaceBase, Property, PropertyArg, PropertyKind},
         def_use::PlaceKey,
@@ -117,6 +117,21 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             if let Some(val) = arg_val {
                 self.ensure_local_allocation(callee_local);
                 self.set_local(callee_local, val);
+            }
+        }
+        // Propagate field_values from caller arg locals to callee param
+        // locals, so that inlined callee body can access struct fields
+        // (e.g. Iter::ptr / end_or_len for len/is_empty computations).
+        for (i, caller_arg) in arg_locals.iter().enumerate() {
+            let callee_param = Local::from_usize(i + 1);
+            let caller_field_keys: Vec<Vec<usize>> = self.field_values.keys()
+                .filter(|(l, _)| *l == *caller_arg)
+                .map(|(_, f)| f.clone())
+                .collect();
+            for fields in caller_field_keys {
+                if let Some(fv) = self.field_value(*caller_arg, &fields).cloned() {
+                    self.set_field_value(callee_param, fields, fv);
+                }
             }
         }
     }
@@ -235,18 +250,111 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         continue;
                     }
                     let variant = adt_def.non_enum_variant();
+                    let mut elem_alloc: FxHashMap<Ty<'tcx>, (AllocId, Int<'ctx>)> =
+                        FxHashMap::default();
                     for (idx, field_def) in variant.fields.iter().enumerate() {
                         let field_ty: Ty<'tcx> = field_def.ty(self.tcx, substs).skip_norm_wip();
-                        let field_term = self.fresh_int(
-                            &format!("field_{}_{}", local_idx, idx)
-                        );
-                        self.set_field_value(local, vec![idx], VmValue {
-                            term: field_term,
-                            ty: field_ty,
-                            provenance: None,
-                            invariants: ValueInvariants { init: true, ..Default::default() },
-                        });
-                        self.mark_field_init(local, vec![idx]);
+                        if let rustc_middle::ty::TyKind::RawPtr(inner, _) = field_ty.kind() {
+                            let prost_offset;
+                            if let Some(&(existing_alloc, ref base)) = elem_alloc.get(inner) {
+                                let elem_size = self.size_of_ty(*inner).max(1) as u64;
+                                let len_term = self.fresh_int(
+                                    &format!("field_len_{}_{}", local_idx, idx)
+                                );
+                                self.path_conditions.push(len_term.ge(&Int::from_u64(self.ctx, 0)));
+                                prost_offset = Int::mul(self.ctx, &[&len_term, &Int::from_u64(self.ctx, elem_size)]);
+                                let field_term = Int::add(self.ctx, &[base, &prost_offset]);
+                                self.set_field_value(local, vec![idx], VmValue {
+                                    term: field_term,
+                                    ty: field_ty,
+                                    provenance: Some(Provenance {
+                                        alloc_id: existing_alloc,
+                                        offset: prost_offset.clone(),
+                                    }),
+                                    invariants: ValueInvariants {
+                                        non_null: true, init: true, ..Default::default()
+                                    },
+                                });
+                                self.mark_field_init(local, vec![idx]);
+                                continue;
+                            } else {
+                                let field_align = 1u64.max(self.align_of_ty(*inner));
+                                let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                let (field_alloc_id, field_base) = self.allocate_external(
+                                    max_size, field_align, Some(*inner),
+                                );
+                                self.init_allocations.insert(field_alloc_id);
+                                prost_offset = Int::from_u64(self.ctx, 0);
+                                elem_alloc.insert(*inner, (field_alloc_id, field_base.clone()));
+                                self.set_field_value(local, vec![idx], VmValue {
+                                    term: field_base,
+                                    ty: field_ty,
+                                    provenance: Some(Provenance {
+                                        alloc_id: field_alloc_id,
+                                        offset: prost_offset,
+                                    }),
+                                    invariants: ValueInvariants {
+                                        non_null: true, init: true, ..Default::default()
+                                    },
+                                });
+                                self.mark_field_init(local, vec![idx]);
+                            }
+                        } else if let Some(pointee) = self.find_nn_pointee(field_ty) {
+                            let prost_offset;
+                            if let Some(&(existing_alloc, ref base)) = elem_alloc.get(&pointee) {
+                                let elem_size = self.size_of_ty(pointee).max(1) as u64;
+                                let len_term = self.fresh_int(
+                                    &format!("field_len_{}_{}", local_idx, idx)
+                                );
+                                self.path_conditions.push(len_term.ge(&Int::from_u64(self.ctx, 0)));
+                                prost_offset = Int::mul(self.ctx, &[&len_term, &Int::from_u64(self.ctx, elem_size)]);
+                                let field_term = Int::add(self.ctx, &[base, &prost_offset]);
+                                self.set_field_value(local, vec![idx], VmValue {
+                                    term: field_term,
+                                    ty: field_ty,
+                                    provenance: Some(Provenance {
+                                        alloc_id: existing_alloc,
+                                        offset: prost_offset.clone(),
+                                    }),
+                                    invariants: ValueInvariants { init: true, ..Default::default() },
+                                });
+                                self.mark_field_init(local, vec![idx]);
+                                continue;
+                            } else {
+                                let pointee_align = 1u64.max(self.align_of_ty(pointee));
+                                let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                let (field_alloc_id, field_base_term) = self.allocate_external(
+                                    max_size, pointee_align, Some(pointee),
+                                );
+                                self.init_allocations.insert(field_alloc_id);
+                                prost_offset = Int::from_u64(self.ctx, 0);
+                                elem_alloc.insert(pointee, (field_alloc_id, field_base_term));
+                                let field_term = self.fresh_int(
+                                    &format!("field_nn_{}_{}", local_idx, idx)
+                                );
+                                self.set_field_value(local, vec![idx], VmValue {
+                                    term: field_term,
+                                    ty: field_ty,
+                                    provenance: Some(Provenance {
+                                        alloc_id: field_alloc_id,
+                                        offset: prost_offset,
+                                    }),
+                                    invariants: ValueInvariants { init: true, ..Default::default() },
+                                });
+                                self.mark_field_init(local, vec![idx]);
+                            }
+                        } else {
+                            let field_term = self.fresh_int(
+                                &format!("field_{}_{}", local_idx, idx)
+                            );
+                            self.set_field_value(local, vec![idx], VmValue {
+                                term: field_term,
+                                ty: field_ty,
+                                provenance: None,
+                                invariants: ValueInvariants { init: true, ..Default::default() },
+                            });
+                            self.mark_field_init(local, vec![idx]);
+                        }
                     }
                     let term = self.fresh_int(&format!("param_{}", local_idx));
                     self.set_local(local, VmValue {
@@ -336,51 +444,151 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     if let rustc_middle::ty::TyKind::Adt(adt_def, substs) = pointee_ty.kind() {
                         if !adt_def.is_enum() {
                             let variant = adt_def.non_enum_variant();
+                            // Track the first data allocation per element type.
+                            // Subsequent RawPtr / NonNull fields with the same
+                            // pointee type reuse the allocation with per-field
+                            // symbolic offsets, preserving the field relationships
+                            // (e.g. ptr=start, end_or_len=start+len).
+                            let mut elem_alloc: FxHashMap<Ty<'tcx>, (AllocId, Int<'ctx>)> =
+                                FxHashMap::default();
                             for (idx, field_def) in variant.fields.iter().enumerate() {
                                 let field_ty: Ty<'tcx> = field_def.ty(self.tcx, substs).skip_norm_wip();
                                 if let rustc_middle::ty::TyKind::RawPtr(inner, _) = field_ty.kind() {
-                                    let field_align = 1u64.max(self.align_of_ty(*inner));
-                                    let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
-                                    let (field_alloc_id, field_base) = self.allocate_external(
-                                        max_size, field_align, Some(*inner),
-                                    );
-                                    self.init_allocations.insert(field_alloc_id);
-                                    self.set_field_value(local, vec![idx], VmValue {
-                                        term: field_base,
-                                        ty: field_ty,
-                                        provenance: Some(Provenance {
-                                            alloc_id: field_alloc_id,
-                                            offset: Int::from_u64(self.ctx, 0),
-                                        }),
-                                        invariants: ValueInvariants {
-                                            non_null: true, init: true, ..Default::default()
-                                        },
-                                    });
-                                    self.mark_field_init(local, vec![idx]);
+                                    let prost_offset;
+                                    if let Some(&(existing_alloc, ref base)) = elem_alloc.get(inner) {
+                                        let elem_size = self.size_of_ty(*inner).max(1) as u64;
+                                        let len_term = self.fresh_int(
+                                            &format!("field_len_{}_{}", local_idx, idx)
+                                        );
+                                        self.path_conditions.push(len_term.ge(&Int::from_u64(self.ctx, 0)));
+                                        prost_offset = Int::mul(self.ctx, &[&len_term, &Int::from_u64(self.ctx, elem_size)]);
+                                        let field_term = Int::add(self.ctx, &[base, &prost_offset]);
+                                        self.set_field_value(local, vec![idx], VmValue {
+                                            term: field_term,
+                                            ty: field_ty,
+                                            provenance: Some(Provenance {
+                                                alloc_id: existing_alloc,
+                                                offset: prost_offset.clone(),
+                                            }),
+                                            invariants: ValueInvariants {
+                                                non_null: true, init: true, ..Default::default()
+                                            },
+                                        });
+                                        self.mark_field_init(local, vec![idx]);
+                                        continue;
+                                    } else {
+                                        let field_align = 1u64.max(self.align_of_ty(*inner));
+                                        let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                        let (field_alloc_id, field_base) = self.allocate_external(
+                                            max_size, field_align, Some(*inner),
+                                        );
+                                        self.init_allocations.insert(field_alloc_id);
+                                        prost_offset = Int::from_u64(self.ctx, 0);
+                                        elem_alloc.insert(*inner, (field_alloc_id, field_base.clone()));
+                                        self.set_field_value(local, vec![idx], VmValue {
+                                            term: field_base,
+                                            ty: field_ty,
+                                            provenance: Some(Provenance {
+                                                alloc_id: field_alloc_id,
+                                                offset: prost_offset,
+                                            }),
+                                            invariants: ValueInvariants {
+                                                non_null: true, init: true, ..Default::default()
+                                            },
+                                        });
+                                        self.mark_field_init(local, vec![idx]);
+                                    }
                                 } else if let Some(pointee) = self.find_nn_pointee(field_ty) {
                                     // Field contains NonNull<T> (possibly wrapped in Option):
-                                    // create an external allocation for the pointee and
-                                    // set field value with provenance so that subsequent
-                                    // as_ptr() / as_ref() / as_mut() propagate correctly.
-                                    let pointee_align = 1u64.max(self.align_of_ty(pointee));
-                                    let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
-                                    let (field_alloc_id, _field_base) = self.allocate_external(
-                                        max_size, pointee_align, Some(pointee),
-                                    );
-                                    self.init_allocations.insert(field_alloc_id);
-                                    let field_term = self.fresh_int(
-                                        &format!("ref_field_{}_{}", local_idx, idx)
-                                    );
-                                    self.set_field_value(local, vec![idx], VmValue {
-                                        term: field_term,
-                                        ty: field_ty,
-                                        provenance: Some(Provenance {
-                                            alloc_id: field_alloc_id,
-                                            offset: Int::from_u64(self.ctx, 0),
-                                        }),
-                                        invariants: ValueInvariants { init: true, ..Default::default() },
-                                    });
-                                    self.mark_field_init(local, vec![idx]);
+                                    // create/reuse an external allocation for the pointee.
+                                    let prost_offset;
+                                    if let Some(&(existing_alloc, ref base)) = elem_alloc.get(&pointee) {
+                                        let elem_size = self.size_of_ty(pointee).max(1) as u64;
+                                        let len_term = self.fresh_int(
+                                            &format!("field_len_{}_{}", local_idx, idx)
+                                        );
+                                        self.path_conditions.push(len_term.ge(&Int::from_u64(self.ctx, 0)));
+                                        prost_offset = Int::mul(self.ctx, &[&len_term, &Int::from_u64(self.ctx, elem_size)]);
+                                        let field_term = Int::add(self.ctx, &[base, &prost_offset]);
+                                        self.set_field_value(local, vec![idx], VmValue {
+                                            term: field_term,
+                                            ty: field_ty,
+                                            provenance: Some(Provenance {
+                                                alloc_id: existing_alloc,
+                                                offset: prost_offset.clone(),
+                                            }),
+                                            invariants: ValueInvariants { init: true, ..Default::default() },
+                                        });
+                                        self.mark_field_init(local, vec![idx]);
+                                        continue;
+                                    } else {
+                                        let pointee_align = 1u64.max(self.align_of_ty(pointee));
+                                        let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                        let (field_alloc_id, field_base_term) = self.allocate_external(
+                                            max_size, pointee_align, Some(pointee),
+                                        );
+                                        self.init_allocations.insert(field_alloc_id);
+                                        prost_offset = Int::from_u64(self.ctx, 0);
+                                        elem_alloc.insert(pointee, (field_alloc_id, field_base_term));
+                                        let field_term = self.fresh_int(
+                                            &format!("ref_field_{}_{}", local_idx, idx)
+                                        );
+                                        self.set_field_value(local, vec![idx], VmValue {
+                                            term: field_term,
+                                            ty: field_ty,
+                                            provenance: Some(Provenance {
+                                                alloc_id: field_alloc_id,
+                                                offset: prost_offset,
+                                            }),
+                                            invariants: ValueInvariants { init: true, ..Default::default() },
+                                        });
+                                        self.mark_field_init(local, vec![idx]);
+                                    }
+                                } else if let rustc_middle::ty::TyKind::Ref(_, pointee, _) = field_ty.kind() {
+                                    // Field contains a reference (&T, &mut T, &[T], etc.).
+                                    // Give it provenance so that as_ptr() / as_mut_ptr()
+                                    // on the field propagates the allocation info.
+                                    if let rustc_middle::ty::TyKind::Slice(elem_ty) = pointee.kind() {
+                                        let elem_align = 1u64.max(self.align_of_ty(*elem_ty));
+                                        let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                        let (data_alloc_id, data_base) = self.allocate_external(
+                                            max_size, elem_align, Some(*elem_ty),
+                                        );
+                                        self.init_allocations.insert(data_alloc_id);
+                                        self.alive_assumed.insert(data_alloc_id);
+                                        self.set_field_value(local, vec![idx], VmValue {
+                                            term: data_base,
+                                            ty: field_ty,
+                                            provenance: Some(Provenance {
+                                                alloc_id: data_alloc_id,
+                                                offset: Int::from_u64(self.ctx, 0),
+                                            }),
+                                            invariants: ValueInvariants {
+                                                non_null: true, init: true, ..Default::default()
+                                            },
+                                        });
+                                        self.mark_field_init(local, vec![idx]);
+                                    } else {
+                                        let pointee_align = 1u64.max(self.align_of_ty(*pointee));
+                                        let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
+                                        let (field_alloc_id, field_base) = self.allocate_external(
+                                            max_size, pointee_align, Some(*pointee),
+                                        );
+                                        self.init_allocations.insert(field_alloc_id);
+                                        self.alive_assumed.insert(field_alloc_id);
+                                        self.set_field_value(local, vec![idx], VmValue {
+                                            term: field_base,
+                                            ty: field_ty,
+                                            provenance: Some(Provenance {
+                                                alloc_id: field_alloc_id,
+                                                offset: Int::from_u64(self.ctx, 0),
+                                            }),
+                                            invariants: ValueInvariants {
+                                                non_null: true, init: true, ..Default::default()
+                                            },
+                                        });
+                                        self.mark_field_init(local, vec![idx]);
+                                    }
                                 }
                             }
                         }

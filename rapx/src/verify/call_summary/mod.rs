@@ -162,6 +162,10 @@ pub enum CallEffect {
     /// Remove `slice_data_allocations` links for the argument's stack
     /// alloc_id — used for `mem::forget` which prevents a drop cascade.
     CleanSliceDataLinks { arg: usize },
+    /// Returns the element-count distance between two pointers with common
+    /// provenance: `(self_arg.addr() - origin_arg.addr()) / sizeof(T)`.
+    /// Models `NonNull::offset_from_unsigned` / `offset_from`.
+    ReturnOffsetFromUnsigned { self_arg: usize, origin_arg: usize },
 }
 
 /// Return dependency information for a MIR call terminator.

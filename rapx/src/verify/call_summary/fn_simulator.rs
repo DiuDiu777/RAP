@@ -61,6 +61,7 @@ static REGISTRY: &[Entry] = &[
     E!(is_maybe_uninit_assume_init,dep0!(), false, none!(), eff_none),
     E!(is_numeric_arith,      ALL,      true,   none!(),  eff_none),
     E!(saturating_sub,        ALL,      true,   none!(),  eff_none),
+    E!(is_offset_from_unsigned, dep01!(), false, none!(), eff_offset_from_unsigned),
     E!(is_option_unwrap,      dep0!(),  false,  none!(),  eff_alias_arg0),
     E!(from_trait_call,       dep0!(),  false,  none!(),  eff_from_trait),
 
@@ -217,6 +218,10 @@ fn eff_ptr_sub(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReturnPointerSub { base_arg: 0, offset_arg: 1, stride }]
 }
 
+fn eff_offset_from_unsigned(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+    vec![CallEffect::ReturnOffsetFromUnsigned { self_arg: 0, origin_arg: 1 }]
+}
+
 fn eff_read_mem(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReadMemory { arg: 0 }]
 }
@@ -347,7 +352,11 @@ fn cmp_min(n: &str) -> bool                 { (n.contains("::cmp::min") || n.sta
 fn saturating_sub(n: &str) -> bool          { n.contains("::saturating_sub") }
 fn split_at(n: &str) -> bool                { n.contains("::split_at") }
 fn is_slice_get_unchecked(n: &str) -> bool   { 
-    n.contains("::get_unchecked") && (n.contains("::SliceIndex") || n.contains("::impl [T]>::get_unchecked"))
+    (n.contains("::get_unchecked") || n.contains("::get_unchecked_mut"))
+        && (n.contains("::SliceIndex")
+            || n.contains("::impl [T]>::get_unchecked")
+            || n.contains("::mut_ptr::get_unchecked")
+            || n.contains("::const_ptr::get_unchecked"))
 }
 
 // ── is_* helpers (hot path — direct string matching) ─────────────────
@@ -421,6 +430,9 @@ pub fn is_maybe_uninit_write(name: &str) -> bool {
         && !name.contains("write_bytes")
 }
 pub fn is_len(name: &str) -> bool { name.contains("::len") }
+pub fn is_offset_from_unsigned(name: &str) -> bool {
+    name.contains("::offset_from_unsigned") || name.contains("::offset_from")
+}
 pub fn is_numeric_arith(name: &str) -> bool {
     name.contains("::unchecked_mul") || name.contains("::unchecked_add")
         || name.contains("::unchecked_sub") || name.contains("::unchecked_div")

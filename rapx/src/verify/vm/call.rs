@@ -68,19 +68,79 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             return;
         }
 
+        // Iter::len() / Iter::is_empty(): compute from struct fields
+        // (ptr + end_or_len share the same allocation with per-field
+        // offsets).  The generic fn_simulator would return
+        // sizeof(Iter)/sizeof(T) which is wrong for generic T.
+        if (name.contains("::Iter<") || name.contains("::IterMut<"))
+            && (name.ends_with("::len") || name.ends_with("::is_empty"))
+            && arg_values.len() >= 1
+        {
+            let receiver_local = args.first().and_then(|a| a.node.place())
+                .map(|p| p.local);
+            if let Some(local) = receiver_local {
+                // len() = (end_or_len - ptr) / sizeof(T)   (non-ZST)
+                // is_empty() = ptr == end_or_len           (non-ZST)
+                let ptr_val = self.field_value(local, &[0]);
+                let end_val = self.field_value(local, &[1]);
+                if let (Some(ptr), Some(end)) = (ptr_val, end_val) {
+                    if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                        if pp.alloc_id == ep.alloc_id {
+                            let dest_ty = self.body.local_decls[destination].ty;
+                            if name.ends_with("::len") {
+                                let elem_ty = match ptr.ty.kind() {
+                                    TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                                    _ => None,
+                                };
+                                let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                                let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
+                                let sz = Int::from_u64(self.ctx, elem_size);
+                                let val = VmValue {
+                                    term: diff.div(&sz),
+                                    ty: dest_ty,
+                                    provenance: None,
+                                    invariants: ValueInvariants::default(),
+                                };
+                                self.set_local(destination, val);
+                                return;
+                            } else {
+                                // is_empty(): ptr == end_or_len  (non-ZST branch)
+                                let eq = pp.offset._eq(&ep.offset);
+                                let zero = Int::from_u64(self.ctx, 0);
+                                let one = Int::from_u64(self.ctx, 1);
+                                let val = VmValue {
+                                    term: eq.ite(&one, &zero),
+                                    ty: dest_ty,
+                                    provenance: None,
+                                    invariants: ValueInvariants::default(),
+                                };
+                                self.set_local(destination, val);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+            // Fall through to fn_simulator if field access failed
+        }
+
         // Try inline for callees with available MIR, unless fn_simulator
         // has a precise summary (memory allocation, intrinsics, known ptr
         // arithmetic, etc.). The summary path handles these with
         // hand-crafted invariants that are more precise than BFS inline.
         let callee = crate::helpers::mir_utils::dep_callee_def_id(func);
         let mut tried_inline = false;
+        // Extract caller arg locals for field_value propagation into inline.
+        let caller_arg_locals: Vec<Local> = args.iter()
+            .filter_map(|a| a.node.place().map(|p| p.local))
+            .collect();
         if let Some(c) = callee {
             if self.tcx.is_mir_available(c) {
                 let has_fn_sim = crate::verify::call_summary::fn_simulator::lookup_effect(
                     self.tcx, caller_def_id, Some(c), &name, func, destination,
                 ).is_some();
                 if !has_fn_sim {
-                    if self.exec_inline_call(c, &arg_values, destination, 0) {
+                    if self.exec_inline_call(c, &arg_values, &caller_arg_locals, destination, 0) {
                         self.materialize_const_bytes_after_call(args, destination);
                         return;
                     }
@@ -108,7 +168,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 let inlined = callee
                     .and_then(|c| {
                         if self.tcx.is_mir_available(c) {
-                            Some(self.exec_inline_call(c, &arg_values, destination, 0))
+                            Some(self.exec_inline_call(c, &arg_values, &caller_arg_locals, destination, 0))
                         } else {
                             None
                         }
@@ -198,6 +258,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         &mut self,
         callee_def_id: DefId,
         arg_values: &[VmValue<'ctx, 'tcx>],
+        caller_arg_locals: &[Local],
         dest: Local,
         depth: usize,
     ) -> bool {
@@ -250,6 +311,25 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let callee_local = Local::from_usize(i + 1);
             self.ensure_local_allocation(callee_local);
             self.set_local(callee_local, arg_val.clone());
+        }
+
+        // Propagate field_values from caller arg locals into the callee
+        // context so that inline body can access struct fields (e.g.
+        // Iter::ptr / end_or_len for len/is_empty computations).
+        for (i, caller_arg) in caller_arg_locals.iter().enumerate() {
+            let callee_param = Local::from_usize(i + 1);
+            if *caller_arg == callee_param {
+                continue; // same local; field_values already present
+            }
+            let caller_field_keys: Vec<Vec<usize>> = saved_field_values.keys()
+                .filter(|(l, _)| *l == *caller_arg)
+                .map(|(_, f)| f.clone())
+                .collect();
+            for fields in caller_field_keys {
+                if let Some(fv) = saved_field_values.get(&(*caller_arg, fields.clone())).cloned() {
+                    self.set_field_value(callee_param, fields, fv);
+                }
+            }
         }
 
         // ── BFS execution of callee MIR ──
@@ -638,6 +718,12 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             CallEffect::ReturnLengthOfArg { arg } => {
                 if let Some(arg_val) = args.get(*arg) {
+                    // For Iter / IterMut, compute len from struct fields
+                    // (ptr + end_or_len with shared allocation) instead of
+                    // the generic sizeof(Iter)/sizeof(T) heuristic.
+                    if self.interpreter_iter_len(arg_val, dest) {
+                        return;
+                    }
                     let effective_alloc_id = arg_val.provenance_alloc_id()
                         .and_then(|pid| self.slice_data_allocations.get(&pid).copied())
                         .or_else(|| arg_val.provenance_alloc_id());
@@ -695,6 +781,9 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             CallEffect::ReturnIsEmptyOfArg { arg } => {
                 if let Some(arg_val) = args.get(*arg) {
+                    if self.iterpreter_iter_is_empty(arg_val, dest) {
+                        return;
+                    }
                     let effective_alloc_id = arg_val.provenance_alloc_id()
                         .and_then(|pid| self.slice_data_allocations.get(&pid).copied())
                         .or_else(|| arg_val.provenance_alloc_id());
@@ -721,6 +810,49 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 let fresh = self.fresh_int(&format!("empty_{}", dest.as_usize()));
                 let val = VmValue {
                     term: fresh.le(&zero).ite(&one, &zero),
+                    ty: dest_ty,
+                    provenance: None,
+                    invariants: ValueInvariants::default(),
+                };
+                self.set_local(dest, val);
+            }
+            CallEffect::ReturnOffsetFromUnsigned { self_arg, origin_arg } => {
+                if let (Some(self_val), Some(origin_val)) = (args.get(*self_arg), args.get(*origin_arg)) {
+                    let dest_ty = self.body.local_decls[dest].ty;
+                    if let (Some(self_prov), Some(origin_prov)) = (&self_val.provenance, &origin_val.provenance) {
+                        // Both pointers share provenance: the element-distance
+                        // is (self_offset - origin_offset) / elem_size.
+                        let elem_ty = match self_val.ty.kind() {
+                            TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                            _ => None,
+                        };
+                        let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                        let diff = Int::sub(self.ctx, &[&self_prov.offset, &origin_prov.offset]);
+                        let sz = Int::from_u64(self.ctx, elem_size);
+                        let val = VmValue {
+                            term: diff.div(&sz),
+                            ty: dest_ty,
+                            provenance: None,
+                            invariants: ValueInvariants::default(),
+                        };
+                        self.set_local(dest, val);
+                        return;
+                    }
+                    // Fallback: fresh symbolic length.
+                    let term = self.fresh_int(&format!("offset_{}", dest.as_usize()));
+                    let val = VmValue {
+                        term,
+                        ty: dest_ty,
+                        provenance: None,
+                        invariants: ValueInvariants::default(),
+                    };
+                    self.set_local(dest, val);
+                    return;
+                }
+                let dest_ty = self.body.local_decls[dest].ty;
+                let term = self.fresh_int(&format!("offset_{}", dest.as_usize()));
+                let val = VmValue {
+                    term,
                     ty: dest_ty,
                     provenance: None,
                     invariants: ValueInvariants::default(),
@@ -1152,5 +1284,83 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
         }
         None
+    }
+
+    /// For Iter/IterMut types, compute len from struct fields directly
+    /// instead of the generic allocation-size heuristic. Returns true
+    /// if handled (value set to dest).
+    fn interpreter_iter_len(&mut self, arg_val: &VmValue<'ctx, 'tcx>, dest: Local) -> bool {
+        let local = self.find_iter_self_local(arg_val);
+        if let Some(l) = local {
+            if let (Some(ptr), Some(end)) = (self.field_value(l, &[0]), self.field_value(l, &[1])) {
+                if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                    if pp.alloc_id == ep.alloc_id {
+                        let dest_ty = self.body.local_decls[dest].ty;
+                        let elem_ty = match ptr.ty.kind() {
+                            TyKind::Adt(_, substs) => substs.first().and_then(|s| s.as_type()),
+                            _ => None,
+                        };
+                        let elem_size = elem_ty.map(|t| self.size_of_ty(t).max(1)).unwrap_or(1) as u64;
+                        let diff = Int::sub(self.ctx, &[&ep.offset, &pp.offset]);
+                        let sz = Int::from_u64(self.ctx, elem_size);
+                        let val = VmValue {
+                            term: diff.div(&sz),
+                            ty: dest_ty,
+                            provenance: None,
+                            invariants: ValueInvariants::default(),
+                        };
+                        self.set_local(dest, val);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    fn iterpreter_iter_is_empty(&mut self, arg_val: &VmValue<'ctx, 'tcx>, dest: Local) -> bool {
+        let local = self.find_iter_self_local(arg_val);
+        if let Some(l) = local {
+            if let (Some(ptr), Some(end)) = (self.field_value(l, &[0]), self.field_value(l, &[1])) {
+                if let (Some(pp), Some(ep)) = (&ptr.provenance, &end.provenance) {
+                    if pp.alloc_id == ep.alloc_id {
+                        let dest_ty = self.body.local_decls[dest].ty;
+                        let eq = pp.offset._eq(&ep.offset);
+                        let zero = Int::from_u64(self.ctx, 0);
+                        let one = Int::from_u64(self.ctx, 1);
+                        let val = VmValue {
+                            term: eq.ite(&one, &zero),
+                            ty: dest_ty,
+                            provenance: None,
+                            invariants: ValueInvariants::default(),
+                        };
+                        self.set_local(dest, val);
+                        return true;
+                    }
+                }
+            }
+        }
+        false
+    }
+
+    /// If arg_val is a reference to an Iter or IterMut struct, return the
+    /// local index of the referent (so field values can be looked up).
+    /// Since len()/is_empty() always take &self, local 1 is the receiver.
+    fn find_iter_self_local(&self, arg_val: &VmValue<'ctx, 'tcx>) -> Option<Local> {
+        match arg_val.ty.kind() {
+            TyKind::Ref(_, pointee, _) => match pointee.kind() {
+                TyKind::Adt(adt_def, _) => {
+                    let name = self.tcx.def_path_str(adt_def.did());
+                    if name.contains("::Iter<") || name == "Iter"
+                        || name.contains("::IterMut<") || name == "IterMut"
+                    {
+                        return Some(Local::from_usize(1));
+                    }
+                    None
+                }
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }

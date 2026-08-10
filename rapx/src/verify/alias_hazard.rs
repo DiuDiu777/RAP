@@ -395,7 +395,7 @@ pub fn escaped_self_field_violation(
             }
             let item_self = self_borrow_mutability(tcx, *item);
             if method_writes_self_field(tcx, *item, origin.field_index) {
-                if current_self.is_none() {
+                if current_self.is_none() || item_self.is_none() {
                     continue;
                 }
                 if let (Some(ty::Mutability::Not), Some(ty::Mutability::Mut)) =
@@ -410,7 +410,7 @@ pub fn escaped_self_field_violation(
                 ));
             }
             if method_exposes_self_field(tcx, *item, origin.field_index) {
-                if current_self.is_none() {
+                if current_self.is_none() || item_self.is_none() {
                     continue;
                 }
                 if let (Some(ty::Mutability::Not), Some(ty::Mutability::Mut)) =
@@ -509,11 +509,15 @@ fn place_raw_accesses_self_field(
     place: &Place<'_>,
     field_index: usize,
 ) -> bool {
-    if !place
-        .projection
-        .iter()
-        .any(|projection| matches!(projection, ProjectionElem::Deref))
-    {
+    let body = tcx.optimized_mir(method);
+    let has_raw_deref = place.projection.iter().any(|projection| {
+        if let ProjectionElem::Deref = projection {
+            matches!(body.local_decls[place.local].ty.kind(), TyKind::RawPtr(_, _))
+        } else {
+            false
+        }
+    });
+    if !has_raw_deref {
         return false;
     }
     local_traces_to_self_field(tcx, method, place.local, field_index, &mut HashSet::new())
