@@ -782,6 +782,34 @@ impl<'tcx> VerifyRun<'tcx> {
 
         let mut global_seen = FxHashSet::default();
         let mut global_seen_callees = FxHashSet::default();
+        let mut global_seen_structs = FxHashSet::default();
+
+        for target in targets {
+            if let Some(struct_def_id) = target.owner_struct_def_id {
+                if !target.struct_invariants.is_empty()
+                    && global_seen_structs.insert(struct_def_id)
+                {
+                    let local_names = self.resolve_local_names(target.def_id);
+                    let struct_name = self.tcx.def_path_str(struct_def_id);
+                    rap_info!("Struct Invariants for {struct_name}");
+                    rap_info!("{:-<1$}", "", 76);
+                    let mut inv_lines: Vec<(String, String)> = Vec::new();
+                    for property in &target.struct_invariants {
+                        inv_lines.push(fmt_contract_expanded(
+                            self.tcx,
+                            &local_names,
+                            property,
+                            target.owner_struct_def_id,
+                        ));
+                    }
+                    if !inv_lines.is_empty() {
+                        emit_lines(&inv_lines);
+                    }
+                    rap_info!("{:-<1$}", "", 76);
+                    rap_info!("");
+                }
+            }
+        }
 
         for target in targets {
             let local_names = self.resolve_local_names(target.def_id);
@@ -790,31 +818,28 @@ impl<'tcx> VerifyRun<'tcx> {
                 .caller_requires
                 .iter()
                 .any(|p| p.kind != PropertyKind::Unknown);
-            let has_inv = !target.struct_invariants.is_empty();
 
-            if has_caller || has_inv {
+            if has_caller {
                 let mut lines: Vec<(String, String)> = Vec::new();
                 let mut seen_kinds = FxHashSet::default();
 
-                for property in &target.caller_requires {
-                    if property.kind != PropertyKind::Unknown {
-                        lines.push(fmt_contract_expanded(
-                            self.tcx,
-                            &local_names,
-                            property,
-                            target.owner_struct_def_id,
-                        ));
-                        seen_kinds.insert(property.kind.clone());
+                let has_caller_contracts = target
+                    .caller_requires
+                    .iter()
+                    .any(|p| p.kind != PropertyKind::Unknown);
+                if has_caller_contracts {
+                    lines.push(("[Caller Contracts]".to_string(), String::new()));
+                    for property in &target.caller_requires {
+                        if property.kind != PropertyKind::Unknown {
+                            lines.push(fmt_contract_expanded(
+                                self.tcx,
+                                &local_names,
+                                property,
+                                target.owner_struct_def_id,
+                            ));
+                            seen_kinds.insert(property.kind.clone());
+                        }
                     }
-                }
-
-                for property in &target.struct_invariants {
-                    lines.push(fmt_contract_expanded(
-                        self.tcx,
-                        &local_names,
-                        property,
-                        target.owner_struct_def_id,
-                    ));
                 }
 
                 self.append_callee_contracts(
