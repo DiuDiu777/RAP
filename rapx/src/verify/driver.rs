@@ -23,7 +23,7 @@ use rustc_middle::ty::TyCtxt;
 use super::{
     contract::Property,
     display::{
-        emit_lines, emit_results_and_verdict, emit_verify_summary, fmt_contract_expanded,
+        emit_results_and_verdict, emit_verify_summary, fmt_contract_expanded,
         fmt_fn_path_with_bounds, fmt_fn_path_with_generics, fmt_fn_with_params,
     },
     engine::VerifyEngine,
@@ -772,162 +772,230 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
 impl<'tcx> VerifyRun<'tcx> {
     fn print_contracts_debug(&self, targets: &[FunctionTarget<'tcx>]) {
-        use crate::compat::FxHashSet;
-        use crate::verify::contract::PropertyKind;
-
-        rap_info!("============================================================");
+        rap_info!("{:=<1$}", "", 76);
         rap_info!("[rapx::debug-contracts] Expanded Contract Assertions");
-        rap_info!("============================================================");
+        rap_info!("{:=<1$}", "", 76);
         rap_info!("");
 
-        let mut global_seen = FxHashSet::default();
-        let mut global_seen_callees = FxHashSet::default();
+        let mut struct_groups: FxHashMap<
+            rustc_hir::def_id::DefId,
+            Vec<&FunctionTarget<'tcx>>,
+        > = FxHashMap::default();
+        let mut free_targets: Vec<&FunctionTarget<'tcx>> = Vec::new();
 
         for target in targets {
-            let local_names = self.resolve_local_names(target.def_id);
-            let (arg_names_typed, ret_ty) = self.resolve_arg_names_with_types(target.def_id);
-            let has_caller = target
-                .caller_requires
-                .iter()
-                .any(|p| p.kind != PropertyKind::Unknown);
-            let has_inv = !target.struct_invariants.is_empty();
-
-            if has_caller || has_inv {
-                let mut lines: Vec<(String, String)> = Vec::new();
-                let mut seen_kinds = FxHashSet::default();
-
-                for property in &target.caller_requires {
-                    if property.kind != PropertyKind::Unknown {
-                        lines.push(fmt_contract_expanded(
-                            self.tcx,
-                            &local_names,
-                            property,
-                            target.owner_struct_def_id,
-                        ));
-                        seen_kinds.insert(property.kind.clone());
-                    }
-                }
-
-                for property in &target.struct_invariants {
-                    lines.push(fmt_contract_expanded(
-                        self.tcx,
-                        &local_names,
-                        property,
-                        target.owner_struct_def_id,
-                    ));
-                }
-
-                self.append_callee_contracts(
-                    &target,
-                    &mut lines,
-                    &mut seen_kinds,
-                    &mut global_seen_callees,
-                );
-
-                if lines.is_empty() {
-                    continue;
-                }
-
-                let target_path = fmt_fn_path_with_generics(self.tcx, target.def_id);
-                rap_info!(
-                    "{}",
-                    fmt_fn_with_params(&target_path, &arg_names_typed, ret_ty.as_deref())
-                );
-                rap_info!("{:-<1$}", "", 76);
-                emit_lines(&lines);
-                rap_info!("{:-<1$}", "", 76);
-                rap_info!("");
+            if let Some(sid) = target.owner_struct_def_id {
+                struct_groups.entry(sid).or_default().push(target);
             } else {
-                let mut callee_ids: Vec<_> = target.callee_requires.keys().copied().collect();
-                callee_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
-                let mut first_callee = true;
-                for callee_id in callee_ids {
-                    if !global_seen_callees.insert(callee_id) {
-                        continue;
-                    }
-                    let callee_names = self.resolve_local_names(callee_id);
-                    let (callee_typed, callee_ret) = self.resolve_arg_names_with_types(callee_id);
-                    if let Some(contracts) = target.callee_requires.get(&callee_id) {
-                        let mut lines: Vec<(String, String)> = Vec::new();
-                        for property in contracts {
-                            if property.kind != PropertyKind::Unknown
-                                && global_seen.insert(property.kind.clone())
-                            {
-                                lines.push(fmt_contract_expanded(
-                                    self.tcx,
-                                    &callee_names,
-                                    property,
-                                    None,
-                                ));
-                            }
-                        }
-                        if !lines.is_empty() {
-                            if !first_callee {
-                                rap_info!("");
-                            }
-                            first_callee = false;
-                            let callee_path = fmt_fn_path_with_generics(self.tcx, callee_id);
-                            rap_info!(
-                                "{}",
-                                fmt_fn_with_params(
-                                    &callee_path,
-                                    &callee_typed,
-                                    callee_ret.as_deref()
-                                )
-                            );
-                            rap_info!("{:-<1$}", "", 76);
-                            emit_lines(&lines);
-                            rap_info!("{:-<1$}", "", 76);
-                            rap_info!("");
-                        }
-                    }
+                free_targets.push(target);
+            }
+        }
+
+        let mut struct_ids: Vec<_> = struct_groups.keys().copied().collect();
+        struct_ids.sort_by_key(|did| self.tcx.def_path_str(*did));
+
+        for struct_def_id in struct_ids {
+            let methods = &struct_groups[&struct_def_id];
+            let struct_name = self.tcx.def_path_str(struct_def_id);
+
+            // -- Struct invariants (once) --
+            let inv_target = methods
+                .iter()
+                .find(|t| !t.struct_invariants.is_empty());
+            let have_invariants = inv_target.is_some();
+
+            if have_invariants || methods.iter().any(|t| {
+                self.has_printable_contracts(t)
+            }) {
+                rap_info!("{:=<1$}", "", 76);
+                rap_info!("[rapx::debug-contracts] struct: {struct_name}");
+                rap_info!("{:=<1$}", "", 76);
+            }
+
+            if let Some(tgt) = inv_target {
+                let local_names = self.resolve_local_names(tgt.def_id);
+                rap_info!("  [Struct Invariants]:");
+                let inv_count = tgt.struct_invariants.len();
+                for (ii, property) in tgt.struct_invariants.iter().enumerate() {
+                    let ibranch = if ii + 1 == inv_count { "`-" } else { "|-" };
+                    let (call, meaning) =
+                        fmt_contract_expanded(self.tcx, &local_names, property, tgt.owner_struct_def_id);
+                    self.print_contract_lines("  ", &ibranch, &call, &meaning);
+                }
+                rap_info!("");
+            }
+
+            // -- Each method --
+            let mut printed = false;
+            for (mi, target) in methods.iter().enumerate() {
+                let is_last_method = mi + 1 == methods.len();
+                let branch = if is_last_method { "`-" } else { "|-" };
+                let cont = if is_last_method { "  " } else { "| " };
+                if self.print_target_contracts(target, branch, cont) {
+                    printed = true;
                 }
             }
+            if printed {
+                rap_info!("{:=<1$}", "", 76);
+                rap_info!("");
+            }
+        }
+
+        // -- Free functions --
+        for target in &free_targets {
+            self.print_target_contracts(target, "- ", "  ");
         }
     }
 
-    fn append_callee_contracts(
+    fn has_printable_contracts(&self, target: &FunctionTarget<'tcx>) -> bool {
+        use crate::verify::contract::PropertyKind;
+        let is_unsafe_fn = self
+            .tcx
+            .fn_sig(target.def_id)
+            .skip_binder()
+            .safety()
+            == rustc_hir::Safety::Unsafe;
+        let has_caller = is_unsafe_fn
+            && target
+                .caller_requires
+                .iter()
+                .any(|p| p.kind != PropertyKind::Unknown);
+        if has_caller {
+            return true;
+        }
+        target.callee_requires.values().any(|c| {
+            c.iter().any(|p| p.kind != PropertyKind::Unknown)
+        })
+    }
+
+    fn print_contract_lines(&self, prefix: &str, branch: &str, call: &str, meaning: &str) {
+        rap_info!("{prefix}{branch} {call}");
+        let cont = if branch == "`-" { "  " } else { "| " };
+        for line in meaning.lines() {
+            rap_info!("{prefix}{cont} {line}");
+        }
+    }
+
+    fn print_target_contracts(
         &self,
         target: &FunctionTarget<'tcx>,
-        lines: &mut Vec<(String, String)>,
-        seen_kinds: &mut crate::compat::FxHashSet<crate::verify::contract::PropertyKind>,
-        global_seen_callees: &mut crate::compat::FxHashSet<rustc_hir::def_id::DefId>,
-    ) {
-        use crate::compat::FxHashSet;
+        branch: &str,
+        cont: &str,
+    ) -> bool {
         use crate::verify::contract::PropertyKind;
+
+        let local_names = self.resolve_local_names(target.def_id);
+        let (arg_names_typed, ret_ty) = self.resolve_arg_names_with_types(target.def_id);
+        let is_unsafe_fn = self
+            .tcx
+            .fn_sig(target.def_id)
+            .skip_binder()
+            .safety()
+            == rustc_hir::Safety::Unsafe;
+
+        let target_path = fmt_fn_path_with_generics(self.tcx, target.def_id);
+        let short_name = crate::helpers::name::short_fn_name(self.tcx, target.def_id);
+
+        // Collect what to print first
+        let has_caller = is_unsafe_fn
+            && target
+                .caller_requires
+                .iter()
+                .any(|p| p.kind != PropertyKind::Unknown);
         let mut callee_ids: Vec<_> = target.callee_requires.keys().copied().collect();
-        callee_ids.sort_by_key(|def_id| self.tcx.def_path_str(*def_id));
-        for callee_id in callee_ids {
-            if !global_seen_callees.insert(callee_id) {
-                continue;
+        callee_ids.retain(|did| {
+            target
+                .callee_requires
+                .get(did)
+                .is_some_and(|c| c.iter().any(|p| p.kind != PropertyKind::Unknown))
+        });
+        callee_ids.sort_by_key(|did| self.tcx.def_path_str(*did));
+        let has_callees = !callee_ids.is_empty();
+
+        if !has_caller && !has_callees {
+            return false;
+        }
+
+        let fn_display = fmt_fn_with_params(&target_path, &arg_names_typed, ret_ty.as_deref());
+        let header = format!("--- method: {short_name}");
+        let dashes = 72usize.saturating_sub(header.len());
+        rap_info!("{branch} {header} {}", "-".repeat(dashes));
+        rap_info!("{cont}  {fn_display}");
+
+        // Caller Contracts (only for unsafe functions)
+        if has_caller {
+            rap_info!("{cont}  [Caller Contracts]:");
+            let caller_props: Vec<_> = target
+                .caller_requires
+                .iter()
+                .filter(|p| p.kind != PropertyKind::Unknown)
+                .collect();
+            for (pi, property) in caller_props.iter().enumerate() {
+                let is_last = pi + 1 == caller_props.len();
+                let pbranch = if is_last { "`-" } else { "|-" };
+                let (call, meaning) = fmt_contract_expanded(
+                    self.tcx,
+                    &local_names,
+                    property,
+                    target.owner_struct_def_id,
+                );
+                self.print_contract_lines(
+                    &format!("{cont}  "),
+                    pbranch,
+                    &call,
+                    &meaning,
+                );
             }
-            let callee_names = self.resolve_local_names(callee_id);
-            if let Some(contracts) = target.callee_requires.get(&callee_id) {
-                let mut callee_seen = FxHashSet::default();
-                let mut callee_lines: Vec<(String, String)> = Vec::new();
-                for property in contracts {
-                    if property.kind != PropertyKind::Unknown
-                        && !seen_kinds.contains(&property.kind)
-                        && callee_seen.insert(property.kind.clone())
-                    {
-                        callee_lines.push(fmt_contract_expanded(
-                            self.tcx,
-                            &callee_names,
-                            property,
-                            None,
-                        ));
-                    }
-                }
-                if !callee_lines.is_empty() {
-                    let (callee_typed, callee_ret) = self.resolve_arg_names_with_types(callee_id);
-                    let callee_path = fmt_fn_path_with_generics(self.tcx, callee_id);
-                    let header =
-                        fmt_fn_with_params(&callee_path, &callee_typed, callee_ret.as_deref());
-                    lines.push((format!("[{header}]"), String::new()));
-                    lines.extend(callee_lines);
+            if !has_callees {
+                rap_info!("");
+            }
+        }
+
+        // Callee Contracts (for each unsafe callee)
+        if has_callees {
+            rap_info!("{cont}  [Unsafe Callees]:");
+            for (ci, &callee_id) in callee_ids.iter().enumerate() {
+                let is_last_callee = ci + 1 == callee_ids.len();
+                let cbranch = if is_last_callee { "`-" } else { "|-" };
+                let ccont = if is_last_callee { "  " } else { "| " };
+                let contracts = target.callee_requires.get(&callee_id).unwrap();
+                let callee_names = self.resolve_local_names(callee_id);
+                let (callee_typed, callee_ret) =
+                    self.resolve_arg_names_with_types(callee_id);
+                let callee_path = fmt_fn_path_with_generics(self.tcx, callee_id);
+                rap_info!(
+                    "{cont}  {cbranch} {}",
+                    fmt_fn_with_params(
+                        &callee_path,
+                        &callee_typed,
+                        callee_ret.as_deref()
+                    )
+                );
+                let props: Vec<_> = contracts
+                    .iter()
+                    .filter(|p| p.kind != PropertyKind::Unknown)
+                    .collect();
+                for (pi, property) in props.iter().enumerate() {
+                    let is_last_prop = pi + 1 == props.len();
+                    let pbranch = if is_last_prop { "`-" } else { "|-" };
+                    let (call, meaning) = fmt_contract_expanded(
+                        self.tcx,
+                        &callee_names,
+                        property,
+                        None,
+                    );
+                    self.print_contract_lines(
+                        &format!("{cont}  {ccont}"),
+                        pbranch,
+                        &call,
+                        &meaning,
+                    );
                 }
             }
         }
+
+        rap_info!("");
+        true
     }
 
     fn resolve_local_names(&self, def_id: rustc_hir::def_id::DefId) -> Vec<String> {

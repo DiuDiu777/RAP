@@ -138,7 +138,13 @@ pub fn emit_lines(lines: &[(String, String)]) {
             }
         } else {
             rap_info!("  Safety Tag: {tag}");
-            rap_info!("    Meaning:   {meaning}");
+            for (i, line) in meaning.lines().enumerate() {
+                if i == 0 {
+                    rap_info!("  Meaning   : {line}");
+                } else {
+                    rap_info!("              {line}");
+                }
+            }
         }
     }
 }
@@ -150,6 +156,37 @@ pub fn fmt_contract_expanded(
     struct_def_id: Option<rustc_hir::def_id::DefId>,
 ) -> (String, String) {
     use crate::verify::contract::PropertyKind;
+    if matches!(property.kind, PropertyKind::Or) {
+        let group_count = property.or_alternatives.len();
+        let mut call_parts = Vec::new();
+        let mut meaning = format!("any of {group_count} alternative group(s):\n");
+        for (gi, group) in property.or_alternatives.iter().enumerate() {
+            let is_last = gi + 1 == group_count;
+            let branch = if is_last { "`-" } else { "|-" };
+            let group_calls: Vec<String> = group
+                .iter()
+                .map(|prop| {
+                    let (call, _) =
+                        fmt_contract_expanded(tcx, local_names, prop, struct_def_id);
+                    call
+                })
+                .collect();
+            call_parts.push(group_calls.join(" && "));
+            let meanings: Vec<String> = group
+                .iter()
+                .map(|prop| {
+                    let (_, m) =
+                        fmt_contract_expanded(tcx, local_names, prop, struct_def_id);
+                    m
+                })
+                .collect();
+            meaning.push_str(&format!("{branch} {}\n", meanings.join(" && ")));
+        }
+        return (
+            format!("Or({})", call_parts.join(", ")),
+            meaning.trim_end().to_string(),
+        );
+    }
     let args: Vec<String> = property
         .args
         .iter()
@@ -178,10 +215,10 @@ pub fn fmt_contract_expanded(
         if let Some(PropertyArg::Expr(ContractExpr::IndexAccess { slice, index })) =
             property.args.first()
         {
-            let mut s = fmt_expr_plain(tcx, local_names, slice);
+            let mut s = fmt_expr_plain(tcx, local_names, struct_def_id, slice);
             s = s.strip_prefix("&mut ").unwrap_or(&s).to_string();
             s = s.strip_prefix("&").unwrap_or(&s).to_string();
-            let i = fmt_expr_plain(tcx, local_names, index);
+            let i = fmt_expr_plain(tcx, local_names, struct_def_id, index);
             format!("{tag}({s}, {i})")
         } else {
             unreachable!()
@@ -196,7 +233,7 @@ pub fn fmt_contract_expanded(
     let call = if matches!(property.kind, PropertyKind::ValidNum)
         && let Some(crate::verify::contract::PropertyArg::Predicates(preds)) = property.args.first()
     {
-        format!("{tag}({})", fmt_valid_num_call(tcx, local_names, preds))
+        format!("{tag}({})", fmt_valid_num_call(tcx, local_names, struct_def_id, preds))
     } else {
         call
     };
@@ -215,10 +252,10 @@ pub fn fmt_contract_expanded(
             let placeholder = format!("InBound({})", args.join(", "));
             match property.args.first() {
                 Some(PropertyArg::Expr(ContractExpr::IndexAccess { slice, index })) => {
-                    let mut s = fmt_expr_plain(tcx, local_names, slice);
+                    let mut s = fmt_expr_plain(tcx, local_names, struct_def_id, slice);
                     s = s.strip_prefix("&mut ").unwrap_or(&s).to_string();
                     s = s.strip_prefix("&").unwrap_or(&s).to_string();
-                    let i = fmt_expr_plain(tcx, local_names, index);
+                    let i = fmt_expr_plain(tcx, local_names, struct_def_id, index);
                     format!("0 <= {i} < {s}.len()")
                 }
                 Some(PropertyArg::Expr(ContractExpr::Place(place))) => {
@@ -267,11 +304,9 @@ pub fn fmt_contract_expanded(
             let p = args.first().map(|s| s.as_str()).unwrap_or("ptr");
             let ty = args.get(1).map(|s| s.as_str()).unwrap_or("T");
             let cnt = args.get(2).map(|s| s.as_str()).unwrap_or("count");
-            let line1 = format!("{cnt} element(s) of type {ty} at {p} are initialized");
-            let line2 = format!(
-                "                     forall i in 0..{cnt}: *({p} + i*sizeof({ty})) |= type_invariant({ty})"
-            );
-            format!("{line1}\n{line2}")
+            format!(
+                "forall i in 0..{cnt}: *({p} + i*sizeof({ty})) |= type_invariant({ty}), and the {cnt} value(s) are initialized"
+            )
         }
         PropertyKind::Typed => {
             let ptr = args.first().map(|s| s.as_str()).unwrap_or("ptr");
@@ -317,7 +352,7 @@ pub fn fmt_contract_expanded(
                 "[{src}] as [{dst}]: every size_of({dst})-byte contiguous chunk of [{src}] is a valid bit-pattern of {dst} (type_invariant satisfied, alignment not required)"
             );
             let line2 = format!(
-                "                     forall w subset bytes([{src}]), |w| == |{dst}|: reinterpret_as_{dst}(w) |= type_invariant({dst}) \\ align_of({dst})",
+                "forall w subset bytes([{src}]), |w| == |{dst}|: reinterpret_as_{dst}(w) |= type_invariant({dst}) \\ align_of({dst})",
             );
             format!("{line1}\n{line2}")
         }
@@ -377,14 +412,12 @@ pub fn fmt_contract_expanded(
         }
         PropertyKind::Trait => {
             let t = args.first().map(|s| s.as_str()).unwrap_or("T");
-            format!("{t} upholds its unsafe trait contract")
+            let tr = args.get(1).map(|s| s.as_str()).unwrap_or("Trait");
+            format!("{t} satisfies the trait bound {tr}")
         }
         PropertyKind::Unreachable => "not Reachable()".to_string(),
         PropertyKind::Unknown => "(unresolved contract)".to_string(),
-        PropertyKind::Or => {
-            let group_count = property.or_alternatives.len();
-            format!("any of {group_count} alternative group(s)")
-        }
+        PropertyKind::Or => unreachable!(),
     };
     (call, meaning)
 }
@@ -393,15 +426,15 @@ pub fn fmt_arg_plain(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_names: &[String],
     arg: &crate::verify::contract::PropertyArg<'_>,
-    _struct_def_id: Option<rustc_hir::def_id::DefId>,
+    struct_def_id: Option<rustc_hir::def_id::DefId>,
 ) -> String {
     match arg {
         crate::verify::contract::PropertyArg::Ty(ty) => format!("{}", ty),
-        crate::verify::contract::PropertyArg::Expr(expr) => fmt_expr_plain(tcx, local_names, expr),
+        crate::verify::contract::PropertyArg::Expr(expr) => fmt_expr_plain(tcx, local_names, struct_def_id, expr),
         crate::verify::contract::PropertyArg::Predicates(preds) => {
             let p: Vec<_> = preds
                 .iter()
-                .map(|p| fmt_pred_plain(tcx, local_names, p))
+                .map(|p| fmt_pred_plain(tcx, local_names, struct_def_id, p))
                 .collect();
             p.join(" && ")
         }
@@ -415,13 +448,12 @@ pub fn fmt_place_plain(
     local_names: &[String],
     struct_def_id: Option<rustc_hir::def_id::DefId>,
 ) -> String {
-    let has_projections = !place.projections.is_empty();
     let mut base = match place.base {
         crate::verify::contract::PlaceBase::Return => {
-            if has_projections {
-                String::new()
-            } else {
+            if place.projections.is_empty() {
                 "return".to_string()
+            } else {
+                String::new()
             }
         }
         crate::verify::contract::PlaceBase::Arg(i) => local_names
@@ -464,17 +496,18 @@ pub fn fmt_place_plain(
 pub fn fmt_expr_plain(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_names: &[String],
+    struct_def_id: Option<rustc_hir::def_id::DefId>,
     expr: &crate::verify::contract::ContractExpr<'_>,
 ) -> String {
     use crate::verify::contract::ContractExpr;
     match expr {
-        ContractExpr::Place(place) => fmt_place_plain(tcx, place, local_names, None),
+        ContractExpr::Place(place) => fmt_place_plain(tcx, place, local_names, struct_def_id),
         ContractExpr::Const(c) => format!("{}", c),
         ContractExpr::ConstParam { name, .. } => name.clone(),
         ContractExpr::SizeOf(ty) => format!("size_of::<{}>()", ty),
         ContractExpr::AlignOf(ty) => format!("align_of::<{}>()", ty),
         ContractExpr::Len(inner) => {
-            let inner_str = fmt_expr_plain(tcx, local_names, inner);
+            let inner_str = fmt_expr_plain(tcx, local_names, struct_def_id, inner);
             if matches!(inner.as_ref(), ContractExpr::Place(_)) {
                 format!("{}.len()", inner_str)
             } else {
@@ -484,8 +517,8 @@ pub fn fmt_expr_plain(
         ContractExpr::IndexAccess { slice, index } => {
             format!(
                 "index_access({}, {})",
-                fmt_expr_plain(tcx, local_names, slice),
-                fmt_expr_plain(tcx, local_names, index)
+                fmt_expr_plain(tcx, local_names, struct_def_id, slice),
+                fmt_expr_plain(tcx, local_names, struct_def_id, index)
             )
         }
         ContractExpr::Binary { op, lhs, rhs } => {
@@ -501,9 +534,9 @@ pub fn fmt_expr_plain(
             };
             format!(
                 "{} {} {}",
-                fmt_expr_plain(tcx, local_names, lhs),
+                fmt_expr_plain(tcx, local_names, struct_def_id, lhs),
                 op_str,
-                fmt_expr_plain(tcx, local_names, rhs)
+                fmt_expr_plain(tcx, local_names, struct_def_id, rhs)
             )
         }
         ContractExpr::Unary { op, expr: inner } => {
@@ -511,20 +544,20 @@ pub fn fmt_expr_plain(
                 crate::verify::contract::NumericUnaryOp::Not => "!",
                 crate::verify::contract::NumericUnaryOp::Neg => "-",
             };
-            format!("{}{}", op_str, fmt_expr_plain(tcx, local_names, inner))
+            format!("{}{}", op_str, fmt_expr_plain(tcx, local_names, struct_def_id, inner))
         }
         ContractExpr::Min { a, b } => {
             format!(
                 "min({}, {})",
-                fmt_expr_plain(tcx, local_names, a),
-                fmt_expr_plain(tcx, local_names, b),
+                fmt_expr_plain(tcx, local_names, struct_def_id, a),
+                fmt_expr_plain(tcx, local_names, struct_def_id, b),
             )
         }
         ContractExpr::Max { a, b } => {
             format!(
                 "max({}, {})",
-                fmt_expr_plain(tcx, local_names, a),
-                fmt_expr_plain(tcx, local_names, b),
+                fmt_expr_plain(tcx, local_names, struct_def_id, a),
+                fmt_expr_plain(tcx, local_names, struct_def_id, b),
             )
         }
         ContractExpr::Unknown => "<?>".to_string(),
@@ -534,37 +567,39 @@ pub fn fmt_expr_plain(
 pub fn fmt_valid_num_pred(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_names: &[String],
+    struct_def_id: Option<rustc_hir::def_id::DefId>,
     pred: &crate::verify::contract::NumericPredicate<'_>,
 ) -> String {
     use crate::verify::contract::ContractExpr;
     if matches!(pred.op, crate::verify::contract::RelOp::Ne)
         && matches!(pred.rhs, ContractExpr::Const(0))
     {
-        return fmt_expr_plain(tcx, local_names, &pred.lhs);
+        return fmt_expr_plain(tcx, local_names, struct_def_id, &pred.lhs);
     }
-    fmt_pred_plain(tcx, local_names, pred)
+    fmt_pred_plain(tcx, local_names, struct_def_id, pred)
 }
 
 pub fn fmt_valid_num_call(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_names: &[String],
+    struct_def_id: Option<rustc_hir::def_id::DefId>,
     preds: &[crate::verify::contract::NumericPredicate<'_>],
 ) -> String {
     use crate::verify::contract::RelOp;
 
     if preds.len() == 2 {
         let (lower, upper) = (&preds[0], &preds[1]);
-        let lower_l = fmt_expr_plain(tcx, local_names, &lower.lhs);
-        let lower_val = fmt_expr_plain(tcx, local_names, &lower.rhs);
-        let upper_val = fmt_expr_plain(tcx, local_names, &upper.lhs);
-        let upper_r = fmt_expr_plain(tcx, local_names, &upper.rhs);
+        let lower_l = fmt_expr_plain(tcx, local_names, struct_def_id, &lower.lhs);
+        let lower_val = fmt_expr_plain(tcx, local_names, struct_def_id, &lower.rhs);
+        let upper_val = fmt_expr_plain(tcx, local_names, struct_def_id, &upper.lhs);
+        let upper_r = fmt_expr_plain(tcx, local_names, struct_def_id, &upper.rhs);
         if lower_val == upper_val {
             let lo = match lower.op {
                 RelOp::Gt | RelOp::Le => lower_l,
                 _ => {
                     return preds
                         .iter()
-                        .map(|p| fmt_valid_num_pred(tcx, local_names, p))
+                        .map(|p| fmt_valid_num_pred(tcx, local_names, struct_def_id, p))
                         .collect::<Vec<_>>()
                         .join(", ");
                 }
@@ -584,7 +619,7 @@ pub fn fmt_valid_num_call(
                 _ => {
                     return preds
                         .iter()
-                        .map(|p| fmt_valid_num_pred(tcx, local_names, p))
+                        .map(|p| fmt_valid_num_pred(tcx, local_names, struct_def_id, p))
                         .collect::<Vec<_>>()
                         .join(", ");
                 }
@@ -595,7 +630,7 @@ pub fn fmt_valid_num_call(
 
     preds
         .iter()
-        .map(|p| fmt_valid_num_pred(tcx, local_names, p))
+        .map(|p| fmt_valid_num_pred(tcx, local_names, struct_def_id, p))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -603,6 +638,7 @@ pub fn fmt_valid_num_call(
 pub fn fmt_pred_plain(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     local_names: &[String],
+    struct_def_id: Option<rustc_hir::def_id::DefId>,
     pred: &crate::verify::contract::NumericPredicate<'_>,
 ) -> String {
     let op = match pred.op {
@@ -615,9 +651,9 @@ pub fn fmt_pred_plain(
     };
     format!(
         "{} {} {}",
-        fmt_expr_plain(tcx, local_names, &pred.lhs),
+        fmt_expr_plain(tcx, local_names, struct_def_id, &pred.lhs),
         op,
-        fmt_expr_plain(tcx, local_names, &pred.rhs)
+        fmt_expr_plain(tcx, local_names, struct_def_id, &pred.rhs)
     )
 }
 
