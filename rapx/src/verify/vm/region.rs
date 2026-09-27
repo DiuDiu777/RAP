@@ -1,7 +1,7 @@
 //! Region (lifetime) helpers shared by the VM and the property checker.
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{EarlyParamRegion, GenericParamDefKind, Region, RegionKind, TyCtxt};
+use rustc_middle::ty::{EarlyParamRegion, GenericParamDefKind, Region, RegionKind, Ty, TyCtxt};
 
 /// Resolve a lifetime name from a contract (e.g. `"a"`, `"static"`) to a
 /// concrete `Region`. `name` is the raw ident, without the leading `'`.
@@ -78,4 +78,47 @@ fn free_region_outlives<'tcx>(
         FxHashSet::default(),
     );
     env.free_region_map().sub_free_regions(tcx, ret, src)
+}
+
+/// Whether `src_region` provably outlives the reference region of `self_ty`
+/// via the type's own well-formedness.  A reference parameter `&'r SliceHost<'s>`
+/// requires its pointee's regions to outlive `'r` (`'s: 'r`), which the
+/// where-clause-only [`region_outlives`] cannot see.  Complements it with the
+/// implied outlives components of `self_ty`.
+pub(crate) fn region_outlives_implied<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    src_region: Region<'tcx>,
+    self_ty: Ty<'tcx>,
+) -> bool {
+    use rustc_data_structures::smallvec::SmallVec;
+    use rustc_middle::ty::outlives::{Component, push_outlives_components};
+
+    let mut out: SmallVec<[Component<TyCtxt<'tcx>>; 4]> = SmallVec::new();
+    push_outlives_components(tcx, self_ty, &mut out);
+    out.iter()
+        .any(|c| matches!(c, Component::Region(r) if *r == src_region))
+}
+
+/// The function's signature with late-bound regions liberated to free
+/// `ReLateParam`s, so reference regions are comparable (MIR erases them to
+/// `ReErased`).
+fn liberate_fn_sig<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> rustc_middle::ty::FnSig<'tcx> {
+    let fn_sig = tcx.fn_sig(def_id).instantiate_identity();
+    #[cfg(rapx_ge_99)]
+    let fn_sig = fn_sig.skip_norm_wip();
+    tcx.liberate_late_bound_regions(def_id, fn_sig)
+}
+
+/// The reference region of `def_id`'s return type (`&'r T` → `Some('r)`).
+pub(crate) fn fn_return_region<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Region<'tcx>> {
+    use rustc_middle::ty::TyKind;
+    match liberate_fn_sig(tcx, def_id).output().kind() {
+        TyKind::Ref(region, _, _) => Some(*region),
+        _ => None,
+    }
+}
+
+/// The type of `def_id`'s argument at `index`.
+pub(crate) fn fn_arg_ty<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, index: usize) -> Option<Ty<'tcx>> {
+    liberate_fn_sig(tcx, def_id).inputs().get(index).copied()
 }

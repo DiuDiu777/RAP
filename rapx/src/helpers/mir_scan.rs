@@ -260,7 +260,13 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
 
     let body = tcx.optimized_mir(def_id);
     for (bb, data) in body.basic_blocks.iter_enumerated() {
-        let TerminatorKind::Call { func, args, .. } = &data.terminator().kind else {
+        let TerminatorKind::Call {
+            func,
+            args,
+            destination: call_dest,
+            ..
+        } = &data.terminator().kind
+        else {
             continue;
         };
 
@@ -295,7 +301,7 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
             block: bb,
             args: args.iter().map(|arg| arg.node.clone()).collect(),
             kind: CheckpointKind::UnsafeCall,
-            destination: None,
+            destination: Some(call_dest.local),
             is_mut_ref: false,
             statement_index: 0,
         });

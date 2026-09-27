@@ -925,24 +925,51 @@ impl PropertyChecker {
                         // The `Alive(p, 'r)` check demands the memory alive for
                         // `'r`, while the assumption only guarantees `'a`; the
                         // assumption covers the demand only when `'a: 'r`.
-                        let check_region = property.args().get(1).and_then(|a| {
-                            if let PropertyArg::Ident(name) = a {
+                        //
+                        // A struct invariant / function `requires` binds its
+                        // region at parse time (`PropertyArg::Region`); a std
+                        // contract carries the callee's *generic* return
+                        // lifetime (`Ident`), instantiated here from the
+                        // caller's return reference region.
+                        let check_region = property.args().get(1).and_then(|a| match a {
+                            PropertyArg::Region(r) => Some(*r),
+                            PropertyArg::Ident(name) => {
                                 crate::verify::vm::region::resolve_region_name(
                                     vm_state.tcx,
                                     checkpoint.caller,
                                     name,
                                 )
-                            } else {
-                                None
+                                .or_else(|| {
+                                    crate::verify::vm::region::fn_return_region(
+                                        vm_state.tcx,
+                                        checkpoint.caller,
+                                    )
+                                })
                             }
+                            _ => None,
                         });
                         if let Some(r) = check_region {
-                            if !crate::verify::vm::region::region_outlives(
+                            let outlives = crate::verify::vm::region::region_outlives(
                                 vm_state.tcx,
                                 checkpoint.caller,
                                 *src_region,
                                 r,
-                            ) {
+                            );
+                            // A reference parameter `&'r Self<'a>` implies
+                            // `'a: 'r` through its type (not a where-clause).
+                            let implied = crate::verify::vm::region::fn_arg_ty(
+                                vm_state.tcx,
+                                checkpoint.caller,
+                                0,
+                            )
+                            .is_some_and(|self_ty| {
+                                crate::verify::vm::region::region_outlives_implied(
+                                    vm_state.tcx,
+                                    *src_region,
+                                    self_ty,
+                                )
+                            });
+                            if !outlives && !implied {
                                 return CheckResult::Failed;
                             }
                         }

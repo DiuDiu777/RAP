@@ -416,12 +416,29 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 // provenance so that pointer-deriving operations (as_ptr,
                 // add, etc.) propagate correctly.
                 if let rustc_middle::ty::TyKind::Ref(..) = ty.kind() {
-                    let pointee_ty =
+                    // Prefer the precise pointee type from the function
+                    // signature (late-bound-liberated) so reference-field regions
+                    // are `'a` rather than MIR's erased `ReErased`.
+                    let precise_pointee = (local_idx <= arg_count)
+                        .then(|| {
+                            crate::verify::vm::region::fn_arg_ty(
+                                self.tcx,
+                                self.caller_def_id,
+                                local_idx - 1,
+                            )
+                        })
+                        .flatten()
+                        .and_then(|precise_ty| match precise_ty.kind() {
+                            rustc_middle::ty::TyKind::Ref(_, inner, _) => Some(*inner),
+                            _ => None,
+                        });
+                    let pointee_ty = precise_pointee.unwrap_or_else(|| {
                         if let rustc_middle::ty::TyKind::Ref(_, inner_ty, _) = ty.kind() {
                             *inner_ty
                         } else {
                             ty
-                        };
+                        }
+                    });
                     // `&MaybeUninit<T>` / `&[MaybeUninit<T>]` carry no validity
                     // invariant — the content need not be initialized — so do not
                     // claim `Init` for them (the content property reduces to
