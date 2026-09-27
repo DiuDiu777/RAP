@@ -2929,8 +2929,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 // allocation behind the argument. A reference argument carries the
                 // *stack* provenance of the referent (penetrate to its heap field);
                 // a value argument (`Box`/`Vec`) carries the heap provenance
-                // directly. The first drop marks the allocation dead; a second drop
-                // (already dead) records a double free.
+                // directly. Mark the allocation dead; a second drop of an
+                // already-dead allocation is detected downstream via `dead` alone.
                 if let Some(arg_val) = args.get(*pointer_arg) {
                     let alloc_id = if matches!(arg_val.ty.kind(), rustc_middle::ty::TyKind::Ref(..))
                     {
@@ -2941,11 +2941,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         arg_val.provenance_alloc_id()
                     };
                     if let Some(alloc_id) = alloc_id {
-                        if self.alloc(alloc_id).dead {
-                            self.double_freed.insert(alloc_id);
-                        } else {
-                            self.alloc_mut(alloc_id).dead = true;
-                        }
+                        self.alloc_mut(alloc_id).dead = true;
                     }
                 }
             }

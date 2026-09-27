@@ -62,9 +62,6 @@ impl PropertyChecker {
         }) {
             return CheckResult::ProvedByRule;
         }
-        if vm_state.double_freed.contains(&alloc_id) {
-            return CheckResult::Failed;
-        }
         // Owning(p): p is the sole carrier of *p's ownership. A live `needs_drop`
         // owner whose buffer aliases `alloc_id` means a second owner will drop the
         // same allocation — a double free. The reconstructed owner (the call's

@@ -412,11 +412,10 @@ impl PropertyChecker {
             // checkpoint, so its `ValidPtr`/`Allocated` precondition concerns
             // the pre-drop (still-live) state.  A double free — an
             // already-dead allocation reaching a *second* drop — must still
-            // fail, so the exemption is lifted when `double_freed` records it
-            // (unless the repeated block is only a loop-unrolled iteration).
+            // fail, so the exemption is lifted (unless the repeated block is
+            // only a loop-unrolled iteration).
             let dropped_here =
-                crate::verify::api_classify::is_manually_drop_drop(checkpoint.callee)
-                    && (unrolled || !vm_state.double_freed.contains(&alloc_id));
+                crate::verify::api_classify::is_manually_drop_drop(checkpoint.callee) && unrolled;
             if !dropped_here && !Self::is_maybe_uninit_ptr(vm_state, &value, alloc_id) {
                 let is_param_ref = vm_state.resolve_origin(&value).map_or(false, |origin| {
                     origin.local.as_usize() <= vm_state.body.arg_count
