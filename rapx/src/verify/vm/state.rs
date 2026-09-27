@@ -60,7 +60,6 @@ pub(crate) struct Provenance<'ctx> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ValueInvariants<'ctx> {
     pub non_null: bool,
-    pub aligned: bool,
     pub init: bool,
     pub in_bounds: bool,
     /// If Some(n), the value's term is known to satisfy `term % n == 0`.

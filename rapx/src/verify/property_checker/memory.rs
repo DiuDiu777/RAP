@@ -199,10 +199,9 @@ impl PropertyChecker {
         local.pop(1);
         if matches!(r, CheckResult::Failed) {
             rap_debug!(
-                "align=Failed vterm={} align_n={:?} aligned={} off={}",
+                "align=Failed vterm={} align_n={:?} off={}",
                 value.term.to_string(),
                 value.invariants.align_n,
-                value.invariants.aligned,
                 value
                     .provenance
                     .as_ref()
@@ -317,6 +316,20 @@ impl PropertyChecker {
         }
     }
 
+    /// Whether `value` is known to be aligned: either `align_n` carries a
+    /// concrete alignment, or the value sits at the base of an allocation whose
+    /// `align` is not 1.
+    fn is_value_aligned<'ctx, 'tcx>(
+        vm_state: &VmState<'ctx, 'tcx>,
+        value: &VmValue<'ctx, 'tcx>,
+    ) -> bool {
+        value.invariants.align_n.is_some()
+            || value.provenance.as_ref().is_some_and(|p| {
+                p.offset_kind.is_none()
+                    && vm_state.alloc(p.alloc_id).align.simplify().as_u64() != Some(1)
+            })
+    }
+
     /// Whether `value` is a `MaybeUninit`-typed pointer access into `alloc_id`.
     ///
     /// `assume_init_drop` / `as_mut_ptr` (and friends) legitimately consume an
@@ -330,7 +343,7 @@ impl PropertyChecker {
     ) -> bool {
         value.invariants.init
             && value.invariants.non_null
-            && value.invariants.aligned
+            && Self::is_value_aligned(vm_state, value)
             && (matches!(value.ty.kind(), TyKind::RawPtr(..))
                 || matches!(value.ty.kind(), TyKind::Ref(_, inner, _)
                     if matches!(inner.kind(), TyKind::Adt(adt, _)
@@ -728,7 +741,7 @@ impl PropertyChecker {
             // as_ptr/as_mut_ptr on MaybeUninit → write operations don't need pre-init.
             if value.invariants.init
                 && value.invariants.non_null
-                && value.invariants.aligned
+                && Self::is_value_aligned(vm_state, &value)
                 && matches!(value.ty.kind(), TyKind::RawPtr(..))
                 && !vm_state.alloc(id).dead
             {

@@ -158,7 +158,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 if prov.offset.as_u64() == Some(0) {
                     v.invariants.non_null = true;
                     v.invariants.init = true;
-                    v.invariants.aligned = true;
                     self.alloc_mut(prov.alloc_id).initialized = true;
                 }
             }
@@ -227,7 +226,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         };
                         invariants.non_null = true;
                         invariants.init = true;
-                        invariants.aligned = true;
                         self.alloc_mut(heap_alloc_id).initialized = true;
                         // Also expose the box's inner `Unique<T>.pointer` field
                         // (a `NonNull<T>` at path [0, 0]) so that inlined bodies
@@ -248,7 +246,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 invariants: ValueInvariants {
                                     non_null: true,
                                     init: true,
-                                    aligned: true,
                                     ..Default::default()
                                 },
                             },
@@ -447,7 +444,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     if !pointee_is_maybe_uninit {
                         invariants.init = true;
                     }
-                    invariants.aligned = true;
                     // A reference always points within a live allocation, so it
                     // carries the pointer-validity facts (`NonNull`, `Allocated`,
                     // `InBound`) explicitly — the content property `Init` must
@@ -957,7 +953,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         } else {
             ValueInvariants {
                 init: true,
-                aligned: true,
                 align_n,
                 ..Default::default()
             }
@@ -978,7 +973,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let field_term = Int::add(self.ctx, &[base, &prost_offset]);
             let mut invariants = invariants;
             if is_raw_ptr {
-                invariants.aligned = true;
                 invariants.align_n = Some(elem_align);
             }
             self.set_field_value(
@@ -1541,7 +1535,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         ty: dest_ty,
                         provenance: src_val.provenance,
                         invariants: ValueInvariants {
-                            aligned: src_val.invariants.aligned,
                             in_bounds: src_val.invariants.in_bounds,
                             align_n: if is_cast || is_ptr_arith {
                                 src_val.invariants.align_n
@@ -1623,7 +1616,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         provenance: addr.provenance,
                         invariants: ValueInvariants {
                             non_null: true,
-                            aligned: true,
                             init: true,
                             in_bounds: src_in_bounds,
                             align_n: alloc_align,
@@ -1701,7 +1693,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 ty: dest_ty,
                                 provenance: prov,
                                 invariants: ValueInvariants {
-                                    aligned: src_val.invariants.aligned,
                                     in_bounds: false,
                                     align_n: src_val.invariants.align_n,
                                     ..src_val.invariants
@@ -2219,7 +2210,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         provenance: addr.provenance,
                         invariants: ValueInvariants {
                             non_null: true,
-                            aligned: self.check_place_alignment(place),
                             init: true,
                             in_bounds: src_in_bounds,
                             align_n: slice_elem_align.or(alloc_align),
@@ -2429,13 +2419,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         }
                     }
                 }
-                let is_src_ref = matches!(src_ty.kind(), rustc_middle::ty::TyKind::Ref(..));
-                let dest_is_ptr = matches!(cast_ty.kind(), rustc_middle::ty::TyKind::RawPtr(..));
-                let aligned = if dest_is_ptr && is_src_ref {
-                    true
-                } else {
-                    src_val.invariants.aligned
-                };
                 // Transmute-like casts of single-field newtypes (e.g.
                 // NonZero::get's `_0 = copy _1 as T`) yield the underlying
                 // field value, not the wrapper's own term.
@@ -2468,7 +2451,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     invariants: ValueInvariants {
                         non_null: src_val.invariants.non_null,
                         init: src_val.invariants.init,
-                        aligned,
                         in_bounds: src_val.invariants.in_bounds,
                         align_n: if crate::helpers::mir_utils::pointee_ty(src_ty)
                             .is_some_and(|t| t.is_unit())
@@ -3489,12 +3471,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         }
     }
 
-    /// Check if a MIR place's type alignment is statically known.
-    fn check_place_alignment(&self, place: &Place<'tcx>) -> bool {
-        let ty = place.ty(self.body, self.tcx).ty;
-        self.align_of_ty(ty) > 0
-    }
-
     /// Assert a contract fact as VM state invariants.
     fn assert_contract_fact(&mut self, property: &Property<'tcx>) {
         // A precondition with a hazard component records that the caller
@@ -3769,7 +3745,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 non_null: true,
                 init: true,
                 in_bounds: true,
-                aligned: true,
                 align_n: heap_align_n,
                 is_field_offset: false,
             },
@@ -4473,7 +4448,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
 
     /// Set align invariant on the target value.
     fn set_align_for_value(&mut self, property: &Property<'tcx>, mut val: VmValue<'ctx, 'tcx>) {
-        val.invariants.aligned = true;
         if let Some(PropertyArg::Ty(ty)) = property.args().get(1) {
             let align = self.align_sym(*ty);
             if align.simplify().as_u64() != Some(1) {
@@ -4656,7 +4630,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     provenance: Some(prov.clone()),
                     invariants: ValueInvariants {
                         non_null: true,
-                        aligned: true,
                         init: true,
                         in_bounds: first_arg_val.invariants.in_bounds,
                         align_n: first_arg_val.invariants.align_n,
@@ -4738,7 +4711,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         val.invariants = ValueInvariants {
                             non_null: true,
                             init: true,
-                            aligned: true,
                             in_bounds: false,
                             align_n: None,
                             is_field_offset: false,

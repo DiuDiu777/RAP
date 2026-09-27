@@ -10,9 +10,6 @@ impl fmt::Display for ValueInvariants<'_> {
         if self.non_null {
             flags.push("non_null");
         }
-        if self.aligned {
-            flags.push("aligned");
-        }
         if self.init {
             flags.push("init");
         }

@@ -416,7 +416,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }),
                 invariants: ValueInvariants {
                     non_null: true,
-                    aligned: true,
                     init: true,
                     in_bounds: true,
                     ..Default::default()
@@ -547,7 +546,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 }),
                 invariants: ValueInvariants {
                     non_null: true,
-                    aligned: true,
                     init: true,
                     in_bounds: true,
                     ..Default::default()
@@ -648,7 +646,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let mut val = ptr.clone();
             val.ty = dest_ty;
             val.invariants.non_null = true;
-            val.invariants.aligned = true;
             let zero = Int::from_u64(self.ctx, 0);
             self.path_conditions.push(ptr.term._eq(&zero).not());
             self.set_local(destination, val);
@@ -987,7 +984,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     if prov.offset.as_u64() == Some(0) {
                         val.invariants.non_null = true;
                         val.invariants.init = true;
-                        val.invariants.aligned = true;
                         self.alloc_mut(prov.alloc_id).initialized = true;
                     }
                 }
@@ -1304,7 +1300,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let mut val = arg_val.clone();
         val.ty = self.body.local_decls[dest].ty;
         val.invariants.non_null = true;
-        val.invariants.aligned = true;
         val.invariants.init = true;
         self.set_local(dest, val);
     }
@@ -1587,7 +1582,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             invariants: ValueInvariants {
                                 init: true,
                                 non_null: true,
-                                aligned: true,
                                 in_bounds: true,
                                 align_n: Some(field_alloc_align),
                                 is_field_offset: false,
@@ -1653,7 +1647,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     invariants: ValueInvariants {
                         init: true,
                         non_null: true,
-                        aligned: true,
                         align_n: elem_align_n.clone(),
                         ..Default::default()
                     },
@@ -1669,7 +1662,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     invariants: ValueInvariants {
                         init: true,
                         non_null: true,
-                        aligned: true,
                         align_n: elem_align_n,
                         ..Default::default()
                     },
@@ -1785,7 +1777,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         invariants: ValueInvariants {
                             init: true,
                             non_null: true,
-                            aligned: true,
                             in_bounds: true,
                             align_n: if f_align.simplify().as_u64() != Some(1) {
                                 Some(f_align)
@@ -1816,7 +1807,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 if api_classify::is_std_nonnull(adt.did())
                         );
                     val.invariants.non_null = src_non_null;
-                    val.invariants.aligned = arg_val.invariants.aligned;
                     // Preserve the tracked alignment so `as_ptr().deref()` can
                     // discharge the `raw-ptr-deref` `Align` check (Iter::next).
                     val.invariants.align_n = arg_val.invariants.align_n.clone();
@@ -1914,7 +1904,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         provenance: adjusted_provenance,
                         invariants: ValueInvariants {
                             non_null: base.invariants.non_null,
-                            aligned: align_n.is_some() && base.invariants.aligned,
                             in_bounds: *dereferenceable,
                             align_n,
                             init: base.invariants.init,
@@ -1977,7 +1966,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         provenance: adjusted_provenance,
                         invariants: ValueInvariants {
                             non_null: base.invariants.non_null,
-                            aligned: align_n.is_some() && base.invariants.aligned,
                             in_bounds: base.invariants.in_bounds,
                             align_n,
                             init: base.invariants.init,
@@ -2042,7 +2030,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             CallEffect::ReturnAligned => {
                 if let Some(mut existing) = self.locals.get(&dest).cloned() {
-                    existing.invariants.aligned = true;
                     // `as_ptr`/`as_mut_ptr`/`into_raw` expose a pointer aligned to
                     // the *pointee* type, so record the symbolic alignment for the
                     // downstream `raw-ptr-deref`/`from_raw_parts` `Align` check.
@@ -2066,7 +2053,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             ty: dest_ty,
                             provenance: None,
                             invariants: ValueInvariants {
-                                aligned: true,
                                 ..Default::default()
                             },
                         },
@@ -2569,7 +2555,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 non_null: true,
                                 init: true,
                                 in_bounds: true,
-                                aligned: true,
                                 align_n: result_align_n.clone(),
                                 ..ValueInvariants::default()
                             },
@@ -2586,7 +2571,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 invariants: ValueInvariants {
                                     non_null: true,
                                     init: true,
-                                    aligned: true,
                                     in_bounds: true,
                                     align_n: result_align_n,
                                     ..ValueInvariants::default()
@@ -2643,7 +2627,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     invariants: ValueInvariants {
                         non_null: true,
                         init: true,
-                        aligned: true,
                         ..Default::default()
                     },
                 };
@@ -2663,7 +2646,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         invariants: ValueInvariants {
                             non_null: true,
                             init: true,
-                            aligned: true,
                             in_bounds: true,
                             align_n,
                             is_field_offset: false,
@@ -2713,7 +2695,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 non_null: true,
                                 init: true,
                                 in_bounds: true,
-                                aligned: true,
                                 ..ValueInvariants::default()
                             },
                         },
@@ -2733,7 +2714,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 invariants: ValueInvariants {
                                     non_null: true,
                                     init: true,
-                                    aligned: true,
                                     in_bounds: true,
                                     ..ValueInvariants::default()
                                 },
@@ -2781,7 +2761,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 non_null: true,
                                 init: true,
                                 in_bounds: true,
-                                aligned: true,
                                 ..ValueInvariants::default()
                             },
                         },
@@ -2800,7 +2779,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 invariants: ValueInvariants {
                                     non_null: true,
                                     init: true,
-                                    aligned: true,
                                     in_bounds: true,
                                     ..ValueInvariants::default()
                                 },
@@ -2848,7 +2826,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             non_null: true,
                             init: true,
                             in_bounds: true,
-                            aligned: true,
                             ..ValueInvariants::default()
                         },
                     },
@@ -2869,7 +2846,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             invariants: ValueInvariants {
                                 non_null: true,
                                 init: true,
-                                aligned: true,
                                 in_bounds: true,
                                 ..ValueInvariants::default()
                             },
@@ -2899,7 +2875,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                         non_null: true,
                                         init: true,
                                         in_bounds: true,
-                                        aligned: true,
                                         ..ValueInvariants::default()
                                     },
                                 },
