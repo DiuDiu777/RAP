@@ -107,7 +107,7 @@ impl RelevantPlaces {
                     self.collect_numeric_predicate(predicate);
                 }
             }
-            PropertyArg::Ty(_) | PropertyArg::Ident(_) => {}
+            PropertyArg::Ty(_) | PropertyArg::Ident(_) | PropertyArg::Region(_) => {}
         }
     }
 

@@ -5,7 +5,7 @@
 //! (attributes, JSON, compound-property macros, pest DSL) produce this IR.
 
 use rustc_middle::mir::Local;
-use rustc_middle::ty::Ty;
+use rustc_middle::ty::{Region, Ty};
 
 /// The root of a contract place: a function's return value, an argument, or a
 /// raw MIR local.  `Return` ⇔ `Local(0)`; `Arg(n)` ⇔ `Local(n + 1)`.
@@ -237,6 +237,9 @@ pub(crate) enum PropertyArg<'tcx> {
     Predicates(Vec<NumericPredicate<'tcx>>),
     /// A name: lifetime, allocator, trait (e.g. `Copy`), or `sized`/`unsized`.
     Ident(String),
+    /// A resolved lifetime region (e.g. `'a` in `Alive(p, 'a)`), bound against
+    /// the item that declares the lifetime (a struct for its invariants).
+    Region(Region<'tcx>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

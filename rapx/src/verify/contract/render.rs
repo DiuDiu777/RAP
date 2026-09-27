@@ -209,6 +209,7 @@ impl<'tcx> PropertyArg<'tcx> {
                 p.join(" && ")
             }
             PropertyArg::Ident(s) => s.clone(),
+            PropertyArg::Region(r) => format!("'{r}"),
         }
     }
 }

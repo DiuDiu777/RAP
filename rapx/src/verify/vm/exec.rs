@@ -10,7 +10,7 @@ use rustc_middle::{
         BasicBlock, BinOp, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
         TerminatorKind, UnOp,
     },
-    ty::Ty,
+    ty::{Region, Ty},
 };
 use z3::ast::{Ast, Bool, Int};
 
@@ -561,7 +561,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                         false,
                                         "ref_field",
                                     );
-                                } else if let rustc_middle::ty::TyKind::Ref(_, pointee, _) =
+                                } else if let rustc_middle::ty::TyKind::Ref(region, pointee, _) =
                                     field_ty.kind()
                                 {
                                     // Field contains a reference (&T, &mut T, &[T], etc.).
@@ -572,7 +572,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                         _ => *pointee,
                                     };
                                     self.materialize_external_field(
-                                        local, idx, field_ty, elem_ty, true,
+                                        local, idx, field_ty, elem_ty, Some(*region),
                                     );
                                 } else if let rustc_middle::ty::TyKind::Slice(elem_ty) =
                                     field_ty.kind()
@@ -582,7 +582,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                     // stays symbolic instead of defaulting to a single
                                     // element (which would make `inner.len()` == 1).
                                     self.materialize_external_field(
-                                        local, idx, field_ty, *elem_ty, false,
+                                        local, idx, field_ty, *elem_ty, None,
                                     );
                                 } else if let rustc_middle::ty::TyKind::Adt(adt, substs) =
                                     field_ty.kind()
@@ -603,7 +603,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                                 _ => pointee,
                                             };
                                             self.materialize_external_field(
-                                                local, idx, field_ty, elem_ty, false,
+                                                local, idx, field_ty, elem_ty, None,
                                             );
                                         }
                                     }
@@ -874,24 +874,25 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// slice (`[T]`), or a heap-backed smart pointer (`Box`/`Vec`) as an external
     /// allocation, so field access (e.g. `self.buckets.iter()`, `as_ptr()`)
     /// resolves to the *data* rather than the whole struct. The caller
-    /// pre-computes `elem_ty` (the pointee / slice element). `assumed_alive`
-    /// marks a reference field's referent as live (a reference guarantees its
-    /// referent is alive; a raw slice / `Box` / `Vec` field carries no such
-    /// guarantee).
+    /// pre-computes `elem_ty` (the pointee / slice element). `alive_region`
+    /// carries the lifetime of a reference field (`&'a T`), marking its
+    /// referent alive for `'a` (a reference guarantees its referent is alive);
+    /// a raw slice / `Box` / `Vec` field carries no such guarantee and passes
+    /// `None`.
     fn materialize_external_field(
         &mut self,
         local: Local,
         idx: usize,
         field_ty: Ty<'tcx>,
         elem_ty: Ty<'tcx>,
-        assumed_alive: bool,
+        alive_region: Option<Region<'tcx>>,
     ) {
         let align = self.align_sym(elem_ty);
         let max_size = Int::from_u64(self.ctx, i64::MAX as u64);
         let (alloc_id, base) = self.allocate_external(max_size, align, Some(elem_ty));
         self.alloc_mut(alloc_id).initialized = true;
-        if assumed_alive {
-            self.alloc_mut(alloc_id).liveness = Liveness::Assumed;
+        if let Some(region) = alive_region {
+            self.alloc_mut(alloc_id).liveness = Liveness::AssumedFor(region);
         }
         self.set_field_value(
             local,
@@ -3576,21 +3577,24 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             PropertyKind::Alive => {
                 if let Some(id) = self.contract_alloc_id_field_aware(property) {
-                    let region = property.args().get(1).and_then(|a| {
-                        if let PropertyArg::Ident(name) = a {
-                            crate::verify::vm::region::resolve_region_name(
-                                self.tcx,
-                                self.caller_def_id,
-                                name,
-                            )
-                        } else {
-                            None
-                        }
+                    let region = property.args().get(1).and_then(|a| match a {
+                        // Struct invariants bind their region at parse time
+                        // (`bind_struct_invariant_regions`).
+                        PropertyArg::Region(r) => Some(*r),
+                        // Function `requires` resolve their region here.
+                        PropertyArg::Ident(name) => crate::verify::vm::region::resolve_region_name(
+                            self.tcx,
+                            self.caller_def_id,
+                            name,
+                        ),
+                        _ => None,
                     });
-                    self.alloc_mut(id).liveness = match region {
-                        Some(r) => Liveness::AssumedFor(r),
-                        None => Liveness::Assumed,
-                    };
+                    // A missing or unresolvable region leaves the allocation
+                    // unassumed, so the `Alive` check fails rather than silently
+                    // assuming unconditional liveness.
+                    if let Some(r) = region {
+                        self.alloc_mut(id).liveness = Liveness::AssumedFor(r);
+                    }
                 }
             }
             PropertyKind::InBound => {
