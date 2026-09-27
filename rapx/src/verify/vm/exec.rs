@@ -3594,23 +3594,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
             PropertyKind::Alive => {
                 if let Some(id) = self.contract_alloc_id_field_aware(property) {
-                    let region = property.args().get(1).and_then(|a| match a {
-                        // Struct invariants bind their region at parse time
-                        // (`bind_struct_invariant_regions`).
-                        PropertyArg::Region(r) => Some(*r),
-                        // Function `requires` resolve their region here.
-                        PropertyArg::Ident(name) => crate::verify::vm::region::resolve_region_name(
-                            self.tcx,
-                            self.caller_def_id,
-                            name,
-                        ),
-                        _ => None,
-                    });
-                    // A missing or unresolvable region leaves the allocation
-                    // unassumed, so the `Alive` check fails rather than silently
-                    // assuming unconditional liveness.
-                    if let Some(r) = region {
-                        self.alloc_mut(id).liveness = Liveness::AssumedFor(r);
+                    // The region is bound at parse time (`bind_alive_regions`):
+                    // struct invariants against the struct, function `requires`
+                    // against the function.
+                    if let Some(PropertyArg::Region(region)) = property.args().get(1) {
+                        self.alloc_mut(id).liveness = Liveness::AssumedFor(*region);
                     }
                 }
             }

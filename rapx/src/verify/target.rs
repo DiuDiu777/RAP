@@ -726,6 +726,12 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             .collect();
 
         let mut caller_requires = self.get_fn_contracts(def_id, false);
+        // A `requires` lifetime (`Alive(p, 'a)`) names a lifetime on the
+        // function, so bind it here (callee `requires` keep the generic `Ident`
+        // and are instantiated at the call site instead).
+        for contract in &mut caller_requires {
+            bind_alive_regions(self.tcx, def_id, contract);
+        }
         // `get_fn_contracts` already resolves the entry contracts with the
         // right precedence — inline `#[rapx::requires]`, then trait contracts,
         // then the std JSON database (only when no annotation is present).
@@ -1683,36 +1689,33 @@ pub(crate) fn get_struct_invariants_from_annotation<'tcx>(
     // the *struct*, so bind it here against the struct's own generics. Parsing
     // used `context_def_id` (the method), whose generics lack `'a`.
     for inv in &mut invariants {
-        bind_struct_invariant_regions(tcx, struct_def_id, inv);
+        bind_alive_regions(tcx, struct_def_id, inv);
     }
     invariants
 }
 
-/// Bind `Alive(p, 'a)` region idents in a struct invariant to `Region`s,
-/// resolving `'a` against `struct_def_id` (the struct declares `'a`).
-fn bind_struct_invariant_regions<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    struct_def_id: DefId,
-    property: &mut Property<'tcx>,
-) {
+/// Bind `Alive(p, 'a)` region idents in a contract to `Region`s, resolving `'a`
+/// against `def_id` (the item that declares `'a`: the struct for its
+/// invariants, the function for its `requires`).
+fn bind_alive_regions<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId, property: &mut Property<'tcx>) {
     match property {
         Property::Atom(atom) => {
             if atom.kind == PropertyKind::Alive
                 && let Some(PropertyArg::Ident(name)) = atom.args.get(1).cloned()
                 && let Some(region) =
-                    crate::verify::vm::region::resolve_region_name(tcx, struct_def_id, &name)
+                    crate::verify::vm::region::resolve_region_name(tcx, def_id, &name)
             {
                 atom.args[1] = PropertyArg::Region(region);
             }
         }
         Property::And(and) => {
             for conjunct in &mut and.conjuncts {
-                bind_struct_invariant_regions(tcx, struct_def_id, conjunct);
+                bind_alive_regions(tcx, def_id, conjunct);
             }
         }
         Property::Or(or) => {
             for disjunct in &mut or.disjuncts {
-                bind_struct_invariant_regions(tcx, struct_def_id, disjunct);
+                bind_alive_regions(tcx, def_id, disjunct);
             }
         }
     }

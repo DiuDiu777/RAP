@@ -926,25 +926,21 @@ impl PropertyChecker {
                         // assumption covers the demand only when `'a: 'r`.
                         //
                         // A struct invariant / function `requires` binds its
-                        // region at parse time (`PropertyArg::Region`); a std
-                        // contract carries the callee's *generic* return
-                        // lifetime (`Ident`), instantiated here from the
-                        // caller's return reference region.
+                        // region at parse time (`PropertyArg::Region`); a callee
+                        // contract carries either `'static` (concrete) or the
+                        // callee's *generic* return lifetime (`Ident`), which is
+                        // instantiated from the caller's return reference region.
                         let check_region = property.args().get(1).and_then(|a| match a {
                             PropertyArg::Region(r) => Some(*r),
-                            PropertyArg::Ident(name) => {
-                                crate::verify::vm::region::resolve_region_name(
-                                    vm_state.tcx,
-                                    checkpoint.caller,
-                                    name,
-                                )
-                                .or_else(|| {
-                                    crate::verify::vm::region::fn_return_region(
-                                        vm_state.tcx,
-                                        checkpoint.caller,
-                                    )
-                                })
+                            PropertyArg::Ident(name)
+                                if name == "static" || name == "static_lifetime" =>
+                            {
+                                Some(vm_state.tcx.lifetimes.re_static)
                             }
+                            PropertyArg::Ident(_) => crate::verify::vm::region::fn_return_region(
+                                vm_state.tcx,
+                                checkpoint.caller,
+                            ),
                             _ => None,
                         });
                         if let Some(r) = check_region {
