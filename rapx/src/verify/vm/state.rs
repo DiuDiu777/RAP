@@ -21,15 +21,14 @@ use crate::verify::{def_use::PlaceKey, path_extractor::Path};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AllocId(pub usize);
 
-/// The *kind* of a pointer's byte offset, for provenance.
+/// The structure of a pointer's byte offset, when it has one.
 ///
-/// `None` means the pointer sits at the allocation base (`offset == 0`) and has
-/// no special structure.  The structured cases let the verifier use a cheaper,
-/// more precise proof: `Field` carries the "field in-bounds" guarantee
-/// (`offset + size_of(field) <= size_of(container)`, e.g. `Option::as_slice`),
-/// and `Element(k)` tracks the element index so `InBound` checks `k + count <=
-/// slice_len` linearly instead of the non-linear byte form `(k+count)·S <=
-/// len·S` (undecidable in Z3 NIA for a generic `S`).
+/// Each variant lets the verifier use a cheaper, more precise proof: `Field`
+/// carries the "field in-bounds" guarantee (`offset + size_of(field) <=
+/// size_of(container)`, e.g. `Option::as_slice`), and `Element(k)` tracks the
+/// element index so `InBound` checks `k + count <= slice_len` linearly instead
+/// of the non-linear byte form `(k+count)·S <= len·S` (undecidable in Z3 NIA
+/// for a generic `S`).
 #[derive(Clone, Debug)]
 pub(crate) enum OffsetKind<'ctx> {
     /// Compile-time field offset (`offset_of!`), including a first field at 0.
@@ -41,15 +40,19 @@ pub(crate) enum OffsetKind<'ctx> {
     Byte,
 }
 
-/// Pointer provenance: which allocation and at what byte offset.
+/// Pointer provenance: which allocation, at what byte offset, and (when known)
+/// what structure that offset has.
 #[derive(Clone, Debug)]
 pub(crate) struct Provenance<'ctx> {
     /// The allocation this pointer derives from.
     pub alloc_id: AllocId,
-    /// Byte offset from the allocation base. A freshly created
+    /// Byte offset from the allocation base (always present). A freshly created
     /// pointer to the base of an allocation has `offset = 0`.
     pub offset: Int<'ctx>,
-    /// The offset's structure, when known (`None` = plain base, offset 0).
+    /// The offset's structure. `None` means the pointer sits at the base
+    /// (`offset == 0`) with no further structure; `Some(..)` records whether the
+    /// offset is a compile-time field offset (`Field`), an element index from
+    /// element-strided arithmetic (`Element`), or a byte-strided offset (`Byte`).
     pub offset_kind: Option<OffsetKind<'ctx>>,
 }
 
