@@ -41,6 +41,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 ty,
                 provenance,
                 invariants: ValueInvariants::default(),
+                field_offset: false,
             });
         }
 
@@ -183,6 +184,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             ty,
             provenance,
             invariants: ValueInvariants::default(),
+            field_offset: false,
         })
     }
 

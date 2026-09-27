@@ -67,10 +67,6 @@ pub(crate) struct ValueInvariants<'ctx> {
     /// `n` is a Z3 term so that a generic type's alignment (a symbolic
     /// `align_T`) can be carried the same way as a concrete alignment.
     pub align_n: Option<Int<'ctx>>,
-    /// Whether this scalar value is a compile-time field offset (`offset_of!`).
-    /// Propagated to a pointer's provenance when used as an `add`/`byte_add`
-    /// offset.
-    pub is_field_offset: bool,
 }
 
 /// A symbolic value tracked by the VM.
@@ -96,6 +92,11 @@ pub(crate) struct VmValue<'ctx, 'tcx> {
     pub provenance: Option<Provenance<'ctx>>,
     /// Known constraints on this value.
     pub invariants: ValueInvariants<'ctx>,
+    /// Source tag: this scalar is a compile-time field offset (`offset_of!`).
+    /// Propagated to a pointer's provenance when used as an `add`/`byte_add`
+    /// offset.  It is origin information, not an SMT-assertable invariant, so it
+    /// lives on `VmValue` rather than in `ValueInvariants`.
+    pub field_offset: bool,
 }
 
 impl<'ctx, 'tcx> VmValue<'ctx, 'tcx> {
@@ -105,6 +106,7 @@ impl<'ctx, 'tcx> VmValue<'ctx, 'tcx> {
             ty,
             provenance: None,
             invariants: ValueInvariants::default(),
+            field_offset: false,
         }
     }
 
@@ -903,7 +905,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     &constant.const_,
                     &text,
                 );
-                let is_field_offset = int_val.is_none()
+                let field_offset = int_val.is_none()
                     && crate::helpers::mir_utils::offset_of_container(self.tcx, &constant.const_)
                         .is_some();
                 let term = if let Some(v) = int_val {
@@ -923,10 +925,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     term,
                     ty,
                     provenance: None,
-                    invariants: ValueInvariants {
-                        is_field_offset,
-                        ..ValueInvariants::default()
-                    },
+                    invariants: ValueInvariants::default(),
+                    field_offset,
                 }
             }
             #[cfg(rapx_ge_95)]
@@ -988,6 +988,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             ty: place.ty(self.body, self.tcx).ty,
                             provenance: Some(prov.clone()),
                             invariants: base_val.invariants.clone(),
+                            field_offset: false,
                         });
                     }
                 }
@@ -1104,6 +1105,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                             ty: place.ty(self.body, self.tcx).ty,
                                             provenance: None,
                                             invariants: ValueInvariants::default(),
+                                            field_offset: false,
                                         });
                                     } else {
                                         let mut chain = self.fresh_int("arr_elem");
@@ -1118,6 +1120,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                             ty: place.ty(self.body, self.tcx).ty,
                                             provenance: None,
                                             invariants: ValueInvariants::default(),
+                                            field_offset: false,
                                         });
                                     }
                                 }

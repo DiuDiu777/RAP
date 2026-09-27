@@ -136,6 +136,7 @@ impl PropertyChecker {
                         ty: inner_ty,
                         provenance: base_val.provenance.clone(),
                         invariants: base_val.invariants,
+                        field_offset: base_val.field_offset,
                     });
                 }
                 ContractProjection::ForEach => {
@@ -151,6 +152,7 @@ impl PropertyChecker {
                                 ty: base_val.ty,
                                 provenance: base_val.provenance.clone(),
                                 invariants: base_val.invariants.clone(),
+                                field_offset: base_val.field_offset,
                             });
                         }
                     }
@@ -196,6 +198,7 @@ impl PropertyChecker {
                     ty: base_val.ty,
                     provenance: Some(prov.clone()),
                     invariants: base_val.invariants.clone(),
+                    field_offset: base_val.field_offset,
                 });
             }
         }

@@ -248,6 +248,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                     init: true,
                                     ..Default::default()
                                 },
+                                field_offset: false,
                             },
                         );
                         // For Vec: materialize `buf.cap` ([0, 1]) and `len`
@@ -271,6 +272,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                     offset_kind: None,
                                 }),
                                 invariants,
+                                field_offset: false,
                             },
                         );
                         continue;
@@ -288,6 +290,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 ty,
                                 provenance: None,
                                 invariants,
+                                field_offset: false,
                             },
                         );
                         continue;
@@ -347,6 +350,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                             init: true,
                                             ..Default::default()
                                         },
+                                        field_offset: false,
                                     },
                                 );
                             }
@@ -364,6 +368,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                         init: true,
                                         ..Default::default()
                                     },
+                                    field_offset: false,
                                 },
                             );
                         }
@@ -386,6 +391,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                         init: true,
                                         ..Default::default()
                                     },
+                                    field_offset: false,
                                 },
                             );
                             continue;
@@ -402,6 +408,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 init: true,
                                 ..Default::default()
                             },
+                            field_offset: false,
                         },
                     );
                     continue;
@@ -496,6 +503,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                     offset_kind: None,
                                 }),
                                 invariants,
+                                field_offset: false,
                             },
                         );
                         continue;
@@ -524,6 +532,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 offset_kind: None,
                             }),
                             invariants,
+                            field_offset: false,
                         },
                     );
 
@@ -644,6 +653,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                                 init: true,
                                                 ..Default::default()
                                             },
+                                            field_offset: false,
                                         },
                                     );
                                 }
@@ -669,6 +679,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             ty,
                             provenance: None,
                             invariants,
+                            field_offset: false,
                         },
                     );
                     continue;
@@ -694,6 +705,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 offset_kind: None,
                             }),
                             invariants,
+                            field_offset: false,
                         },
                     );
                     continue;
@@ -768,6 +780,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 init: true,
                                 ..invariants
                             },
+                            field_offset: false,
                         },
                     );
                     continue;
@@ -781,6 +794,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         ty,
                         provenance: None,
                         invariants,
+                        field_offset: false,
                     },
                 );
                 continue;
@@ -803,6 +817,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     ty,
                     provenance: None,
                     invariants,
+                    field_offset: false,
                 },
             );
         }
@@ -848,6 +863,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                         ty: dest.ty(self.body, self.tcx).ty,
                                         provenance: src_val.provenance.clone(),
                                         invariants: src_val.invariants.clone(),
+                                        field_offset: false,
                                     },
                                 );
                             }
@@ -917,6 +933,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     init: true,
                     ..Default::default()
                 },
+                field_offset: false,
             },
         );
     }
@@ -987,6 +1004,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         offset_kind: None,
                     }),
                     invariants,
+                    field_offset: false,
                 },
             );
         } else {
@@ -1046,6 +1064,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         offset_kind: None,
                     }),
                     invariants,
+                    field_offset: false,
                 },
             );
         }
@@ -1104,6 +1123,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             ..Default::default()
                         },
+                        field_offset: false,
                     },
                 );
             }
@@ -1159,6 +1179,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             ..Default::default()
                         },
+                        field_offset: false,
                     },
                 );
                 self.decompose_pointee_fields(
@@ -1193,6 +1214,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             ..Default::default()
                         },
+                        field_offset: false,
                     },
                 );
             } else if let TyKind::Array(elem_ty, const_len) = field_ty.kind() {
@@ -1227,6 +1249,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             ..Default::default()
                         },
+                        field_offset: false,
                     },
                 );
             }
@@ -1543,6 +1566,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             },
                             ..src_val.invariants
                         },
+                        field_offset: src_val.field_offset,
                     },
                 );
             }
@@ -1572,6 +1596,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             ty: dest_ty,
                             provenance: val.provenance,
                             invariants: val.invariants,
+                            field_offset: false,
                         },
                     );
                 }
@@ -1619,8 +1644,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             in_bounds: src_in_bounds,
                             align_n: alloc_align,
-                            is_field_offset: false,
                         },
+                        field_offset: false,
                     },
                 );
             }
@@ -1652,6 +1677,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             align_n: alloc_align,
                             ..Default::default()
                         },
+                        field_offset: false,
                     },
                 );
             }
@@ -1683,6 +1709,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 ty: self.body.local_decls[dest_local].ty,
                                 provenance: None,
                                 invariants: ValueInvariants::default(),
+                                field_offset: false,
                             });
                         let prov = self.provenance_for_binary_op(*op, &src_val, &rhs_val);
                         let dest_ty = self.body.local_decls[dest_local].ty;
@@ -1697,6 +1724,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                     align_n: src_val.invariants.align_n,
                                     ..src_val.invariants
                                 },
+                                field_offset: false,
                             },
                         );
                     }
@@ -2213,8 +2241,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             in_bounds: src_in_bounds,
                             align_n: slice_elem_align.or(alloc_align),
-                            is_field_offset: false,
                         },
+                        field_offset: false,
                     };
                     self.propagate_byte_values_to_ref(place, &val);
                     self.propagate_field_values_to_ref(place, dest_place.local);
@@ -2238,6 +2266,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             ..Default::default()
                         },
+                        field_offset: false,
                     }
                 }
             }
@@ -2262,6 +2291,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             align_n: alloc_align,
                             ..Default::default()
                         },
+                        field_offset: false,
                     };
                     val
                 } else {
@@ -2274,6 +2304,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             non_null: true,
                             ..Default::default()
                         },
+                        field_offset: false,
                     }
                 }
             }
@@ -2359,6 +2390,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             ty: fields[0],
                             provenance: provenance.clone(),
                             invariants: invariants.clone(),
+                            field_offset: false,
                         };
                         self.set_field_value(dest_place.local, vec![0], result_val);
                         let overflow_term = self.fresh_int("overflow_flag");
@@ -2371,6 +2403,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     ty: dest_ty,
                     provenance,
                     invariants,
+                    field_offset: false,
                 }
             }
             Rvalue::UnaryOp(op, operand) => {
@@ -2392,6 +2425,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     ty: dest_ty,
                     provenance: val.provenance,
                     invariants: val.invariants,
+                    field_offset: false,
                 }
             }
             Rvalue::Cast(_kind, operand, cast_ty) => {
@@ -2459,11 +2493,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         } else {
                             src_val.invariants.align_n
                         },
-                        // A raw-pointer cast only reinterprets the address; keep
-                        // the field-offset flag so `byte_add(offset_of!()).cast()`
-                        // stays a field pointer (`Option::as_slice`).
-                        is_field_offset: src_val.invariants.is_field_offset,
                     },
+                    field_offset: src_val.field_offset,
                 }
             }
             Rvalue::Aggregate(_kind, operands) => {
@@ -2502,6 +2533,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         ty: dest_ty,
                         provenance: field_val.provenance,
                         invariants: field_val.invariants,
+                        field_offset: false,
                     };
                 }
                 let term = self.fresh_int("aggregate");
@@ -2644,6 +2676,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     ty: dest_ty,
                     provenance: result_prov,
                     invariants: ValueInvariants::default(),
+                    field_offset: false,
                 }
             }
             Rvalue::Discriminant(place) => {
@@ -2690,6 +2723,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     ty: dest_ty,
                     provenance: val.provenance,
                     invariants: val.invariants,
+                    field_offset: false,
                 }
             }
             Rvalue::CopyForDeref(place) => {
@@ -2736,6 +2770,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         non_null: true,
                         ..Default::default()
                     },
+                    field_offset: false,
                 }
             }
         }
@@ -3746,8 +3781,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 init: true,
                 in_bounds: true,
                 align_n: heap_align_n,
-                is_field_offset: false,
             },
+            field_offset: false,
         }
     }
 
@@ -4633,11 +4668,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         init: true,
                         in_bounds: first_arg_val.invariants.in_bounds,
                         align_n: first_arg_val.invariants.align_n,
-                        // A pointer `cast` only reinterprets the address; keep
-                        // the field-offset flag so `byte_add(offset_of!())` +
-                        // `cast` stays a field pointer (`Option::as_slice`).
-                        is_field_offset: first_arg_val.invariants.is_field_offset,
                     },
+                    field_offset: first_arg_val.field_offset,
                 },
             );
             return true;
@@ -4713,7 +4745,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             init: true,
                             in_bounds: false,
                             align_n: None,
-                            is_field_offset: false,
                         };
                     }
                 }
