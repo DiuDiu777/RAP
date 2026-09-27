@@ -456,9 +456,6 @@ pub(crate) struct VmState<'ctx, 'tcx> {
     /// The path being executed (for branch target resolution).
     pub(crate) path: Option<Path>,
 
-    /// Name of the most recent call (for context-aware effects like Vec push).
-    pub(crate) last_call_name: String,
-
     /// `DefId` of the most recent call (for `DefId`-based API classification).
     pub(crate) last_call_callee: Option<DefId>,
 
@@ -537,7 +534,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             bytes: FxHashMap::default(),
             notes: Vec::new(),
             path: None,
-            last_call_name: String::new(),
             last_call_callee: None,
             inline_depth: 0,
             inline_frames: Vec::new(),

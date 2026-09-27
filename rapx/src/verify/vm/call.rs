@@ -115,7 +115,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     crate::verify::call_summary::interprocedural::try_field_load_effect(self.tcx, c)
                 {
                     self.apply_call_effect(&effect, &arg_values, &caller_arg_locals, destination);
-                    self.last_call_name = name.clone();
                     self.last_call_callee = callee;
                     self.materialize_const_bytes_after_call(args, destination);
                     return;
@@ -126,7 +125,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     )
                 {
                     self.apply_call_effect(&effect, &arg_values, &caller_arg_locals, destination);
-                    self.last_call_name = name.clone();
                     self.last_call_callee = callee;
                     self.materialize_const_bytes_after_call(args, destination);
                     return;
@@ -135,7 +133,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     crate::verify::call_summary::interprocedural::try_branch_effect(self.tcx, c)
                 {
                     self.apply_call_effect(&effect, &arg_values, &caller_arg_locals, destination);
-                    self.last_call_name = name.clone();
                     self.last_call_callee = callee;
                     self.materialize_const_bytes_after_call(args, destination);
                     return;
@@ -146,7 +143,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     )
                 {
                     self.apply_call_effect(&effect, &arg_values, &caller_arg_locals, destination);
-                    self.last_call_name = name.clone();
                     self.last_call_callee = callee;
                     self.materialize_const_bytes_after_call(args, destination);
                     return;
@@ -157,7 +153,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     )
                 {
                     self.apply_call_effect(&effect, &arg_values, &caller_arg_locals, destination);
-                    self.last_call_name = name.clone();
                     self.last_call_callee = callee;
                     self.materialize_const_bytes_after_call(args, destination);
                     return;
@@ -202,13 +197,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         // shared symbolic `sizeof_T` / `align_T` so it agrees with allocation
         // sizes and pointer strides.
         if self.try_size_align_effect(func, destination) {
-            self.last_call_name = summary.name.clone();
             self.last_call_callee = callee;
             self.materialize_const_bytes_after_call(args, destination);
             return;
         }
 
-        self.last_call_name = summary.name.clone();
         self.last_call_callee = callee;
 
         if !summary.unsupported {
