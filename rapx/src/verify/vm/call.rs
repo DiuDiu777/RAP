@@ -1877,11 +1877,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     let element_offset = if stride == Some(1) {
                         None
                     } else {
-                        match base
-                            .provenance
-                            .as_ref()
-                            .and_then(|p| p.element_offset().cloned())
-                        {
+                        match base.provenance.as_ref().and_then(|p| match &p.offset_kind {
+                            Some(OffsetKind::Element(e)) => Some(e.clone()),
+                            _ => None,
+                        }) {
                             Some(e) => Some(Int::add(self.ctx, &[&e, &offset.term])),
                             None if base
                                 .provenance
@@ -1950,11 +1949,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     let element_offset = if stride == Some(1) {
                         None
                     } else {
-                        match base
-                            .provenance
-                            .as_ref()
-                            .and_then(|p| p.element_offset().cloned())
-                        {
+                        match base.provenance.as_ref().and_then(|p| match &p.offset_kind {
+                            Some(OffsetKind::Element(e)) => Some(e.clone()),
+                            _ => None,
+                        }) {
                             Some(e) => Some(Int::sub(self.ctx, &[&e, &offset.term])),
                             None => None,
                         }

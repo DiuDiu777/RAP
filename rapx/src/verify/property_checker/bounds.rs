@@ -10,7 +10,7 @@ use crate::verify::contract::{
     ContractExpr, NumericBinOp, PlaceBase, Property, PropertyArg, RelOp,
 };
 use crate::verify::report::CheckResult;
-use crate::verify::vm::state::{VmState, VmValue};
+use crate::verify::vm::state::{OffsetKind, VmState, VmValue};
 use rustc_middle::mir::{Local, Operand, Rvalue, StatementKind};
 use rustc_middle::ty::{Ty, TyKind};
 use z3::{
@@ -132,7 +132,10 @@ impl PropertyChecker {
                 value
                     .provenance
                     .as_ref()
-                    .and_then(|p| p.element_offset().cloned()),
+                    .and_then(|p| match &p.offset_kind {
+                        Some(OffsetKind::Element(e)) => Some(e.clone()),
+                        _ => None,
+                    }),
             ) {
                 let count_term = property
                     .args()
@@ -173,7 +176,7 @@ impl PropertyChecker {
         if value
             .provenance
             .as_ref()
-            .is_some_and(|prov| prov.is_field_offset())
+            .is_some_and(|prov| matches!(prov.offset_kind, Some(OffsetKind::Field)))
         {
             let field_size = crate::helpers::mir_utils::pointee_ty(value.ty)
                 .map(|ty| vm_state.size_sym_read(ty))

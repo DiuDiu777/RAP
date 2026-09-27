@@ -9,7 +9,7 @@ use crate::helpers::mir_scan::Checkpoint;
 use crate::verify::api_classify;
 use crate::verify::contract::{ContractExpr, Property, PropertyArg};
 use crate::verify::report::CheckResult;
-use crate::verify::vm::state::{AllocId, Liveness, VmState, VmValue};
+use crate::verify::vm::state::{AllocId, Liveness, OffsetKind, VmState, VmValue};
 use rustc_hash::FxHashSet;
 use rustc_middle::mir::{Local, Operand, Rvalue, StatementKind};
 use rustc_middle::ty::TyKind;
@@ -95,7 +95,7 @@ impl PropertyChecker {
         let effective_align_n = if value
             .provenance
             .as_ref()
-            .is_some_and(|prov| prov.is_field_offset())
+            .is_some_and(|prov| matches!(prov.offset_kind, Some(OffsetKind::Field)))
         {
             crate::helpers::mir_utils::pointee_ty(value.ty).map(|ty| vm_state.align_sym_read(ty))
         } else {
@@ -513,7 +513,7 @@ impl PropertyChecker {
         if value
             .provenance
             .as_ref()
-            .is_some_and(|prov| prov.is_field_offset())
+            .is_some_and(|prov| matches!(prov.offset_kind, Some(OffsetKind::Field)))
         {
             let field_size = crate::helpers::mir_utils::pointee_ty(value.ty)
                 .map(|ty| vm_state.size_sym_read(ty))

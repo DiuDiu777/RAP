@@ -56,22 +56,6 @@ pub(crate) struct Provenance<'ctx> {
     pub offset_kind: Option<OffsetKind<'ctx>>,
 }
 
-impl<'ctx> Provenance<'ctx> {
-    /// Whether `offset` is a compile-time field offset (`offset_of!`).
-    pub(crate) fn is_field_offset(&self) -> bool {
-        matches!(self.offset_kind, Some(OffsetKind::Field))
-    }
-
-    /// The element index, when this pointer was derived by element-strided
-    /// arithmetic off an allocation base.
-    pub(crate) fn element_offset(&self) -> Option<&Int<'ctx>> {
-        match &self.offset_kind {
-            Some(OffsetKind::Element(e)) => Some(e),
-            _ => None,
-        }
-    }
-}
-
 /// Known invariants about a symbolic value.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct ValueInvariants<'ctx> {
