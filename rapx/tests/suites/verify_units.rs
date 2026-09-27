@@ -208,6 +208,7 @@ sound_tests! {
     init_std_sound_06: "verify_units/init_std_sound_6" => "sound_len_bound_loop_initializes_slice",
     init_ctx_sound_01: "verify_units/init_ctx_sound_1" => "sound_context_sensitive_conditional_init",
     init_ctx_sound_02: "verify_units/init_ctx_sound_1" => "maybe_init_slot",
+    init_ctx_sound_03: "verify_units/init_ctx_unsound_1" => "sound_literal_true",
 }
 
 // ================ Init Unsound Cases =============
@@ -220,6 +221,9 @@ unsound_tests! {
     init_std_unsound_06: "verify_units/init_std_unsound_6" => "unsound_from_raw_parts_uninitialized" => "Init",
     init_std_unsound_08: "verify_units/init_std_unsound_8" => "unsound_len_bound_loop_skips_even_indices" => "Init",
     init_std_unsound_09: "verify_units/init_std_unsound_9" => "unsound_write_past_path_limit" => "Init",
+    init_ctx_unsound_01: "verify_units/init_ctx_unsound_1" => "unsound_literal_false" => "Init",
+    init_ctx_unsound_02: "verify_units/init_ctx_unsound_1" => "unsound_wrapper_runtime_flag" => "Init",
+    init_ctx_unsound_03: "verify_units/init_ctx_unsound_1" => "unsound_wrapper_literal_true" => "Init",
 }
 
 // Custom: `from_raw_parts` with the wrong element type causes multiple failures.

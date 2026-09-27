@@ -17,6 +17,7 @@ use rustc_middle::{
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::analysis::path::graph::{PathEnumerator, PathGraph};
+use crate::compat::Spanned;
 use crate::helpers::mir_utils as helpers;
 
 use super::{CallContext, CallEffect};
@@ -1188,11 +1189,21 @@ fn single_call_wrapper_target<'tcx>(tcx: TyCtxt<'tcx>, callee: DefId) -> Option<
     found
 }
 
-/// Cached must-write summaries, keyed by `(callee, depth)`. Depth is part of
-/// the key because the `depth > 4` cutoff makes a summary computed deeper in the
-/// wrapper chain less complete than one computed higher up, and the DFS reaches
-/// the deep ones first.
-type MustWriteMemo = HashMap<(DefId, usize), Option<HashSet<usize>>>;
+/// Cached must-write summaries, keyed by `(callee, depth, context)`. Depth is
+/// part of the key because the `depth > 4` cutoff makes a summary computed
+/// deeper in the wrapper chain less complete than one computed higher up, and
+/// the DFS reaches the deep ones first. The context is part of the key because
+/// one query can reach the same callee with different concrete arguments, which
+/// prune different paths.
+type MustWriteMemo = HashMap<(DefId, usize, Vec<(usize, i128)>), Option<HashSet<usize>>>;
+
+/// Canonical, sortable representation of a [`CallContext`]'s concrete
+/// arguments, used as part of the memo key (`FxHashMap` is not `Hash`).
+fn context_key(context: &CallContext) -> Vec<(usize, i128)> {
+    let mut entries: Vec<(usize, i128)> = context.concrete.iter().map(|(k, v)| (*k, *v)).collect();
+    entries.sort_unstable();
+    entries
+}
 
 /// Return callee argument indices that are definitely written on every
 /// reachable return path, pruning paths infeasible under `context`. Works for
@@ -1223,7 +1234,8 @@ fn must_write_args_rec(
     if tcx.intrinsic(callee).is_some() || helpers::is_drop_in_place(callee) {
         return None;
     }
-    if let Some(summary) = memo.get(&(callee, depth)) {
+    let key = (callee, depth, context_key(context));
+    if let Some(summary) = memo.get(&key) {
         return summary.clone();
     }
 
@@ -1258,7 +1270,7 @@ fn must_write_args_rec(
     })
     .ok()
     .flatten();
-    memo.insert((callee, depth), summary.clone());
+    memo.insert(key, summary.clone());
     summary
 }
 
@@ -1524,9 +1536,14 @@ fn write_args_on_path<'tcx>(
         }
 
         // Wrapper calls: a nested callee that writes its own args maps those
-        // writes back onto this callee's args.
+        // writes back onto this callee's args. The nested callee sees its own
+        // argument positions, so rebuild its context from this call's arguments
+        // (its own literals plus the outer concrete values passed through).
         if let Some(nested) = helpers::dep_callee_def_id(func) {
-            if let Some(nested_writes) = must_write_args_rec(tcx, nested, depth + 1, context, memo) {
+            let nested_context = nested_call_context(tcx, body, args, context);
+            if let Some(nested_writes) =
+                must_write_args_rec(tcx, nested, depth + 1, &nested_context, memo)
+            {
                 for (i, arg) in args.iter().enumerate() {
                     if nested_writes.contains(&i) {
                         if let Some(outer) = trace_to_callee_arg(tcx, body, &arg.node) {
@@ -1538,6 +1555,31 @@ fn write_args_on_path<'tcx>(
         }
     }
     writes
+}
+
+/// Build the `CallContext` a nested call sees, keyed by the *nested* callee's
+/// own argument indices. Each nested argument is concrete either because it is a
+/// literal at this call site, or because it passes an outer concrete value
+/// straight through (`Copy`/`Move` of an argument). This keeps a caller's
+/// literal at position `i` from being read as the nested callee's position-`i`
+/// argument.
+fn nested_call_context<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    body: &rustc_middle::mir::Body<'tcx>,
+    args: &[Spanned<Operand<'tcx>>],
+    context: &CallContext,
+) -> CallContext {
+    let mut nested_context = CallContext::default();
+    for (i, arg) in args.iter().enumerate() {
+        if let Some(v) = helpers::operand_const_u64(&arg.node) {
+            nested_context.concrete.insert(i, v as i128);
+        } else if let Some(outer) = trace_to_callee_arg(tcx, body, &arg.node) {
+            if let Some(v) = context.concrete.get(&outer) {
+                nested_context.concrete.insert(i, *v);
+            }
+        }
+    }
+    nested_context
 }
 
 /// Return true when `call_dest`'s value flows (via Copy/Move/Cast) to the
