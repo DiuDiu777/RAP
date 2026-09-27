@@ -90,9 +90,16 @@ unsound_tests! {
 }
 
 // ================ NonNull Sound Cases =============
+// Chained contract propagation through a named contract: the middle caller and
+// the outer caller share one fixture, verified once.
+sound_tests_multi! {
+    nonnull_sound_01: "verify_units/nonnull_sound_1" => [
+        "caller_with_contract",
+        "sound_chained_propagation",
+    ],
+}
+
 sound_tests! {
-    nonnull_sound_01: "verify_units/nonnull_sound_1" => "caller_with_contract",
-    nonnull_sound_01_chained: "verify_units/nonnull_sound_1" => "sound_chained_propagation",
     nonnull_sound_02: "verify_units/nonnull_sound_2" => "sound_slice_as_ptr_branch",
     nonnull_sound_03: "verify_units/nonnull_sound_3" => "sound_intra_helper_from_ref",
     nonnull_sound_04: "verify_units/nonnull_sound_4" => "sound_scc_unrelated_state",
@@ -198,9 +205,16 @@ sound_tests! {
     init_std_sound_04: "verify_units/init_std_sound_4" => "sound_intra_helper_initializes",
     init_std_sound_05: "verify_units/init_std_sound_5" => "sound_loop_initializes_slice",
     init_std_sound_06: "verify_units/init_std_sound_6" => "sound_len_bound_loop_initializes_slice",
-    init_ctx_sound_01: "verify_units/init_ctx_sound_1" => "sound_context_sensitive_conditional_init",
-    init_ctx_sound_02: "verify_units/init_ctx_sound_1" => "maybe_init_slot",
-    init_ctx_sound_03: "verify_units/init_ctx_unsound_1" => "sound_literal_true",
+}
+
+sound_tests_multi! {
+    init_ctx_sound_01: "verify_units/init_ctx_sound_1" => [
+        "sound_context_sensitive_conditional_init",
+        "maybe_init_slot",
+    ],
+    init_ctx_sound_02: "verify_units/init_ctx_unsound_1" => [
+        "sound_literal_true",
+    ],
 }
 
 // ================ Init Unsound Cases =============
@@ -213,9 +227,14 @@ unsound_tests! {
     init_std_unsound_06: "verify_units/init_std_unsound_6" => "unsound_from_raw_parts_uninitialized" => "Init",
     init_std_unsound_08: "verify_units/init_std_unsound_8" => "unsound_len_bound_loop_skips_even_indices" => "Init",
     init_std_unsound_09: "verify_units/init_std_unsound_9" => "unsound_write_past_path_limit" => "Init",
-    init_ctx_unsound_01: "verify_units/init_ctx_unsound_1" => "unsound_literal_false" => "Init",
-    init_ctx_unsound_02: "verify_units/init_ctx_unsound_1" => "unsound_wrapper_runtime_flag" => "Init",
-    init_ctx_unsound_03: "verify_units/init_ctx_unsound_1" => "unsound_wrapper_literal_true" => "Init",
+}
+
+unsound_tests_multi! {
+    init_ctx_unsound: "verify_units/init_ctx_unsound_1" => [
+        "unsound_literal_false" => "Init",
+        "unsound_wrapper_runtime_flag" => "Init",
+        "unsound_wrapper_literal_true" => "Init",
+    ],
 }
 
 // Custom: `from_raw_parts` with the wrong element type causes multiple failures.
@@ -256,27 +275,31 @@ unsound_weak_tests! {
 }
 
 // ================ Typed Sound Cases =============
-sound_tests! {
-    typed_sound_01: "verify_units/typed_cases" => "sound_reference_source",
-    typed_sound_02: "verify_units/typed_cases" => "sound_slice_element_source",
-    typed_sound_03: "verify_units/typed_cases" => "sound_repr_c_field_source",
-    typed_sound_04: "verify_units/typed_cases" => "sound_generic_reference_source",
-    typed_sound_05: "verify_units/typed_cases" => "sound_branch_all_sources_typed",
-    typed_sound_06: "verify_units/typed_cases" => "sound_scc_preserves_typed_source",
-    typed_sound_07: "verify_units/typed_cases" => "sound_maybeuninit_after_write",
-    typed_sound_08: "verify_units/typed_cases" => "sound_align_to_same_type",
+sound_tests_multi! {
+    typed_sound: "verify_units/typed_cases" => [
+        "sound_reference_source",
+        "sound_slice_element_source",
+        "sound_repr_c_field_source",
+        "sound_generic_reference_source",
+        "sound_branch_all_sources_typed",
+        "sound_scc_preserves_typed_source",
+        "sound_maybeuninit_after_write",
+        "sound_align_to_same_type",
+    ],
 }
 
 // ================ Typed Unsound Cases =============
-unsound_tests! {
-    typed_unsound_01: "verify_units/typed_cases" => "unsound_u8_bytes_as_u32" => "Typed",
-    typed_unsound_02: "verify_units/typed_cases" => "unsound_u16_slice_as_u32" => "Typed",
-    typed_unsound_03: "verify_units/typed_cases" => "unsound_uninit_memory_as_u32" => "Typed",
-    typed_unsound_04: "verify_units/typed_cases" => "unsound_invalid_bool_bits" => "Typed",
-    typed_unsound_05: "verify_units/typed_cases" => "unsound_invalid_char_bits" => "Typed",
-    typed_unsound_06: "verify_units/typed_cases" => "unsound_invalid_enum_discriminant" => "Typed",
-    typed_unsound_07: "verify_units/typed_cases" => "unsound_branch_selects_untyped_source" => "Typed",
-    typed_unsound_08: "verify_units/typed_cases" => "unsound_scc_overwrites_with_untyped_source" => "Typed",
+unsound_tests_multi! {
+    typed_unsound: "verify_units/typed_cases" => [
+        "unsound_u8_bytes_as_u32" => "Typed",
+        "unsound_u16_slice_as_u32" => "Typed",
+        "unsound_uninit_memory_as_u32" => "Typed",
+        "unsound_invalid_bool_bits" => "Typed",
+        "unsound_invalid_char_bits" => "Typed",
+        "unsound_invalid_enum_discriminant" => "Typed",
+        "unsound_branch_selects_untyped_source" => "Typed",
+        "unsound_scc_overwrites_with_untyped_source" => "Typed",
+    ],
 }
 
 // ================ Alive Sound Cases =============
@@ -461,19 +484,28 @@ unsound_tests! {
 
 // ================ SplitTransmute Sound Cases =============
 sound_tests! {
-    split_transmute_sound_01: "verify_units/split_transmute_sound" => "align_to_u8_sound",
-    split_transmute_sound_02: "verify_units/split_transmute_unsound" => "align_without_contract_u32",
-    split_transmute_sound_03: "verify_units/split_transmute_unsound" => "align_without_contract_u16",
-    split_transmute_sound_04: "verify_units/split_transmute_unsound" => "align_without_contract_u8",
+    split_transmute_sound_contract: "verify_units/split_transmute_sound" => "align_to_u8_sound",
+}
+
+sound_tests_multi! {
+    split_transmute_sound_layout: "verify_units/split_transmute_unsound" => [
+        "align_without_contract_u32",
+        "align_without_contract_u16",
+        "align_without_contract_u8",
+    ],
 }
 
 // ================ SplitTransmute Unsound Cases =============
-unsound_tests! {
-    split_transmute_unsound_01: "verify_units/split_transmute_unsound" => "align_without_contract_generic" => "SplitTransmute",
-    split_transmute_unsound_02: "verify_units/split_transmute_unsound" => "unsound_align_to_bool_from_bytes" => "SplitTransmute",
-    split_transmute_unsound_03: "verify_units/split_transmute_nonzero" => "align_to_nonzero_u16" => "SplitTransmute",
-    split_transmute_unsound_04: "verify_units/split_transmute_nonzero" => "align_to_nonzero_u32" => "SplitTransmute",
-    split_transmute_unsound_05: "verify_units/split_transmute_nonzero" => "align_to_nonzero_u8" => "SplitTransmute",
+unsound_tests_multi! {
+    split_transmute_unsound_contract: "verify_units/split_transmute_unsound" => [
+        "align_without_contract_generic" => "SplitTransmute",
+        "unsound_align_to_bool_from_bytes" => "SplitTransmute",
+    ],
+    split_transmute_unsound_nonzero: "verify_units/split_transmute_nonzero" => [
+        "align_to_nonzero_u16" => "SplitTransmute",
+        "align_to_nonzero_u32" => "SplitTransmute",
+        "align_to_nonzero_u8" => "SplitTransmute",
+    ],
 }
 
 // ================ ValidCStr Sound Cases =============
@@ -519,15 +551,19 @@ unsound_tests! {
 }
 
 // ================ AsChunks Sound Cases =============
-sound_tests! {
-    as_chunks_sound_01: "verify_units/as_chunks_sound_01" => "sound_as_chunks_unchecked_exact_div",
-    as_chunks_sound_02: "verify_units/as_chunks_sound_01" => "sound_exact_div_guard",
+sound_tests_multi! {
+    as_chunks_sound: "verify_units/as_chunks_sound_01" => [
+        "sound_as_chunks_unchecked_exact_div",
+        "sound_exact_div_guard",
+    ],
 }
 
 // ================ AsChunks Unsound Cases =============
-unsound_tests! {
-    as_chunks_unsound_01: "verify_units/as_chunks_unsound_01" => "unsound_as_chunks_unchecked_missing_exact_div" => "ValidNum",
-    as_chunks_unsound_02: "verify_units/as_chunks_unsound_01" => "unsound_exact_div_missing_guard" => "ValidNum",
+unsound_tests_multi! {
+    as_chunks_unsound: "verify_units/as_chunks_unsound_01" => [
+        "unsound_as_chunks_unchecked_missing_exact_div" => "ValidNum",
+        "unsound_exact_div_missing_guard" => "ValidNum",
+    ],
 }
 
 // ================ Align Repeat Threshold Cases =============

@@ -284,6 +284,42 @@ macro_rules! unsound_tests {
     };
 }
 
+/// Declare one test per entry that runs `verify` once on `dir` and asserts
+/// every listed function is SOUND. Use for a fixture holding several sound
+/// functions, so it is verified once instead of once per function.
+macro_rules! sound_tests_multi {
+    ($($name:ident: $dir:literal => [$($func:literal),+ $(,)?]),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                let output = $crate::run_with_args($dir, CMD_VERIFY_TARGETED);
+                $(
+                    $crate::assert_contain(&output, concat!("function: ", $func));
+                    $crate::assert_contain(&output, "result: SOUND");
+                )+
+            }
+        )+
+    };
+}
+
+/// Declare one test per entry that runs `verify` once on `dir` and asserts
+/// every listed function is UNSOUND with the given property as its only
+/// unproved one. Use for a fixture holding several unsound functions sharing
+/// one property.
+macro_rules! unsound_tests_multi {
+    ($($name:ident: $dir:literal => [$($func:literal => $prop:literal),+ $(,)?]),+ $(,)?) => {
+        $(
+            #[test]
+            fn $name() {
+                let output = $crate::run_with_args($dir, CMD_VERIFY_TARGETED);
+                $(
+                    $crate::assert_unproved_exclusive(&output, $func, &[$prop]);
+                )+
+            }
+        )+
+    };
+}
+
 macro_rules! verify_unsound_hazard {
     ($dir:literal, $func:literal, $prop:literal) => {{
         let output = $crate::run_with_args($dir, CMD_VERIFY_TARGETED);
