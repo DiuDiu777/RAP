@@ -920,7 +920,6 @@ impl PropertyChecker {
             // precondition / struct invariant), or grounded in a live reference.
             if !vm_state.alloc(root_id).dead {
                 match &vm_state.alloc(root_id).liveness {
-                    Liveness::Assumed => return CheckResult::ProvedByRule,
                     Liveness::AssumedFor(src_region) => {
                         // The `Alive(p, 'r)` check demands the memory alive for
                         // `'r`, while the assumption only guarantees `'a`; the

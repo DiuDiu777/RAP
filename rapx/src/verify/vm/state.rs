@@ -164,11 +164,8 @@ pub(crate) enum Liveness<'tcx> {
     /// `!dead`; an external allocation with no assumption has unknown liveness
     /// (and fails `Alive` unless grounded in a live reference).
     Unassumed,
-    /// Assumed alive for the function's whole execution region (a reference's
-    /// referent, `ValidCStr`, `'static` data, an `Allocated` raw-pointer
-    /// parameter, or `Alive(p)` with no lifetime).
-    Assumed,
-    /// Assumed alive for the named region (an `Alive(p, 'a)` contract/invariant).
+    /// Assumed alive for the named region (an `Alive(p, 'a)` contract/invariant,
+    /// or `'static` for `ValidCStr` / `Allocated` params / `'static` data).
     AssumedFor(Region<'tcx>),
 }
 
