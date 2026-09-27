@@ -91,6 +91,8 @@ unsound_tests! {
 
 // ================ NonNull Sound Cases =============
 sound_tests! {
+    nonnull_sound_01: "verify_units/nonnull_sound_1" => "caller_with_contract",
+    nonnull_sound_01_chained: "verify_units/nonnull_sound_1" => "sound_chained_propagation",
     nonnull_sound_02: "verify_units/nonnull_sound_2" => "sound_slice_as_ptr_branch",
     nonnull_sound_03: "verify_units/nonnull_sound_3" => "sound_intra_helper_from_ref",
     nonnull_sound_04: "verify_units/nonnull_sound_4" => "sound_scc_unrelated_state",
@@ -107,16 +109,6 @@ unsound_tests! {
     nonnull_unsound_04: "verify_units/nonnull_unsound_4" => "unsound_scc_overwrites_with_null" => "NonNull",
     nonnull_unsound_05: "verify_units/nonnull_unsound_5" => "unsound_unrelated_guard" => "NonNull",
     nonnull_unsound_06: "verify_units/nonnull_unsound_6" => "unsound_nonnull_wrapper_from_null" => "NonNull",
-}
-
-// NonNull manual case: chained contract propagation through a named contract.
-#[test]
-fn nonnull_sound_01() {
-    let output = run_with_args("verify_units/nonnull_sound_1", CMD_VERIFY_TARGETED);
-    assert_contain(&output, "function: caller_with_contract");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_chained_propagation");
-    assert_contain(&output, "result: SOUND");
 }
 
 // ================ ValidPtr Sound Cases =============
@@ -263,38 +255,28 @@ unsound_weak_tests! {
     validnum_std_unsound_02: "verify_units/validnum_std_unsound_2" => "unsound_std_copy_nonoverlapping_validnum" => "ValidNum",
 }
 
-// ================ Typed Provenance Cases =============
-#[test]
-fn typed_provenance_cases() {
-    let output = run_with_args("verify_units/typed_cases", CMD_VERIFY_TARGETED);
-    assert_contain(&output, "function: sound_reference_source");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_slice_element_source");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_repr_c_field_source");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_generic_reference_source");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_branch_all_sources_typed");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_scc_preserves_typed_source");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_maybeuninit_after_write");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_align_to_same_type");
-    assert_contain(&output, "result: SOUND");
-    assert_unproved_exclusive(&output, "unsound_u8_bytes_as_u32", &["Typed"]);
-    assert_unproved_exclusive(&output, "unsound_u16_slice_as_u32", &["Typed"]);
-    assert_unproved_exclusive(&output, "unsound_uninit_memory_as_u32", &["Typed"]);
-    assert_unproved_exclusive(&output, "unsound_invalid_bool_bits", &["Typed"]);
-    assert_unproved_exclusive(&output, "unsound_invalid_char_bits", &["Typed"]);
-    assert_unproved_exclusive(&output, "unsound_invalid_enum_discriminant", &["Typed"]);
-    assert_unproved_exclusive(&output, "unsound_branch_selects_untyped_source", &["Typed"]);
-    assert_unproved_exclusive(
-        &output,
-        "unsound_scc_overwrites_with_untyped_source",
-        &["Typed"],
-    );
+// ================ Typed Sound Cases =============
+sound_tests! {
+    typed_sound_01: "verify_units/typed_cases" => "sound_reference_source",
+    typed_sound_02: "verify_units/typed_cases" => "sound_slice_element_source",
+    typed_sound_03: "verify_units/typed_cases" => "sound_repr_c_field_source",
+    typed_sound_04: "verify_units/typed_cases" => "sound_generic_reference_source",
+    typed_sound_05: "verify_units/typed_cases" => "sound_branch_all_sources_typed",
+    typed_sound_06: "verify_units/typed_cases" => "sound_scc_preserves_typed_source",
+    typed_sound_07: "verify_units/typed_cases" => "sound_maybeuninit_after_write",
+    typed_sound_08: "verify_units/typed_cases" => "sound_align_to_same_type",
+}
+
+// ================ Typed Unsound Cases =============
+unsound_tests! {
+    typed_unsound_01: "verify_units/typed_cases" => "unsound_u8_bytes_as_u32" => "Typed",
+    typed_unsound_02: "verify_units/typed_cases" => "unsound_u16_slice_as_u32" => "Typed",
+    typed_unsound_03: "verify_units/typed_cases" => "unsound_uninit_memory_as_u32" => "Typed",
+    typed_unsound_04: "verify_units/typed_cases" => "unsound_invalid_bool_bits" => "Typed",
+    typed_unsound_05: "verify_units/typed_cases" => "unsound_invalid_char_bits" => "Typed",
+    typed_unsound_06: "verify_units/typed_cases" => "unsound_invalid_enum_discriminant" => "Typed",
+    typed_unsound_07: "verify_units/typed_cases" => "unsound_branch_selects_untyped_source" => "Typed",
+    typed_unsound_08: "verify_units/typed_cases" => "unsound_scc_overwrites_with_untyped_source" => "Typed",
 }
 
 // ================ Alive Sound Cases =============
@@ -477,44 +459,21 @@ unsound_tests! {
     raw_eq_unsound_01: "verify_units/raw_eq_unsound_01" => "unsound_raw_eq_padded" => "NoPadding",
 }
 
-// ================ Split Transmute Cases =============
-#[test]
-fn split_transmute_unsound() {
-    let output = run_with_args("verify_units/split_transmute_unsound", CMD_VERIFY_TARGETED);
-    assert_unproved_exclusive(
-        &output,
-        "align_without_contract_generic",
-        &["SplitTransmute"],
-    );
-    assert_unproved_exclusive(
-        &output,
-        "unsound_align_to_bool_from_bytes",
-        &["SplitTransmute"],
-    );
-    assert_contain(&output, "function: align_without_contract_u32");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: align_without_contract_u16");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: align_without_contract_u8");
-    assert_contain(&output, "result: SOUND");
+// ================ SplitTransmute Sound Cases =============
+sound_tests! {
+    split_transmute_sound_01: "verify_units/split_transmute_sound" => "align_to_u8_sound",
+    split_transmute_sound_02: "verify_units/split_transmute_unsound" => "align_without_contract_u32",
+    split_transmute_sound_03: "verify_units/split_transmute_unsound" => "align_without_contract_u16",
+    split_transmute_sound_04: "verify_units/split_transmute_unsound" => "align_without_contract_u8",
 }
 
-#[test]
-fn split_transmute_nonzero() {
-    let output = run_with_args("verify_units/split_transmute_nonzero", CMD_VERIFY_TARGETED);
-    assert_contain(&output, "function: align_to_nonzero_u16");
-    assert_contain(&output, "result: UNSOUND");
-    assert_contain(&output, "function: align_to_nonzero_u32");
-    assert_contain(&output, "result: UNSOUND");
-    assert_contain(&output, "function: align_to_nonzero_u8");
-    assert_contain(&output, "result: UNSOUND");
-}
-
-#[test]
-fn split_transmute_sound() {
-    let output = run_with_args("verify_units/split_transmute_sound", CMD_VERIFY_TARGETED);
-    assert_contain(&output, "function: align_to_u8_sound");
-    assert_contain(&output, "result: SOUND");
+// ================ SplitTransmute Unsound Cases =============
+unsound_tests! {
+    split_transmute_unsound_01: "verify_units/split_transmute_unsound" => "align_without_contract_generic" => "SplitTransmute",
+    split_transmute_unsound_02: "verify_units/split_transmute_unsound" => "unsound_align_to_bool_from_bytes" => "SplitTransmute",
+    split_transmute_unsound_03: "verify_units/split_transmute_nonzero" => "align_to_nonzero_u16" => "SplitTransmute",
+    split_transmute_unsound_04: "verify_units/split_transmute_nonzero" => "align_to_nonzero_u32" => "SplitTransmute",
+    split_transmute_unsound_05: "verify_units/split_transmute_nonzero" => "align_to_nonzero_u8" => "SplitTransmute",
 }
 
 // ================ ValidCStr Sound Cases =============
@@ -560,25 +519,15 @@ unsound_tests! {
 }
 
 // ================ AsChunks Sound Cases =============
-#[test]
-fn as_chunks_sound_cases() {
-    let output = run_with_args("verify_units/as_chunks_sound_01", CMD_VERIFY_TARGETED);
-    assert_contain(&output, "function: sound_as_chunks_unchecked_exact_div");
-    assert_contain(&output, "result: SOUND");
-    assert_contain(&output, "function: sound_exact_div_guard");
-    assert_contain(&output, "result: SOUND");
+sound_tests! {
+    as_chunks_sound_01: "verify_units/as_chunks_sound_01" => "sound_as_chunks_unchecked_exact_div",
+    as_chunks_sound_02: "verify_units/as_chunks_sound_01" => "sound_exact_div_guard",
 }
 
 // ================ AsChunks Unsound Cases =============
-#[test]
-fn as_chunks_unsound_cases() {
-    let output = run_with_args("verify_units/as_chunks_unsound_01", CMD_VERIFY_TARGETED);
-    assert_unproved_exclusive(
-        &output,
-        "unsound_as_chunks_unchecked_missing_exact_div",
-        &["ValidNum"],
-    );
-    assert_unproved_exclusive(&output, "unsound_exact_div_missing_guard", &["ValidNum"]);
+unsound_tests! {
+    as_chunks_unsound_01: "verify_units/as_chunks_unsound_01" => "unsound_as_chunks_unchecked_missing_exact_div" => "ValidNum",
+    as_chunks_unsound_02: "verify_units/as_chunks_unsound_01" => "unsound_exact_div_missing_guard" => "ValidNum",
 }
 
 // ================ Align Repeat Threshold Cases =============
