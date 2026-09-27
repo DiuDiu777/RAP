@@ -243,8 +243,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 provenance: Some(Provenance {
                                     alloc_id: heap_alloc_id,
                                     offset: Int::from_u64(self.ctx, 0),
-                                    is_field_offset: false,
-                                    element_offset: None,
+                                    offset_kind: None,
                                 }),
                                 invariants: ValueInvariants {
                                     non_null: true,
@@ -272,8 +271,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 provenance: Some(Provenance {
                                     alloc_id: heap_alloc_id,
                                     offset: Int::from_u64(self.ctx, 0),
-                                    is_field_offset: false,
-                                    element_offset: None,
+                                    offset_kind: None,
                                 }),
                                 invariants,
                             },
@@ -499,8 +497,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                                 provenance: Some(Provenance {
                                     alloc_id: data_alloc_id,
                                     offset: Int::from_u64(self.ctx, 0),
-                                    is_field_offset: false,
-                                    element_offset: None,
+                                    offset_kind: None,
                                 }),
                                 invariants,
                             },
@@ -528,8 +525,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             provenance: Some(Provenance {
                                 alloc_id: pointee_alloc_id,
                                 offset: Int::from_u64(self.ctx, 0),
-                                is_field_offset: false,
-                                element_offset: None,
+                                offset_kind: None,
                             }),
                             invariants,
                         },
@@ -699,8 +695,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             provenance: Some(Provenance {
                                 alloc_id,
                                 offset: Int::from_u64(self.ctx, 0),
-                                is_field_offset: false,
-                                element_offset: None,
+                                offset_kind: None,
                             }),
                             invariants,
                         },
@@ -771,8 +766,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                             provenance: Some(Provenance {
                                 alloc_id,
                                 offset: Int::from_u64(self.ctx, 0),
-                                is_field_offset: false,
-                                element_offset: None,
+                                offset_kind: None,
                             }),
                             invariants: ValueInvariants {
                                 init: true,
@@ -920,8 +914,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 provenance: Some(Provenance {
                     alloc_id,
                     offset: Int::from_u64(self.ctx, 0),
-                    is_field_offset: false,
-                    element_offset: None,
+                    offset_kind: None,
                 }),
                 invariants: ValueInvariants {
                     non_null: true,
@@ -997,8 +990,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     provenance: Some(Provenance {
                         alloc_id: existing_alloc,
                         offset: prost_offset.clone(),
-                        is_field_offset: false,
-                        element_offset: None,
+                        offset_kind: None,
                     }),
                     invariants,
                 },
@@ -1057,8 +1049,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     provenance: Some(Provenance {
                         alloc_id: field_alloc_id,
                         offset: Int::from_u64(self.ctx, 0),
-                        is_field_offset: false,
-                        element_offset: None,
+                        offset_kind: None,
                     }),
                     invariants,
                 },
@@ -1168,8 +1159,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         provenance: Some(Provenance {
                             alloc_id: fa,
                             offset: Int::from_u64(self.ctx, 0),
-                            is_field_offset: false,
-                            element_offset: None,
+                            offset_kind: None,
                         }),
                         invariants: ValueInvariants {
                             init: true,
@@ -1237,8 +1227,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         provenance: Some(Provenance {
                             alloc_id: fa,
                             offset: Int::from_u64(self.ctx, 0),
-                            is_field_offset: false,
-                            element_offset: None,
+                            offset_kind: None,
                         }),
                         invariants: ValueInvariants {
                             init: true,
@@ -3061,8 +3050,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::add(self.ctx, &[&prov.offset, &rhs.term]),
-                    is_field_offset: false,
-                    element_offset: None,
+                    offset_kind: None,
                 })
             }
             BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked => {
@@ -3073,8 +3061,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::sub(self.ctx, &[&prov.offset, &rhs.term]),
-                    is_field_offset: false,
-                    element_offset: None,
+                    offset_kind: None,
                 })
             }
             BinOp::BitAnd => {
@@ -3087,8 +3074,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                     // unpredictably; use a fresh symbolic offset constrained
                     // by the BitAnd path conditions emitted in eval_binary_op.
                     offset: self.fresh_int("align_offset"),
-                    is_field_offset: false,
-                    element_offset: None,
+                    offset_kind: None,
                 })
             }
             BinOp::BitXor | BinOp::Shr | BinOp::ShrUnchecked => {
@@ -3104,8 +3090,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::add(self.ctx, &[&prov.offset, &rhs.term]),
-                    is_field_offset: false,
-                    element_offset: None,
+                    offset_kind: None,
                 })
             }
             BinOp::Mul | BinOp::MulWithOverflow | BinOp::MulUnchecked => {
@@ -3115,8 +3100,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::mul(self.ctx, &[&prov.offset, &rhs.term]),
-                    is_field_offset: false,
-                    element_offset: None,
+                    offset_kind: None,
                 })
             }
             BinOp::Div | BinOp::Rem => lhs.provenance.clone(),
@@ -3779,8 +3763,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             provenance: Some(Provenance {
                 alloc_id: heap_id,
                 offset: Int::from_u64(self.ctx, 0),
-                is_field_offset: false,
-                element_offset: None,
+                offset_kind: None,
             }),
             invariants: ValueInvariants {
                 non_null: true,
@@ -4653,8 +4636,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         .map(|&id| Provenance {
                             alloc_id: id,
                             offset: Int::from_u64(self.ctx, 0),
-                            is_field_offset: false,
-                            element_offset: None,
+                            offset_kind: None,
                         })
                 } else {
                     None
@@ -4751,8 +4733,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         val.provenance = Some(super::state::Provenance {
                             alloc_id,
                             offset: z3::ast::Int::from_u64(self.ctx, 0),
-                            is_field_offset: false,
-                            element_offset: None,
+                            offset_kind: None,
                         });
                         val.invariants = ValueInvariants {
                             non_null: true,

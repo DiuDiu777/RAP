@@ -21,6 +21,26 @@ use crate::verify::{def_use::PlaceKey, path_extractor::Path};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub(crate) struct AllocId(pub usize);
 
+/// The *kind* of a pointer's byte offset, for provenance.
+///
+/// `None` means the pointer sits at the allocation base (`offset == 0`) and has
+/// no special structure.  The structured cases let the verifier use a cheaper,
+/// more precise proof: `Field` carries the "field in-bounds" guarantee
+/// (`offset + size_of(field) <= size_of(container)`, e.g. `Option::as_slice`),
+/// and `Element(k)` tracks the element index so `InBound` checks `k + count <=
+/// slice_len` linearly instead of the non-linear byte form `(k+count)·S <=
+/// len·S` (undecidable in Z3 NIA for a generic `S`).
+#[derive(Clone, Debug)]
+pub(crate) enum OffsetKind<'ctx> {
+    /// Compile-time field offset (`offset_of!`), including a first field at 0.
+    Field,
+    /// Element index from element-strided arithmetic (`ptr.add(k)`); the byte
+    /// offset is `element · S`.
+    Element(Int<'ctx>),
+    /// A byte-strided or otherwise unclassifiable offset (`byte_add`).
+    Byte,
+}
+
 /// Pointer provenance: which allocation and at what byte offset.
 #[derive(Clone, Debug)]
 pub(crate) struct Provenance<'ctx> {
@@ -29,19 +49,24 @@ pub(crate) struct Provenance<'ctx> {
     /// Byte offset from the allocation base. A freshly created
     /// pointer to the base of an allocation has `offset = 0`.
     pub offset: Int<'ctx>,
-    /// Whether `offset` is a compile-time field offset (`offset_of!`).  Such an
-    /// offset always satisfies `0 <= offset` and `offset + size_of(field) <=
-    /// size_of(container)`, which the verifier uses to discharge in-bounds
-    /// checks for patterns like `Option::as_slice`.
-    pub is_field_offset: bool,
-    /// Element index within the allocation, tracked only when the pointer was
-    /// derived by *element*-strided pointer arithmetic (e.g. `ptr.add(k)` or
-    /// `SliceIndex::get_unchecked`) off an allocation base.  Lets `InBound`
-    /// check `k + count <= slice_len` linearly instead of the non-linear byte
-    /// form `(k + count)·S <= len·S` (which Z3's NIA solver cannot decide for
-    /// a generic element size `S`).  `None` for byte-strided or untracked
-    /// pointers.
-    pub element_offset: Option<Int<'ctx>>,
+    /// The offset's structure, when known (`None` = plain base, offset 0).
+    pub offset_kind: Option<OffsetKind<'ctx>>,
+}
+
+impl<'ctx> Provenance<'ctx> {
+    /// Whether `offset` is a compile-time field offset (`offset_of!`).
+    pub(crate) fn is_field_offset(&self) -> bool {
+        matches!(self.offset_kind, Some(OffsetKind::Field))
+    }
+
+    /// The element index, when this pointer was derived by element-strided
+    /// arithmetic off an allocation base.
+    pub(crate) fn element_offset(&self) -> Option<&Int<'ctx>> {
+        match &self.offset_kind {
+            Some(OffsetKind::Element(e)) => Some(e),
+            _ => None,
+        }
+    }
 }
 
 /// Known invariants about a symbolic value.

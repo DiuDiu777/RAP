@@ -95,7 +95,7 @@ impl PropertyChecker {
         let effective_align_n = if value
             .provenance
             .as_ref()
-            .is_some_and(|prov| prov.is_field_offset)
+            .is_some_and(|prov| prov.is_field_offset())
         {
             crate::helpers::mir_utils::pointee_ty(value.ty).map(|ty| vm_state.align_sym_read(ty))
         } else {
@@ -513,7 +513,7 @@ impl PropertyChecker {
         if value
             .provenance
             .as_ref()
-            .is_some_and(|prov| prov.is_field_offset)
+            .is_some_and(|prov| prov.is_field_offset())
         {
             let field_size = crate::helpers::mir_utils::pointee_ty(value.ty)
                 .map(|ty| vm_state.size_sym_read(ty))

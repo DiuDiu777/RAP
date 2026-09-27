@@ -33,8 +33,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         .map(|alloc_id| Provenance {
                             alloc_id,
                             offset: zero,
-                            is_field_offset: false,
-                            element_offset: None,
+                            offset_kind: None,
                         })
                 });
             return Some(VmValue {
@@ -53,8 +52,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             .map(|alloc_id| Provenance {
                 alloc_id,
                 offset: zero.clone(),
-                is_field_offset: false,
-                element_offset: None,
+                offset_kind: None,
             });
         let mut current_ty = self.body.local_decls[place.local].ty;
         let mut field_path: Vec<usize> = Vec::new();

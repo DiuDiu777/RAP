@@ -132,7 +132,7 @@ impl PropertyChecker {
                 value
                     .provenance
                     .as_ref()
-                    .and_then(|p| p.element_offset.clone()),
+                    .and_then(|p| p.element_offset().cloned()),
             ) {
                 let count_term = property
                     .args()
@@ -173,7 +173,7 @@ impl PropertyChecker {
         if value
             .provenance
             .as_ref()
-            .is_some_and(|prov| prov.is_field_offset)
+            .is_some_and(|prov| prov.is_field_offset())
         {
             let field_size = crate::helpers::mir_utils::pointee_ty(value.ty)
                 .map(|ty| vm_state.size_sym_read(ty))
