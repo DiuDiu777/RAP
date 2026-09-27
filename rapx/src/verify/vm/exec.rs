@@ -3725,6 +3725,12 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             return false;
         };
         self.alloc_mut(alloc_id).dead = false;
+        // An `Allocated(p, T, n)` contract on a raw-pointer parameter means the
+        // caller guarantees the memory is allocated and outlives the call, so
+        // it is alive for the function's execution region.
+        if self.alloc(alloc_id).is_external() {
+            self.alloc_mut(alloc_id).liveness = Liveness::Assumed;
+        }
         if self.alloc(alloc_id).element_ty.is_generic() {
             self.alloc_mut(alloc_id).element_ty = ContentTy::Typed(elem_ty);
         }

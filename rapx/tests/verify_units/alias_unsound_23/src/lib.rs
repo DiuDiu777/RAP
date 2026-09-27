@@ -7,7 +7,6 @@
 #[rapx::requires(ValidPtr(ptr, u32, len))]
 #[rapx::requires(Align(ptr, u32))]
 #[rapx::requires(Init(ptr, u32, len))]
-#[rapx::requires(Alive(ptr))]
 #[rapx::requires(Owning(ptr))]
 #[rapx::requires(ValidNum(size_of(u32) * len <= isize::MAX))]
 #[rapx::verify]

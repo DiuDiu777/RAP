@@ -948,7 +948,7 @@ impl PropertyChecker {
                         }
                         return CheckResult::ProvedByRule;
                     }
-                    Liveness::Unknown => {}
+                    Liveness::Unassumed => {}
                 }
             }
             // A raw pointer derived from a live reference or owned (Box/Vec)
