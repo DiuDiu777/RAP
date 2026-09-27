@@ -792,22 +792,14 @@ fn escape_region_violation(
     local: usize,
 ) -> Option<String> {
     // MIR `local_decls` erases lifetime regions (`ReErased`), so take the
-    // precise regions from the function signature instead.
-    let fn_sig = tcx.fn_sig(caller);
-    let inst = fn_sig.instantiate_identity();
-    #[cfg(rapx_ge_99)]
-    let inst = inst.skip_norm_wip();
-    let src = inst.input(local - 1);
-    let ret = inst.output();
-    let (
-        rustc_middle::ty::TyKind::Ref(src_region, _, _),
-        rustc_middle::ty::TyKind::Ref(ret_region, _, _),
-    ) = (src.skip_binder().kind(), ret.skip_binder().kind())
-    else {
-        // Not a reference-to-reference return: nothing to check.
-        return None;
-    };
-    if !super::region::region_outlives(tcx, caller, *src_region, *ret_region) {
+    // precise (late-bound-liberated) regions from the function signature.
+    let src_region =
+        super::region::fn_arg_ty(tcx, caller, local - 1).and_then(|ty| match ty.kind() {
+            rustc_middle::ty::TyKind::Ref(region, _, _) => Some(*region),
+            _ => None,
+        })?;
+    let ret_region = super::region::fn_return_region(tcx, caller)?;
+    if !super::region::region_outlives(tcx, caller, src_region, ret_region) {
         return Some(format!(
             "returned region `{ret_region:?}` outlives the source reference's region `{src_region:?}`"
         ));
