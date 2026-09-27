@@ -4221,10 +4221,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         property: &Property<'tcx>,
         fe_place: &crate::verify::contract::ContractPlace<'tcx>,
     ) {
-        let fe_local = match fe_place.base {
-            PlaceBase::Arg(n) => Local::from_usize(n + 1),
-            PlaceBase::Local(n) => Local::from_usize(n),
-            _ => return,
+        let Some(fe_local) = fe_place.base.try_to_local() else {
+            return;
         };
         let fe_val = match self.locals.get(&fe_local).cloned() {
             Some(v) => v,
@@ -4245,19 +4243,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let slice_local = match property.args().first() {
             Some(PropertyArg::Expr(ContractExpr::IndexAccess { slice, .. })) => {
                 match slice.as_ref() {
-                    ContractExpr::Place(cp) => match cp.base {
-                        PlaceBase::Arg(n) => Some(Local::from_usize(n + 1)),
-                        PlaceBase::Local(n) => Some(Local::from_usize(n)),
-                        _ => None,
-                    },
+                    ContractExpr::Place(cp) => cp.base.try_to_local(),
                     _ => None,
                 }
             }
-            Some(PropertyArg::Expr(ContractExpr::Place(cp))) => match cp.base {
-                PlaceBase::Arg(n) => Some(Local::from_usize(n + 1)),
-                PlaceBase::Local(n) => Some(Local::from_usize(n)),
-                _ => None,
-            },
+            Some(PropertyArg::Expr(ContractExpr::Place(cp))) => cp.base.try_to_local(),
             _ => None,
         };
         let data_size = slice_local
@@ -4307,11 +4297,7 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             }
         }
         let slice_local = match slice.as_ref() {
-            ContractExpr::Place(cp) => match cp.base {
-                PlaceBase::Arg(n) => Some(Local::from_usize(n + 1)),
-                PlaceBase::Local(n) => Some(Local::from_usize(n)),
-                _ => None,
-            },
+            ContractExpr::Place(cp) => cp.base.try_to_local(),
             _ => None,
         };
         let Some(slice_local) = slice_local else {

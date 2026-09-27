@@ -28,6 +28,17 @@ impl PlaceBase {
             PlaceBase::Local(n) => Local::from_usize(*n),
         }
     }
+
+    /// Like [`to_local`](Self::to_local), but `None` for `Return`.  Callers that
+    /// need a concrete `Arg`/`Local` index (e.g. resolving a container's local)
+    /// use this instead of hand-copying the `Arg`/`Local` arm plus an `_ => None`.
+    pub(crate) fn try_to_local(&self) -> Option<Local> {
+        match self {
+            PlaceBase::Return => None,
+            PlaceBase::Arg(n) => Some(Local::from_usize(*n + 1)),
+            PlaceBase::Local(n) => Some(Local::from_usize(*n)),
+        }
+    }
 }
 
 /// A step into a place, from the base down to the value a contract talks

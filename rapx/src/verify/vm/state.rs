@@ -57,7 +57,12 @@ pub(crate) struct Provenance<'ctx> {
 }
 
 /// Known invariants about a symbolic value.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// `PartialEq`/`Eq` are deliberately *not* derived: `align_n` is a Z3 AST
+/// whose equality is structural (`Z3_is_eq_ast`), not semantic, so comparing
+/// two `ValueInvariants` would silently report semantically-equal values as
+/// unequal.
+#[derive(Clone, Debug, Default)]
 pub(crate) struct ValueInvariants<'ctx> {
     pub non_null: bool,
     pub init: bool,

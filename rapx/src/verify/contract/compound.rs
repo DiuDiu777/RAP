@@ -39,7 +39,11 @@ pub(crate) enum CompoundArg {
     Lit(String),
 }
 
-/// The body of a compound property, structured as DNF (Or of And of calls).
+/// The body of a compound property: a boolean tree over primitive-property
+/// calls (`Call` leaves), freely nested via `And`/`Or`.  The DSL `&&`/`||`
+/// grammar permits arbitrary nesting (an `And` may contain an `Or` and vice
+/// versa), so this is *not* constrained to DNF; `expand_compound_body`
+/// recurses over whatever shape was parsed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum CompoundBody {
     And(Vec<CompoundBody>),
