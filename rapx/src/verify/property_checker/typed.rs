@@ -8,9 +8,11 @@ use crate::helpers::mir_scan::Checkpoint;
 use crate::verify::contract::{ContractExpr, Property, PropertyArg};
 use crate::verify::report::CheckResult;
 use crate::verify::vm::state::VmState;
-#[cfg(not(rapx_ge_100))]
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100)))]
 use rustc_hir::LangItem;
-#[cfg(rapx_ge_100)]
+#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100))]
 use rustc_hir::attrs::lang_items::LangItem;
 use rustc_middle::ty::{Ty, TyKind};
 use z3::{Solver, ast::Ast};

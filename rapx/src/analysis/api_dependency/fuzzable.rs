@@ -1,10 +1,19 @@
 #[cfg(not(rapx_has_skip_norm_wip))]
 use crate::compat::SkipNormWip;
-#[cfg(not(rapx_ge_100))]
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100)))]
 use rustc_hir::LangItem;
-#[cfg(rapx_ge_100)]
+#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100))]
 use rustc_hir::attrs::lang_items::LangItem;
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::find_attr;
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::AttributeKind;
+#[cfg(not(rapx_has_attr_ir))]
 use rustc_hir::find_attr;
+#[cfg(not(rapx_has_attr_ir))]
+use rustc_hir::attrs::AttributeKind;
 #[cfg(rapx_const_ext)]
 use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind};
@@ -65,19 +74,19 @@ pub fn has_non_exhaustive_attr(tcx: TyCtxt<'_>, adt: ty::AdtDef<'_>) -> bool {
     adt.is_variant_list_non_exhaustive()
         || find_attr!(
             crate::compat::get_all_attrs(tcx, adt.did()),
-            rustc_hir::attrs::AttributeKind::NonExhaustive(..)
+            AttributeKind::NonExhaustive(..)
         )
         || adt.variants().iter().any(|variant_def| {
             variant_def.is_field_list_non_exhaustive()
                 || find_attr!(
                     crate::compat::get_all_attrs(tcx, variant_def.def_id),
-                    rustc_hir::attrs::AttributeKind::NonExhaustive(..)
+                    AttributeKind::NonExhaustive(..)
                 )
         })
         || adt.all_fields().any(|field_def| {
             find_attr!(
                 crate::compat::get_all_attrs(tcx, field_def.did),
-                rustc_hir::attrs::AttributeKind::NonExhaustive(..)
+                AttributeKind::NonExhaustive(..)
             )
         })
 }

@@ -77,6 +77,9 @@ impl<T: Sized> SkipNormWip for T {}
 
 // ── get_all_attrs (deprecated but still the only way) ───────────────────
 
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::Attribute;
+#[cfg(not(rapx_has_attr_ir))]
 use rustc_hir::Attribute;
 
 #[allow(deprecated)]
@@ -86,11 +89,11 @@ pub fn get_all_attrs<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> &'tcx [Attribute
 }
 
 #[cfg(not(rapx_ge_99))]
-pub fn attribute_to_string<'tcx>(tcx: TyCtxt<'tcx>, attr: &rustc_hir::Attribute) -> String {
+pub fn attribute_to_string<'tcx>(tcx: TyCtxt<'tcx>, attr: &Attribute) -> String {
     rustc_hir_pretty::attribute_to_string(&tcx, attr)
 }
 #[cfg(rapx_ge_99)]
-pub fn attribute_to_string(_tcx: TyCtxt<'_>, attr: &rustc_hir::Attribute) -> String {
+pub fn attribute_to_string(_tcx: TyCtxt<'_>, attr: &Attribute) -> String {
     struct Ann;
     impl rustc_hir_pretty::PpAnn for Ann {}
     rustc_hir_pretty::attribute_to_string(&Ann, attr)

@@ -1,6 +1,8 @@
-#[cfg(all(not(rapx_ge_100), not(rapx_box_deref_transmute)))]
+#[cfg(all(rapx_has_attr_ir, not(rapx_box_deref_transmute)))]
+use rustc_attr_ir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100), not(rapx_box_deref_transmute)))]
 use rustc_hir::LangItem;
-#[cfg(all(rapx_ge_100, not(rapx_box_deref_transmute)))]
+#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100, not(rapx_box_deref_transmute)))]
 use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::{Safety, def_id::DefId};
 use rustc_middle::{

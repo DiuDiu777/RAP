@@ -13,15 +13,21 @@ use crate::cli::VerifyMode;
 use crate::compat::FxHashMap;
 use crate::helpers::mir_scan::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
 use crate::helpers::name::short_fn_name;
-#[cfg(not(rapx_ge_100))]
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100)))]
 use rustc_hir::LangItem;
-#[cfg(rapx_ge_100)]
+#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100))]
 use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::{
-    Attribute, BodyId, FnDecl, ItemKind,
+    BodyId, FnDecl, ItemKind,
     def_id::{DefId, LocalDefId},
     intravisit::{FnKind, Visitor},
 };
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::Attribute;
+#[cfg(not(rapx_has_attr_ir))]
+use rustc_hir::Attribute;
 use rustc_middle::{hir::nested_filter, ty::TyCtxt};
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet, VecDeque};

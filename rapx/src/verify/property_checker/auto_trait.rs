@@ -14,9 +14,11 @@
 //! `std-trait-ensures.json` + `std-compound-properties.rs`; this module only
 //! implements the primitive type-level checks.
 
-#[cfg(not(rapx_ge_100))]
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100)))]
 use rustc_hir::LangItem;
-#[cfg(rapx_ge_100)]
+#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100))]
 use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::DefId;

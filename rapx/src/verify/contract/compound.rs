@@ -26,6 +26,10 @@ use std::collections::{HashMap, HashSet};
 use std::sync::{OnceLock, RwLock};
 
 use rustc_hir::def_id::{CrateNum, LOCAL_CRATE};
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::Attribute;
+#[cfg(not(rapx_has_attr_ir))]
+use rustc_hir::Attribute;
 use syn::Expr;
 use syn::visit_mut::{self, VisitMut};
 
@@ -747,7 +751,7 @@ pub(crate) fn register_compound_properties(tcx: rustc_middle::ty::TyCtxt<'_>) ->
 
 /// Whether an attribute path is `rapx::def_property` (or the bare form with the
 /// tool prefix stripped).
-fn is_def_property_attr(attr: &rustc_hir::Attribute) -> bool {
+fn is_def_property_attr(attr: &Attribute) -> bool {
     let path = attr.path();
     if path.len() >= 2
         && path[path.len() - 2].as_str() == "rapx"
