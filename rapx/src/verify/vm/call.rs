@@ -208,13 +208,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             for effect in &summary.effects {
                 self.apply_call_effect(effect, &arg_values, &caller_arg_locals, destination);
             }
-            // Mark the call destination as forward-assigned so the backward
-            // `propagate_pass` does not re-apply the effect. Allocation effects
-            // (`ReturnBoxAllocation`, `ReturnFreshAllocation`, ...) consume a
-            // fresh `next_alloc_id` on each application, so a second application
-            // would allocate a *different* heap object and the pointer derived
-            // before it (`&mut *boxed`) would keep stale provenance.
-            self.forward_assigned.insert(destination);
         } else {
             self.notes
                 .push(format!("unsupported call: {}", summary.name));

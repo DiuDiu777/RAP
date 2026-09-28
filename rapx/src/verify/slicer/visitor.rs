@@ -7,7 +7,7 @@
 
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::Body;
-use rustc_middle::mir::{BasicBlock, Local, StatementKind, TerminatorKind};
+use rustc_middle::mir::{BasicBlock, Local, Operand, Rvalue, StatementKind, TerminatorKind};
 use rustc_middle::ty::TyCtxt;
 
 use std::collections::{HashMap, HashSet};
@@ -441,7 +441,46 @@ impl<'tcx> BackwardSlicer<'tcx> {
             _ => {}
         }
 
-        if defs.intersects(relevant) {
+        // A provenance-carrying assignment — a pointer cast (`*const T as
+        // *const U`, a reference→pointer cast) or a reborrow through a
+        // reference/pointer (`&mut (*_1)`) — carries the source's
+        // provenance/align_n even when its destination is not *value*-relevant
+        // to the property.  Keep it — and follow its source — so the forward VM
+        // propagates the provenance instead of relying on the backward
+        // `propagate_single_assign` fill-in.
+        let is_provenance_carrier = match &statement.kind {
+            StatementKind::Assign(assign) => {
+                let (place, rvalue) = &**assign;
+                let dest_is_ptr = matches!(
+                    self.tcx.optimized_mir(def_id).local_decls[place.local].ty.kind(),
+                    rustc_middle::ty::TyKind::RawPtr(..) | rustc_middle::ty::TyKind::Ref(..)
+                );
+                match rvalue {
+                    Rvalue::Cast(..) => dest_is_ptr,
+                    Rvalue::Ref(_, _, src_place) | Rvalue::RawPtr(_, src_place) => src_place
+                        .projection
+                        .iter()
+                        .any(|p| {
+                            matches!(
+                                p.kind(),
+                                rustc_middle::mir::ProjectionElem::Deref
+                            )
+                        }),
+                    Rvalue::Use(operand, _) => {
+                        let is_projected = match operand {
+                            Operand::Copy(p) | Operand::Move(p) => !p.projection.is_empty(),
+                            _ => false,
+                        };
+                        dest_is_ptr || is_projected
+                    }
+                    Rvalue::CopyForDeref(p) => dest_is_ptr || !p.projection.is_empty(),
+                    _ => false,
+                }
+            }
+            _ => false,
+        };
+
+        if defs.intersects(relevant) || is_provenance_carrier {
             let mut uses = collect_statement_uses(statement, block, statement_index, flow, &defs);
             items.push(RelevantItem::Statement {
                 def_id,

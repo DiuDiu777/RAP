@@ -366,13 +366,6 @@ pub(crate) struct VmState<'ctx, 'tcx> {
     /// Current value bound to each MIR local.
     pub(crate) locals: FxHashMap<Local, VmValue<'ctx, 'tcx>>,
 
-    /// Locals whose value was assigned by *forward* execution (not the
-    /// `init_parameters` fallback).  Used by `propagate_single_assign` to tell
-    /// "already executed" apart from "still at its default value", so a
-    /// pruned assignment (e.g. a `*const T as *mut T` cast) is still filled in
-    /// instead of leaving the destination at its stack-address default.
-    pub(crate) forward_assigned: FxHashSet<Local>,
-
     /// Known address for each stack-allocated local.
     pub(crate) local_addresses: FxHashMap<Local, Int<'ctx>>,
 
@@ -510,7 +503,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             body,
             caller_def_id,
             locals: FxHashMap::default(),
-            forward_assigned: FxHashSet::default(),
             local_addresses: FxHashMap::default(),
             local_alloc_ids: FxHashMap::default(),
             allocations: Vec::new(),

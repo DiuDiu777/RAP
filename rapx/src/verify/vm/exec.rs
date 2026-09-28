@@ -1407,41 +1407,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
                         );
                     }
                 }
-                // Contract calls (e.g. `SliceIndex::get_unchecked`) become
-                // checkpoints, so the forward slicer prunes their terminator and
-                // leaves the destination at its `init_parameters` default.  Apply
-                // the call's effect summary here so a downstream raw-ptr-deref
-                // (or any other checkpoint) reads the real return value (with
-                // provenance) instead of the local's default address.
-                if !self.forward_assigned.contains(&dest) {
-                    let arg_values: Vec<VmValue<'ctx, 'tcx>> = args
-                        .iter()
-                        .map(|a| self.value_of_operand(&a.node))
-                        .collect();
-                    let caller_arg_locals: Vec<Option<Local>> = args
-                        .iter()
-                        .map(|a| a.node.place().map(|p| p.local))
-                        .collect();
-                    let mut concrete = crate::compat::FxHashMap::default();
-                    for (i, arg) in arg_values.iter().enumerate() {
-                        if let Some(v) = arg.term.simplify().as_u64() {
-                            concrete.insert(i, v as i128);
-                        }
-                    }
-                    let context = crate::verify::call_summary::CallContext { concrete };
-                    let summary = crate::verify::call_summary::effect_summary(
-                        self.tcx,
-                        self.caller_def_id,
-                        func,
-                        dest,
-                        &context,
-                    );
-                    if !summary.unsupported {
-                        for effect in &summary.effects {
-                            self.apply_call_effect(effect, &arg_values, &caller_arg_locals, dest);
-                        }
-                    }
-                }
                 // For comparison calls (e.g. <[u8]>::eq), propagate
                 // constant bytes from a literal operand to the tracked
                 // operand's allocation so ValidCStr checks succeed.
@@ -1464,63 +1429,14 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     }
 
     /// Propagate a single MIR assignment to fill in provenance for previously
-    /// uninitialised locals.
+    /// uninitialised locals.  Pointer-carrying assignments (casts, reborrows,
+    /// projected/pointer copies) are kept by the slicer, so only a destination
+    /// the slicer still pruned (e.g. the return slot `_0`) is filled here.
     fn propagate_single_assign(&mut self, dest_local: Local, rvalue: &Rvalue<'tcx>) {
-        // A pruned cast (`_5 = _6 as *mut T`) or projected field copy
-        // (`_6 = copy (*_1).0`) must still be filled even though `init_parameters`
-        // pre-populated `dest_local` with a default address, so use the
-        // forward-assignment marker there.  A direct scalar copy (`_i7 = copy _4`
-        // feeding a `SwitchInt`) keeps the skip-if-present behaviour, or the path
-        // condition is lost and a conditional write looks unconditional.
-        let skip = match rvalue {
-            Rvalue::Cast(..) => self.forward_assigned.contains(&dest_local),
-            Rvalue::Ref(_, _, place) | Rvalue::RawPtr(_, place) => {
-                // A *reborrow through* a reference/pointer (`&mut (*_1)`) must be
-                // filled even when pruned, so the pointee's provenance + align_n
-                // survive (e.g. `self.as_mut_ptr()` on a `&mut [T]`).  A *direct*
-                // reborrow of a local (`&mut _3`) keeps skip-if-present, or a
-                // conditional write through it looks unconditional.
-                let has_deref = place
-                    .projection
-                    .iter()
-                    .any(|p| matches!(p.kind(), rustc_middle::mir::ProjectionElem::Deref));
-                if has_deref {
-                    self.forward_assigned.contains(&dest_local)
-                } else {
-                    self.locals.contains_key(&dest_local)
-                }
-            }
-            _ => {
-                let projected_use = match rvalue {
-                    #[cfg(rapx_rvalue_use_with_retag)]
-                    Rvalue::Use(operand, _) => match operand {
-                        Operand::Copy(p) | Operand::Move(p) => !p.projection.is_empty(),
-                        _ => false,
-                    },
-                    #[cfg(not(rapx_rvalue_use_with_retag))]
-                    Rvalue::Use(operand) => match operand {
-                        Operand::Copy(p) | Operand::Move(p) => !p.projection.is_empty(),
-                        _ => false,
-                    },
-                    Rvalue::CopyForDeref(p) => !p.projection.is_empty(),
-                    _ => false,
-                };
-                // A pointer copy (`_tmp = self.as_ptr()`) must be filled to
-                // propagate provenance + align_n; a scalar copy (a `flag`/index
-                // feeding a `SwitchInt`) keeps skip-if-present so the path
-                // condition is preserved.
-                let is_pointer = matches!(
-                    self.body.local_decls[dest_local].ty.kind(),
-                    rustc_middle::ty::TyKind::RawPtr(..) | rustc_middle::ty::TyKind::Ref(..)
-                );
-                if projected_use || is_pointer {
-                    self.forward_assigned.contains(&dest_local)
-                } else {
-                    self.locals.contains_key(&dest_local)
-                }
-            }
-        };
-        if skip {
+        // Skip when the destination already holds a value (from `init_parameters`
+        // pre-population or forward execution); only a still-missing destination
+        // is filled from the source.
+        if self.locals.contains_key(&dest_local) {
             return;
         }
 
@@ -1789,7 +1705,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             let mut value = value;
             value.invariants.init = true;
             self.set_local(place.local, value);
-            self.forward_assigned.insert(place.local);
             // Record a whole-place move (`_3 = move _4`) so `Owning` can trace
             // the move-alias chain back to the destination.
             let moved_from = match rvalue {

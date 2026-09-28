@@ -8,7 +8,7 @@
 use crate::compat::{FxHashMap, Spanned};
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{BasicBlock, Body, Operand, Place};
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{TyCtxt, TyKind};
 
 use crate::analysis::dataflow::types::DataflowGraph;
 
@@ -47,6 +47,27 @@ pub(crate) fn visit<'tcx>(
     let summary = call_summary::dependency_summary(tcx, func, args.len(), &call_context_from_args(args));
 
     if defs.intersects(relevant) {
+        if summary.unsupported {
+            items.push(RelevantItem::Forget);
+        }
+        items.push(RelevantItem::Terminator { def_id, block });
+        relevant.remove_all(&defs);
+        relevant.extend(call_args_uses_at(args, &summary.return_depends_on_args));
+        return;
+    }
+
+    // A call returning a pointer/reference (e.g. `get_unchecked`, `as_ptr`,
+    // `Box::new`'s `NonNull` destination) carries the callee's provenance even
+    // when its destination is not *value*-relevant.  Keep it so the forward VM
+    // applies the call's effect (and thus the provenance/alloc) instead of
+    // relying on the backward `propagate_pass` re-application.  Deliberately
+    // *not* applied to must-write calls (e.g. `MaybeUninit::write`), whose
+    // write effect is tracked separately below via `must_write_args`.
+    let dest_is_ptr = matches!(
+        body.local_decls[destination.local].ty.kind(),
+        TyKind::RawPtr(..) | TyKind::Ref(..)
+    );
+    if dest_is_ptr && summary.must_write_args.is_empty() {
         if summary.unsupported {
             items.push(RelevantItem::Forget);
         }
