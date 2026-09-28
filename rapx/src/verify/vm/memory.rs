@@ -195,7 +195,10 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         }
         let ty = self.body.local_decls[local].ty;
         let align = self.align_sym(ty);
-        let base = self.local_address(local);
+        // Generate the base address symbol directly (the address lives only in
+        // `Allocation::base` now; `local_address` reads it back from there).
+        let name = format!("addr__{}", local.as_usize());
+        let base = Int::new_const(self.ctx, name.as_str());
         let id = AllocId(self.next_alloc_id);
         self.next_alloc_id += 1;
         // For arrays, track the element type (not the array type) so that

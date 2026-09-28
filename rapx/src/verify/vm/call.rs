@@ -872,7 +872,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         let saved_caller = self.caller_def_id;
         let saved_locals = std::mem::take(&mut self.locals);
         let saved_field_values = std::mem::take(&mut self.field_values);
-        let saved_local_addresses = std::mem::take(&mut self.local_addresses);
         let saved_local_alloc_ids = std::mem::take(&mut self.local_alloc_ids);
         let saved_binary_op_sources = std::mem::take(&mut self.binary_op_sources);
         let saved_other_op_sources = std::mem::take(&mut self.other_op_sources);
@@ -949,7 +948,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         self.caller_def_id = saved_caller;
         self.locals = saved_locals;
         self.field_values = saved_field_values;
-        self.local_addresses = saved_local_addresses;
         self.local_alloc_ids = saved_local_alloc_ids;
         self.binary_op_sources = saved_binary_op_sources;
         self.other_op_sources = saved_other_op_sources;
@@ -3182,8 +3180,8 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     /// receiver (often a reborrow temp) back to the referent local that carries
     /// the materialized field values.
     pub(crate) fn find_local_by_address(&self, term: &Int<'ctx>) -> Option<Local> {
-        for (local, addr) in &self.local_addresses {
-            if addr == term {
+        for (local, id) in &self.local_alloc_ids {
+            if self.allocations[id.0].base == *term {
                 return Some(*local);
             }
         }

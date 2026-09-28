@@ -366,9 +366,6 @@ pub(crate) struct VmState<'ctx, 'tcx> {
     /// Current value bound to each MIR local.
     pub(crate) locals: FxHashMap<Local, VmValue<'ctx, 'tcx>>,
 
-    /// Known address for each stack-allocated local.
-    pub(crate) local_addresses: FxHashMap<Local, Int<'ctx>>,
-
     /// Allocation ID for each stack-allocated local.
     pub(crate) local_alloc_ids: FxHashMap<Local, AllocId>,
 
@@ -503,7 +500,6 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
             body,
             caller_def_id,
             locals: FxHashMap::default(),
-            local_addresses: FxHashMap::default(),
             local_alloc_ids: FxHashMap::default(),
             allocations: Vec::new(),
             path_conditions: Vec::new(),
@@ -542,15 +538,11 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
         self.locals.insert(local, value);
     }
 
-    /// Get or create the symbolic address of a MIR local.
+    /// Get the symbolic address of a MIR local (its stack allocation's base).
     pub(crate) fn local_address(&mut self, local: Local) -> Int<'ctx> {
-        if let Some(addr) = self.local_addresses.get(&local) {
-            return addr.clone();
-        }
-        let name = format!("addr__{}", local.as_usize());
-        let addr = Int::new_const(self.ctx, name.as_str());
-        self.local_addresses.insert(local, addr.clone());
-        addr
+        self.ensure_local_allocation(local);
+        let id = self.local_alloc_ids[&local];
+        self.allocations[id.0].base.clone()
     }
 
     /// Allocate a fresh symbolic object and return its ID and base address.

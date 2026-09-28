@@ -3135,10 +3135,9 @@ impl<'ctx, 'tcx> VmState<'ctx, 'tcx> {
     // ── Storage ──────────────────────────────────────────────────
 
     fn exec_storage_live(&mut self, local: Local) {
-        self.local_address(local);
-        if let Some(alloc_id) = self.local_alloc_ids.get(&local).copied() {
-            self.alloc_mut(alloc_id).dead = false;
-        }
+        self.ensure_local_allocation(local);
+        let alloc_id = self.local_alloc_ids[&local];
+        self.alloc_mut(alloc_id).dead = false;
     }
 
     fn exec_storage_dead(&mut self, local: Local) {
