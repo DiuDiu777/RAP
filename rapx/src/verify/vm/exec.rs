@@ -1628,12 +1628,18 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         self.constraints.assertions.push(lhs._eq(&rhs));
     }
 
+    /// `Some(align)` when `align` is non-trivial (≠ 1); `None` for a byte
+    /// alignment, which carries no alignment guarantee.
+    fn non_trivial_align(align: Int<'z3>) -> Option<Int<'z3>> {
+        (align.simplify().as_u64() != Some(1)).then_some(align)
+    }
+
     /// The provenance allocation's alignment, when it is non-trivial (≠ 1).
     fn alloc_align_of(&self, val: &VmValue<'z3, 'tcx>) -> Option<Int<'z3>> {
         val.provenance
             .as_ref()
             .map(|p| self.alloc(p.alloc_id).align.clone())
-            .filter(|a| a.simplify().as_u64() != Some(1))
+            .and_then(Self::non_trivial_align)
     }
 
     /// Evaluate an Rvalue into a VmValue.
@@ -2588,12 +2594,15 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         lhs: &VmValue<'z3, 'tcx>,
         rhs: &VmValue<'z3, 'tcx>,
     ) -> Option<Provenance<'z3>> {
+        // `ptr ⊙ ptr` (rhs is a pointer) yields an integer / is meaningless, so
+        // it carries no provenance.  `Div`/`Rem` keep `lhs`'s provenance
+        // regardless (ptr ÷ scalar), so they are excluded here.
+        if rhs.is_pointer() && !matches!(op, BinOp::Div | BinOp::Rem) {
+            return None;
+        }
         match op {
             BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked | BinOp::Offset => {
                 // ptr + scalar → propagate with adjusted offset
-                if rhs.is_pointer() {
-                    return None;
-                }
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::add(self.z3_ctx, &[&prov.offset, &rhs.z3_term]),
@@ -2601,10 +2610,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 })
             }
             BinOp::Sub | BinOp::SubWithOverflow | BinOp::SubUnchecked => {
-                if rhs.is_pointer() {
-                    // ptr - ptr → integer (difference), no provenance
-                    return None;
-                }
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::sub(self.z3_ctx, &[&prov.offset, &rhs.z3_term]),
@@ -2612,9 +2617,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 })
             }
             BinOp::BitAnd => {
-                if rhs.is_pointer() {
-                    return None;
-                }
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     // Alignment rounding changes the intra-allocation offset
@@ -2625,15 +2627,9 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 })
             }
             BinOp::BitXor | BinOp::Shr | BinOp::ShrUnchecked => {
-                if rhs.is_pointer() {
-                    return None;
-                }
                 lhs.provenance.clone()
             }
             BinOp::BitOr | BinOp::Shl | BinOp::ShlUnchecked => {
-                if rhs.is_pointer() {
-                    return None;
-                }
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::add(self.z3_ctx, &[&prov.offset, &rhs.z3_term]),
@@ -2641,9 +2637,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 })
             }
             BinOp::Mul | BinOp::MulWithOverflow | BinOp::MulUnchecked => {
-                if rhs.is_pointer() {
-                    return None;
-                }
                 lhs.provenance.as_ref().map(|prov| Provenance {
                     alloc_id: prov.alloc_id,
                     offset: Int::mul(self.z3_ctx, &[&prov.offset, &rhs.z3_term]),
@@ -2840,15 +2833,13 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 if target == chosen {
                     let val_term = Int::from_u64(self.z3_ctx, value as u64);
                     self.constraints.assertions.push(discr_val.z3_term._eq(&val_term));
-                    if let Some(ref cond) = cmp_cond {
-                        if value != 0 {
-                            self.constraints.assertions.push(cond.clone());
-                        } else {
-                            self.constraints.assertions.push(cond.not());
-                        }
-                    }
                     if value != 0 {
+                        if let Some(ref cond) = cmp_cond {
+                            self.constraints.assertions.push(cond.clone());
+                        }
                         self.infer_switch_guard(discr);
+                    } else if let Some(ref cond) = cmp_cond {
+                        self.constraints.assertions.push(cond.not());
                     }
                     return;
                 }
@@ -2883,14 +2874,13 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         // boolean condition (`idx < len`) alongside the ite-encoded fact, so
         // the SMT solver can unfold it (mirrors `exec_switchint`).
         let cmp_cond = cond_val.bool_cond().cloned();
+        let zero = Int::from_u64(self.z3_ctx, 0);
         if expected {
-            let zero = Int::from_u64(self.z3_ctx, 0);
             self.constraints.assertions.push(cond_val.z3_term._eq(&zero).not());
             if let Some(c) = &cmp_cond {
                 self.constraints.assertions.push(c.clone());
             }
         } else {
-            let zero = Int::from_u64(self.z3_ctx, 0);
             self.constraints.assertions.push(cond_val.z3_term._eq(&zero));
             if let Some(c) = &cmp_cond {
                 self.constraints.assertions.push(c.not());
@@ -2916,16 +2906,22 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             .map(|(l, r, o)| (l.clone(), r.clone(), o))
     }
 
+    /// The `PlaceKey` of a `Copy`/`Move` operand.
+    fn operand_place_key(op: &Operand<'tcx>) -> Option<PlaceKey> {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) => Some(PlaceKey::from_mir_place(p)),
+            _ => None,
+        }
+    }
+
     /// Infer alignment constraints from guards of the form `(x % n) == 0`.
     pub(crate) fn infer_guard_align(&mut self, cond: &Operand<'tcx>, expected: bool) {
         if !expected {
             return;
         }
-        let place = match cond {
-            Operand::Copy(p) | Operand::Move(p) => p,
-            _ => return,
+        let Some(cond_pk) = Self::operand_place_key(cond) else {
+            return;
         };
-        let cond_pk = PlaceKey::from_mir_place(place);
 
         // Check if cond is a Ne/Eq comparison of (x % n) or (x & (align-1)) against 0
         if let Some((lhs_pk, rhs_pk, _)) = self.op_source_of(&cond_pk) {
@@ -2974,11 +2970,9 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         if !expected {
             return;
         }
-        let place = match cond {
-            Operand::Copy(p) | Operand::Move(p) => p,
-            _ => return,
+        let Some(cond_pk) = Self::operand_place_key(cond) else {
+            return;
         };
-        let cond_pk = PlaceKey::from_mir_place(place);
 
         // Check if cond was defined by BinaryOp(Ne, (ptr, 0)) or similar:
         // mark the non-constant side as non-null.  Only `Ne` guards imply
@@ -2999,11 +2993,9 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
 
     /// Infer non_null from SwitchInt discriminant.
     fn infer_switch_guard(&mut self, discr: &Operand<'tcx>) {
-        let place = match discr {
-            Operand::Copy(p) | Operand::Move(p) => p,
-            _ => return,
+        let Some(pk) = Self::operand_place_key(discr) else {
+            return;
         };
-        let pk = PlaceKey::from_mir_place(place);
         if let Some((lhs_pk, rhs_pk, _)) = self.op_source_of(&pk) {
             self.mark_guard_pointer(&lhs_pk, &rhs_pk);
         }
@@ -3183,13 +3175,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             PropertyKind::Typed => {
                 if let Some(val) = self.contract_target_value(property)
                     && let Some(alloc_id) = val.provenance_alloc_id()
-                        && let Some(expected_ty) = property.args().get(1).and_then(|a| {
-                            if let PropertyArg::Ty(ty) = a {
-                                Some(*ty)
-                            } else {
-                                None
-                            }
-                        }) {
+                        && let Some(expected_ty) = Self::ty_arg(property, 1) {
                             // A `Typed(container.iter(), T)` *for_each* invariant
                             // declares that the container's pointer elements all
                             // point at valid `T`s. Record that target type so a
@@ -3216,20 +3202,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 // transmute re-interprets *that* allocation's bytes into the
                 // destination element type, so `check_split_transmute` finds the
                 // license through the receiver slice's provenance.
-                let src = property.args().first().and_then(|a| {
-                    if let PropertyArg::Ty(ty) = a {
-                        Some(*ty)
-                    } else {
-                        None
-                    }
-                });
-                let dst = property.args().get(1).and_then(|a| {
-                    if let PropertyArg::Ty(ty) = a {
-                        Some(*ty)
-                    } else {
-                        None
-                    }
-                });
+                let src = Self::ty_arg(property, 0);
+                let dst = Self::ty_arg(property, 1);
                 if let (Some(src), Some(dst)) = (src, dst) {
                     // `SplitTransmute([T], [U])` licenses re-interpretation into
                     // the *element* type `U` (the `[U]` slice wrapper unwraps).
@@ -3340,6 +3314,14 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
+    /// The `Ty` in a property's `idx`-th `PropertyArg::Ty` argument.
+    fn ty_arg(property: &Property<'tcx>, idx: usize) -> Option<Ty<'tcx>> {
+        match property.args().get(idx) {
+            Some(PropertyArg::Ty(ty)) => Some(*ty),
+            _ => None,
+        }
+    }
+
     /// Get the local referenced by a contract property's target.
     fn contract_target_local(&self, property: &Property<'tcx>) -> Option<Local> {
         let cp = property.target_place()?;
@@ -3378,11 +3360,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     ) -> VmValue<'z3, 'tcx> {
         let elem_sz_raw = self.size_of_ty(elem_ty);
         let heap_align = self.align_sym(elem_ty);
-        let heap_align_n = if heap_align.simplify().as_u64() != Some(1) {
-            Some(heap_align.clone())
-        } else {
-            None
-        };
+        let heap_align_n = Self::non_trivial_align(heap_align.clone());
         let (heap_id, heap_base) = if huge || elem_sz_raw == 0 {
             // Struct-field targets (and generic element types): use an
             // unbounded external allocation so `Allocated`/`InBound` checks
@@ -3426,13 +3404,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     ///   container itself is not a pointer — keep the legacy whole-local
     ///   behaviour.
     fn assert_allocated_fact(&mut self, property: &Property<'tcx>) {
-        let elem_ty = property.args().get(1).and_then(|a| {
-            if let PropertyArg::Ty(ty) = a {
-                Some(*ty)
-            } else {
-                None
-            }
-        });
+        let elem_ty = Self::ty_arg(property, 1);
         let count_term = property
             .args()
             .get(2)
@@ -3493,44 +3465,29 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                                 || matches!(elem_ty.kind(), rustc_middle::ty::TyKind::Param(_)))
                     })
                     .unwrap_or(false);
-                if is_direct_simple_ptr {
-                    let Some(val) = self.field_value(local, &field_path).cloned() else {
+                let Some(val) = self.field_value(local, &field_path).cloned() else {
+                    return;
+                };
+                if let Some(alloc_id) = val.provenance_alloc_id() {
+                    self.alloc_mut(alloc_id).facts.dead = false;
+                    if self.alloc(alloc_id).size.as_u64().is_some() {
                         return;
-                    };
-                    if let Some(alloc_id) = val.provenance_alloc_id() {
-                        self.alloc_mut(alloc_id).facts.dead = false;
-                        if self.alloc(alloc_id).size.as_u64().is_some() {
-                            return;
-                        }
                     }
-                    let mut v = self.materialize_external_alloc(elem_ty, count_term, val.ty, true);
-                    // The size materialization must not clobber a *stronger*
-                    // alignment fact already on the field (e.g. `Align(ptr,
-                    // usize)` set `align_n = 8`, but `Allocated(ptr, u8, n)`
-                    // re-materializes with `u8`'s align of 1 → `align_n = None`).
-                    if v.facts.align_n.is_none() {
-                        v.facts.align_n = val.facts.align_n.clone();
-                    }
-                    self.set_field_value(local, field_path, v);
-                } else {
-                    // Wrapped field / pointer-to-ADT: materialize the *field*
-                    // target (not the whole local) so a downstream `Allocated`
-                    // on the field sees the freshly-sized allocation.
-                    let Some(val) = self.field_value(local, &field_path).cloned() else {
-                        return;
-                    };
-                    if let Some(alloc_id) = val.provenance_alloc_id() {
-                        self.alloc_mut(alloc_id).facts.dead = false;
-                        if self.alloc(alloc_id).size.as_u64().is_some() {
-                            return;
-                        }
-                    }
-                    let mut v = self.materialize_external_alloc(elem_ty, count_term, val.ty, false);
-                    if v.facts.align_n.is_none() {
-                        v.facts.align_n = val.facts.align_n.clone();
-                    }
-                    self.set_field_value(local, field_path, v);
                 }
+                // A direct simple pointer field carries the allocation itself; a
+                // wrapped field / pointer-to-ADT materializes the *field* target
+                // (unbounded via `huge`) so a downstream `Allocated` sees the
+                // freshly-sized allocation.
+                let mut v =
+                    self.materialize_external_alloc(elem_ty, count_term, val.ty, is_direct_simple_ptr);
+                // The size materialization must not clobber a *stronger*
+                // alignment fact already on the field (e.g. `Align(ptr, usize)`
+                // set `align_n = 8`, but `Allocated(ptr, u8, n)` re-materializes
+                // with `u8`'s align of 1 → `align_n = None`).
+                if v.facts.align_n.is_none() {
+                    v.facts.align_n = val.facts.align_n.clone();
+                }
+                self.set_field_value(local, field_path, v);
             }
         }
     }
@@ -4122,16 +4079,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         // `Init(p, MaybeUninit<T>, n)` reduces to `Typed(p, MaybeUninit<T>)`: the
         // content carries no validity invariant, so there is nothing to mark
         // initialized — the `Init ⇒ Typed` subsumption records the element type.
-        let is_maybe_uninit = property
-            .args()
-            .get(1)
-            .and_then(|a| {
-                if let PropertyArg::Ty(ty) = a {
-                    Some(api_classify::is_maybe_uninit_ty(*ty))
-                } else {
-                    None
-                }
-            })
+        let is_maybe_uninit = Self::ty_arg(property, 1)
+            .map(api_classify::is_maybe_uninit_ty)
             .unwrap_or(false);
         if is_maybe_uninit {
             return;
