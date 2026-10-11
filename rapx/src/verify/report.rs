@@ -19,6 +19,9 @@ pub(crate) enum UnknownReason {
     /// The SMT solver returned `unknown` — with the fixed per-query timeout
     /// this is effectively a timeout on a query it could not decide in time.
     SmtTimeout,
+    /// The inline recursion limit was reached, so the callee's body was not
+    /// executed and the memory state is incomplete.
+    InlineDepthExceeded,
     /// The checker has no rule for this shape (unsupported property, unannotated
     /// callee, unresolvable operand, undecidable generic, …).
     Unimplemented,
@@ -30,6 +33,9 @@ impl UnknownReason {
         match (self, other) {
             (UnknownReason::SmtTimeout, _) | (_, UnknownReason::SmtTimeout) => {
                 UnknownReason::SmtTimeout
+            }
+            (UnknownReason::InlineDepthExceeded, _) | (_, UnknownReason::InlineDepthExceeded) => {
+                UnknownReason::InlineDepthExceeded
             }
             _ => UnknownReason::Unimplemented,
         }
@@ -69,6 +75,9 @@ impl CheckResult {
             CheckResult::ProvedByRule | CheckResult::ProvedBySmt => "Proved",
             CheckResult::Failed => "Failed",
             CheckResult::Unknown(UnknownReason::SmtTimeout) => "Unknown (timeout)",
+            CheckResult::Unknown(UnknownReason::InlineDepthExceeded) => {
+                "Unknown (inline depth)"
+            }
             CheckResult::Unknown(UnknownReason::Unimplemented) => "Unknown",
         }
     }

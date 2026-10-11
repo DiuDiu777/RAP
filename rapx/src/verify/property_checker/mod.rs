@@ -39,6 +39,12 @@ impl PropertyChecker {
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
+        // The inline recursion limit was hit while executing this path, so the
+        // memory state is incomplete: any conclusion (proved or failed) would
+        // be unsound. Report `Unknown` instead.
+        if vm_state.inline.inline_depth_exceeded {
+            return CheckResult::Unknown(UnknownReason::InlineDepthExceeded);
+        }
         let solver = Solver::new(vm_state.z3_ctx);
         vm_state.assert_all(&solver);
         self.check_inner(vm_state, &solver, checkpoint, property)

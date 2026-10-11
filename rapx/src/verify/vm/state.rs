@@ -408,6 +408,10 @@ pub(crate) struct InlineCtx<'z3, 'tcx> {
     /// Current inlining depth (nested inlined callees), bounded by
     /// `MAX_INLINE_DEPTH`.
     pub inline_depth: usize,
+    /// Set once when an inlined callee is rejected for hitting
+    /// `MAX_INLINE_DEPTH`; marks this path's memory state as incomplete so the
+    /// checker reports `Unknown` instead of a spurious failure.
+    pub inline_depth_exceeded: bool,
     /// During `exec_inline_call`, maps each callee argument index to the
     /// *caller* local its value points at (resolved from the reference's
     /// address term before the caller's address map is saved away).  Used by

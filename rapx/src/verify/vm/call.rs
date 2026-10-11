@@ -24,10 +24,10 @@ use super::state::{AllocId, ElementTy, OffsetKind, Provenance, ValueFacts, Value
 impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// Execute a call terminator, dispatching by precision:
     ///
-    ///  1. pre-inline side effects (`Eq` const-byte propagation, `IterPtrAdj`
-    ///     iterator-offset tracking) — always run and fall through;
+    ///  1. pre-inline side effect (`Eq` const-byte propagation) — always runs
+    ///     and falls through;
     ///  2. a registry / transparent-deref summary effect;
-    ///  3. BFS inline of the callee's MIR when there is no summary.
+    ///  3. inline of the callee's MIR when there is no summary.
     ///
     /// A call with neither a summary nor inlinable MIR leaves `destination`
     /// unset.
@@ -85,6 +85,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         dest: Local,
     ) -> bool {
         if self.inline.inline_depth >= MAX_INLINE_DEPTH {
+            self.inline.inline_depth_exceeded = true;
             return false;
         }
         self.inline.inline_depth += 1;
@@ -153,7 +154,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             }
         }
 
-        // ── BFS execution of callee MIR ──
+        // ── Execute callee MIR ──
         self.inline_execute_body();
 
         // ── Capture return value and its per-field values ──
@@ -261,7 +262,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         None
     }
 
-    /// BFS-execute the callee's MIR body.
+    /// Execute the callee's MIR body.
     fn inline_execute_body(&mut self) {
         let mut visited = FxHashSet::default();
         let mut queue: Vec<BasicBlock> = Vec::new();
@@ -364,15 +365,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     self.exec_drop(place);
                     queue.push(*target);
                 }
-                TerminatorKind::Unreachable
-                | TerminatorKind::UnwindResume
-                | TerminatorKind::UnwindTerminate(_)
-                | TerminatorKind::Yield { .. }
-                | TerminatorKind::CoroutineDrop
-                | TerminatorKind::FalseEdge { .. }
-                | TerminatorKind::FalseUnwind { .. }
-                | TerminatorKind::InlineAsm { .. }
-                | TerminatorKind::TailCall { .. } => {
+                _ => {
                     // Dead-end or unsupported — stop traversal at this block.
                 }
             }

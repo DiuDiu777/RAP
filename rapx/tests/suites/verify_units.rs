@@ -695,13 +695,18 @@ fn box_deref() {
 }
 
 // ================ Self-recursive Callee ================
-// A self-recursive callee must not overflow the pointer-arithmetic wrapper
-// summary (which is cycle-detected and memoized).
+// A self-recursive callee is truncated by the inline-depth bound. Its return
+// value feeds `ptr.add`; the base case (no recursion) keeps the offset bounded
+// (`InBound | Proved`), while the truncated recursion makes the offset
+// unprovable and degrades to `Unknown (inline depth)` instead of a false
+// `Failed`. The call summary must also stay cycle-detected (no overflow).
 #[test]
 fn self_recursive_callee() {
-    let output = run_with_args("verify_units/self_recursive_callee", CMD_VERIFY_SCAN);
+    let output = run_with_args("verify_units/self_recursive_callee", CMD_VERIFY_TARGETED);
     assert_not_contain(&output, "overflowed");
-    assert_function_result(&output, "target", "SOUND");
+    assert_function_result(&output, "target", "UNKNOWN");
+    assert_contain(&output, "Unknown (inline depth)");
+    assert_contain(&output, "InBound | Proved");
 }
 
 // ================ Call Chain Depth ================
