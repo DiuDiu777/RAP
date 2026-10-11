@@ -1551,7 +1551,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 };
                 let nn_path = self
                     .container_ptr_field(dest_ty)
-                    .map(|(p, _)| p)
                     .expect("Box has no owning pointer field");
                 self.set_field_value(dest, nn_path.clone(), nn_field.clone());
                 self.units[alloc_id.0]
@@ -1873,7 +1872,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                         && api_classify::is_std_box(adt.did()) {
                             let nn_path = self
                                 .container_ptr_field(val.ty)
-                                .map(|(p, _)| p)
                                 .expect("Box has no owning pointer field");
                             self.set_field_value(dest, nn_path.clone(), val.clone());
                             if let Some(prov) = &val.provenance {
@@ -2753,7 +2751,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     ) {
         let elem_size = self.size_of_ty(ptr.ty).max(1);
         let ty = self.body().local_decls[local].ty;
-        let (ptr_path, _) = self
+        let ptr_path = self
             .container_ptr_field(ty)
             .expect("materialize_vec_fields: container has no owning pointer field");
         self.set_field_value(local, ptr_path, ptr);

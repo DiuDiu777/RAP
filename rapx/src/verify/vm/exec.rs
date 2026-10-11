@@ -187,8 +187,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
-    // ── Initialization ──────────────────────────────────────────
-
     fn init_parameters(&mut self) {
         let arg_count = self.body().arg_count;
         let local_count = self.body().local_decls.len();
@@ -207,409 +205,15 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             let mut invariants = ValueFacts::default();
             if local_idx <= arg_count {
                 // ── Box / Vec parameter: heap-allocated pointee ──
-                if let rustc_middle::ty::TyKind::Adt(adt_def, _) = ty.kind() {
-                    let is_vec = api_classify::is_std_vec(adt_def.did());
-                    if api_classify::is_std_box(adt_def.did())
-                        || is_vec
-                        || api_classify::is_std_cstring(adt_def.did())
-                    {
-                        let heap_ty = if let rustc_middle::ty::TyKind::Adt(_, substs) = ty.kind() {
-                            if let Some(first) = substs.first() {
-                                first.as_type()
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        };
-                        let heap_ty = heap_ty.unwrap_or(ty);
-                        let heap_size = self.size_of_ty(heap_ty);
-                        let heap_align = self.align_sym(heap_ty);
-                        let heap_size_term = Int::from_u64(self.z3_ctx, heap_size.max(1));
-                        // Vec/CString can hold many elements — use an external
-                        // allocation so Allocated checks can pass for arbitrary
-                        // capacity queries.
-                        let (heap_alloc_id, heap_base) = if is_vec {
-                            let max_size = Int::from_u64(self.z3_ctx, i64::MAX as u64);
-                            let (id, base) =
-                                self.allocate_external(max_size, heap_align.clone(), Some(heap_ty));
-                            (id, base)
-                        } else {
-                            self.allocate(heap_size_term, heap_align, Some(heap_ty))
-                        };
-                        invariants.non_null = true;
-                        invariants.init = true;
-                        self.content_mut(heap_alloc_id).facts.initialized = true;
-                        // Also expose the container's owning pointer field (Box's
-                        // inner `Unique<T>.pointer` → `NonNull<T>`, Vec's
-                        // `buf.ptr.pointer`) so that inlined bodies like
-                        // `Box::into_non_null_with_allocator` — which reads
-                        // `(_1.0).0` and transmutes it to `NonNull<T>` — inherit
-                        // the heap pointer's non-null/aligned/allocated facts.
-                        let owner_path = self
-                            .container_ptr_field(ty)
-                            .map(|(p, _)| p)
-                            .expect("container parameter has no owning pointer field");
-                        self.set_field_value(
-                            local,
-                            owner_path,
-                            VmValue {
-                                z3_term: heap_base.clone(),
-                                ty,
-                                provenance: Some(Provenance {
-                                    alloc_id: heap_alloc_id,
-                                    offset: Int::from_u64(self.z3_ctx, 0),
-                                    offset_kind: None,
-                                }),
-                                facts: ValueFacts {
-                                    non_null: true,
-                                    init: true,
-                                    ..Default::default()
-                                },
-                                source: ValueSource::None,
-                            },
-                        );
-                        // For Vec: assert `0 <= len <= cap` and
-                        // `cap * elem_size <= isize::MAX` as path conditions
-                        // (the backing allocation's slice length tracks `len`).
-                        if is_vec {
-                            let cap = self.fresh_int(&format!("vec_cap_{}", local_idx));
-                            let len = self.fresh_int(&format!("vec_len_{}", local_idx));
-                            self.materialize_vec_len_cap(cap, len, heap_size);
-                        }
-                        self.set_local(
-                            local,
-                            VmValue {
-                                z3_term: heap_base,
-                                ty,
-                                provenance: Some(Provenance {
-                                    alloc_id: heap_alloc_id,
-                                    offset: Int::from_u64(self.z3_ctx, 0),
-                                    offset_kind: None,
-                                }),
-                                facts: invariants,
-                                source: ValueSource::None,
-                            },
-                        );
-                        continue;
-                    }
+                if self.init_box_vec_param(local, ty, local_idx, &mut invariants) {
+                    continue;
                 }
                 // ── Struct/tuple/enum parameter (non-Box/Vec ADT) ──
-                // Decompose into per-field symbolic values for field-level checking.
-                if let rustc_middle::ty::TyKind::Adt(adt_def, _) = ty.kind() {
-                    if adt_def.is_enum() {
-                        let term = self.fresh_int(&format!("param_{}", local_idx));
-                        self.set_local(
-                            local,
-                            VmValue {
-                                z3_term: term,
-                                ty,
-                                provenance: None,
-                                facts: invariants,
-                                source: ValueSource::None,
-                            },
-                        );
-                        continue;
-                    }
-                    let mut elem_alloc: FxHashMap<Ty<'tcx>, (AllocId, Int<'z3>)> =
-                        FxHashMap::default();
-                    self.decompose_adt_fields(local, vec![], ty, local_idx, &mut elem_alloc, 0);
-                    // A single-raw-pointer wrapper (e.g. `NonNull<T>`) *is* its
-                    // pointer, so carry the field's provenance onto the whole local —
-                    // otherwise alias/ownership reasoning can't trace a deref of
-                    // `self.pointer` back to "owned" (the local's provenance would
-                    // be `None`).
-                    if mir_utils::is_raw_ptr_wrapper(self.tcx, adt_def.did())
-                        && let Some(f0) = self.field_value(local, &[0]).cloned() {
-                            let prov = f0.provenance.clone();
-                            self.set_local(
-                                local,
-                                VmValue {
-                                    z3_term: f0.z3_term,
-                                    ty,
-                                    provenance: prov,
-                                    facts: ValueFacts {
-                                        init: true,
-                                        ..Default::default()
-                                    },
-                                    source: ValueSource::None,
-                                },
-                            );
-                            continue;
-                        }
-                    let term = self.fresh_int(&format!("param_{}", local_idx));
-                    self.set_local(
-                        local,
-                        VmValue {
-                            z3_term: term,
-                            ty,
-                            provenance: None,
-                            facts: ValueFacts {
-                                init: true,
-                                ..Default::default()
-                            },
-                            source: ValueSource::None,
-                        },
-                    );
+                if self.init_struct_param(local, ty, local_idx, &mut invariants) {
                     continue;
                 }
                 // ── Reference parameter (&T, &mut T) ──
-                // Create a symbolic allocation for the pointee and attach
-                // provenance so that pointer-deriving operations (as_ptr,
-                // add, etc.) propagate correctly.
-                if let rustc_middle::ty::TyKind::Ref(..) = ty.kind() {
-                    // Prefer the precise pointee type from the function
-                    // signature (late-bound-liberated) so reference-field regions
-                    // are `'a` rather than MIR's erased `ReErased`.
-                    let precise_pointee = (local_idx <= arg_count)
-                        .then(|| {
-                            crate::verify::vm::region::fn_arg_ty(
-                                self.tcx,
-                                self.current_frame.current_def_id,
-                                local_idx - 1,
-                            )
-                        })
-                        .flatten()
-                        .and_then(|precise_ty| match precise_ty.kind() {
-                            rustc_middle::ty::TyKind::Ref(_, inner, _) => Some(*inner),
-                            _ => None,
-                        });
-                    let pointee_ty = precise_pointee.unwrap_or_else(|| {
-                        if let rustc_middle::ty::TyKind::Ref(_, inner_ty, _) = ty.kind() {
-                            *inner_ty
-                        } else {
-                            ty
-                        }
-                    });
-                    // `&MaybeUninit<T>` / `&[MaybeUninit<T>]` carry no validity
-                    // invariant — the content need not be initialized — so do not
-                    // claim `Init` for them (the content property reduces to
-                    // `Typed`).
-                    let pointee_is_maybe_uninit = api_classify::is_maybe_uninit_ty(pointee_ty);
-
-                    invariants.non_null = true;
-                    if !pointee_is_maybe_uninit {
-                        invariants.init = true;
-                    }
-                    // A reference always points within a live allocation, so it
-                    // carries the pointer-validity facts (`NonNull`, `Allocated`,
-                    // `InBound`) explicitly — the content property `Init` must
-                    // not be the only source of pointer validity (see
-                    // std-subsumption.rs).
-                    invariants.in_bounds = true;
-
-                    if let rustc_middle::ty::TyKind::Slice(elem_ty) = pointee_ty.kind() {
-                        let elem_size = self.size_of_ty(*elem_ty);
-                        let len = self.fresh_int(&format!("slice_len_{}", local_idx));
-                        let zero = Int::from_u64(self.z3_ctx, 0);
-                        self.constraints.assertions.push(len.ge(&zero));
-                        let isize_max = Int::from_i64(self.z3_ctx, i64::MAX);
-                        let elem_sz = if elem_size > 0 {
-                            elem_size
-                        } else {
-                            mir_utils::size_of_generic_param(
-                                self.tcx,
-                                self.current_frame.current_def_id,
-                                *elem_ty,
-                            )
-                            .max(1)
-                        };
-                        let elem_sz_term = Int::from_u64(self.z3_ctx, elem_sz);
-                        self.constraints.assertions
-                            .push(Int::mul(self.z3_ctx, &[&len, &elem_sz_term]).le(&isize_max));
-                        // The data allocation's byte size uses the shared
-                        // symbolic `sizeof_T` so `InBound` can cancel the factor
-                        // (`len·S / S == len`); `allocate_slice` computes
-                        // `size = len * sizeof_T` and materializes `len` together
-                        // so the two can never diverge. The alignment is the
-                        // element type's alignment — symbolic (`align_T`) for a
-                        // generic element type, with the layout constraint
-                        // `sizeof_T % align_T == 0` established by `align_sym`.
-                        let elem_align = self.align_sym(*elem_ty);
-                        let elem_size_sym = self.size_sym(*elem_ty);
-                        let (data_alloc_id, data_base) =
-                            self.allocate_slice(len, elem_size_sym, elem_align, Some(*elem_ty));
-                        if !pointee_is_maybe_uninit {
-                            self.content_mut(data_alloc_id).facts.initialized = true;
-                        }
-                        // Record placeholder per-byte symbols for the first few
-                        // elements so byte-level checkers (`ValidCStr` interior-NUL,
-                        // `ValidString` UTF-8) can reason over symbolic slice bytes
-                        // (the length is symbolic, so only a bounded prefix is
-                        // materialized — mirrors the array parameter handling).
-                        let step = (elem_size.max(1)) as usize;
-                        let m = 16usize;
-                        for i in 0..m {
-                            let off = i * step;
-                            let elem_term =
-                                self.fresh_int(&format!("slice_{}_idx_{}", local_idx, i));
-                            self.record_byte_value(data_alloc_id, off, elem_term);
-                        }
-                        self.set_local(
-                            local,
-                            VmValue {
-                                z3_term: data_base,
-                                ty,
-                                provenance: Some(Provenance {
-                                    alloc_id: data_alloc_id,
-                                    offset: Int::from_u64(self.z3_ctx, 0),
-                                    offset_kind: None,
-                                }),
-                                facts: invariants,
-                                source: ValueSource::None,
-                            },
-                        );
-                        continue;
-                    }
-
-                    // Non-slice reference: allocate pointee.  A generic `T`
-                    // yields `sizeof_T`; a struct with a generic field is summed
-                    // (`struct_size_sym`) so a field reference can be discharged.
-                    let pointee_align = self.align_sym(pointee_ty);
-                    let pointee_size_term = self
-                        .struct_size_sym(pointee_ty)
-                        .unwrap_or_else(|| self.size_sym(pointee_ty));
-                    let (pointee_alloc_id, pointee_base) =
-                        self.allocate(pointee_size_term, pointee_align, Some(pointee_ty));
-                    if !pointee_is_maybe_uninit {
-                        self.content_mut(pointee_alloc_id).facts.initialized = true;
-                    }
-                    self.set_local(
-                        local,
-                        VmValue {
-                            z3_term: pointee_base,
-                            ty,
-                            provenance: Some(Provenance {
-                                alloc_id: pointee_alloc_id,
-                                offset: Int::from_u64(self.z3_ctx, 0),
-                                offset_kind: None,
-                            }),
-                            facts: invariants,
-                            source: ValueSource::None,
-                        },
-                    );
-
-                    // Decompose struct fields for pointer-field access.
-                    // E.g. &RawBuf → (*self).ptr should yield a valid raw ptr.
-                    if let rustc_middle::ty::TyKind::Adt(adt_def, substs) = pointee_ty.kind()
-                        && !adt_def.is_enum() {
-                            let variant = adt_def.non_enum_variant();
-                            // Track the first data allocation per element type.
-                            // Subsequent RawPtr / NonNull fields with the same
-                            // pointee type reuse the allocation with per-field
-                            // symbolic offsets, preserving the field relationships
-                            // (e.g. ptr=start, end_or_len=start+len).
-                            let mut elem_alloc: FxHashMap<Ty<'tcx>, (AllocId, Int<'z3>)> =
-                                FxHashMap::default();
-                            for (idx, field_def) in variant.fields.iter().enumerate() {
-                                let field_ty: Ty<'tcx> = mir_utils::field_ty(
-                                    self.tcx, field_def, substs,
-                                );
-                                if let rustc_middle::ty::TyKind::RawPtr(inner, _) = field_ty.kind()
-                                {
-                                    self.init_ptr_field(
-                                        local,
-                                        vec![idx],
-                                        field_ty,
-                                        *inner,
-                                        local_idx,
-                                        idx,
-                                        &mut elem_alloc,
-                                        true,
-                                        "field_nn",
-                                    );
-                                } else if let Some(pointee) = self.find_nn_pointee(field_ty) {
-                                    // Field contains NonNull<T> (possibly wrapped in Option):
-                                    // create/reuse an external allocation for the pointee.
-                                    self.init_ptr_field(
-                                        local,
-                                        vec![idx],
-                                        field_ty,
-                                        pointee,
-                                        local_idx,
-                                        idx,
-                                        &mut elem_alloc,
-                                        false,
-                                        "ref_field",
-                                    );
-                                } else if let rustc_middle::ty::TyKind::Ref(region, pointee, _) =
-                                    field_ty.kind()
-                                {
-                                    // Field contains a reference (&T, &mut T, &[T], etc.).
-                                    // Give it provenance so that as_ptr() / as_mut_ptr()
-                                    // on the field propagates the allocation info.
-                                    let elem_ty = match pointee.kind() {
-                                        rustc_middle::ty::TyKind::Slice(e) => *e,
-                                        _ => *pointee,
-                                    };
-                                    self.materialize_external_field(
-                                        local, idx, field_ty, elem_ty, Some(*region),
-                                    );
-                                } else if let rustc_middle::ty::TyKind::Slice(elem_ty) =
-                                    field_ty.kind()
-                                {
-                                    // DST slice field (e.g. `CStr { inner: [u8] }`):
-                                    // model it as an external allocation so its length
-                                    // stays symbolic instead of defaulting to a single
-                                    // element (which would make `inner.len()` == 1).
-                                    self.materialize_external_field(
-                                        local, idx, field_ty, *elem_ty, None,
-                                    );
-                                } else if let rustc_middle::ty::TyKind::Adt(adt, substs) =
-                                    field_ty.kind()
-                                {
-                                    // A heap-backed smart-pointer field (`Box<[T]>`,
-                                    // `Vec<T>`) inside a referenced struct: materialize
-                                    // the pointee allocation so field access (e.g.
-                                    // `self.buckets.iter()`) resolves to the *data*
-                                    // elements, not the whole struct.
-                                    if (api_classify::is_std_box(adt.did())
-                                        || api_classify::is_std_vec(adt.did()))
-                                        && let Some(pointee) =
-                                            substs.first().and_then(|s| s.as_type())
-                                        {
-                                            let elem_ty = match pointee.kind() {
-                                                rustc_middle::ty::TyKind::Slice(e) => *e,
-                                                _ => pointee,
-                                            };
-                                            self.materialize_external_field(
-                                                local, idx, field_ty, elem_ty, None,
-                                            );
-                                        }
-                                } else if matches!(
-                                    field_ty.kind(),
-                                    rustc_middle::ty::TyKind::Uint(_)
-                                        | rustc_middle::ty::TyKind::Int(_)
-                                        | rustc_middle::ty::TyKind::Float(_)
-                                        | rustc_middle::ty::TyKind::Bool
-                                        | rustc_middle::ty::TyKind::Char
-                                ) {
-                                    // Scalar field (e.g. `size: usize`) inside a
-                                    // referenced struct. Materialize a fresh
-                                    // symbolic value so that field reads return
-                                    // the correct term instead of the whole
-                                    // struct term. Non-scalar, non-pointer ADT
-                                    // fields (Box/Vec/etc.) are left unset so
-                                    // they keep their pre-existing heap modeling.
-                                    let field_term =
-                                        self.fresh_int(&format!("ref_field_{}_{}", local_idx, idx));
-                                    self.set_field_value(
-                                        local,
-                                        vec![idx],
-                                        VmValue {
-                                            z3_term: field_term,
-                                            ty: field_ty,
-                                            provenance: None,
-                                            facts: ValueFacts {
-                                                init: true,
-                                                ..Default::default()
-                                            },
-                                            source: ValueSource::None,
-                                        },
-                                    );
-                                }
-                            }
-                        }
+                if self.init_reference_param(local, ty, local_idx, &mut invariants) {
                     continue;
                 }
                 // ── Scalar parameter ──
@@ -617,6 +221,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     ty.kind(),
                     rustc_middle::ty::TyKind::Uint(_)
                         | rustc_middle::ty::TyKind::Int(_)
+                        | rustc_middle::ty::TyKind::Float(_)
                         | rustc_middle::ty::TyKind::Bool
                         | rustc_middle::ty::TyKind::Char
                 );
@@ -661,78 +266,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     continue;
                 }
                 // ── Array parameter ([usize; N], etc.) ──
-                // Give every array parameter a real allocation with provenance so
-                // that downstream call effects (e.g. ChecksIndexBoundsDisjoint)
-                // can record the alloc_id and property checker can match it later.
-                if let rustc_middle::ty::TyKind::Array(elem_ty, const_len) = ty.kind() {
-                    let n: Option<usize> =
-                        mir_utils::eval_array_len(self.tcx, const_len)
-                            .map(|v| v as usize);
-                    let elem_size = self.size_of_ty(*elem_ty);
-                    let step = (elem_size.max(1)) as usize;
-                    let align = self.align_sym(*elem_ty);
-                    // Symbolic-aware element size: a generic `T` gets `sizeof_T`
-                    // (≥ 1) so the allocation is `N·sizeof_T` bytes, not `N`.
-                    let elem_sym = self.size_sym(*elem_ty);
-                    // Materialized element count (the array length `N`).
-                    let n_term = match n {
-                        Some(v) => Int::from_u64(self.z3_ctx, v as u64),
-                        None => {
-                            let const_text =
-                                format!("Ty({:?}, {:?})", self.tcx.types.usize, const_len);
-                            let name =
-                                format!("const_{}", const_text.replace([':', '#', ' '], "_"));
-                            Int::new_const(self.z3_ctx, name.as_str())
-                        }
-                    };
-                    let (alloc_id, base) = if let Some(n) = n {
-                        let total =
-                            Int::mul(self.z3_ctx, &[&Int::from_u64(self.z3_ctx, n as u64), &elem_sym]);
-                        self.allocate(total, align.clone(), Some(*elem_ty))
-                    } else {
-                        // Generic N: unbounded external allocation
-                        let max_size = Int::from_u64(self.z3_ctx, i64::MAX as u64);
-                        self.allocate_external(max_size, align, Some(*elem_ty))
-                    };
-                    self.alloc_mut(alloc_id).set_slice_len(n_term);
-                    self.content_mut(alloc_id).facts.initialized = true;
-                    self.current_frame.local_alloc.insert(local, alloc_id);
-                    if let Some(n) = n {
-                        for i in 0..n {
-                            let off = i * step;
-                            let elem_term =
-                                self.fresh_int(&format!("array_{}_idx_{}", local_idx, i));
-                            self.record_byte_value(alloc_id, off, elem_term);
-                        }
-                    } else {
-                        // Generic N: create placeholder byte tracking so that
-                        // downstream Index projection ITE chains and
-                        // assert_in_bound_for_each can add constraints.
-                        let m = 16usize;
-                        for i in 0..m {
-                            let off = i * step;
-                            let elem_term =
-                                self.fresh_int(&format!("array_{}_idx_{}", local_idx, i));
-                            self.record_byte_value(alloc_id, off, elem_term);
-                        }
-                    }
-                    self.set_local(
-                        local,
-                        VmValue {
-                            z3_term: base,
-                            ty,
-                            provenance: Some(Provenance {
-                                alloc_id,
-                                offset: Int::from_u64(self.z3_ctx, 0),
-                                offset_kind: None,
-                            }),
-                            facts: ValueFacts {
-                                init: true,
-                                ..invariants
-                            },
-                            source: ValueSource::None,
-                        },
-                    );
+                if self.init_array_param(local, ty, local_idx, &mut invariants) {
                     continue;
                 }
                 // ── Struct / other parameter ──
@@ -772,60 +306,523 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             );
         }
 
-        // Entry-block provenance propagation: scan the first basic block
-        // for simple assignments that propagate parameter values.  This
-        // helps when the backward slicer omits same-block definitions
-        // (e.g. `_tmp = _1 as *const T`).  Limiting to the entry block
-        // ensures only unconditionally-executed assignments are covered.
-        if let Some(entry_bb) = self.body().basic_blocks.iter().next() {
-            for stmt in &entry_bb.statements {
-                if let StatementKind::Assign(assign) = &stmt.kind {
-                    let (dest, rvalue) = &**assign;
-                    let dest_local = dest.local;
-                    let src = match rvalue {
-                        #[cfg(rapx_rvalue_use_with_retag)]
-                        Rvalue::Use(operand, _) => Some(operand),
-                        #[cfg(not(rapx_rvalue_use_with_retag))]
-                        Rvalue::Use(operand) => Some(operand),
-                        Rvalue::Cast(_, operand, _) => Some(operand),
-                        _ => None,
-                    }
-                    .and_then(|operand| match operand {
-                        Operand::Copy(place) | Operand::Move(place)
-                            if place.projection.is_empty() =>
-                        {
-                            Some(place.local)
-                        }
-                        _ => None,
-                    });
-                    if let Some(src_local) = src
-                        && let Some(src_val) = self.local_value(src_local) {
-                            let has_better_prov = src_val.is_pointer()
-                                && src_val.facts.non_null
-                                && self.local_value(dest_local).is_none_or(|d| {
-                                    d.provenance.is_none() || !d.facts.non_null
-                                });
-                            if has_better_prov {
-                                self.set_local(
-                                    dest_local,
-                                    VmValue {
-                                        z3_term: src_val.z3_term.clone(),
-                                        ty: dest.ty(self.body(), self.tcx).ty,
-                                        provenance: src_val.provenance.clone(),
-                                        facts: src_val.facts.clone(),
-                                        source: ValueSource::None,
-                                    },
-                                );
-                            }
-                        }
-                }
+        self.propagate_entry_block_provenance();
+        self.prewarm_generic_size_align();
+    }
+
+    /// Initialize a struct/tuple/enum parameter (a non-`Box`/`Vec` ADT):
+    /// decompose it into per-field symbolic values for field-level checking.
+    fn init_struct_param(
+        &mut self,
+        local: Local,
+        ty: Ty<'tcx>,
+        local_idx: usize,
+        invariants: &mut ValueFacts<'z3>,
+    ) -> bool {
+        let rustc_middle::ty::TyKind::Adt(adt_def, _) = ty.kind() else {
+            return false;
+        };
+        if adt_def.is_enum() {
+            let term = self.fresh_int(&format!("param_{}", local_idx));
+            self.set_local(
+                local,
+                VmValue {
+                    z3_term: term,
+                    ty,
+                    provenance: None,
+                    facts: invariants.clone(),
+                    source: ValueSource::None,
+                },
+            );
+            return true;
+        }
+        let mut elem_alloc: FxHashMap<Ty<'tcx>, (AllocId, Int<'z3>)> = FxHashMap::default();
+        self.decompose_adt_fields(local, vec![], ty, local_idx, &mut elem_alloc, 0);
+        // A single-raw-pointer wrapper (e.g. `NonNull<T>`) *is* its pointer, so
+        // carry the field's provenance onto the whole local — otherwise
+        // alias/ownership reasoning can't trace a deref of `self.pointer` back to
+        // "owned" (the local's provenance would be `None`).
+        if mir_utils::is_raw_ptr_wrapper(self.tcx, adt_def.did())
+            && let Some(f0) = self.field_value(local, &[0]).cloned() {
+                let prov = f0.provenance.clone();
+                self.set_local(
+                    local,
+                    VmValue {
+                        z3_term: f0.z3_term,
+                        ty,
+                        provenance: prov,
+                        facts: ValueFacts {
+                            init: true,
+                            ..Default::default()
+                        },
+                        source: ValueSource::None,
+                    },
+                );
+                return true;
             }
+        let term = self.fresh_int(&format!("param_{}", local_idx));
+        self.set_local(
+            local,
+            VmValue {
+                z3_term: term,
+                ty,
+                provenance: None,
+                facts: ValueFacts {
+                    init: true,
+                    ..Default::default()
+                },
+                source: ValueSource::None,
+            },
+        );
+        true
+    }
+
+    /// Initialize a `Box`/`Vec`/`CString` parameter: allocate its heap pointee,
+    /// expose the owning pointer field, and (for `Vec`) bind symbolic
+    /// `len`/`cap`.
+    fn init_box_vec_param(
+        &mut self,
+        local: Local,
+        ty: Ty<'tcx>,
+        local_idx: usize,
+        invariants: &mut ValueFacts<'z3>,
+    ) -> bool {
+        let rustc_middle::ty::TyKind::Adt(adt_def, substs) = ty.kind() else {
+            return false;
+        };
+        let is_vec = api_classify::is_std_vec(adt_def.did());
+        let is_cstring = api_classify::is_std_cstring(adt_def.did());
+        if !(api_classify::is_std_box(adt_def.did()) || is_vec || is_cstring) {
+            return false;
+        }
+        let heap_ty = substs.first().and_then(|s| s.as_type()).unwrap_or(ty);
+        let heap_size = self.size_of_ty(heap_ty);
+        let heap_align = self.align_sym(heap_ty);
+        let heap_size_term = Int::from_u64(self.z3_ctx, heap_size.max(1));
+        // Vec/CString can hold many elements — use an external allocation so
+        // Allocated checks can pass for arbitrary capacity queries.
+        let (heap_alloc_id, heap_base) = if is_vec || is_cstring {
+            let max_size = Int::from_u64(self.z3_ctx, i64::MAX as u64);
+            self.allocate_external(max_size, heap_align.clone(), Some(heap_ty))
+        } else {
+            self.allocate(heap_size_term, heap_align, Some(heap_ty))
+        };
+        invariants.non_null = true;
+        invariants.init = true;
+        self.content_mut(heap_alloc_id).facts.initialized = true;
+        // Also expose the container's owning pointer field (Box's inner
+        // `Unique<T>.pointer` → `NonNull<T>`, Vec's `buf.ptr.pointer`) so that
+        // inlined bodies like `Box::into_non_null_with_allocator` — which reads
+        // `(_1.0).0` and transmutes it to `NonNull<T>` — inherit the heap
+        // pointer's non-null/aligned/allocated facts.
+        let owner_path = self
+            .container_ptr_field(ty)
+            .expect("container parameter has no owning pointer field");
+        self.set_field_value(
+            local,
+            owner_path,
+            VmValue {
+                z3_term: heap_base.clone(),
+                ty,
+                provenance: Some(Provenance {
+                    alloc_id: heap_alloc_id,
+                    offset: Int::from_u64(self.z3_ctx, 0),
+                    offset_kind: None,
+                }),
+                facts: ValueFacts {
+                    non_null: true,
+                    init: true,
+                    ..Default::default()
+                },
+                source: ValueSource::None,
+            },
+        );
+        // For Vec: assert `0 <= len <= cap` and `cap * elem_size <= isize::MAX`
+        // as path conditions (the backing allocation's slice length tracks `len`).
+        if is_vec {
+            let cap = self.fresh_int(&format!("vec_cap_{}", local_idx));
+            let len = self.fresh_int(&format!("vec_len_{}", local_idx));
+            self.materialize_vec_len_cap(cap, len, heap_size);
+        }
+        self.set_local(
+            local,
+            VmValue {
+                z3_term: heap_base,
+                ty,
+                provenance: Some(Provenance {
+                    alloc_id: heap_alloc_id,
+                    offset: Int::from_u64(self.z3_ctx, 0),
+                    offset_kind: None,
+                }),
+                facts: invariants.clone(),
+                source: ValueSource::None,
+            },
+        );
+        true
+    }
+
+    /// Initialize an array parameter (`[T; N]`): give it a real allocation with
+    /// provenance so downstream call effects can record the alloc_id.
+    fn init_array_param(
+        &mut self,
+        local: Local,
+        ty: Ty<'tcx>,
+        local_idx: usize,
+        invariants: &mut ValueFacts<'z3>,
+    ) -> bool {
+        let rustc_middle::ty::TyKind::Array(elem_ty, const_len) = ty.kind() else {
+            return false;
+        };
+        let n: Option<usize> = mir_utils::eval_array_len(self.tcx, const_len).map(|v| v as usize);
+        let elem_size = self.size_of_ty(*elem_ty);
+        let step = (elem_size.max(1)) as usize;
+        let align = self.align_sym(*elem_ty);
+        // Symbolic-aware element size: a generic `T` gets `sizeof_T` (≥ 1) so the
+        // allocation is `N·sizeof_T` bytes, not `N`.
+        let elem_sym = self.size_sym(*elem_ty);
+        // Materialized element count (the array length `N`).
+        let n_term = match n {
+            Some(v) => Int::from_u64(self.z3_ctx, v as u64),
+            None => {
+                let const_text = format!("Ty({:?}, {:?})", self.tcx.types.usize, const_len);
+                let name = format!("const_{}", const_text.replace([':', '#', ' '], "_"));
+                Int::new_const(self.z3_ctx, name.as_str())
+            }
+        };
+        let (alloc_id, base) = if let Some(n) = n {
+            let total = Int::mul(self.z3_ctx, &[&Int::from_u64(self.z3_ctx, n as u64), &elem_sym]);
+            self.allocate(total, align.clone(), Some(*elem_ty))
+        } else {
+            // Generic N: unbounded external allocation
+            let max_size = Int::from_u64(self.z3_ctx, i64::MAX as u64);
+            self.allocate_external(max_size, align, Some(*elem_ty))
+        };
+        self.alloc_mut(alloc_id).set_slice_len(n_term);
+        self.content_mut(alloc_id).facts.initialized = true;
+        self.current_frame.local_alloc.insert(local, alloc_id);
+        invariants.init = true;
+        // Constant `N` records every element; a generic `N` records a bounded
+        // placeholder prefix (16 elements) so downstream Index ITE chains /
+        // assert_in_bound_for_each can add constraints.
+        for i in 0..n.unwrap_or(16) {
+            let off = i * step;
+            let elem_term = self.fresh_int(&format!("array_{}_idx_{}", local_idx, i));
+            self.record_byte_value(alloc_id, off, elem_term);
+        }
+        self.set_local(
+            local,
+            VmValue {
+                z3_term: base,
+                ty,
+                provenance: Some(Provenance {
+                    alloc_id,
+                    offset: Int::from_u64(self.z3_ctx, 0),
+                    offset_kind: None,
+                }),
+                facts: invariants.clone(),
+                source: ValueSource::None,
+            },
+        );
+        true
+    }
+
+    /// Initialize a reference parameter (`&T`, `&mut T`): create a symbolic
+    /// allocation for the pointee, attach provenance, and (for a struct pointee)
+    /// materialize its pointer/scalar fields.
+    fn init_reference_param(
+        &mut self,
+        local: Local,
+        ty: Ty<'tcx>,
+        local_idx: usize,
+        invariants: &mut ValueFacts<'z3>,
+    ) -> bool {
+        let rustc_middle::ty::TyKind::Ref(..) = ty.kind() else {
+            return false;
+        };
+        // Prefer the precise pointee type from the function signature
+        // (late-bound-liberated) so reference-field regions are `'a` rather than
+        // MIR's erased `ReErased`.
+        let precise_pointee = crate::verify::vm::region::fn_arg_ty(
+            self.tcx,
+            self.current_frame.current_def_id,
+            local_idx - 1,
+        )
+        .and_then(|precise_ty| match precise_ty.kind() {
+            rustc_middle::ty::TyKind::Ref(_, inner, _) => Some(*inner),
+            _ => None,
+        });
+        let pointee_ty = precise_pointee.unwrap_or_else(|| {
+            if let rustc_middle::ty::TyKind::Ref(_, inner_ty, _) = ty.kind() {
+                *inner_ty
+            } else {
+                ty
+            }
+        });
+        // `&MaybeUninit<T>` / `&[MaybeUninit<T>]` carry no validity invariant —
+        // the content need not be initialized — so do not claim `Init` for them
+        // (the content property reduces to `Typed`).
+        let pointee_is_maybe_uninit = api_classify::is_maybe_uninit_ty(pointee_ty);
+
+        invariants.non_null = true;
+        if !pointee_is_maybe_uninit {
+            invariants.init = true;
+        }
+        // A reference always points within a live allocation, so it carries the
+        // pointer-validity facts (`NonNull`, `Allocated`, `InBound`) explicitly —
+        // the content property `Init` must not be the only source of pointer
+        // validity (see std-subsumption.rs).
+        invariants.in_bounds = true;
+
+        if let rustc_middle::ty::TyKind::Slice(elem_ty) = pointee_ty.kind() {
+            let elem_size = self.size_of_ty(*elem_ty);
+            let len = self.fresh_int(&format!("slice_len_{}", local_idx));
+            let zero = Int::from_u64(self.z3_ctx, 0);
+            self.constraints.assertions.push(len.ge(&zero));
+            let isize_max = Int::from_i64(self.z3_ctx, i64::MAX);
+            let elem_sz = if elem_size > 0 {
+                elem_size
+            } else {
+                mir_utils::size_of_generic_param(
+                    self.tcx,
+                    self.current_frame.current_def_id,
+                    *elem_ty,
+                )
+                .max(1)
+            };
+            let elem_sz_term = Int::from_u64(self.z3_ctx, elem_sz);
+            self.constraints
+                .assertions
+                .push(Int::mul(self.z3_ctx, &[&len, &elem_sz_term]).le(&isize_max));
+            // The data allocation's byte size uses the shared symbolic `sizeof_T`
+            // so `InBound` can cancel the factor (`len·S / S == len`);
+            // `allocate_slice` computes `size = len * sizeof_T` and materializes
+            // `len` together so the two can never diverge. The alignment is the
+            // element type's alignment — symbolic (`align_T`) for a generic
+            // element type, with the layout constraint `sizeof_T % align_T == 0`
+            // established by `align_sym`.
+            let elem_align = self.align_sym(*elem_ty);
+            let elem_size_sym = self.size_sym(*elem_ty);
+            let (data_alloc_id, data_base) =
+                self.allocate_slice(len, elem_size_sym, elem_align, Some(*elem_ty));
+            if !pointee_is_maybe_uninit {
+                self.content_mut(data_alloc_id).facts.initialized = true;
+            }
+            // Record placeholder per-byte symbols for the first few elements so
+            // byte-level checkers (`ValidCStr` interior-NUL, `ValidString` UTF-8)
+            // can reason over symbolic slice bytes (the length is symbolic, so
+            // only a bounded prefix is materialized — mirrors the array parameter
+            // handling).
+            let step = (elem_size.max(1)) as usize;
+            let m = 16usize;
+            for i in 0..m {
+                let off = i * step;
+                let elem_term = self.fresh_int(&format!("slice_{}_idx_{}", local_idx, i));
+                self.record_byte_value(data_alloc_id, off, elem_term);
+            }
+            self.set_local(
+                local,
+                VmValue {
+                    z3_term: data_base,
+                    ty,
+                    provenance: Some(Provenance {
+                        alloc_id: data_alloc_id,
+                        offset: Int::from_u64(self.z3_ctx, 0),
+                        offset_kind: None,
+                    }),
+                    facts: invariants.clone(),
+                    source: ValueSource::None,
+                },
+            );
+            return true;
         }
 
-        // Pre-warm a shared symbolic `sizeof_T` / `align_T` for every generic type
-        // parameter of the caller.  Warming every declared type parameter (not
-        // just those in the signature) makes the read-only `*_sym_read` fallback
-        // dead.
+        // Non-slice reference: allocate pointee.  A generic `T` yields
+        // `sizeof_T`; a struct with a generic field is summed (`struct_size_sym`)
+        // so a field reference can be discharged.
+        let pointee_align = self.align_sym(pointee_ty);
+        let pointee_size_term = self
+            .struct_size_sym(pointee_ty)
+            .unwrap_or_else(|| self.size_sym(pointee_ty));
+        let (pointee_alloc_id, pointee_base) =
+            self.allocate(pointee_size_term, pointee_align, Some(pointee_ty));
+        if !pointee_is_maybe_uninit {
+            self.content_mut(pointee_alloc_id).facts.initialized = true;
+        }
+        self.set_local(
+            local,
+            VmValue {
+                z3_term: pointee_base,
+                ty,
+                provenance: Some(Provenance {
+                    alloc_id: pointee_alloc_id,
+                    offset: Int::from_u64(self.z3_ctx, 0),
+                    offset_kind: None,
+                }),
+                facts: invariants.clone(),
+                source: ValueSource::None,
+            },
+        );
+
+        // Decompose struct fields for pointer-field access.
+        // E.g. &RawBuf → (*self).ptr should yield a valid raw ptr.
+        if let rustc_middle::ty::TyKind::Adt(adt_def, substs) = pointee_ty.kind()
+            && !adt_def.is_enum() {
+                let variant = adt_def.non_enum_variant();
+                // Track the first data allocation per element type. Subsequent
+                // RawPtr / NonNull fields with the same pointee type reuse the
+                // allocation with per-field symbolic offsets, preserving the field
+                // relationships (e.g. ptr=start, end_or_len=start+len).
+                let mut elem_alloc: FxHashMap<Ty<'tcx>, (AllocId, Int<'z3>)> =
+                    FxHashMap::default();
+                for (idx, field_def) in variant.fields.iter().enumerate() {
+                    let field_ty: Ty<'tcx> = mir_utils::field_ty(self.tcx, field_def, substs);
+                    if let rustc_middle::ty::TyKind::RawPtr(inner, _) = field_ty.kind() {
+                        self.init_ptr_field(
+                            local,
+                            vec![idx],
+                            field_ty,
+                            *inner,
+                            local_idx,
+                            idx,
+                            &mut elem_alloc,
+                            true,
+                            "field_nn",
+                        );
+                    } else if let Some(pointee) = self.find_nn_pointee(field_ty) {
+                        // Field contains NonNull<T> (possibly wrapped in Option):
+                        // create/reuse an external allocation for the pointee.
+                        self.init_ptr_field(
+                            local,
+                            vec![idx],
+                            field_ty,
+                            pointee,
+                            local_idx,
+                            idx,
+                            &mut elem_alloc,
+                            false,
+                            "ref_field",
+                        );
+                    } else if let rustc_middle::ty::TyKind::Ref(region, pointee, _) =
+                        field_ty.kind()
+                    {
+                        // Field contains a reference (&T, &mut T, &[T], etc.). Give
+                        // it provenance so that as_ptr() / as_mut_ptr() on the field
+                        // propagates the allocation info.
+                        let elem_ty = match pointee.kind() {
+                            rustc_middle::ty::TyKind::Slice(e) => *e,
+                            _ => *pointee,
+                        };
+                        self.materialize_external_field(local, idx, field_ty, elem_ty, Some(*region));
+                    } else if let rustc_middle::ty::TyKind::Slice(elem_ty) = field_ty.kind() {
+                        // DST slice field (e.g. `CStr { inner: [u8] }`): model it
+                        // as an external allocation so its length stays symbolic
+                        // instead of defaulting to a single element (which would
+                        // make `inner.len()` == 1).
+                        self.materialize_external_field(local, idx, field_ty, *elem_ty, None);
+                    } else if let rustc_middle::ty::TyKind::Adt(adt, substs) = field_ty.kind() {
+                        // A heap-backed smart-pointer field (`Box<[T]>`, `Vec<T>`)
+                        // inside a referenced struct: materialize the pointee
+                        // allocation so field access (e.g. `self.buckets.iter()`)
+                        // resolves to the *data* elements, not the whole struct.
+                        if (api_classify::is_std_box(adt.did())
+                            || api_classify::is_std_vec(adt.did()))
+                            && let Some(pointee) = substs.first().and_then(|s| s.as_type())
+                            {
+                                let elem_ty = match pointee.kind() {
+                                    rustc_middle::ty::TyKind::Slice(e) => *e,
+                                    _ => pointee,
+                                };
+                                self.materialize_external_field(local, idx, field_ty, elem_ty, None);
+                            }
+                    } else if matches!(
+                        field_ty.kind(),
+                        rustc_middle::ty::TyKind::Uint(_)
+                            | rustc_middle::ty::TyKind::Int(_)
+                            | rustc_middle::ty::TyKind::Float(_)
+                            | rustc_middle::ty::TyKind::Bool
+                            | rustc_middle::ty::TyKind::Char
+                    ) {
+                        // Scalar field (e.g. `size: usize`) inside a referenced
+                        // struct. Materialize a fresh symbolic value so that field
+                        // reads return the correct term instead of the whole struct
+                        // term. Non-scalar, non-pointer ADT fields (Box/Vec/etc.)
+                        // are left unset so they keep their pre-existing heap
+                        // modeling.
+                        let field_term =
+                            self.fresh_int(&format!("ref_field_{}_{}", local_idx, idx));
+                        self.set_field_value(
+                            local,
+                            vec![idx],
+                            VmValue {
+                                z3_term: field_term,
+                                ty: field_ty,
+                                provenance: None,
+                                facts: ValueFacts {
+                                    init: true,
+                                    ..Default::default()
+                                },
+                                source: ValueSource::None,
+                            },
+                        );
+                    }
+                }
+            }
+        true
+    }
+
+    /// Propagate parameter provenance through the entry block's simple
+    /// assignments (`_tmp = _1`, `_tmp = _1 as *const T`), which the backward
+    /// slicer may omit as same-block definitions.
+    fn propagate_entry_block_provenance(&mut self) {
+        let Some(entry_bb) = self.body().basic_blocks.iter().next() else {
+            return;
+        };
+        for stmt in &entry_bb.statements {
+            let StatementKind::Assign(assign) = &stmt.kind else {
+                continue;
+            };
+            let (dest, rvalue) = &**assign;
+            let dest_local = dest.local;
+            let src = match rvalue {
+                #[cfg(rapx_rvalue_use_with_retag)]
+                Rvalue::Use(operand, _) => Some(operand),
+                #[cfg(not(rapx_rvalue_use_with_retag))]
+                Rvalue::Use(operand) => Some(operand),
+                Rvalue::Cast(_, operand, _) => Some(operand),
+                _ => None,
+            }
+            .and_then(|operand| match operand {
+                Operand::Copy(place) | Operand::Move(place) if place.projection.is_empty() => {
+                    Some(place.local)
+                }
+                _ => None,
+            });
+            if let Some(src_local) = src
+                && let Some(src_val) = self.local_value(src_local) {
+                    let has_better_prov = src_val.is_pointer()
+                        && src_val.facts.non_null
+                        && self.local_value(dest_local).is_none_or(|d| {
+                            d.provenance.is_none() || !d.facts.non_null
+                        });
+                    if has_better_prov {
+                        self.set_local(
+                            dest_local,
+                            VmValue {
+                                z3_term: src_val.z3_term.clone(),
+                                ty: dest.ty(self.body(), self.tcx).ty,
+                                provenance: src_val.provenance.clone(),
+                                facts: src_val.facts.clone(),
+                                source: ValueSource::None,
+                            },
+                        );
+                    }
+                }
+        }
+    }
+
+    /// Pre-warm a shared symbolic `sizeof_T` / `align_T` for every generic type
+    /// parameter of the caller, so the read-only `*_sym_read` fallback is dead.
+    fn prewarm_generic_size_align(&mut self) {
         let mut warmed: FxHashSet<Ty<'tcx>> = FxHashSet::default();
         for param in self.tcx.generics_of(self.current_frame.current_def_id).own_params.iter() {
             if let rustc_middle::ty::GenericParamDefKind::Type { .. } = param.kind {
@@ -2162,7 +2159,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     let box_prov = if let rustc_middle::ty::TyKind::Adt(adt, _) = dest_ty.kind() {
                         if api_classify::is_std_box(adt.did()) {
                             self.container_ptr_field(dest_ty)
-                                .and_then(|(path, _)| self.field_value(dest_local, &path))
+                                .and_then(|path| self.field_value(dest_local, &path))
                                 .and_then(|v| v.provenance.clone())
                         } else {
                             None
@@ -4285,7 +4282,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
-    pub(crate) fn container_ptr_field(&self, ty: Ty<'tcx>) -> Option<(Vec<usize>, Ty<'tcx>)> {
+    pub(crate) fn container_ptr_field(&self, ty: Ty<'tcx>) -> Option<Vec<usize>> {
         self.container_ptr_field_inner(ty, Vec::new(), 0)
     }
 
@@ -4294,7 +4291,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         ty: Ty<'tcx>,
         prefix: Vec<usize>,
         depth: usize,
-    ) -> Option<(Vec<usize>, Ty<'tcx>)> {
+    ) -> Option<Vec<usize>> {
         use rustc_middle::ty::TyKind;
         if depth > 4 {
             return None;
@@ -4309,11 +4306,11 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                         mir_utils::field_ty(self.tcx, field_def, substs);
                     let mut path = prefix.clone();
                     path.push(idx);
-                    if let TyKind::RawPtr(inner, _) = field_ty.kind() {
-                        return Some((path, *inner));
+                    if let TyKind::RawPtr(..) = field_ty.kind() {
+                        return Some(path);
                     }
-                    if let Some(pointee) = self.find_nn_pointee(field_ty) {
-                        return Some((path, pointee));
+                    if self.find_nn_pointee(field_ty).is_some() {
+                        return Some(path);
                     }
                     if let Some(found) =
                         self.container_ptr_field_inner(field_ty, path, depth + 1)
@@ -4340,7 +4337,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         if !matches!(view_ty.kind(), TyKind::Adt(..)) {
             return None;
         }
-        let (path, _) = self.container_ptr_field(view_ty)?;
+        let path = self.container_ptr_field(view_ty)?;
         self.load_value(header, view_ty, &path)?.provenance_alloc_id()
     }
 
@@ -4404,7 +4401,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         if !matches!(view_ty.kind(), TyKind::Adt(..)) {
             return false;
         }
-        let Some((path, _)) = self.container_ptr_field(view_ty) else {
+        let Some(path) = self.container_ptr_field(view_ty) else {
             return false;
         };
         let ptr_field = VmValue {

@@ -1017,7 +1017,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// `Box` produced by `into_boxed_slice`, which only records the whole value).
     pub(crate) fn owner_ptr_field(&self, local: Local) -> Option<&VmValue<'z3, 'tcx>> {
         let ty = self.body().local_decls[local].ty;
-        if let Some((path, _)) = self.container_ptr_field(ty)
+        if let Some(path) = self.container_ptr_field(ty)
             && let Some(v) = self.field_value(local, &path)
                 && v.provenance_alloc_id().is_some() {
                     return Some(v);
@@ -1035,7 +1035,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// second owner of the heap allocation it no longer owns.
     pub(crate) fn invalidate_owner_field(&mut self, local: Local) {
         let ty = self.body().local_decls[local].ty;
-        let Some((path, _)) = self.container_ptr_field(ty) else {
+        let Some(path) = self.container_ptr_field(ty) else {
             return;
         };
         let Some(mut fv) = self.field_value(local, &path).cloned() else {
