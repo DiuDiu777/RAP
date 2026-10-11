@@ -25,6 +25,7 @@ fn main() {
     emit_check_cfg("rapx_has_deeply_resolve_ignoring_regions");
     emit_check_cfg("rapx_has_compiler_entrypoint");
     emit_check_cfg("rapx_defkind_const_struct");
+    emit_check_cfg("rapx_has_boxraw");
 
     emit_cfg("rapx_ge_95", minor >= 95);
     emit_cfg("rapx_ge_99", minor >= 99);
@@ -150,6 +151,13 @@ fn main() {
             "pub fn compiler_entrypoint",
         ),
     );
+    // `Box<T>`'s inner pointer was renamed `Unique<T>` -> `BoxRaw<T>` in
+    // nightly 1.101 (around 2026-10-08).  The heap-ownership analysis keys off
+    // the concrete inner type name, so detect the rename in the std source.
+    emit_cfg(
+        "rapx_has_boxraw",
+        std_src_contains_path("library/alloc/src/boxed.rs", "struct BoxRaw"),
+    );
 }
 
 fn emit_check_cfg(name: &str) {
@@ -198,6 +206,16 @@ fn rustc_src_contains(needle: &str) -> bool {
 fn rustc_src_contains_path(relative_path: &str, needle: &str) -> bool {
     let sysroot = get_sysroot();
     let path = format!("{}/lib/rustlib/rustc-src/rust/{}", sysroot, relative_path);
+    std::fs::read_to_string(path)
+        .map(|s| s.contains(needle))
+        .unwrap_or(false)
+}
+
+/// Check whether a specific file in the standard-library source tree (the
+/// `rust-src` component) contains a string.
+fn std_src_contains_path(relative_path: &str, needle: &str) -> bool {
+    let sysroot = get_sysroot();
+    let path = format!("{}/lib/rustlib/src/rust/{}", sysroot, relative_path);
     std::fs::read_to_string(path)
         .map(|s| s.contains(needle))
         .unwrap_or(false)

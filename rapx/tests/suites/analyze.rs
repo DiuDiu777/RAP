@@ -182,13 +182,20 @@ fn heapowner_cell() {
 fn heapowner_collections() {
     let output = run_with_args("analyze/heapowner_collections", CMD_ANALYZE_HEAPOWNER);
     for pattern in [
-        "Unique\": True, <0>",
         "Box\": True, <0,1>",
         "Vec\": True, <0,1>",
         "String\": True, <>",
         "LinkedList\": True, <1,1>",
     ] {
         assert_contain(&output, pattern);
+    }
+    #[cfg(rapx_has_boxraw)]
+    {
+        assert_contain(&output, "BoxRaw\": True, <0>");
+    }
+    #[cfg(not(rapx_has_boxraw))]
+    {
+        assert_contain(&output, "Unique\": True, <0>");
     }
     #[cfg(rapx_ge_95)]
     {

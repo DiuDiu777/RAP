@@ -179,6 +179,16 @@ pub fn is_str_as_bytes(callee: Option<DefId>) -> bool {
     any_of(callee, &[def_id::str_as_bytes()])
 }
 
+/// `core::ub_checks::check_language_ub` (and its `runtime`/`compiletime`
+/// helpers) gates `assert_unsafe_precondition!` behind `debug_assertions` /
+/// `ub_checks`.  The VM models release semantics (checks disabled), so this
+/// gate always evaluates to "no check" (`false`); letting it inline would pull
+/// in the branchy `panic!` bodies (`maybe_is_aligned`, `is_null`, …) up to the
+/// recursion limit for no constraint value.
+pub fn is_ub_checks_gate(tcx: TyCtxt<'_>, callee: DefId) -> bool {
+    tcx.def_path_str(callee).contains("ub_checks::check_language_ub")
+}
+
 // ── Pointer arithmetic ────────────────────────────────────────────
 // Direction (`add` vs `sub`) and granularity (`element` vs `byte`) are two
 // orthogonal axes. Each of the four combinations is a first-class classifier

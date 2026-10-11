@@ -52,6 +52,20 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             self.propagate_const_bytes_to_tracked(args);
         }
 
+        // `assert_unsafe_precondition!` gates are disabled under release
+        // semantics; bind them to `false` so their branchy panic bodies are not
+        // inlined (which would otherwise recurse to the depth limit).
+        if let Some(c) = callee
+            && api_classify::is_ub_checks_gate(self.tcx, c)
+        {
+            let dest_ty = self.body().local_decls[destination].ty;
+            self.set_local(
+                destination,
+                VmValue::new(Int::from_u64(self.z3_ctx, 0), dest_ty),
+            );
+            return;
+        }
+
         // Registry summary, else the transparent-deref / unknown fallback.
         let summary = crate::verify::call_summary::builtin_models::lookup_effect(
             self.tcx,
@@ -85,7 +99,13 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         dest: Local,
     ) -> bool {
         if self.inline.inline_depth >= MAX_INLINE_DEPTH {
-            self.inline.inline_depth_exceeded = true;
+            // Leave a distinguishable symbolic value in `dest` so the checker
+            // can detect that this result depends on a truncated inline and
+            // report `Unknown` instead of failing on an unconstrained term.
+            let dest_ty = self.body().local_decls[dest].ty;
+            let truncated_term = self.fresh_int("inline_truncated");
+            self.inline.inline_truncated_terms.insert(truncated_term.clone());
+            self.set_local(dest, VmValue::new(truncated_term, dest_ty));
             return false;
         }
         self.inline.inline_depth += 1;
@@ -230,8 +250,11 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     }
 
     /// Resolve a `SwitchInt` discriminant to a constant `u64`, following a
-    /// single local-assignment chain (a `cfg!`-style runtime-check flag).
+    /// single local-assignment chain (a `cfg!`-style runtime-check flag) or a
+    /// call to an `assert_unsafe_precondition!` gate (`check_language_ub`),
+    /// which is disabled under release semantics.
     fn switch_discr_const(
+        &self,
         body: &rustc_middle::mir::Body<'tcx>,
         discr: &Operand<'tcx>,
     ) -> Option<u64> {
@@ -257,6 +280,25 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     continue;
                 }
                 return mir_utils::rvalue_runtime_checks_value(rvalue);
+            }
+        }
+        // `check_language_ub` is a function *call* (not an assignment), whose
+        // destination is the discriminant.  It gates the precondition check
+        // behind `debug_assertions`/`ub_checks` and is `false` under the release
+        // semantics the VM models.
+        for bbd in body.basic_blocks.iter() {
+            let terminator = bbd.terminator();
+            if let TerminatorKind::Call {
+                func, destination, ..
+            } = &terminator.kind
+            {
+                if destination.local == p.local
+                    && destination.projection.is_empty()
+                    && let Some(callee) = mir_utils::dep_callee_def_id(func)
+                    && api_classify::is_ub_checks_gate(self.tcx, callee)
+                {
+                    return Some(0);
+                }
             }
         }
         None
@@ -311,7 +353,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 }
                 TerminatorKind::SwitchInt { discr, targets } => {
                     // A constant discriminant folds to a single live edge.
-                    if let Some(v) = Self::switch_discr_const(self.body(), discr) {
+                    if let Some(v) = self.switch_discr_const(self.body(), discr) {
                         let t = targets
                             .iter()
                             .find(|(val, _)| *val == v as u128)

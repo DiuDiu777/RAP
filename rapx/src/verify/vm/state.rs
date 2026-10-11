@@ -408,10 +408,14 @@ pub(crate) struct InlineCtx<'z3, 'tcx> {
     /// Current inlining depth (nested inlined callees), bounded by
     /// `MAX_INLINE_DEPTH`.
     pub inline_depth: usize,
-    /// Set once when an inlined callee is rejected for hitting
-    /// `MAX_INLINE_DEPTH`; marks this path's memory state as incomplete so the
-    /// checker reports `Unknown` instead of a spurious failure.
-    pub inline_depth_exceeded: bool,
+    /// The symbolic terms introduced for a callee rejected for hitting
+    /// `MAX_INLINE_DEPTH`.  A property whose target value (or a checkpoint
+    /// argument it reads, or a pointer provenance offset) is one of these terms
+    /// depends on the truncated inline, so its proof is incomplete and the
+    /// checker reports `Unknown` instead of a spurious failure.  Terms propagate
+    /// through arithmetic (e.g. `ptr.add(truncated)` keeps `truncated` as its
+    /// element offset), so only the directly-dependent properties are affected.
+    pub inline_truncated_terms: FxHashSet<Int<'z3>>,
     /// During `exec_inline_call`, maps each callee argument index to the
     /// *caller* local its value points at (resolved from the reference's
     /// address term before the caller's address map is saved away).  Used by
