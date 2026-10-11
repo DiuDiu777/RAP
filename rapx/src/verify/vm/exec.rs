@@ -784,10 +784,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             let (dest, rvalue) = &**assign;
             let dest_local = dest.local;
             let src = match rvalue {
-                #[cfg(rapx_rvalue_use_with_retag)]
-                Rvalue::Use(operand, _) => Some(operand),
-                #[cfg(not(rapx_rvalue_use_with_retag))]
-                Rvalue::Use(operand) => Some(operand),
+                Rvalue::Use(operand, ..) => Some(operand),
                 Rvalue::Cast(_, operand, _) => Some(operand),
                 _ => None,
             }
@@ -904,7 +901,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     ) {
         // A `NonNull<T>` guarantees its inner pointer is aligned to `T`; a raw
         // pointer carries no such guarantee.
-        let invariants = if is_raw_ptr {
+        let mut invariants = if is_raw_ptr {
             // A raw pointer carries no non-null / init / align guarantee; those
             // facts must come from the struct's own `#[rapx::invariant]`s.
             ValueFacts::default()
@@ -936,10 +933,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 .push(len_term.ge(&Int::from_u64(self.z3_ctx, 0)));
             let prost_offset = Int::mul(self.z3_ctx, &[&len_term, &elem_size]);
             let field_term = Int::add(self.z3_ctx, &[base, &prost_offset]);
-            let mut invariants = invariants;
-            if is_raw_ptr {
-                invariants.align_n = Some(elem_align);
-            }
+            invariants.align_n = Some(elem_align);
             self.set_field_value(
                 local,
                 path,
@@ -1287,7 +1281,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     }
 
     fn exec_assign(&mut self, place: &Place<'tcx>, rvalue: &Rvalue<'tcx>) {
-        let value = self.eval_rvalue(place, rvalue);
+        let mut value = self.eval_rvalue(place, rvalue);
 
         let has_deref = place
             .projection
@@ -1298,10 +1292,9 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             self.record_projected_store(place, &value);
             self.record_indexed_store_for_vm(place, &value);
         }
+        value.facts.init = true;
 
         if place.projection.is_empty() {
-            let mut value = value;
-            value.facts.init = true;
             self.set_local(place.local, value);
             // On a whole-place move (`_3 = move _4`), the destination is a fresh
             // container slot: re-point its whole-value provenance from the source's
@@ -1309,13 +1302,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             // destination's owning field (copied below) rather than the moved-out
             // source's (which is invalidated after the propagation).
             let moved_from = match rvalue {
-                #[cfg(rapx_rvalue_use_with_retag)]
-                Rvalue::Use(operand, _) => match operand {
-                    Operand::Move(p) if p.projection.is_empty() => Some(p.local),
-                    _ => None,
-                },
-                #[cfg(not(rapx_rvalue_use_with_retag))]
-                Rvalue::Use(operand) => match operand {
+                Rvalue::Use(operand, ..) => match operand {
                     Operand::Move(p) if p.projection.is_empty() => Some(p.local),
                     _ => None,
                 },
@@ -1340,10 +1327,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             // so `(_1.2).1` becomes `_11.1` — this keeps the `NonNull` node
             // field's provenance alive across `NodeRef` moves.
             let src_place: Option<&Place<'tcx>> = match rvalue {
-                #[cfg(rapx_rvalue_use_with_retag)]
-                Rvalue::Use(Operand::Copy(p) | Operand::Move(p), _) => Some(p),
-                #[cfg(not(rapx_rvalue_use_with_retag))]
-                Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) => Some(p),
+                Rvalue::Use(Operand::Copy(p) | Operand::Move(p), ..) => Some(p),
                 Rvalue::CopyForDeref(p) => Some(p),
                 _ => None,
             };
@@ -1406,9 +1390,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             if !field_indices.is_empty() {
                 // Track cumulative ptr offset for Iter/IterMut before moving value.
                 let track_iter = field_indices == [0];
-                let mut write_value = value;
-                write_value.facts.init = true;
-                self.set_field_value(place.local, field_indices, write_value);
+                self.set_field_value(place.local, field_indices, value);
                 if track_iter {
                     self.track_iter_ptr_update(place.local);
                 }
@@ -1442,9 +1424,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     // `self.len += 1`.)
                     if self.field_value(place.local, &field_indices).is_some() {
                         let is_iter_field = field_indices == [0];
-                        let mut write_value = value;
-                        write_value.facts.init = true;
-                        self.set_field_value(place.local, field_indices, write_value);
+                        self.set_field_value(place.local, field_indices, value);
                         if is_iter_field {
                             self.track_iter_ptr_update(place.local);
                         }
@@ -1457,9 +1437,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     let pointed = self.local_value(place.local).cloned();
                     if let Some(pointed) = pointed {
                         if let Some(referent) = self.find_local_by_address(&pointed.z3_term) {
-                            let mut write_value = value;
-                            write_value.facts.init = true;
-                            self.set_field_value(referent, field_indices, write_value);
+                            self.set_field_value(referent, field_indices, value);
                         } else if let Some(arg_idx) = place.local.as_usize().checked_sub(1) {
                             // Inline frame: the caller's address map is saved
                             // away, so resolve through the precomputed
@@ -1667,16 +1645,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         let dest_ty = dest_place.ty(self.body(), self.tcx).ty;
 
         match rvalue {
-            #[cfg(rapx_rvalue_use_with_retag)]
-            Rvalue::Use(operand, _retag) => {
-                let mut val = self.value_of_operand(operand);
-                self.try_materialize_const_bytes(&mut val, operand);
-                self.inject_layout_constraints(operand, &val);
-                self.try_emit_gcd_divisibility(operand, &val);
-                val
-            }
-            #[cfg(not(rapx_rvalue_use_with_retag))]
-            Rvalue::Use(operand) => {
+            Rvalue::Use(operand, ..) => {
                 let mut val = self.value_of_operand(operand);
                 self.try_materialize_const_bytes(&mut val, operand);
                 self.inject_layout_constraints(operand, &val);
@@ -1702,7 +1671,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                         } else {
                             false
                         };
-                    let src_in_bounds = if is_slice_ref && is_from_raw_parts_like && has_deref {
+                    let is_slice_ref_from_raw = is_slice_ref && is_from_raw_parts_like && has_deref;
+                    let src_in_bounds = if is_slice_ref_from_raw {
                         addr.is_pointer()
                     } else {
                         self.local_value(place.local)
@@ -1714,7 +1684,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     // type, but its provenance here may reuse `self`'s allocation
                     // (whose align is that of `T`).  Record the element type's
                     // alignment so `check_align` can discharge it.
-                    let slice_elem_align = if is_slice_ref && is_from_raw_parts_like && has_deref {
+                    let slice_elem_align = if is_slice_ref_from_raw {
                         if let rustc_middle::ty::TyKind::Ref(_, inner, _) = dest_ty.kind() {
                             if let rustc_middle::ty::TyKind::Slice(elem) = inner.kind() {
                                 let a = self.align_sym(*elem);
@@ -1804,109 +1774,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             }
             Rvalue::BinaryOp(op, pair) => {
                 let (lhs_op, rhs_op) = &**pair;
-                let lhs = self.value_of_operand(lhs_op);
-                let rhs = self.value_of_operand(rhs_op);
-                let term = self.eval_binary_op(*op, &lhs.z3_term, &rhs.z3_term);
-                let provenance = self.provenance_for_binary_op(*op, &lhs, &rhs);
-                let invariants = self.facts_for_binary_op(*op, &lhs, &rhs, &provenance);
-                let lhs_pk = mir_utils::operand_place(lhs_op);
-                let rhs_pk = mir_utils::operand_place(rhs_op);
-                // Carry the direct boolean condition alongside the ite-encoded
-                // result so `switchInt`/`Assert` can record a precise path
-                // condition (e.g. `offset <= len - 16`) instead of
-                // `ite(cond, 1, 0) != 0`, which the SMT solver often fails to
-                // unfold.
-                let cmp_cond = self
-                    .iter_ptr_comparison(*op, &lhs, &rhs)
-                    .or_else(|| match *op {
-                        BinOp::Le => Some(lhs.z3_term.le(&rhs.z3_term)),
-                        BinOp::Lt => Some(lhs.z3_term.lt(&rhs.z3_term)),
-                        BinOp::Ge => Some(lhs.z3_term.ge(&rhs.z3_term)),
-                        BinOp::Gt => Some(lhs.z3_term.gt(&rhs.z3_term)),
-                        BinOp::Eq => Some(lhs.z3_term._eq(&rhs.z3_term)),
-                        BinOp::Ne => Some(lhs.z3_term._eq(&rhs.z3_term).not()),
-                        _ => None,
-                    });
-                // Add Euclidean division identity for Div and Rem:
-                //   lhs == (lhs/rhs)*rhs + lhs%rhs  ∧  lhs%rhs >= 0
-                // Also add (lhs/rhs)*rhs <= lhs directly for Div for robustness.
-                // This lets later checks prove (x/N)*N <= x and x%N >= 0.
-                // IMPORTANT: use `term` (returned by eval_binary_op) as the
-                // quotient, NOT a separate `lhs.div(&rhs)` call, so that the
-                // axiom constrains the SAME Z3 term used in subsequent ops.
-                if matches!(*op, BinOp::Div | BinOp::Rem) {
-                    let quot = if matches!(*op, BinOp::Div) {
-                        &term
-                    } else {
-                        &lhs.z3_term.div(&rhs.z3_term)
-                    };
-                    let rem = lhs.z3_term.rem(&rhs.z3_term);
-                    let mul_term = Int::mul(self.z3_ctx, &[quot, &rhs.z3_term]);
-                    let sum_term = Int::add(self.z3_ctx, &[&mul_term, &rem]);
-                    self.constraints.assertions.push(lhs.z3_term._eq(&sum_term));
-                    let zero = Int::from_u64(self.z3_ctx, 0);
-                    self.constraints.assertions.push(rem.ge(&zero));
-                    // Remainder and quotient bounds help prove length constraints
-                    // involving % and / in the SMT solver.
-                    if rhs.z3_term.as_u64().is_none_or(|r| r >= 1) {
-                        self.constraints.assertions.push(rem.lt(&rhs.z3_term));
-                    }
-                    self.constraints.assertions.push(rem.le(&lhs.z3_term));
-                    self.constraints.assertions.push(quot.ge(&zero));
-                    // Direct inequality: (lhs/rhs)*rhs <= lhs
-                    self.constraints.assertions.push(mul_term.le(&lhs.z3_term));
-                    // Quotient strict bound: for rhs >= 2 and lhs >= 2,
-                    // quot + 1 <= lhs (hence quot < lhs). E.g. X/2 < X for X>1.
-                    if rhs.z3_term.as_u64().is_some_and(|r| r >= 2) {
-                        let one = Int::from_u64(self.z3_ctx, 1);
-                        let qp1 = Int::add(self.z3_ctx, &[quot, &one]);
-                        // qp1 <= lhs is equivalent to quot < lhs for integers
-                        self.constraints.assertions.push(qp1.le(&lhs.z3_term));
-                    } else {
-                        // For rhs >= 1: quot <= lhs
-                        if rhs.z3_term.as_u64().is_some_and(|r| r >= 1) {
-                            self.constraints.assertions.push(quot.le(&lhs.z3_term));
-                        }
-                    }
-                }
-                // For tuple-returning binary ops (AddWithOverflow, MulWithOverflow),
-                // populate the field values so that .0 (result) and .1 (overflow
-                // flag) are properly tracked. Without this, field access falls
-                // through to cloning the base term, mixing the arithmetic result
-                // with the boolean overflow flag and corrupting path conditions.
-                if let rustc_middle::ty::TyKind::Tuple(fields) = dest_ty.kind()
-                    && fields.len() == 2 {
-                        let result_val = VmValue {
-                            z3_term: term.clone(),
-                            ty: fields[0],
-                            provenance: provenance.clone(),
-                            facts: invariants.clone(),
-                            source: ValueSource::None,
-                        };
-                        self.set_field_value(dest_place.local, vec![0], result_val);
-                        let overflow_term = self.fresh_int("overflow_flag");
-                        let overflow_val = VmValue::new(overflow_term, fields[1]);
-                        self.set_field_value(dest_place.local, vec![1], overflow_val);
-                    }
-                VmValue {
-                    z3_term: term,
-                    ty: dest_ty,
-                    provenance,
-                    facts: invariants,
-                    source: match cmp_cond {
-                        Some(cond) => ValueSource::Comparison {
-                            lhs: lhs_pk,
-                            rhs: rhs_pk,
-                            op: *op,
-                            cond,
-                        },
-                        None => ValueSource::BinaryOp {
-                            lhs: lhs_pk,
-                            rhs: rhs_pk,
-                            op: *op,
-                        },
-                    },
-                }
+                self.eval_binary_op_rvalue(dest_place, dest_ty, *op, lhs_op, rhs_op)
             }
             Rvalue::UnaryOp(op, operand) => {
                 let val = self.value_of_operand(operand);
@@ -1997,185 +1865,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     source: src_val.source.field_offset_only(),
                 }
             }
-            Rvalue::Aggregate(_kind, operands) => {
-                // For an enum aggregate, remember whether this is the
-                // data-carrying variant of `Option`/`Result` (`Some`/`Ok`), so
-                // the nested-field flattening below only fires on paths that
-                // actually carry a `Self` value.
-                let data_variant = match &**_kind {
-                    rustc_middle::mir::AggregateKind::Adt(did, variant_idx, ..) => {
-                        if self.tcx.is_diagnostic_item(rustc_span::sym::Result, *did) {
-                            Some(variant_idx.as_usize() == 0)
-                        } else if self.tcx.is_diagnostic_item(rustc_span::sym::Option, *did) {
-                            Some(variant_idx.as_usize() == 1)
-                        } else {
-                            None
-                        }
-                    }
-                    _ => None,
-                };
-                // `NonNull::new_unchecked(ptr)` / `NonNull::from(&T)` construct a
-                // repr(transparent) single-field newtype whose value *is* the
-                // underlying pointer.  Model the wrapper as the pointer field
-                // itself (term + provenance + invariants) so downstream checks
-                // like `NonNull(node)` / `Align(node, T)` / `Allocated(node, ..)`
-                // can discharge against the real pointer instead of a fresh
-                // unconstrained `aggregate` symbol.
-                if operands.len() == 1 && self.find_nn_pointee(dest_ty).is_some() {
-                    let field_val = self.value_of_operand(operands.iter().next().unwrap());
-                    let dest_local = dest_place.local;
-                    self.set_field_value(dest_local, vec![0], field_val.clone());
-                    if let Some(alloc_id) = self.current_frame.local_alloc.get(&dest_local).copied() {
-                        self.content_mut(alloc_id).facts.initialized = true;
-                    }
-                    return VmValue {
-                        z3_term: field_val.z3_term,
-                        ty: dest_ty,
-                        provenance: field_val.provenance,
-                        facts: field_val.facts,
-                        source: ValueSource::None,
-                    };
-                }
-                let term = self.fresh_int("aggregate");
-                let dest_local = dest_place.local;
-                // Prefer the pointee allocation (through a `*ptr` deref) over the
-                // base local's own stack slot, so byte values land on the real
-                // buffer (e.g. `((*_8).1).0 = [a, b, 0]` writes into the box).
-                let dest_alloc_id = self
-                    .local_value(dest_local)
-                    .and_then(|v| v.provenance_alloc_id())
-                    .or_else(|| self.current_frame.local_alloc.get(&dest_local).copied());
-                let is_byte_array = mir_utils::is_u8_array_or_slice(dest_ty);
-                let field_types: Vec<_> = self.aggregate_field_tys(dest_ty);
-                let mut byte_offset = 0usize;
-                for (i, operand) in operands.iter().enumerate() {
-                    let mut field_val = self.value_of_operand(operand);
-                    if let Some(field_ty) = field_types.get(i) {
-                        let src_is_ref =
-                            matches!(field_val.ty.kind(), rustc_middle::ty::TyKind::Ref(..));
-                        let dst_is_raw =
-                            matches!(field_ty.kind(), rustc_middle::ty::TyKind::RawPtr(..));
-                        if dst_is_raw && (src_is_ref || field_val.facts.non_null) {
-                            field_val.facts.in_bounds = true;
-                            field_val.ty = *field_ty;
-                        }
-                    }
-                    let field_sz = field_types
-                        .get(i)
-                        .copied()
-                        .map(|ty| self.size_of_ty(ty) as usize)
-                        .unwrap_or(1);
-                    let field_term = field_val.z3_term.clone();
-                    self.set_field_value(dest_local, vec![i], field_val);
-                    // Flatten a nested aggregate: if the operand is a local whose
-                    // own fields are tracked (e.g. `_0 = Result::Ok(_24)` where
-                    // `_24 = RawVecInner { ptr: _25, .. }`), expose the nested
-                    // fields under the destination's field path so a contract
-                    // place like `Return.Field(0).Field(0)` (the `Ok` variant's
-                    // data, then the struct field) can resolve to `_25`.
-                    // Only flatten the data-carrying variant (`Ok`/`Some`); on
-                    // `Err`/`None` paths there is no `Self` and the nested place
-                    // should resolve to `Unknown` instead.
-                    if data_variant != Some(false)
-                        && let Some(op_place) = operand.place()
-                            && op_place.projection.is_empty() {
-                                let nested: Vec<(Vec<usize>, VmValue<'z3, 'tcx>)> = self
-                                    .field_paths(op_place.local)
-                                    .into_iter()
-                                    .filter_map(|p| {
-                                        self.field_value(op_place.local, &p)
-                                            .cloned()
-                                            .map(|v| (p, v))
-                                    })
-                                    .collect();
-                                for (nested_path, nested_val) in nested {
-                                    let mut full = vec![i];
-                                    full.extend_from_slice(&nested_path);
-                                    self.set_field_value(dest_local, full, nested_val);
-                                }
-                            }
-                    if let Some(alloc_id) = dest_alloc_id {
-                        self.content_mut(alloc_id).facts.initialized = true;
-                        if is_byte_array && field_sz == 1 {
-                            self.record_byte_value(alloc_id, byte_offset, field_term.clone());
-                        }
-                        // Record known_nul / known_non_nul from constant operands
-                        if let Some(int_val) = mir_utils::operand_const_u64(operand)
-                        {
-                            if field_sz == 1 {
-                                if int_val == 0 {
-                                    if !is_byte_array {
-                                        self.record_byte_value(
-                                            alloc_id,
-                                            byte_offset,
-                                            Int::from_u64(self.z3_ctx, 0),
-                                        );
-                                    }
-                                } else {
-                                    if !is_byte_array {
-                                        self.record_byte_value(
-                                            alloc_id,
-                                            byte_offset,
-                                            Int::from_u64(self.z3_ctx, int_val),
-                                        );
-                                    }
-                                }
-                            }
-                            // For multi-byte fields: track each constituent byte
-                            for b in 0..field_sz.min(8) {
-                                let byte_off = byte_offset + b;
-                                let byte_val = (int_val >> (b * 8)) & 0xFF;
-                                self.record_byte_value(
-                                    alloc_id,
-                                    byte_off,
-                                    Int::from_u64(self.z3_ctx, byte_val),
-                                );
-                            }
-                        }
-                    }
-                    byte_offset += field_sz;
-                }
-                // Fat-pointer construction (inlined `from_raw_parts` /
-                // `slice_from_raw_parts_mut`): the result's address and
-                // provenance are those of the data pointer (field 0), so
-                // downstream `Allocated`/`Owning` checks on the slice resolve
-                // against the real buffer instead of a fresh `aggregate` symbol.
-                let is_slice_ptr = matches!(dest_ty.kind(),
-                    rustc_middle::ty::TyKind::RawPtr(inner, _) | rustc_middle::ty::TyKind::Ref(_, inner, _)
-                        if matches!(inner.kind(), rustc_middle::ty::TyKind::Slice(_)));
-                let (result_term, result_prov) = if is_slice_ptr {
-                    match self.field_value(dest_local, &[0]).cloned() {
-                        Some(data) => (data.z3_term.clone(), data.provenance.clone()),
-                        None => (term.clone(), None),
-                    }
-                } else {
-                    // `Box<T>` (an aggregate `Box(Unique<T>, A)`) takes its
-                    // provenance from the inner `Unique<T>.pointer` (`NonNull<T>`
-                    // at path `[0, 0]`), which the field-flattening above just
-                    // recorded.  Without this, `Box::assume_init`'s rebuild
-                    // (`Box(Unique::new_unchecked(raw), alloc)`) drops the heap
-                    // provenance and a later `Box::as_ptr` field read fails
-                    // `NonNull` (rustc 1.95 lowers `as_ptr` to that field read).
-                    let box_prov = if let rustc_middle::ty::TyKind::Adt(adt, _) = dest_ty.kind() {
-                        if api_classify::is_std_box(adt.did()) {
-                            self.container_ptr_field(dest_ty)
-                                .and_then(|path| self.field_value(dest_local, &path))
-                                .and_then(|v| v.provenance.clone())
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    (term.clone(), box_prov)
-                };
-                VmValue {
-                    z3_term: result_term,
-                    ty: dest_ty,
-                    provenance: result_prov,
-                    facts: ValueFacts::default(),
-                    source: ValueSource::None,
-                }
+            Rvalue::Aggregate(kind, operands) => {
+                self.eval_aggregate_rvalue(dest_place, dest_ty, &**kind, operands)
             }
             Rvalue::Discriminant(place) => {
                 // If the ADT's variant is known symbolically (e.g. `Iterator::next`
@@ -2263,6 +1954,305 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     },
                     source: ValueSource::None,
                 }
+            }
+        }
+    }
+
+    /// Evaluate a `BinaryOp` rvalue into a `VmValue`.
+    fn eval_binary_op_rvalue(
+        &mut self,
+        dest_place: &Place<'tcx>,
+        dest_ty: Ty<'tcx>,
+        op: BinOp,
+        lhs_op: &Operand<'tcx>,
+        rhs_op: &Operand<'tcx>,
+    ) -> VmValue<'z3, 'tcx> {
+        let lhs = self.value_of_operand(lhs_op);
+        let rhs = self.value_of_operand(rhs_op);
+        let term = self.eval_binary_op(op, &lhs.z3_term, &rhs.z3_term);
+        let provenance = self.provenance_for_binary_op(op, &lhs, &rhs);
+        let invariants = self.facts_for_binary_op(op, &lhs, &rhs, &provenance);
+        let lhs_pk = mir_utils::operand_place(lhs_op);
+        let rhs_pk = mir_utils::operand_place(rhs_op);
+        // Carry the direct boolean condition alongside the ite-encoded result so
+        // `switchInt`/`Assert` can record a precise path condition (e.g.
+        // `offset <= len - 16`) instead of `ite(cond, 1, 0) != 0`, which the SMT
+        // solver often fails to unfold.
+        let cmp_cond = self
+            .iter_ptr_comparison(op, &lhs, &rhs)
+            .or_else(|| match op {
+                BinOp::Le => Some(lhs.z3_term.le(&rhs.z3_term)),
+                BinOp::Lt => Some(lhs.z3_term.lt(&rhs.z3_term)),
+                BinOp::Ge => Some(lhs.z3_term.ge(&rhs.z3_term)),
+                BinOp::Gt => Some(lhs.z3_term.gt(&rhs.z3_term)),
+                BinOp::Eq => Some(lhs.z3_term._eq(&rhs.z3_term)),
+                BinOp::Ne => Some(lhs.z3_term._eq(&rhs.z3_term).not()),
+                _ => None,
+            });
+        if matches!(op, BinOp::Div | BinOp::Rem) {
+            self.emit_div_rem_axioms(op, &term, &lhs.z3_term, &rhs.z3_term);
+        }
+        // For tuple-returning binary ops (AddWithOverflow, MulWithOverflow),
+        // populate the field values so that .0 (result) and .1 (overflow flag)
+        // are properly tracked. Without this, field access falls through to
+        // cloning the base term, mixing the arithmetic result with the boolean
+        // overflow flag and corrupting path conditions.
+        if let rustc_middle::ty::TyKind::Tuple(fields) = dest_ty.kind()
+            && fields.len() == 2 {
+                let result_val = VmValue {
+                    z3_term: term.clone(),
+                    ty: fields[0],
+                    provenance: provenance.clone(),
+                    facts: invariants.clone(),
+                    source: ValueSource::None,
+                };
+                self.set_field_value(dest_place.local, vec![0], result_val);
+                let overflow_term = self.fresh_int("overflow_flag");
+                let overflow_val = VmValue::new(overflow_term, fields[1]);
+                self.set_field_value(dest_place.local, vec![1], overflow_val);
+            }
+        VmValue {
+            z3_term: term,
+            ty: dest_ty,
+            provenance,
+            facts: invariants,
+            source: match cmp_cond {
+                Some(cond) => ValueSource::Comparison {
+                    lhs: lhs_pk,
+                    rhs: rhs_pk,
+                    op,
+                    cond,
+                },
+                None => ValueSource::BinaryOp {
+                    lhs: lhs_pk,
+                    rhs: rhs_pk,
+                    op,
+                },
+            },
+        }
+    }
+
+    /// Evaluate an `Aggregate` rvalue into a `VmValue`.
+    fn eval_aggregate_rvalue(
+        &mut self,
+        dest_place: &Place<'tcx>,
+        dest_ty: Ty<'tcx>,
+        kind: &rustc_middle::mir::AggregateKind<'tcx>,
+        operands: &rustc_index::IndexVec<rustc_abi::FieldIdx, Operand<'tcx>>,
+    ) -> VmValue<'z3, 'tcx> {
+        // For an enum aggregate, remember whether this is the data-carrying
+        // variant of `Option`/`Result` (`Some`/`Ok`), so the nested-field
+        // flattening below only fires on paths that actually carry a `Self`.
+        let data_variant = match kind {
+            rustc_middle::mir::AggregateKind::Adt(did, variant_idx, ..) => {
+                if self.tcx.is_diagnostic_item(rustc_span::sym::Result, *did) {
+                    Some(variant_idx.as_usize() == 0)
+                } else if self.tcx.is_diagnostic_item(rustc_span::sym::Option, *did) {
+                    Some(variant_idx.as_usize() == 1)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+        // `NonNull::new_unchecked(ptr)` / `NonNull::from(&T)` construct a
+        // repr(transparent) single-field newtype whose value *is* the underlying
+        // pointer.  Model the wrapper as the pointer field itself (term +
+        // provenance + invariants) so downstream checks like `NonNull(node)` /
+        // `Align(node, T)` / `Allocated(node, ..)` can discharge against the real
+        // pointer instead of a fresh unconstrained `aggregate` symbol.
+        if operands.len() == 1 && self.find_nn_pointee(dest_ty).is_some() {
+            let field_val = self.value_of_operand(operands.iter().next().unwrap());
+            let dest_local = dest_place.local;
+            self.set_field_value(dest_local, vec![0], field_val.clone());
+            if let Some(alloc_id) = self.current_frame.local_alloc.get(&dest_local).copied() {
+                self.content_mut(alloc_id).facts.initialized = true;
+            }
+            return VmValue {
+                z3_term: field_val.z3_term,
+                ty: dest_ty,
+                provenance: field_val.provenance,
+                facts: field_val.facts,
+                source: ValueSource::None,
+            };
+        }
+        let term = self.fresh_int("aggregate");
+        let dest_local = dest_place.local;
+        // Prefer the pointee allocation (through a `*ptr` deref) over the base
+        // local's own stack slot, so byte values land on the real buffer (e.g.
+        // `((*_8).1).0 = [a, b, 0]` writes into the box).
+        let dest_alloc_id = self
+            .local_value(dest_local)
+            .and_then(|v| v.provenance_alloc_id())
+            .or_else(|| self.current_frame.local_alloc.get(&dest_local).copied());
+        let is_byte_array = mir_utils::is_u8_array_or_slice(dest_ty);
+        let field_types: Vec<_> = self.aggregate_field_tys(dest_ty);
+        let mut byte_offset = 0usize;
+        for (i, operand) in operands.iter().enumerate() {
+            let mut field_val = self.value_of_operand(operand);
+            let field_ty_opt = field_types.get(i).copied();
+            if let Some(field_ty) = field_ty_opt {
+                let src_is_ref = matches!(field_val.ty.kind(), rustc_middle::ty::TyKind::Ref(..));
+                let dst_is_raw =
+                    matches!(field_ty.kind(), rustc_middle::ty::TyKind::RawPtr(..));
+                if dst_is_raw && (src_is_ref || field_val.facts.non_null) {
+                    field_val.facts.in_bounds = true;
+                    field_val.ty = field_ty;
+                }
+            }
+            let field_sz = field_ty_opt
+                .map(|ty| self.size_of_ty(ty) as usize)
+                .unwrap_or(1);
+            let field_term = field_val.z3_term.clone();
+            self.set_field_value(dest_local, vec![i], field_val);
+            // Flatten a nested aggregate: if the operand is a local whose own
+            // fields are tracked (e.g. `_0 = Result::Ok(_24)` where
+            // `_24 = RawVecInner { ptr: _25, .. }`), expose the nested fields
+            // under the destination's field path so a contract place like
+            // `Return.Field(0).Field(0)` can resolve to `_25`.  Only flatten the
+            // data-carrying variant (`Ok`/`Some`); on `Err`/`None` paths there is
+            // no `Self` and the nested place should resolve to `Unknown`.
+            if data_variant != Some(false)
+                && let Some(op_place) = operand.place()
+                    && op_place.projection.is_empty() {
+                        let nested: Vec<(Vec<usize>, VmValue<'z3, 'tcx>)> = self
+                            .field_paths(op_place.local)
+                            .into_iter()
+                            .filter_map(|p| {
+                                self.field_value(op_place.local, &p).cloned().map(|v| (p, v))
+                            })
+                            .collect();
+                        for (nested_path, nested_val) in nested {
+                            let mut full = vec![i];
+                            full.extend_from_slice(&nested_path);
+                            self.set_field_value(dest_local, full, nested_val);
+                        }
+                    }
+            if let Some(alloc_id) = dest_alloc_id {
+                self.content_mut(alloc_id).facts.initialized = true;
+                if is_byte_array && field_sz == 1 {
+                    self.record_byte_value(alloc_id, byte_offset, field_term.clone());
+                }
+                // Record known_nul / known_non_nul from constant operands
+                if let Some(int_val) = mir_utils::operand_const_u64(operand) {
+                    if field_sz == 1 {
+                        if int_val == 0 {
+                            if !is_byte_array {
+                                self.record_byte_value(
+                                    alloc_id,
+                                    byte_offset,
+                                    Int::from_u64(self.z3_ctx, 0),
+                                );
+                            }
+                        } else if !is_byte_array {
+                            self.record_byte_value(
+                                alloc_id,
+                                byte_offset,
+                                Int::from_u64(self.z3_ctx, int_val),
+                            );
+                        }
+                    }
+                    // For multi-byte fields: track each constituent byte
+                    for b in 0..field_sz.min(8) {
+                        let byte_off = byte_offset + b;
+                        let byte_val = (int_val >> (b * 8)) & 0xFF;
+                        self.record_byte_value(
+                            alloc_id,
+                            byte_off,
+                            Int::from_u64(self.z3_ctx, byte_val),
+                        );
+                    }
+                }
+            }
+            byte_offset += field_sz;
+        }
+        // Fat-pointer construction (inlined `from_raw_parts` /
+        // `slice_from_raw_parts_mut`): the result's address and provenance are
+        // those of the data pointer (field 0), so downstream `Allocated`/`Owning`
+        // checks on the slice resolve against the real buffer instead of a fresh
+        // `aggregate` symbol.
+        let is_slice_ptr = matches!(dest_ty.kind(),
+            rustc_middle::ty::TyKind::RawPtr(inner, _) | rustc_middle::ty::TyKind::Ref(_, inner, _)
+                if matches!(inner.kind(), rustc_middle::ty::TyKind::Slice(_)));
+        let (result_term, result_prov) = if is_slice_ptr {
+            match self.field_value(dest_local, &[0]).cloned() {
+                Some(data) => (data.z3_term.clone(), data.provenance.clone()),
+                None => (term.clone(), None),
+            }
+        } else {
+            // `Box<T>` (an aggregate `Box(Unique<T>, A)`) takes its provenance
+            // from the inner `Unique<T>.pointer` (`NonNull<T>` at path `[0, 0]`),
+            // which the field-flattening above just recorded.  Without this,
+            // `Box::assume_init`'s rebuild drops the heap provenance and a later
+            // `Box::as_ptr` field read fails `NonNull`.
+            let box_prov = if let rustc_middle::ty::TyKind::Adt(adt, _) = dest_ty.kind() {
+                if api_classify::is_std_box(adt.did()) {
+                    self.container_ptr_field(dest_ty)
+                        .and_then(|path| self.field_value(dest_local, &path))
+                        .and_then(|v| v.provenance.clone())
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            (term.clone(), box_prov)
+        };
+        VmValue {
+            z3_term: result_term,
+            ty: dest_ty,
+            provenance: result_prov,
+            facts: ValueFacts::default(),
+            source: ValueSource::None,
+        }
+    }
+
+    /// Assert the Euclidean division identity and its bounds for `Div`/`Rem`:
+    ///   `lhs == (lhs/rhs)*rhs + lhs%rhs  ∧  lhs%rhs >= 0`
+    /// plus `(lhs/rhs)*rhs <= lhs` directly for robustness.  This lets later
+    /// checks prove `(x/N)*N <= x` and `x%N >= 0`.
+    ///
+    /// `term` must be the *same* Z3 term returned by `eval_binary_op` (the
+    /// quotient), not a separate `lhs.div(rhs)` call, so the axiom constrains
+    /// the term used in subsequent operations.
+    fn emit_div_rem_axioms(
+        &mut self,
+        op: BinOp,
+        term: &Int<'z3>,
+        lhs: &Int<'z3>,
+        rhs: &Int<'z3>,
+    ) {
+        let quot = if matches!(op, BinOp::Div) {
+            term
+        } else {
+            &lhs.div(rhs)
+        };
+        let rem = lhs.rem(rhs);
+        let mul_term = Int::mul(self.z3_ctx, &[quot, rhs]);
+        let sum_term = Int::add(self.z3_ctx, &[&mul_term, &rem]);
+        self.constraints.assertions.push(lhs._eq(&sum_term));
+        let zero = Int::from_u64(self.z3_ctx, 0);
+        self.constraints.assertions.push(rem.ge(&zero));
+        // Remainder and quotient bounds help prove length constraints involving
+        // % and / in the SMT solver.
+        if rhs.as_u64().is_none_or(|r| r >= 1) {
+            self.constraints.assertions.push(rem.lt(rhs));
+        }
+        self.constraints.assertions.push(rem.le(lhs));
+        self.constraints.assertions.push(quot.ge(&zero));
+        // Direct inequality: (lhs/rhs)*rhs <= lhs
+        self.constraints.assertions.push(mul_term.le(lhs));
+        // Quotient strict bound: for rhs >= 2 and lhs >= 2,
+        // quot + 1 <= lhs (hence quot < lhs). E.g. X/2 < X for X>1.
+        if rhs.as_u64().is_some_and(|r| r >= 2) {
+            let one = Int::from_u64(self.z3_ctx, 1);
+            let qp1 = Int::add(self.z3_ctx, &[quot, &one]);
+            // qp1 <= lhs is equivalent to quot < lhs for integers
+            self.constraints.assertions.push(qp1.le(lhs));
+        } else {
+            // For rhs >= 1: quot <= lhs
+            if rhs.as_u64().is_some_and(|r| r >= 1) {
+                self.constraints.assertions.push(quot.le(lhs));
             }
         }
     }
@@ -4519,13 +4509,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                         continue;
                     }
                     match rvalue {
-                        #[cfg(rapx_rvalue_use_with_retag)]
-                        Rvalue::Use(op, _) => {
-                            return mir_utils::const_operand_bytes(self.tcx, op)
-                                .or_else(|| self.trace_to_const_bytes(op));
-                        }
-                        #[cfg(not(rapx_rvalue_use_with_retag))]
-                        Rvalue::Use(op) => {
+                        Rvalue::Use(op, ..) => {
                             return mir_utils::const_operand_bytes(self.tcx, op)
                                 .or_else(|| self.trace_to_const_bytes(op));
                         }

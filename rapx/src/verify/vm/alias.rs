@@ -850,10 +850,7 @@ fn find_struct_field_origin_for_param<'tcx>(
                     continue;
                 }
                 let source = match rvalue {
-                    #[cfg(rapx_rvalue_use_with_retag)]
-                    Rvalue::Use(Operand::Copy(p) | Operand::Move(p), _) => p,
-                    #[cfg(not(rapx_rvalue_use_with_retag))]
-                    Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) => p,
+                    Rvalue::Use(Operand::Copy(p) | Operand::Move(p), ..) => p,
                     Rvalue::CopyForDeref(p) => p,
                     _ => continue,
                 };

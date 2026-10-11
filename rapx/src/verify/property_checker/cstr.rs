@@ -401,12 +401,7 @@ impl PropertyChecker {
                     if let Rvalue::Ref(_, _, place) = rvalue {
                         buffer_locals.insert(place.local);
                     }
-                    #[cfg(rapx_rvalue_use_with_retag)]
-                    if let Rvalue::Use(Operand::Copy(p) | Operand::Move(p), _) = rvalue {
-                        work.push(p.local);
-                    }
-                    #[cfg(not(rapx_rvalue_use_with_retag))]
-                    if let Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) = rvalue {
+                    if let Rvalue::Use(Operand::Copy(p) | Operand::Move(p), ..) = rvalue {
                         work.push(p.local);
                     }
                     if let Rvalue::Cast(_, Operand::Copy(p) | Operand::Move(p), _) = rvalue
@@ -431,12 +426,7 @@ impl PropertyChecker {
                 if target.projection.is_empty() {
                     continue;
                 }
-                #[cfg(rapx_rvalue_use_with_retag)]
-                let Rvalue::Use(Operand::Constant(c), _) = rvalue else {
-                    continue;
-                };
-                #[cfg(not(rapx_rvalue_use_with_retag))]
-                let Rvalue::Use(Operand::Constant(c)) = rvalue else {
+                let Rvalue::Use(Operand::Constant(c), ..) = rvalue else {
                     continue;
                 };
                 if c.const_

@@ -831,14 +831,7 @@ impl PropertyChecker {
                             continue;
                         }
                         let src_local = match rvalue {
-                            #[cfg(rapx_rvalue_use_with_retag)]
-                            Rvalue::Use(Operand::Copy(p) | Operand::Move(p), _)
-                                if p.projection.is_empty() =>
-                            {
-                                Some(p.local)
-                            }
-                            #[cfg(not(rapx_rvalue_use_with_retag))]
-                            Rvalue::Use(Operand::Copy(p) | Operand::Move(p))
+                            Rvalue::Use(Operand::Copy(p) | Operand::Move(p), ..)
                                 if p.projection.is_empty() =>
                             {
                                 Some(p.local)

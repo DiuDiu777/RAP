@@ -130,12 +130,7 @@ pub(crate) fn rvalue_runtime_checks_value(rvalue: &Rvalue<'_>) -> Option<u64> {
     }
     #[cfg(not(rapx_rvalue_has_nullary_op))]
     {
-        #[cfg(rapx_rvalue_use_with_retag)]
-        if let Rvalue::Use(Operand::RuntimeChecks(_), _) = rvalue {
-            return Some(0);
-        }
-        #[cfg(not(rapx_rvalue_use_with_retag))]
-        if let Rvalue::Use(Operand::RuntimeChecks(_)) = rvalue {
+        if let Rvalue::Use(Operand::RuntimeChecks(_), ..) = rvalue {
             return Some(0);
         }
     }

@@ -12,7 +12,6 @@ fn main() {
     emit_check_cfg("rapx_has_attr_item_kind");
     emit_check_cfg("rapx_has_fielddef_extras");
     emit_check_cfg("rapx_has_skip_norm_wip");
-    emit_check_cfg("rapx_rvalue_use_with_retag");
     emit_check_cfg("rapx_rvalue_has_reborrow");
     emit_check_cfg("rapx_scalar_to_pointer_interp_result");
     emit_check_cfg("rapx_has_fnptr_asptr");
@@ -54,10 +53,6 @@ fn main() {
             "compiler/rustc_type_ir/src/unnormalized.rs",
             "fn skip_norm_wip",
         ),
-    );
-    emit_cfg(
-        "rapx_rvalue_use_with_retag",
-        rustc_src_contains_path("compiler/rustc_middle/src/mir/syntax.rs", "WithRetag"),
     );
     // `CastKind::BoxDerefTransmute` is the compiler's dedicated marker for the
     // safe `*box` deref; present only on recent nightlies.

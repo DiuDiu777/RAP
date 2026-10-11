@@ -2589,14 +2589,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 if let StatementKind::Assign(assign) = &stmt.kind {
                     let (dest, rvalue) = &**assign;
                     if dest.local == local && dest.projection.is_empty() {
-                        #[cfg(rapx_rvalue_use_with_retag)]
                         let op = match rvalue {
-                            Rvalue::Use(op, _) => Some(op),
-                            _ => None,
-                        };
-                        #[cfg(not(rapx_rvalue_use_with_retag))]
-                        let op = match rvalue {
-                            Rvalue::Use(op) => Some(op),
+                            Rvalue::Use(op, ..) => Some(op),
                             _ => None,
                         };
                         if let Some(Operand::Copy(p) | Operand::Move(p)) = op

@@ -942,12 +942,7 @@ impl PropertyChecker {
                 if let StatementKind::Assign(assign) = &stmt.kind {
                     let (dest, rvalue) = &**assign;
                     if dest.local == local && dest.projection.is_empty() {
-                        #[cfg(rapx_rvalue_use_with_retag)]
-                        if let Rvalue::Use(src_op, _) = rvalue {
-                            return self.trace_value(vm_state, src_op);
-                        }
-                        #[cfg(not(rapx_rvalue_use_with_retag))]
-                        if let Rvalue::Use(src_op) = rvalue {
+                        if let Rvalue::Use(src_op, ..) = rvalue {
                             return self.trace_value(vm_state, src_op);
                         }
                     }
