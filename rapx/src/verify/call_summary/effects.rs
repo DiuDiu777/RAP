@@ -1,15 +1,5 @@
-//! Builtin call models: API behaviour modelling when MIR is unavailable.
-//!
-//! Each recognised standard-library API is described by a single table
-//! row: a **matcher** (from [`crate::verify::api_classify`]) and an
-//! **effect builder**.  [`lookup_effect`] scans the table linearly (first match
-//! wins) and converts the matched row into the effect summary consumed by the
-//! VM; [`is_modeled`] reports whether a call is in the table (used by the path
-//! graph to keep modelled calls opaque instead of inlining their branchy CFG).
-//!
-//! Two layers:
-//! 1. **Matchers** — [`crate::verify::api_classify`] `DefId` classifiers.
-//! 2. **Effect functions** — produce the `Vec<CallEffect>` for a single API.
+//! Hand-written effect models for standard-library APIs: a matcher + effect
+//! builder per API, looked up by [`lookup_effect`].
 
 use crate::helpers::mir_utils;
 #[cfg(rapx_has_attr_ir)]

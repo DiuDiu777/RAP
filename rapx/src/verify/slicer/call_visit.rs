@@ -6,7 +6,7 @@
 //! modify relevant state.
 
 use crate::helpers::mir_utils;
-use crate::compat::{FxHashMap, Spanned};
+use crate::compat::Spanned;
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir::{BasicBlock, Body, Operand, Place};
 use rustc_middle::ty::{TyCtxt, TyKind};
@@ -46,7 +46,7 @@ pub(crate) fn visit<'tcx>(
         }
     }
 
-    let summary = call_summary::dependency_summary(tcx, func, args.len(), &call_context_from_args(args));
+    let summary = call_summary::dependency_summary(tcx, func, args.len());
 
     if defs.intersects(relevant) {
         items.push(RelevantItem::Terminator { def_id, block, switch_succ: None });
@@ -109,15 +109,3 @@ pub(crate) fn visit<'tcx>(
     }
 }
 
-/// Build a concrete `CallContext` from the call's literal arguments so the
-/// backward slicer prunes callee paths the same way the forward VM does. Only
-/// constant integer arguments are carried; symbolic arguments are absent.
-fn call_context_from_args(args: &[Spanned<Operand<'_>>]) -> call_summary::CallContext {
-    let mut concrete = FxHashMap::default();
-    for (i, arg) in args.iter().enumerate() {
-        if let Some(v) = mir_utils::operand_const_u64(&arg.node) {
-            concrete.insert(i, v as i128);
-        }
-    }
-    concrete
-}

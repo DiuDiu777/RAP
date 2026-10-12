@@ -1,30 +1,15 @@
-//! Interprocedural call summaries for the staged verifier.
-//!
-//! The backward visitor needs dependency information: when a call result is
-//! relevant, which call arguments should become relevant too?  The forward
-//! visitor needs effect information: after a retained call, what facts about the
-//! return value or arguments can be added or forgotten?
-//!
-//! This module keeps those summaries in one place: standard APIs are matched by
-//! `DefId` in [`builtin_models`], and local callees use the dataflow graph to
-//! approximate argument-to-return flow.
-pub(crate) mod builtin_models;
-pub(crate) mod interprocedural;
+//! Call summaries for the staged verifier: backward dependency (which call
+//! arguments stay relevant) and forward effect (what facts a call adds).
+pub(crate) mod effects;
+pub(crate) mod dependencies;
 
 use rustc_middle::{
     mir::Operand,
     ty::TyCtxt,
 };
 
-use crate::compat::FxHashMap;
 use crate::helpers::mir_utils;
 use crate::verify::api_classify::is_branch;
-
-/// Concrete literal argument values keyed by 0-based argument index (matching
-/// `trace_to_callee_arg`), propagated down the call chain during must-write
-/// summarization. Only concrete literals for now; symbolic path conditions
-/// come later.
-pub(crate) type CallContext = FxHashMap<usize, i128>;
 
 /// Dependency summary consumed by the backward visitor.
 #[derive(Clone, Debug)]
@@ -40,8 +25,8 @@ pub(crate) struct CallDependencySummary {
 }
 
 impl CallDependencySummary {
-    /// Build a conservative summary that keeps all arguments relevant.
-    fn unknown(arg_count: usize) -> Self {
+    /// Conservative fallback: keep all arguments relevant.
+    fn fallback(arg_count: usize) -> Self {
         Self {
             return_depends_on_args: (0..arg_count).collect(),
             must_write_args: Vec::new(),
@@ -249,7 +234,6 @@ pub(crate) fn dependency_summary<'tcx>(
     tcx: TyCtxt<'tcx>,
     func: &Operand<'tcx>,
     arg_count: usize,
-    context: &CallContext,
 ) -> CallDependencySummary {
     let callee = mir_utils::dep_callee_def_id(func);
 
@@ -257,9 +241,9 @@ pub(crate) fn dependency_summary<'tcx>(
     // callees alike, no hand-written table needed.
     if let Some(callee) = callee {
         if tcx.intrinsic(callee).is_some() || mir_utils::is_drop_in_place(callee) {
-            return CallDependencySummary::unknown(arg_count);
+            return CallDependencySummary::fallback(arg_count);
         }
-        if let Some(must_write_args) = interprocedural::local_must_write_args(tcx, callee, context)
+        if let Some(must_write_args) = dependencies::local_must_write_args(tcx, callee)
             && !must_write_args.is_empty() {
                 return CallDependencySummary {
                     return_depends_on_args: Vec::new(),
@@ -279,7 +263,7 @@ pub(crate) fn dependency_summary<'tcx>(
                 must_write_args: Vec::new(),
             };
         }
-        if let Some(return_deps) = interprocedural::local_return_dependencies(tcx, callee) {
+        if let Some(return_deps) = dependencies::local_return_dependencies(tcx, callee) {
             return CallDependencySummary {
                 return_depends_on_args: return_deps
                     .into_iter()
@@ -290,5 +274,5 @@ pub(crate) fn dependency_summary<'tcx>(
         }
     }
 
-    CallDependencySummary::unknown(arg_count)
+    CallDependencySummary::fallback(arg_count)
 }

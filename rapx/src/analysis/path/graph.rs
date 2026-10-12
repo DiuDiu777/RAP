@@ -644,7 +644,7 @@ impl<'tcx> PathGraph<'tcx> {
                     .unwrap_or(base_callee)
                 };
                 let has_fn_sim =
-                    crate::verify::call_summary::builtin_models::is_modeled(Some(callee));
+                    crate::verify::call_summary::effects::is_modeled(Some(callee));
                 // A couple of helpers stay opaque because the VM's
                 // interprocedural execution is more precise than their inlined
                 // body:

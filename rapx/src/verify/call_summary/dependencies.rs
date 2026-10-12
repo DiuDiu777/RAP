@@ -1,8 +1,7 @@
-//! Interprocedural call summaries derived from MIR for local wrapper functions.
+//! Dependency summaries derived from MIR for local callees.
 //!
-//! When no hand-crafted summary exists, this module inspects a callee's own MIR
-//! to approximate its effects: pointer-arithmetic wrappers, `from_raw_parts`
-//! wrappers, argument-to-return dataflow, and index-disjointness validators.
+//! When no hand-written effect exists, this module inspects a callee's own MIR
+//! to approximate its return dependencies and must-write arguments.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -16,10 +15,8 @@ use rustc_middle::{
 
 use crate::analysis::dataflow::{DataflowAnalysis, default::DataflowAnalyzer};
 use crate::analysis::path::graph::{PathEnumerator, PathGraph};
-use crate::compat::Spanned;
 use crate::helpers::mir_utils as helpers;
 
-use super::CallContext;
 
 /// Trace backward from an operand (inner call arg) through Copy/Move/Cast/
 /// Ref/RawPtr assignments to the outer callee's argument local, returning its
@@ -34,10 +31,6 @@ fn trace_to_callee_arg<'tcx>(
         Operand::Copy(place) | Operand::Move(place) => place.local,
         _ => return None,
     };
-    let idx = local.as_usize();
-    if idx >= 1 && idx <= body.arg_count {
-        return Some(idx - 1);
-    }
     let mut queue = VecDeque::from([local]);
     let mut seen = HashSet::from([local]);
     while let Some(current) = queue.pop_front() {
@@ -136,28 +129,18 @@ pub(super) fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Optio
     .ok()
 }
 
-/// Memo keyed by `(callee, depth, context)`, shared within a single
+/// Memo keyed by `(callee, depth)`, shared within a single
 /// `local_must_write_args` recursion.
-type MustWriteMemo = HashMap<(DefId, usize, Vec<(usize, i128)>), Option<HashSet<usize>>>;
-
-/// Canonical, sortable representation of a [`CallContext`]'s concrete
-/// arguments, used as part of the memo key (`FxHashMap` is not `Hash`).
-fn context_key(context: &CallContext) -> Vec<(usize, i128)> {
-    let mut entries: Vec<(usize, i128)> = context.iter().map(|(k, v)| (*k, *v)).collect();
-    entries.sort_unstable();
-    entries
-}
+type MustWriteMemo = HashMap<(DefId, usize), Option<HashSet<usize>>>;
 
 /// Return callee argument indices that are definitely written on every
-/// reachable return path, pruning paths infeasible under `context`. Works for
-/// any callee with available MIR, and follows wrapper calls
-/// (`Vec::push` → `push_mut`) with bounded depth.
+/// reachable return path. Works for any callee with available MIR, and follows
+/// wrapper calls (`Vec::push` → `push_mut`) with bounded depth.
 pub(super) fn local_must_write_args(
     tcx: TyCtxt<'_>,
     callee: DefId,
-    context: &CallContext,
 ) -> Option<Vec<usize>> {
-    must_write_args_rec(tcx, callee, 0, context, &mut HashMap::new())
+    must_write_args_rec(tcx, callee, 0, &mut HashMap::new())
         .map(|set| set.into_iter().collect())
 }
 
@@ -165,7 +148,6 @@ fn must_write_args_rec(
     tcx: TyCtxt<'_>,
     callee: DefId,
     depth: usize,
-    context: &CallContext,
     memo: &mut MustWriteMemo,
 ) -> Option<HashSet<usize>> {
     if depth > 4 {
@@ -177,7 +159,7 @@ fn must_write_args_rec(
     if tcx.intrinsic(callee).is_some() || helpers::is_drop_in_place(callee) {
         return None;
     }
-    let key = (callee, depth, context_key(context));
+    let key = (callee, depth);
     if let Some(summary) = memo.get(&key) {
         return summary.clone();
     }
@@ -199,10 +181,7 @@ fn must_write_args_rec(
             if !path_ends_in_return(body, &path) {
                 continue;
             }
-            if path_infeasible_under_context(body, &path, context) {
-                continue;
-            }
-            let writes = write_args_on_path(tcx, body, &path, depth, context, memo);
+            let writes = write_args_on_path(tcx, body, &path, depth, memo);
             must_write = Some(match must_write {
                 Some(current) => current.intersection(&writes).copied().collect(),
                 None => writes,
@@ -215,86 +194,6 @@ fn must_write_args_rec(
     .flatten();
     memo.insert(key, summary.clone());
     summary
-}
-
-/// Return `true` if `path` is provably infeasible under `context`, by folding a
-/// `SwitchInt` whose discriminant is a direct copy of a concrete argument. Only
-/// prunes when the taken target is uniquely determined, so a feasible path is
-/// never removed.
-fn path_infeasible_under_context(
-    body: &rustc_middle::mir::Body<'_>,
-    path: &[usize],
-    context: &CallContext,
-) -> bool {
-    if context.is_empty() {
-        return false;
-    }
-    for window in path.windows(2) {
-        let (block, next) = (window[0], window[1]);
-        let Some(data) = body.basic_blocks.get(BasicBlock::from_usize(block)) else {
-            continue;
-        };
-        let Some(terminator) = &data.terminator else {
-            continue;
-        };
-        let TerminatorKind::SwitchInt { discr, targets } = &terminator.kind else {
-            continue;
-        };
-        let Some(value) = switch_discriminant_concrete(body, discr, context) else {
-            continue;
-        };
-        let expected = targets
-            .iter()
-            .find(|(val, _)| *val == value as u128)
-            .map(|(_, t)| t)
-            .unwrap_or_else(|| targets.otherwise());
-        if expected.as_usize() != next {
-            return true;
-        }
-    }
-    false
-}
-
-/// Trace a `SwitchInt` discriminant back to a concrete argument value, following
-/// only direct `Copy`/`Move` assignments (no casts or pointer arithmetic) so the
-/// recovered value is identical to the argument's.
-fn switch_discriminant_concrete(
-    body: &rustc_middle::mir::Body<'_>,
-    discr: &Operand<'_>,
-    context: &CallContext,
-) -> Option<i128> {
-    let local = match discr {
-        Operand::Copy(place) | Operand::Move(place) => place.local,
-        _ => return None,
-    };
-    let mut queue = VecDeque::from([local]);
-    let mut seen = HashSet::from([local]);
-    while let Some(current) = queue.pop_front() {
-        let cidx = current.as_usize();
-        if cidx >= 1 && cidx <= body.arg_count {
-            return context.get(&(cidx - 1)).copied();
-        }
-        for bb in body.basic_blocks.iter() {
-            for stmt in &bb.statements {
-                let StatementKind::Assign(assign) = &stmt.kind else {
-                    continue;
-                };
-                if assign.0.local != current {
-                    continue;
-                }
-                let source = match &assign.1 {
-                    Rvalue::Use(Operand::Copy(place), ..)
-                    | Rvalue::Use(Operand::Move(place), ..) => place.local,
-                    _ => continue,
-                };
-                if !seen.contains(&source) {
-                    seen.insert(source);
-                    queue.push_back(source);
-                }
-            }
-        }
-    }
-    None
 }
 
 fn path_ends_in_return(body: &rustc_middle::mir::Body<'_>, path: &[usize]) -> bool {
@@ -311,7 +210,6 @@ fn write_args_on_path<'tcx>(
     body: &rustc_middle::mir::Body<'tcx>,
     path: &[usize],
     depth: usize,
-    context: &CallContext,
     memo: &mut MustWriteMemo,
 ) -> HashSet<usize> {
     let mut writes = HashSet::new();
@@ -351,46 +249,18 @@ fn write_args_on_path<'tcx>(
         }
 
         // Wrapper calls: a nested callee that writes its own args maps those
-        // writes back onto this callee's args. The nested callee sees its own
-        // argument positions, so rebuild its context from this call's arguments
-        // (its own literals plus the outer concrete values passed through).
-        if let Some(nested) = helpers::dep_callee_def_id(func) {
-            let nested_context = nested_call_context(body, args, context);
-            if let Some(nested_writes) =
-                must_write_args_rec(tcx, nested, depth + 1, &nested_context, memo)
-            {
-                for (i, arg) in args.iter().enumerate() {
-                    if nested_writes.contains(&i)
-                        && let Some(outer) = trace_to_callee_arg(body, &arg.node) {
-                            writes.insert(outer);
-                        }
-                }
+        // writes back onto this callee's args.
+        if let Some(nested) = helpers::dep_callee_def_id(func)
+            && let Some(nested_writes) = must_write_args_rec(tcx, nested, depth + 1, memo)
+        {
+            for (i, arg) in args.iter().enumerate() {
+                if nested_writes.contains(&i)
+                    && let Some(outer) = trace_to_callee_arg(body, &arg.node) {
+                        writes.insert(outer);
+                    }
             }
         }
     }
     writes
-}
-
-/// Build the `CallContext` a nested call sees, keyed by the *nested* callee's
-/// own argument indices. Each nested argument is concrete either because it is a
-/// literal at this call site, or because it passes an outer concrete value
-/// straight through (`Copy`/`Move` of an argument). This keeps a caller's
-/// literal at position `i` from being read as the nested callee's position-`i`
-/// argument.
-fn nested_call_context<'tcx>(
-    body: &rustc_middle::mir::Body<'tcx>,
-    args: &[Spanned<Operand<'tcx>>],
-    context: &CallContext,
-) -> CallContext {
-    let mut nested_context = CallContext::default();
-    for (i, arg) in args.iter().enumerate() {
-        if let Some(v) = helpers::operand_const_u64(&arg.node) {
-            nested_context.insert(i, v as i128);
-        } else if let Some(outer) = trace_to_callee_arg(body, &arg.node)
-            && let Some(v) = context.get(&outer) {
-                nested_context.insert(i, *v);
-            }
-    }
-    nested_context
 }
 
