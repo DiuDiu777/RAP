@@ -27,17 +27,18 @@ impl PropertyChecker {
     pub(super) fn check_valid_num<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
+        let solver = Solver::new(vm_state.z3_ctx);
+        vm_state.assert_all(&solver);
         if let Some(PropertyArg::Predicates(predicates)) = property.args().first() {
             if self.all_predicates_are_slice_size_invariant(vm_state, checkpoint, predicates) {
                 return CheckResult::ProvedByRule;
             }
             for pred in predicates {
                 if let Some(r) =
-                    self.eval_numeric_predicate(vm_state, solver, Some(checkpoint), pred)
+                    self.eval_numeric_predicate(vm_state, &solver, Some(checkpoint), pred)
                     && !r.is_proved() {
                         return r;
                     }

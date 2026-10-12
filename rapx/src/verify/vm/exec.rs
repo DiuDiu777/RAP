@@ -8,7 +8,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::{
     mir::{
         BasicBlock, BinOp, Local, Operand, Place, Rvalue, Statement, StatementKind, Terminator,
-        TerminatorKind, UnOp,
+        UnOp,
     },
     ty::{Region, Ty},
 };
@@ -1121,7 +1121,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// used for the byte→field cross-view materialization (see
     /// [`Self::field_term_from_bytes`]).
     #[allow(clippy::too_many_arguments)]
-    fn decompose_pointee_fields(
+    pub(crate) fn decompose_pointee_fields(
         &mut self,
         alloc_id: AllocId,
         prefix: Vec<usize>,
@@ -1252,215 +1252,14 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
-    // ── Statement executors ──────────────────────────────────────
-
     pub(crate) fn exec_statement(&mut self, statement: &Statement<'tcx>) {
-        match &statement.kind {
-            StatementKind::Assign(assign) => {
-                let (place, rvalue) = &**assign;
-                self.exec_assign(place, rvalue);
-            }
-            StatementKind::StorageLive(local) => {
-                self.exec_storage_live(*local);
-            }
-            StatementKind::StorageDead(local) => {
-                self.exec_storage_dead(*local);
-            }
-            StatementKind::FakeRead(..)
-            | StatementKind::SetDiscriminant { .. }
-            | StatementKind::AscribeUserType(..)
-            | StatementKind::Coverage(..)
-            | StatementKind::PlaceMention(..)
-            | StatementKind::Intrinsic(..)
-            | StatementKind::ConstEvalCounter
-            | StatementKind::Nop => {}
-            #[cfg(not(rapx_ge_99))]
-            StatementKind::Retag(..) => {}
-            _ => {}
-        }
+        crate::verify::vm::rules::exec_statement(self, statement);
     }
 
-    fn exec_assign(&mut self, place: &Place<'tcx>, rvalue: &Rvalue<'tcx>) {
-        let mut value = self.eval_rvalue(place, rvalue);
-
-        let has_deref = place
-            .projection
-            .iter()
-            .any(|p| matches!(p.kind(), rustc_middle::mir::ProjectionElem::Deref));
-
-        if !place.projection.is_empty() {
-            self.record_projected_store(place, &value);
-            self.record_indexed_store_for_vm(place, &value);
-        }
-        value.facts.init = true;
-
-        if place.projection.is_empty() {
-            self.set_local(place.local, value);
-            // On a whole-place move (`_3 = move _4`), the destination is a fresh
-            // container slot: re-point its whole-value provenance from the source's
-            // stack slot to its own, so `container_data_alloc` later reads the
-            // destination's owning field (copied below) rather than the moved-out
-            // source's (which is invalidated after the propagation).
-            let moved_from = match rvalue {
-                Rvalue::Use(operand, ..) => match operand {
-                    Operand::Move(p) if p.projection.is_empty() => Some(p.local),
-                    _ => None,
-                },
-                _ => None,
-            };
-            if let Some(src) = moved_from
-                && let Some(&src_alloc) = self.current_frame.local_alloc.get(&src)
-                    && let Some(mut wv) = self.local_value(place.local).cloned()
-                        && wv.provenance.as_ref().is_some_and(|p| p.alloc_id == src_alloc) {
-                            let dest_alloc = self.current_frame.local_alloc[&place.local];
-                            wv.provenance = Some(Provenance {
-                                alloc_id: dest_alloc,
-                                offset: Int::from_u64(self.z3_ctx, 0),
-                                offset_kind: None,
-                            });
-                            self.set_local(place.local, wv);
-                        }
-            // Propagate field values for aggregate copies (e.g. `_4 = copy _1`)
-            // so downstream field accesses (NonZero::get -> self.0) resolve to
-            // the same symbolic field terms.  A projected source (`_11 = move
-            // (_1.2)`) shifts the field path by its `Field` projection prefix,
-            // so `(_1.2).1` becomes `_11.1` — this keeps the `NonNull` node
-            // field's provenance alive across `NodeRef` moves.
-            let src_place: Option<&Place<'tcx>> = match rvalue {
-                Rvalue::Use(Operand::Copy(p) | Operand::Move(p), ..) => Some(p),
-                Rvalue::CopyForDeref(p) => Some(p),
-                _ => None,
-            };
-            if let Some(sp) = src_place {
-                let field_prefix: Vec<usize> = sp
-                    .projection
-                    .iter()
-                    .filter_map(|p| match p.kind() {
-                        rustc_middle::mir::ProjectionElem::Field(fi, _) => Some(fi.as_usize()),
-                        _ => None,
-                    })
-                    .collect();
-                // Also propagate for a leading `Deref` (`_3 = copy (*_1)`): the
-                // source is the pointee of a reference, whose per-field values
-                // are keyed by the reference local itself, so copying the pointee
-                // value into a fresh local must carry those field values along
-                // (otherwise `into_leaf(self)`'s `self.node` provenance is lost).
-                let only_field_deref = sp.projection.iter().all(|p| {
-                    matches!(
-                        p.kind(),
-                        rustc_middle::mir::ProjectionElem::Field(..)
-                            | rustc_middle::mir::ProjectionElem::Deref
-                    )
-                });
-                if only_field_deref {
-                    let keys: Vec<Vec<usize>> = self.field_paths(sp.local);
-                    for k in keys {
-                        let rest = if field_prefix.is_empty() {
-                            Some(k.clone())
-                        } else if k.len() > field_prefix.len()
-                            && k[..field_prefix.len()] == field_prefix[..]
-                        {
-                            Some(k[field_prefix.len()..].to_vec())
-                        } else {
-                            None
-                        };
-                        if let Some(rest) = rest
-                            && let Some(fv) = self.field_value(sp.local, &k).cloned() {
-                                self.set_field_value(place.local, rest, fv);
-                            }
-                    }
-                }
-            }
-            // Invalidate the moved-out source's owner-field provenance *after*
-            // the field propagation, so a later `Owning` check does not treat the
-            // source as a second owner while the destination kept the pointer.
-            if let Some(src) = moved_from {
-                self.invalidate_owner_field(src);
-            }
-        } else if !has_deref {
-            // Field projection (no Deref): update the base local's field values.
-            let field_indices: Vec<usize> = place
-                .projection
-                .iter()
-                .filter_map(|p| match p.kind() {
-                    rustc_middle::mir::ProjectionElem::Field(idx, _) => Some(idx.as_usize()),
-                    _ => None,
-                })
-                .collect();
-            if !field_indices.is_empty() {
-                // Track cumulative ptr offset for Iter/IterMut before moving value.
-                let track_iter = field_indices == [0];
-                self.set_field_value(place.local, field_indices, value);
-                if track_iter {
-                    self.track_iter_ptr_update(place.local);
-                }
-            }
-        } else {
-            // Deref projection (`(*ptr).field = val`): resolve the referent
-            // local and write the field there, so `&mut self` setters
-            // (`set_len`, `clear`, …) actually update the referent's
-            // materialized fields instead of being silently dropped.
-            //
-            // A pure `*ptr = val` (no trailing Field) still must NOT overwrite
-            // the pointer local — writing through a pointer should not reassign
-            // the pointer variable.
-            let mut proj = place.projection.iter();
-            if matches!(
-                proj.next().map(|p| p.kind()),
-                Some(rustc_middle::mir::ProjectionElem::Deref)
-            ) {
-                let field_indices: Vec<usize> = proj
-                    .filter_map(|p| match p.kind() {
-                        rustc_middle::mir::ProjectionElem::Field(idx, _) => Some(idx.as_usize()),
-                        _ => None,
-                    })
-                    .collect();
-                if !field_indices.is_empty() {
-                    // `&mut self` (and other reference parameters) materialize
-                    // their pointee's scalar fields keyed by the *reference*
-                    // local itself, so a `(*self).field = val` write must land
-                    // in the reference local's own field values directly.  (This
-                    // is what makes a struct-invariant re-proof see
-                    // `self.len += 1`.)
-                    if self.field_value(place.local, &field_indices).is_some() {
-                        let is_iter_field = field_indices == [0];
-                        self.set_field_value(place.local, field_indices, value);
-                        if is_iter_field {
-                            self.track_iter_ptr_update(place.local);
-                        }
-                        return;
-                    }
-                    // Otherwise resolve the dereferenced pointer (a
-                    // reference/reborrow temp) back to the local it points at,
-                    // matching its address term against the known local
-                    // addresses.
-                    let pointed = self.local_value(place.local).cloned();
-                    if let Some(pointed) = pointed {
-                        if let Some(referent) = self.find_local_by_address(&pointed.z3_term) {
-                            self.set_field_value(referent, field_indices, value);
-                        } else if let Some(arg_idx) = place.local.as_usize().checked_sub(1) {
-                            // Inline frame: the caller's address map is saved
-                            // away, so resolve through the precomputed
-                            // `&mut self` referent and defer the write until the
-                            // caller's frame is restored.
-                            if let Some(referent) =
-                                self.inline.arg_referents.get(arg_idx).copied().flatten()
-                            {
-                                self.inline.deferred_field_writes
-                                    .push((referent, field_indices, value));
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        // For deref projections (`*ptr = val`): do NOT overwrite the base local.
-        // Writing through a pointer should not reassign the pointer variable.
-    }
 
     /// Record byte-level values when assigning to a place with projections.
     /// This handles patterns like `buf[i] = 0u8` (nul-store) and `arr[i] = val`.
-    fn record_projected_store(&mut self, place: &Place<'tcx>, value: &VmValue<'z3, 'tcx>) {
+    pub(crate) fn record_projected_store(&mut self, place: &Place<'tcx>, value: &VmValue<'z3, 'tcx>) {
         // Prefer the value's provenance (pointee alloc) over slots
         // (reference alloc) for ref/ptr parameters.
         let Some(alloc_id) = self
@@ -1531,7 +1330,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
 
     /// Track byte-level values for index-based stores (e.g. `buf[i] = 0u8`)
     /// that `record_projected_store` skips due to Index projections.
-    fn record_indexed_store_for_vm(&mut self, place: &Place<'tcx>, value: &VmValue<'z3, 'tcx>) {
+    pub(crate) fn record_indexed_store_for_vm(&mut self, place: &Place<'tcx>, value: &VmValue<'z3, 'tcx>) {
         let is_u8 = matches!(
             value.ty.kind(),
             rustc_middle::ty::TyKind::Uint(rustc_middle::ty::UintTy::U8)
@@ -1561,7 +1360,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     }
 
     /// Inject layout constraints (>= 1) for generic AlignOf/SizeOf constants.
-    fn inject_layout_constraints(&mut self, operand: &Operand<'tcx>, val: &VmValue<'z3, 'tcx>) {
+    pub(crate) fn inject_layout_constraints(&mut self, operand: &Operand<'tcx>, val: &VmValue<'z3, 'tcx>) {
         if let Operand::Constant(constant) = operand {
             let text = format!("{:?}", constant.const_);
             if mir_utils::const_int_from_debug(&text).is_none() {
@@ -1585,7 +1384,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// block and re-establish `gcd`'s key consequences as path conditions. This
     /// is a targeted workaround for a missing general property of recursive
     /// const fns, not an `align_to`-specific effect.
-    fn try_emit_gcd_divisibility(&mut self, operand: &Operand<'tcx>, val: &VmValue<'z3, 'tcx>) {
+    pub(crate) fn try_emit_gcd_divisibility(&mut self, operand: &Operand<'tcx>, val: &VmValue<'z3, 'tcx>) {
         let Operand::Constant(constant) = operand else {
             return;
         };
@@ -1635,582 +1434,11 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     }
 
     /// The provenance allocation's alignment, when it is non-trivial (≠ 1).
-    fn alloc_align_of(&self, val: &VmValue<'z3, 'tcx>) -> Option<Int<'z3>> {
+    pub(crate) fn alloc_align_of(&self, val: &VmValue<'z3, 'tcx>) -> Option<Int<'z3>> {
         val.provenance
             .as_ref()
             .map(|p| self.alloc(p.alloc_id).align.clone())
             .and_then(Self::non_trivial_align)
-    }
-
-    /// Evaluate an Rvalue into a VmValue.
-    fn eval_rvalue(
-        &mut self,
-        dest_place: &Place<'tcx>,
-        rvalue: &Rvalue<'tcx>,
-    ) -> VmValue<'z3, 'tcx> {
-        let dest_ty = dest_place.ty(self.body(), self.tcx).ty;
-
-        match rvalue {
-            Rvalue::Use(operand, ..) => {
-                let mut val = self.value_of_operand(operand);
-                self.try_materialize_const_bytes(&mut val, operand);
-                self.inject_layout_constraints(operand, &val);
-                self.try_emit_gcd_divisibility(operand, &val);
-                val
-            }
-            Rvalue::Ref(_, _borrow_kind, place) => {
-                if let Some(addr) = self.address_of_place(place) {
-                    let alloc_align = self.alloc_align_of(&addr);
-                    // Inherit in_bounds. For &[T] created via Deref of a
-                    // fat raw ptr (inlined from_raw_parts), set in_bounds
-                    // like ReturnFreshAllocation does in builtin_models.
-                    let has_deref = place
-                        .projection
-                        .iter()
-                        .any(|p| matches!(p.kind(), rustc_middle::mir::ProjectionElem::Deref));
-                    let src_ty = self.body().local_decls[place.local].ty;
-                    let is_from_raw_parts_like =
-                        matches!(src_ty.kind(), rustc_middle::ty::TyKind::RawPtr(_, _));
-                    let is_slice_ref =
-                        if let rustc_middle::ty::TyKind::Ref(_, inner, _) = dest_ty.kind() {
-                            matches!(inner.kind(), rustc_middle::ty::TyKind::Slice(_))
-                        } else {
-                            false
-                        };
-                    let is_slice_ref_from_raw = is_slice_ref && is_from_raw_parts_like && has_deref;
-                    let src_in_bounds = if is_slice_ref_from_raw {
-                        addr.is_pointer()
-                    } else {
-                        self.local_value(place.local)
-                            .is_some_and(|v| v.facts.in_bounds)
-                    };
-                    // An empty slice (`&[]` from `align_to`'s `offset > len` /
-                    // ZST branch) is built as `&*dangling`: the dangling raw
-                    // pointer (`NonNull::dangling`) is aligned to the *element*
-                    // type, but its provenance here may reuse `self`'s allocation
-                    // (whose align is that of `T`).  Record the element type's
-                    // alignment so `check_align` can discharge it.
-                    let slice_elem_align = if is_slice_ref_from_raw {
-                        if let rustc_middle::ty::TyKind::Ref(_, inner, _) = dest_ty.kind() {
-                            if let rustc_middle::ty::TyKind::Slice(elem) = inner.kind() {
-                                let a = self.align_sym(*elem);
-                                if a.simplify().as_u64() != Some(1) {
-                                    Some(a)
-                                } else {
-                                    None
-                                }
-                            } else {
-                                None
-                            }
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    };
-                    let val = VmValue {
-                        z3_term: addr.z3_term,
-                        ty: dest_ty,
-                        provenance: addr.provenance,
-                        facts: ValueFacts {
-                            non_null: true,
-                            init: true,
-                            in_bounds: src_in_bounds,
-                            align_n: slice_elem_align.or(alloc_align),
-                        },
-                        source: ValueSource::None,
-                    };
-                    self.propagate_byte_values_to_ref(place, &val);
-                    self.propagate_field_values_to_ref(place, dest_place.local);
-                    // Expose the freshly-created reference's provenance before
-                    // asserting the pointee struct's `#[rapx::invariant]`s: the
-                    // invariant predicates (`ValidNum(len <= CAPACITY)` on
-                    // `&LeafNode`) resolve their field places through the
-                    // pointee allocation, which needs `dest_place`'s provenance
-                    // to be live (`exec_assign` only stores `val` afterwards).
-                    self.set_local(dest_place.local, val.clone());
-                    self.assert_pointee_struct_invariants(dest_ty, dest_place.local);
-                    val
-                } else {
-                    let term = self.fresh_int("ref_addr");
-                    VmValue {
-                        z3_term: term,
-                        ty: dest_ty,
-                        provenance: None,
-                        facts: ValueFacts {
-                            non_null: true,
-                            init: true,
-                            ..Default::default()
-                        },
-                        source: ValueSource::None,
-                    }
-                }
-            }
-            Rvalue::RawPtr(_, place) => {
-                if let Some(addr) = self.address_of_place(place) {
-                    let alloc_align = self.alloc_align_of(&addr);
-                    let source_in_bounds = self
-                        .local_value(place.local)
-                        .is_some_and(|v| v.facts.in_bounds);
-                    VmValue {
-                        z3_term: addr.z3_term,
-                        ty: dest_ty,
-                        provenance: addr.provenance,
-                        facts: ValueFacts {
-                            non_null: true,
-                            in_bounds: source_in_bounds,
-                            align_n: alloc_align,
-                            ..Default::default()
-                        },
-                        source: ValueSource::None,
-                    }
-                } else {
-                    let term = self.fresh_int("rawptr_addr");
-                    VmValue {
-                        z3_term: term,
-                        ty: dest_ty,
-                        provenance: None,
-                        facts: ValueFacts {
-                            non_null: true,
-                            ..Default::default()
-                        },
-                        source: ValueSource::None,
-                    }
-                }
-            }
-            Rvalue::BinaryOp(op, pair) => {
-                let (lhs_op, rhs_op) = &**pair;
-                self.eval_binary_op_rvalue(dest_place, dest_ty, *op, lhs_op, rhs_op)
-            }
-            Rvalue::UnaryOp(op, operand) => {
-                let val = self.value_of_operand(operand);
-                let is_bool = matches!(val.ty.kind(), rustc_middle::ty::TyKind::Bool);
-                let term = if matches!(op, UnOp::PtrMetadata) {
-                    // `PtrMetadata` on a `&[T]` gives the slice length, which is
-                    // the allocation size divided by the element size. Reuse the
-                    // same symbolic term as the allocation size so downstream
-                    // InBound checks (`offset <= len`) agree with the `len` used
-                    // in loop guards (`offset <= len - 16`).
-                    self.slice_len_from_value(&val)
-                        .unwrap_or_else(|| self.fresh_int("ptr_metadata"))
-                } else {
-                    self.eval_unary_op(*op, &val.z3_term, is_bool)
-                };
-                VmValue {
-                    z3_term: term,
-                    ty: dest_ty,
-                    provenance: val.provenance,
-                    facts: val.facts,
-                    source: ValueSource::None,
-                }
-            }
-            Rvalue::Cast(_kind, operand, cast_ty) => {
-                let src_val = self.value_of_operand(operand);
-                let src_ty = src_val.ty;
-                // A raw-pointer cast to a *different* ADT pointee reinterprets the
-                // allocation's fields (e.g. `NonNull<LeafNode>::as_ptr() as *mut
-                // InternalNode` in `NodeRef::as_internal_ptr`).  Lazily materialize
-                // the target ADT's field view (keyed by type) so a later
-                // `(*cast_ptr).field` resolves to the right field instead of the
-                // original view's field at the same index.
-                if let rustc_middle::ty::TyKind::RawPtr(target_ty, _) = cast_ty.kind()
-                    && let rustc_middle::ty::TyKind::Adt(adt_def, _) = target_ty.kind()
-                        && adt_def.is_struct()
-                            && let Some(alloc_id) = src_val.provenance_alloc_id() {
-                                self.decompose_pointee_fields(
-                                    alloc_id,
-                                    Vec::new(),
-                                    *target_ty,
-                                    *target_ty,
-                                    0,
-                                    0,
-                                    0,
-                                );
-                            }
-                // Transmute-like casts of single-field newtypes (e.g.
-                // NonZero::get's `_0 = copy _1 as T`) yield the underlying
-                // field value, not the wrapper's own term.
-                let term = mir_utils::extract_local(operand)
-                    .and_then(|l| self.field_value(l, &[0]).map(|v| v.z3_term.clone()))
-                    .unwrap_or(src_val.z3_term);
-                // A pointer→integer cast (`ptr as usize`) yields the (always
-                // non-negative) address. Record this as a *path condition* so
-                // downstream pointer arithmetic (e.g. `align_up` in a free-list
-                // allocator) can discharge `NonNull` on the derived pointer —
-                // `check_non_null`'s SMT query only sees path conditions, not
-                // the `term >= 0` constraint `assert_value_constraints` adds.
-                let src_is_ptr = matches!(src_ty.kind(), rustc_middle::ty::TyKind::RawPtr(..)
-                    | rustc_middle::ty::TyKind::Ref(..));
-                let dest_is_int = matches!(
-                    cast_ty.kind(),
-                    rustc_middle::ty::TyKind::Uint(_) | rustc_middle::ty::TyKind::Int(_)
-                );
-                if src_is_ptr && dest_is_int {
-                    let zero = Int::from_u64(self.z3_ctx, 0);
-                    self.constraints.assertions.push(term.ge(&zero));
-                    if src_val.facts.non_null {
-                        self.constraints.assertions.push(term._eq(&zero).not());
-                    }
-                }
-                VmValue {
-                    z3_term: term,
-                    ty: *cast_ty,
-                    provenance: src_val.provenance,
-                    facts: ValueFacts {
-                        non_null: src_val.facts.non_null,
-                        init: src_val.facts.init,
-                        in_bounds: src_val.facts.in_bounds,
-                        align_n: if mir_utils::pointee_ty(src_ty)
-                            .is_some_and(|t| t.is_unit())
-                        {
-                            None
-                        } else {
-                            src_val.facts.align_n
-                        },
-                    },
-                    source: src_val.source.field_offset_only(),
-                }
-            }
-            Rvalue::Aggregate(kind, operands) => {
-                self.eval_aggregate_rvalue(dest_place, dest_ty, &**kind, operands)
-            }
-            Rvalue::Discriminant(place) => {
-                // If the ADT's variant is known symbolically (e.g. `Iterator::next`
-                // returns `Some` iff the iterator was non-empty), reuse that term
-                // so `switchInt(discriminant)` branches stay tied to the real
-                // condition instead of a fresh unconstrained symbol.
-                let place_val = self
-                    .value_of_place(place)
-                    .or_else(|| self.local_value(place.local).cloned());
-                let term = place_val
-                    .as_ref()
-                    .and_then(|v| v.discriminant().cloned())
-                    .unwrap_or_else(|| self.fresh_int("discriminant"));
-                // For Ordering (repr i8, values: Less=-1 Equal=0 Greater=1),
-                // the discriminant index equals the repr value + 1.
-                // Connect the fresh discriminant term to the ADT value so
-                // that SwitchInt constraints propagate to the stored value.
-                if let Some(ref pv) = place_val
-                    && let rustc_middle::ty::TyKind::Adt(adt_def, _) = pv.ty.kind()
-                        && api_classify::is_std_ordering(adt_def.did()) && adt_def.is_enum() {
-                            let one = Int::from_u64(self.z3_ctx, 1);
-                            let discr_minus_one = Int::sub(self.z3_ctx, &[&term, &one]);
-                            self.constraints.assertions.push(pv.z3_term._eq(&discr_minus_one));
-                            // Also bound the discriminant to {0, 1, 2}
-                            let zero = Int::from_u64(self.z3_ctx, 0);
-                            let two = Int::from_u64(self.z3_ctx, 2);
-                            self.constraints.assertions.push(term.ge(&zero));
-                            self.constraints.assertions.push(term.le(&two));
-                        }
-                VmValue::new(term, dest_ty)
-            }
-            #[cfg(not(rapx_ge_99))]
-            Rvalue::ShallowInitBox(operand, _ty) => {
-                let val = self.value_of_operand(operand);
-                VmValue {
-                    z3_term: val.z3_term,
-                    ty: dest_ty,
-                    provenance: val.provenance,
-                    facts: val.facts,
-                    source: ValueSource::None,
-                }
-            }
-            Rvalue::CopyForDeref(place) => {
-                if let Some(val) = self.value_of_place(place) {
-                    val
-                } else {
-                    let term = self.fresh_int("copy_for_deref");
-                    VmValue::new(term, dest_ty)
-                }
-            }
-            Rvalue::Repeat(..) => {
-                let term = self.fresh_int("repeat");
-                VmValue::new(term, dest_ty)
-            }
-            Rvalue::ThreadLocalRef(_) => {
-                let term = self.fresh_int("thread_local");
-                VmValue::new(term, dest_ty)
-            }
-            #[cfg(not(rapx_ge_95))]
-            Rvalue::NullaryOp(_op) => {
-                let term = self.fresh_int("nullary");
-                let op_debug = format!("{:?}", _op);
-                let is_align_of = op_debug.contains("AlignOf") || op_debug.contains("min_align_of");
-                let is_size_of = op_debug.contains("SizeOf");
-                if is_align_of || is_size_of {
-                    let one = Int::from_u64(self.z3_ctx, 1);
-                    self.constraints.assertions.push(term.ge(&one));
-                }
-                VmValue::new(term, dest_ty)
-            }
-            Rvalue::WrapUnsafeBinder(_operand, _ty) => {
-                let term = self.fresh_int("wrap_unsafe_binder");
-                VmValue::new(term, dest_ty)
-            }
-            #[cfg(rapx_rvalue_has_reborrow)]
-            Rvalue::Reborrow(_ty, _mutability, _place) => {
-                let term = self.fresh_int("reborrow");
-                VmValue {
-                    z3_term: term,
-                    ty: dest_ty,
-                    provenance: None,
-                    facts: ValueFacts {
-                        non_null: true,
-                        ..Default::default()
-                    },
-                    source: ValueSource::None,
-                }
-            }
-        }
-    }
-
-    /// Evaluate a `BinaryOp` rvalue into a `VmValue`.
-    fn eval_binary_op_rvalue(
-        &mut self,
-        dest_place: &Place<'tcx>,
-        dest_ty: Ty<'tcx>,
-        op: BinOp,
-        lhs_op: &Operand<'tcx>,
-        rhs_op: &Operand<'tcx>,
-    ) -> VmValue<'z3, 'tcx> {
-        let lhs = self.value_of_operand(lhs_op);
-        let rhs = self.value_of_operand(rhs_op);
-        let term = self.eval_binary_op(op, &lhs.z3_term, &rhs.z3_term);
-        let provenance = self.provenance_for_binary_op(op, &lhs, &rhs);
-        let invariants = self.facts_for_binary_op(op, &lhs, &rhs, &provenance);
-        let lhs_pk = mir_utils::operand_place(lhs_op);
-        let rhs_pk = mir_utils::operand_place(rhs_op);
-        // Carry the direct boolean condition alongside the ite-encoded result so
-        // `switchInt`/`Assert` can record a precise path condition (e.g.
-        // `offset <= len - 16`) instead of `ite(cond, 1, 0) != 0`, which the SMT
-        // solver often fails to unfold.
-        let cmp_cond = self
-            .iter_ptr_comparison(op, &lhs, &rhs)
-            .or_else(|| match op {
-                BinOp::Le => Some(lhs.z3_term.le(&rhs.z3_term)),
-                BinOp::Lt => Some(lhs.z3_term.lt(&rhs.z3_term)),
-                BinOp::Ge => Some(lhs.z3_term.ge(&rhs.z3_term)),
-                BinOp::Gt => Some(lhs.z3_term.gt(&rhs.z3_term)),
-                BinOp::Eq => Some(lhs.z3_term._eq(&rhs.z3_term)),
-                BinOp::Ne => Some(lhs.z3_term._eq(&rhs.z3_term).not()),
-                _ => None,
-            });
-        if matches!(op, BinOp::Div | BinOp::Rem) {
-            self.emit_div_rem_axioms(op, &term, &lhs.z3_term, &rhs.z3_term);
-        }
-        // For tuple-returning binary ops (AddWithOverflow, MulWithOverflow),
-        // populate the field values so that .0 (result) and .1 (overflow flag)
-        // are properly tracked. Without this, field access falls through to
-        // cloning the base term, mixing the arithmetic result with the boolean
-        // overflow flag and corrupting path conditions.
-        if let rustc_middle::ty::TyKind::Tuple(fields) = dest_ty.kind()
-            && fields.len() == 2 {
-                let result_val = VmValue {
-                    z3_term: term.clone(),
-                    ty: fields[0],
-                    provenance: provenance.clone(),
-                    facts: invariants.clone(),
-                    source: ValueSource::None,
-                };
-                self.set_field_value(dest_place.local, vec![0], result_val);
-                let overflow_term = self.fresh_int("overflow_flag");
-                let overflow_val = VmValue::new(overflow_term, fields[1]);
-                self.set_field_value(dest_place.local, vec![1], overflow_val);
-            }
-        VmValue {
-            z3_term: term,
-            ty: dest_ty,
-            provenance,
-            facts: invariants,
-            source: match cmp_cond {
-                Some(cond) => ValueSource::Comparison {
-                    lhs: lhs_pk,
-                    rhs: rhs_pk,
-                    op,
-                    cond,
-                },
-                None => ValueSource::BinaryOp {
-                    lhs: lhs_pk,
-                    rhs: rhs_pk,
-                    op,
-                },
-            },
-        }
-    }
-
-    /// Evaluate an `Aggregate` rvalue into a `VmValue`.
-    fn eval_aggregate_rvalue(
-        &mut self,
-        dest_place: &Place<'tcx>,
-        dest_ty: Ty<'tcx>,
-        kind: &rustc_middle::mir::AggregateKind<'tcx>,
-        operands: &rustc_index::IndexVec<rustc_abi::FieldIdx, Operand<'tcx>>,
-    ) -> VmValue<'z3, 'tcx> {
-        // For an enum aggregate, remember whether this is the data-carrying
-        // variant of `Option`/`Result` (`Some`/`Ok`), so the nested-field
-        // flattening below only fires on paths that actually carry a `Self`.
-        let data_variant = match kind {
-            rustc_middle::mir::AggregateKind::Adt(did, variant_idx, ..) => {
-                if self.tcx.is_diagnostic_item(rustc_span::sym::Result, *did) {
-                    Some(variant_idx.as_usize() == 0)
-                } else if self.tcx.is_diagnostic_item(rustc_span::sym::Option, *did) {
-                    Some(variant_idx.as_usize() == 1)
-                } else {
-                    None
-                }
-            }
-            _ => None,
-        };
-        // `NonNull::new_unchecked(ptr)` / `NonNull::from(&T)` construct a
-        // repr(transparent) single-field newtype whose value *is* the underlying
-        // pointer.  Model the wrapper as the pointer field itself (term +
-        // provenance + invariants) so downstream checks like `NonNull(node)` /
-        // `Align(node, T)` / `Allocated(node, ..)` can discharge against the real
-        // pointer instead of a fresh unconstrained `aggregate` symbol.
-        if operands.len() == 1 && self.find_nn_pointee(dest_ty).is_some() {
-            let field_val = self.value_of_operand(operands.iter().next().unwrap());
-            let dest_local = dest_place.local;
-            self.set_field_value(dest_local, vec![0], field_val.clone());
-            if let Some(alloc_id) = self.current_frame.local_alloc.get(&dest_local).copied() {
-                self.content_mut(alloc_id).facts.initialized = true;
-            }
-            return VmValue {
-                z3_term: field_val.z3_term,
-                ty: dest_ty,
-                provenance: field_val.provenance,
-                facts: field_val.facts,
-                source: ValueSource::None,
-            };
-        }
-        let term = self.fresh_int("aggregate");
-        let dest_local = dest_place.local;
-        // Prefer the pointee allocation (through a `*ptr` deref) over the base
-        // local's own stack slot, so byte values land on the real buffer (e.g.
-        // `((*_8).1).0 = [a, b, 0]` writes into the box).
-        let dest_alloc_id = self
-            .local_value(dest_local)
-            .and_then(|v| v.provenance_alloc_id())
-            .or_else(|| self.current_frame.local_alloc.get(&dest_local).copied());
-        let is_byte_array = mir_utils::is_u8_array_or_slice(dest_ty);
-        let field_types: Vec<_> = self.aggregate_field_tys(dest_ty);
-        let mut byte_offset = 0usize;
-        for (i, operand) in operands.iter().enumerate() {
-            let mut field_val = self.value_of_operand(operand);
-            let field_ty_opt = field_types.get(i).copied();
-            if let Some(field_ty) = field_ty_opt {
-                let src_is_ref = matches!(field_val.ty.kind(), rustc_middle::ty::TyKind::Ref(..));
-                let dst_is_raw =
-                    matches!(field_ty.kind(), rustc_middle::ty::TyKind::RawPtr(..));
-                if dst_is_raw && (src_is_ref || field_val.facts.non_null) {
-                    field_val.facts.in_bounds = true;
-                    field_val.ty = field_ty;
-                }
-            }
-            let field_sz = field_ty_opt
-                .map(|ty| self.size_of_ty(ty) as usize)
-                .unwrap_or(1);
-            let field_term = field_val.z3_term.clone();
-            self.set_field_value(dest_local, vec![i], field_val);
-            // Flatten a nested aggregate: if the operand is a local whose own
-            // fields are tracked (e.g. `_0 = Result::Ok(_24)` where
-            // `_24 = RawVecInner { ptr: _25, .. }`), expose the nested fields
-            // under the destination's field path so a contract place like
-            // `Return.Field(0).Field(0)` can resolve to `_25`.  Only flatten the
-            // data-carrying variant (`Ok`/`Some`); on `Err`/`None` paths there is
-            // no `Self` and the nested place should resolve to `Unknown`.
-            if data_variant != Some(false)
-                && let Some(op_place) = operand.place()
-                    && op_place.projection.is_empty() {
-                        let nested: Vec<(Vec<usize>, VmValue<'z3, 'tcx>)> = self
-                            .field_paths(op_place.local)
-                            .into_iter()
-                            .filter_map(|p| {
-                                self.field_value(op_place.local, &p).cloned().map(|v| (p, v))
-                            })
-                            .collect();
-                        for (nested_path, nested_val) in nested {
-                            let mut full = vec![i];
-                            full.extend_from_slice(&nested_path);
-                            self.set_field_value(dest_local, full, nested_val);
-                        }
-                    }
-            if let Some(alloc_id) = dest_alloc_id {
-                self.content_mut(alloc_id).facts.initialized = true;
-                if is_byte_array && field_sz == 1 {
-                    self.record_byte_value(alloc_id, byte_offset, field_term.clone());
-                }
-                // Record known_nul / known_non_nul from constant operands
-                if let Some(int_val) = mir_utils::operand_const_u64(operand) {
-                    if field_sz == 1 {
-                        if int_val == 0 {
-                            if !is_byte_array {
-                                self.record_byte_value(
-                                    alloc_id,
-                                    byte_offset,
-                                    Int::from_u64(self.z3_ctx, 0),
-                                );
-                            }
-                        } else if !is_byte_array {
-                            self.record_byte_value(
-                                alloc_id,
-                                byte_offset,
-                                Int::from_u64(self.z3_ctx, int_val),
-                            );
-                        }
-                    }
-                    // For multi-byte fields: track each constituent byte
-                    for b in 0..field_sz.min(8) {
-                        let byte_off = byte_offset + b;
-                        let byte_val = (int_val >> (b * 8)) & 0xFF;
-                        self.record_byte_value(
-                            alloc_id,
-                            byte_off,
-                            Int::from_u64(self.z3_ctx, byte_val),
-                        );
-                    }
-                }
-            }
-            byte_offset += field_sz;
-        }
-        // Fat-pointer construction (inlined `from_raw_parts` /
-        // `slice_from_raw_parts_mut`): the result's address and provenance are
-        // those of the data pointer (field 0), so downstream `Allocated`/`Owning`
-        // checks on the slice resolve against the real buffer instead of a fresh
-        // `aggregate` symbol.
-        let is_slice_ptr = matches!(dest_ty.kind(),
-            rustc_middle::ty::TyKind::RawPtr(inner, _) | rustc_middle::ty::TyKind::Ref(_, inner, _)
-                if matches!(inner.kind(), rustc_middle::ty::TyKind::Slice(_)));
-        let (result_term, result_prov) = if is_slice_ptr {
-            match self.field_value(dest_local, &[0]).cloned() {
-                Some(data) => (data.z3_term.clone(), data.provenance.clone()),
-                None => (term.clone(), None),
-            }
-        } else {
-            // `Box<T>` (an aggregate `Box(Unique<T>, A)`) takes its provenance
-            // from the inner `Unique<T>.pointer` (`NonNull<T>` at path `[0, 0]`),
-            // which the field-flattening above just recorded.  Without this,
-            // `Box::assume_init`'s rebuild drops the heap provenance and a later
-            // `Box::as_ptr` field read fails `NonNull`.
-            let box_prov = if let rustc_middle::ty::TyKind::Adt(adt, _) = dest_ty.kind() {
-                if api_classify::is_std_box(adt.did()) {
-                    self.container_ptr_field(dest_ty)
-                        .and_then(|path| self.field_value(dest_local, &path))
-                        .and_then(|v| v.provenance.clone())
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
-            (term.clone(), box_prov)
-        };
-        VmValue {
-            z3_term: result_term,
-            ty: dest_ty,
-            provenance: result_prov,
-            facts: ValueFacts::default(),
-            source: ValueSource::None,
-        }
     }
 
     /// Assert the Euclidean division identity and its bounds for `Div`/`Rem`:
@@ -2221,7 +1449,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// `term` must be the *same* Z3 term returned by `eval_binary_op` (the
     /// quotient), not a separate `lhs.div(rhs)` call, so the axiom constrains
     /// the term used in subsequent operations.
-    fn emit_div_rem_axioms(
+    pub(crate) fn emit_div_rem_axioms(
         &mut self,
         op: BinOp,
         term: &Int<'z3>,
@@ -2276,7 +1504,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         Int::sub(self.z3_ctx, &[&zero, val])
     }
 
-    fn eval_binary_op(&mut self, op: BinOp, lhs: &Int<'z3>, rhs: &Int<'z3>) -> Int<'z3> {
+    pub(crate) fn eval_binary_op(&mut self, op: BinOp, lhs: &Int<'z3>, rhs: &Int<'z3>) -> Int<'z3> {
         match op {
             BinOp::Add | BinOp::AddWithOverflow | BinOp::AddUnchecked => {
                 Int::add(self.z3_ctx, &[lhs, rhs])
@@ -2390,7 +1618,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
-    fn eval_unary_op(&mut self, op: UnOp, val: &Int<'z3>, is_bool: bool) -> Int<'z3> {
+    pub(crate) fn eval_unary_op(&mut self, op: UnOp, val: &Int<'z3>, is_bool: bool) -> Int<'z3> {
         match op {
             UnOp::Not => {
                 if is_bool {
@@ -2588,7 +1816,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// Compute provenance for a binary operation on pointer values.
     /// Propagates provenance with adjusted offset for pointer arithmetic
     /// (`ptr + offset`, `ptr - offset`, `Offset`).
-    fn provenance_for_binary_op(
+    pub(crate) fn provenance_for_binary_op(
         &self,
         op: BinOp,
         lhs: &VmValue<'z3, 'tcx>,
@@ -2650,7 +1878,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
 
     /// Compute facts for a binary operation.
     /// Propagates non_null from pointer arithmetic and align_n from compatible ops.
-    fn facts_for_binary_op(
+    pub(crate) fn facts_for_binary_op(
         &self,
         op: BinOp,
         lhs: &VmValue<'z3, 'tcx>,
@@ -2737,19 +1965,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         false
     }
 
-    // ── Storage ──────────────────────────────────────────────────
-
-    fn exec_storage_live(&mut self, local: Local) {
-        self.ensure_local_allocation(local);
-        let alloc_id = self.current_frame.local_alloc[&local];
-        self.alloc_mut(alloc_id).facts.dead = false;
-    }
-
-    fn exec_storage_dead(&mut self, local: Local) {
-        if let Some(alloc_id) = self.current_frame.local_alloc.get(&local).copied() {
-            self.alloc_mut(alloc_id).facts.dead = true;
-        }
-    }
 
     pub(crate) fn exec_drop(&mut self, place: &Place<'tcx>) {
         if let Some(alloc_id) = self.current_frame.local_alloc.get(&place.local).copied() {
@@ -2769,129 +1984,15 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
-    // ── Terminator executors ─────────────────────────────────────
-
     fn exec_terminator(
         &mut self,
         terminator: &Terminator<'tcx>,
         switch_succ: Option<BasicBlock>,
     ) {
-        match &terminator.kind {
-            TerminatorKind::Call {
-                func,
-                args,
-                destination,
-                ..
-            } => {
-                let caller_id = self.current_frame.current_def_id;
-                self.exec_call(func, args, destination.local, caller_id);
-            }
-            TerminatorKind::SwitchInt { discr, targets } => {
-                self.exec_switchint(discr, targets, switch_succ);
-            }
-            TerminatorKind::Assert { cond, expected, .. } => {
-                self.exec_assert(cond, *expected);
-            }
-            TerminatorKind::Goto { .. }
-            | TerminatorKind::Return
-            | TerminatorKind::Unreachable
-            | TerminatorKind::UnwindResume
-            | TerminatorKind::UnwindTerminate(_)
-            | TerminatorKind::Yield { .. }
-            | TerminatorKind::CoroutineDrop
-            | TerminatorKind::FalseEdge { .. }
-            | TerminatorKind::FalseUnwind { .. }
-            | TerminatorKind::InlineAsm { .. }
-            | TerminatorKind::TailCall { .. } => {}
-            TerminatorKind::Drop { place, .. } => {
-                self.exec_drop(place);
-            }
-        }
+        crate::verify::vm::rules::exec_terminator(self, terminator, switch_succ);
     }
 
-    /// Execute a SwitchInt terminator.
-    ///
-    /// Uses the successor resolved by the slicer (`switch_succ`) to determine
-    /// which branch is taken, then adds a path condition asserting the
-    /// discriminant equals that value.
-    fn exec_switchint(
-        &mut self,
-        discr: &Operand<'tcx>,
-        targets: &rustc_middle::mir::SwitchTargets,
-        switch_succ: Option<BasicBlock>,
-    ) {
-        let discr_val = self.value_of_operand(discr);
 
-        // If the discriminator is a comparison result, record the direct
-        // boolean condition alongside the ite-encoded `discr == value` fact,
-        // so the SMT solver can reason about `offset <= len` directly.
-        let cmp_cond = discr_val.bool_cond().cloned();
-
-        // Determine which target block is taken along the path.
-        if let Some(chosen) = switch_succ {
-            for (value, target) in targets.iter() {
-                if target == chosen {
-                    let val_term = Int::from_u64(self.z3_ctx, value as u64);
-                    self.constraints.assertions.push(discr_val.z3_term._eq(&val_term));
-                    if value != 0 {
-                        if let Some(ref cond) = cmp_cond {
-                            self.constraints.assertions.push(cond.clone());
-                        }
-                        self.infer_switch_guard(discr);
-                    } else if let Some(ref cond) = cmp_cond {
-                        self.constraints.assertions.push(cond.not());
-                    }
-                    return;
-                }
-            }
-            // Otherwise branch: the discrim is NOT any of the explicit values.
-            if targets.otherwise() == chosen {
-                // Negate every explicit target value.
-                for (value, _) in targets.iter() {
-                    let val_term = Int::from_u64(self.z3_ctx, value as u64);
-                    self.constraints.assertions
-                        .push(discr_val.z3_term._eq(&val_term).not());
-                }
-                if let Some(ref cond) = cmp_cond {
-                    // For a boolean discriminator, `otherwise` means the
-                    // comparison result is *not* any explicit value:
-                    //   - targets include 0 → `discr != 0` → comparison true;
-                    //   - targets include 1 → `discr != 1` → comparison false.
-                    if targets.iter().any(|(v, _)| v == 0) {
-                        self.constraints.assertions.push(cond.clone());
-                    } else if targets.iter().any(|(v, _)| v == 1) {
-                        self.constraints.assertions.push(cond.not());
-                    }
-                }
-            }
-        }
-    }
-
-    /// Execute an Assert terminator.
-    fn exec_assert(&mut self, cond: &Operand<'tcx>, expected: bool) {
-        let cond_val = self.value_of_operand(cond);
-        // If the asserted operand is a comparison result, record the direct
-        // boolean condition (`idx < len`) alongside the ite-encoded fact, so
-        // the SMT solver can unfold it (mirrors `exec_switchint`).
-        let cmp_cond = cond_val.bool_cond().cloned();
-        let zero = Int::from_u64(self.z3_ctx, 0);
-        if expected {
-            self.constraints.assertions.push(cond_val.z3_term._eq(&zero).not());
-            if let Some(c) = &cmp_cond {
-                self.constraints.assertions.push(c.clone());
-            }
-        } else {
-            self.constraints.assertions.push(cond_val.z3_term._eq(&zero));
-            if let Some(c) = &cmp_cond {
-                self.constraints.assertions.push(c.not());
-            }
-        }
-
-        // Guard inference: trace the assert condition back to find non_null sources
-        self.infer_guard_non_null(cond, expected);
-        // Infer alignment from == 0 guards on Rem expressions
-        self.infer_guard_align(cond, expected);
-    }
 
     /// The `(lhs, rhs, op)` of the binary-op/comparison source recorded on the
     /// value bound to `pk`'s local, if any.
@@ -2992,7 +2093,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     }
 
     /// Infer non_null from SwitchInt discriminant.
-    fn infer_switch_guard(&mut self, discr: &Operand<'tcx>) {
+    pub(crate) fn infer_switch_guard(&mut self, discr: &Operand<'tcx>) {
         let Some(pk) = Self::operand_place_key(discr) else {
             return;
         };
@@ -3728,7 +2829,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// is located via the shared buffer allocation (the `end` field's provenance
     /// alloc id). Returns `None` when this is not an iterator emptiness
     /// comparison.
-    fn iter_ptr_comparison(
+    pub(crate) fn iter_ptr_comparison(
         &self,
         op: rustc_middle::mir::BinOp,
         lhs: &VmValue<'z3, 'tcx>,
@@ -3787,7 +2888,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// is updated, increment the cumulative ptr offset so that
     /// `interpreter_iter_len` can express `len = initial_len - offset`
     /// instead of nested `(end - (ptr + sz + sz + ...)) / sz`.
-    fn track_iter_ptr_update(&mut self, local: Local) {
+    pub(crate) fn track_iter_ptr_update(&mut self, local: Local) {
         let local_val = match self.local_value(local) {
             Some(v) => v,
             None => return,
@@ -3930,7 +3031,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// `T`'s `#[rapx::invariant]`s on the new reference local, rebinding the
     /// invariant's `self` place to that reference. This is what lets a struct's
     /// invariants flow through pointer dereferences into the caller's state.
-    fn assert_pointee_struct_invariants(&mut self, dest_ty: Ty<'tcx>, dest_local: Local) {
+    pub(crate) fn assert_pointee_struct_invariants(&mut self, dest_ty: Ty<'tcx>, dest_local: Local) {
         let pointee = match dest_ty.kind() {
             rustc_middle::ty::TyKind::Ref(_, inner, _) => *inner,
             _ => return,
@@ -4177,7 +3278,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// Detected structurally (via `#[repr(transparent)]` + a raw-pointer field)
     /// rather than by name, so re-implemented std types in the challenge
     /// suites are modelled identically to their std counterparts.
-    fn find_nn_pointee(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    pub(crate) fn find_nn_pointee(&self, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
         use rustc_middle::ty::TyKind;
         match ty.kind() {
             TyKind::Adt(adt_def, substs) => {
@@ -4484,7 +3585,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     /// path `[0, 1]` becomes available at `_3`'s path `[1]`, so an inlined
     /// callee that dereferences `_3` and reads its `node` field sees the
     /// provenance of the underlying allocation.
-    fn propagate_field_values_to_ref(&mut self, source_place: &Place<'tcx>, dest: Local) {
+    pub(crate) fn propagate_field_values_to_ref(&mut self, source_place: &Place<'tcx>, dest: Local) {
         // Support both `&(local.field...)` (Field projection prefix) and
         // `&(*local)` (reborrow of a reference, pure Deref).  In the latter
         // case the reference's own per-field values already describe the
@@ -4542,7 +3643,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
     }
 
-    fn propagate_byte_values_to_ref(
+    pub(crate) fn propagate_byte_values_to_ref(
         &mut self,
         source_place: &Place<'tcx>,
         ref_val: &VmValue<'z3, 'tcx>,
@@ -4562,7 +3663,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     }
 
     /// Return the per-field types for an aggregate's operands.
-    fn aggregate_field_tys(&self, ty: Ty<'tcx>) -> Vec<Ty<'tcx>> {
+    pub(crate) fn aggregate_field_tys(&self, ty: Ty<'tcx>) -> Vec<Ty<'tcx>> {
         match ty.kind() {
             rustc_middle::ty::TyKind::Array(elem_ty, _len) => {
                 // We don't need the exact count — just the element type for size

@@ -109,6 +109,7 @@ impl PropertyChecker {
     pub(super) fn check_no_internal_mut<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
+        _checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
         let Some(ty) = Self::ty_arg(property, 0) else {
@@ -122,6 +123,7 @@ impl PropertyChecker {
     pub(super) fn check_uni_internal_mut<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
+        _checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
         let Some(ty) = Self::ty_arg(property, 0) else {

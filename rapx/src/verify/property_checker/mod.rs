@@ -5,8 +5,6 @@
 //! submodules (`memory`, `bounds`, `typed`, `numeric`, `string`, `alias`,
 //! `cstr`, `transmute`).  Shared helpers live in `util`.
 
-use z3::Solver;
-
 use crate::helpers::mir_scan::Checkpoint;
 use crate::verify::vm::state::{OffsetKind, VmState};
 use crate::verify::{
@@ -32,6 +30,189 @@ pub(crate) use auto_trait::{
 
 pub(crate) struct PropertyChecker;
 
+/// A property-checking rule: prove a [`PropertyKind`] by matching the kind and
+/// running the associated checker.  `kind` is the `PropertyKind` itself (a
+/// `Copy` enum, so no predicate function is needed), and `apply` is the checker
+/// under one uniform signature.
+pub(crate) struct PropertyRule {
+    /// Rule name, for logging / hit-statistics / debugging.
+    pub name: &'static str,
+    /// The `PropertyKind` this rule discharges.
+    pub kind: PropertyKind,
+    /// The checker: prove `property` (whose kind equals `self.kind`).
+    pub apply: for<'z3, 'tcx> fn(
+        &PropertyChecker,
+        &VmState<'z3, 'tcx>,
+        &Checkpoint<'tcx>,
+        &Property<'tcx>,
+    ) -> CheckResult,
+}
+
+/// `NonVolatile` is uncheckable: the VM does not model volatile access, so
+/// there is nothing to disprove.  Treated as satisfied (Proved) as a documented
+/// soundness assumption — analysed code is assumed not to mix volatile and
+/// non-volatile access.  Revisit if volatile tracking is ever added.
+fn check_non_volatile<'z3, 'tcx>(
+    _checker: &PropertyChecker,
+    _vm_state: &VmState<'z3, 'tcx>,
+    _checkpoint: &Checkpoint<'tcx>,
+    _property: &Property<'tcx>,
+) -> CheckResult {
+    CheckResult::ProvedByRule
+}
+
+/// Fallback for `PropertyKind`s without a dedicated checker (`Unwrap`, `Pinned`,
+/// `Opened`, `Unreachable`, `Unknown`, …): reported `Unknown`.
+fn check_unknown<'z3, 'tcx>(
+    _checker: &PropertyChecker,
+    _vm_state: &VmState<'z3, 'tcx>,
+    _checkpoint: &Checkpoint<'tcx>,
+    _property: &Property<'tcx>,
+) -> CheckResult {
+    CheckResult::Unknown(UnknownReason::Unimplemented)
+}
+
+/// Every property rule, in dispatch order.
+pub(crate) const PROPERTY_RULES: &[PropertyRule] = &[
+    PropertyRule {
+        name: "align",
+        kind: PropertyKind::Align,
+        apply: PropertyChecker::check_align,
+    },
+    PropertyRule {
+        name: "non_null",
+        kind: PropertyKind::NonNull,
+        apply: PropertyChecker::check_non_null,
+    },
+    PropertyRule {
+        name: "null",
+        kind: PropertyKind::Null,
+        apply: PropertyChecker::check_null,
+    },
+    PropertyRule {
+        name: "allocated",
+        kind: PropertyKind::Allocated,
+        apply: PropertyChecker::check_allocated,
+    },
+    PropertyRule {
+        name: "in_bound",
+        kind: PropertyKind::InBound,
+        apply: PropertyChecker::check_in_bound,
+    },
+    PropertyRule {
+        name: "init",
+        kind: PropertyKind::Init,
+        apply: PropertyChecker::check_init,
+    },
+    PropertyRule {
+        name: "typed",
+        kind: PropertyKind::Typed,
+        apply: PropertyChecker::check_typed,
+    },
+    PropertyRule {
+        name: "alias",
+        kind: PropertyKind::Alias,
+        apply: PropertyChecker::check_alias,
+    },
+    PropertyRule {
+        name: "owning",
+        kind: PropertyKind::Owning,
+        apply: PropertyChecker::check_owning,
+    },
+    PropertyRule {
+        name: "alive",
+        kind: PropertyKind::Alive,
+        apply: PropertyChecker::check_alive,
+    },
+    PropertyRule {
+        name: "non_overlap",
+        kind: PropertyKind::NonOverlap,
+        apply: PropertyChecker::check_non_overlap,
+    },
+    PropertyRule {
+        name: "non_volatile",
+        kind: PropertyKind::NonVolatile,
+        apply: check_non_volatile,
+    },
+    PropertyRule {
+        name: "valid_num",
+        kind: PropertyKind::ValidNum,
+        apply: PropertyChecker::check_valid_num,
+    },
+    PropertyRule {
+        name: "valid_string",
+        kind: PropertyKind::ValidString,
+        apply: PropertyChecker::check_valid_string,
+    },
+    PropertyRule {
+        name: "valid_cstr",
+        kind: PropertyKind::ValidCStr,
+        apply: PropertyChecker::check_valid_cstr,
+    },
+    PropertyRule {
+        name: "valid_transmute",
+        kind: PropertyKind::ValidTransmute,
+        apply: PropertyChecker::check_valid_transmute,
+    },
+    PropertyRule {
+        name: "split_transmute",
+        kind: PropertyKind::SplitTransmute,
+        apply: PropertyChecker::check_split_transmute,
+    },
+    PropertyRule {
+        name: "trait",
+        kind: PropertyKind::Trait,
+        apply: PropertyChecker::check_trait,
+    },
+    PropertyRule {
+        name: "size",
+        kind: PropertyKind::Size,
+        apply: PropertyChecker::check_size,
+    },
+    PropertyRule {
+        name: "no_padding",
+        kind: PropertyKind::NoPadding,
+        apply: PropertyChecker::check_no_padding,
+    },
+    PropertyRule {
+        name: "contain_no_type",
+        kind: PropertyKind::ContainNoType,
+        apply: PropertyChecker::check_contain_no_type,
+    },
+    PropertyRule {
+        name: "no_raw_ptr",
+        kind: PropertyKind::NoRawPtr,
+        apply: PropertyChecker::check_no_raw_ptr,
+    },
+    PropertyRule {
+        name: "no_internal_mut",
+        kind: PropertyKind::NoInternalMut,
+        apply: PropertyChecker::check_no_internal_mut,
+    },
+    PropertyRule {
+        name: "uni_internal_mut",
+        kind: PropertyKind::UniInternalMut,
+        apply: PropertyChecker::check_uni_internal_mut,
+    },
+    PropertyRule {
+        name: "atomic_update",
+        kind: PropertyKind::AtomicUpdate,
+        apply: PropertyChecker::check_atomic_update,
+    },
+    PropertyRule {
+        name: "ref_send",
+        kind: PropertyKind::RefSend,
+        apply: PropertyChecker::check_ref_send,
+    },
+];
+
+/// Fallback rule for kinds with no dedicated checker.
+pub(crate) const UNKNOWN_RULE: PropertyRule = PropertyRule {
+    name: "unknown",
+    kind: PropertyKind::Unknown,
+    apply: check_unknown,
+};
+
 impl PropertyChecker {
     pub(crate) fn check<'z3, 'tcx>(
         &self,
@@ -39,15 +220,12 @@ impl PropertyChecker {
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
-        let solver = Solver::new(vm_state.z3_ctx);
-        vm_state.assert_all(&solver);
-        self.check_inner(vm_state, &solver, checkpoint, property)
+        self.check_inner(vm_state, checkpoint, property)
     }
 
     fn check_inner<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
@@ -60,8 +238,8 @@ impl PropertyChecker {
             return CheckResult::ProvedByRule;
         }
         match property {
-            Property::Or(_) => self.check_or(vm_state, solver, checkpoint, property),
-            Property::And(_) => self.check_and(vm_state, solver, checkpoint, property),
+            Property::Or(_) => self.check_or(vm_state, checkpoint, property),
+            Property::And(_) => self.check_and(vm_state, checkpoint, property),
             Property::Atom(atom) => {
                 // A property whose target value (or a checkpoint argument it
                 // reads) depends on a truncated inline cannot be decided:
@@ -69,59 +247,12 @@ impl PropertyChecker {
                 if self.atom_depends_on_truncated_inline(vm_state, checkpoint, property) {
                     return CheckResult::Unknown(UnknownReason::InlineDepthExceeded);
                 }
-                match atom.kind {
-                    PropertyKind::Align => self.check_align(vm_state, checkpoint, property),
-                    PropertyKind::NonNull => self.check_non_null(vm_state, checkpoint, property),
-                    PropertyKind::Null => self.check_null(vm_state, checkpoint, property),
-                    PropertyKind::Allocated => self.check_allocated(vm_state, checkpoint, property),
-                    PropertyKind::InBound => {
-                        self.check_in_bound(vm_state, solver, checkpoint, property)
-                    }
-                    PropertyKind::Init => self.check_init(vm_state, checkpoint, property),
-                    PropertyKind::Typed => self.check_typed(vm_state, checkpoint, property),
-                    PropertyKind::Alias => self.check_alias(vm_state, checkpoint),
-                    PropertyKind::Owning => self.check_owning(vm_state, checkpoint, property),
-                    PropertyKind::Alive => self.check_alive(vm_state, checkpoint, property),
-                    PropertyKind::NonOverlap => {
-                        self.check_non_overlap(vm_state, solver, checkpoint, property)
-                    }
-                    // `NonVolatile` is uncheckable: the VM does not model volatile
-                    // access, so there is nothing to disprove.  Treated as
-                    // satisfied (Proved) as a documented soundness assumption —
-                    // analysed code is assumed not to mix volatile and non-volatile
-                    // access.  Revisit if volatile tracking is ever added.
-                    PropertyKind::NonVolatile => CheckResult::ProvedByRule,
-                    PropertyKind::ValidNum => {
-                        self.check_valid_num(vm_state, solver, checkpoint, property)
-                    }
-                    PropertyKind::ValidString => {
-                        self.check_valid_string(vm_state, solver, checkpoint, property)
-                    }
-                    PropertyKind::ValidCStr => {
-                        self.check_valid_cstr(vm_state, solver, checkpoint, property)
-                    }
-                    PropertyKind::ValidTransmute => self.check_valid_transmute(vm_state, property),
-                    PropertyKind::SplitTransmute => {
-                        self.check_split_transmute(vm_state, checkpoint, property)
-                    }
-                    PropertyKind::Trait => self.check_trait(vm_state, checkpoint, property),
-                    PropertyKind::Size => self.check_size(vm_state, checkpoint, property),
-                    PropertyKind::NoPadding => {
-                        self.check_no_padding(vm_state, checkpoint, property)
-                    }
-                    PropertyKind::ContainNoType => {
-                        self.check_contain_no_type(vm_state, checkpoint, property)
-                    }
-                    PropertyKind::NoRawPtr => self.check_no_raw_ptr(vm_state, checkpoint, property),
-                    PropertyKind::NoInternalMut => self.check_no_internal_mut(vm_state, property),
-                    PropertyKind::UniInternalMut => self.check_uni_internal_mut(vm_state, property),
-                    PropertyKind::AtomicUpdate => {
-                        self.check_atomic_update(vm_state, checkpoint, property)
-                    }
-                    PropertyKind::RefSend => self.check_ref_send(vm_state, checkpoint, property),
-
-                    _ => CheckResult::Unknown(UnknownReason::Unimplemented),
-                }
+                let rule = PROPERTY_RULES
+                    .iter()
+                    .find(|r| r.kind == atom.kind)
+                    .unwrap_or(&UNKNOWN_RULE);
+                crate::rap_debug!("property rule: {}", rule.name);
+                (rule.apply)(self, vm_state, checkpoint, property)
             }
         }
     }
@@ -176,7 +307,6 @@ impl PropertyChecker {
     fn check_or<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
@@ -185,7 +315,7 @@ impl PropertyChecker {
         // disjunction is unsatisfiable, hence Failed.
         let mut overall = CheckResult::Failed;
         for disjunct in property.disjuncts() {
-            let result = self.check_inner(vm_state, solver, checkpoint, disjunct);
+            let result = self.check_inner(vm_state, checkpoint, disjunct);
             overall = overall.or(result);
         }
         overall
@@ -194,7 +324,6 @@ impl PropertyChecker {
     fn check_and<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
@@ -203,7 +332,7 @@ impl PropertyChecker {
         // vacuously proved.
         let mut overall = CheckResult::ProvedByRule;
         for conjunct in property.conjuncts() {
-            let result = self.check_inner(vm_state, solver, checkpoint, conjunct);
+            let result = self.check_inner(vm_state, checkpoint, conjunct);
             overall = overall.and(result);
         }
         overall

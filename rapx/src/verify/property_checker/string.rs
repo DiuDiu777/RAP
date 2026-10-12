@@ -41,10 +41,11 @@ impl PropertyChecker {
     pub(super) fn check_valid_string<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
+        let solver = Solver::new(vm_state.z3_ctx);
+        vm_state.assert_all(&solver);
         // Empty byte range: trivially valid UTF-8.
         if let Some(count) = property
             .args()
@@ -58,7 +59,7 @@ impl PropertyChecker {
             return CheckResult::ProvedByRule;
         };
         if let Some(alloc_id) = value.provenance_alloc_id() {
-            return self.check_utf8_alloc(vm_state, solver, alloc_id);
+            return self.check_utf8_alloc(vm_state, &solver, alloc_id);
         }
 
         // A one-argument `ValidString(iter)` targets an `Iterator<Item = u8>`:
@@ -66,7 +67,7 @@ impl PropertyChecker {
         // byte buffer of its innermost `Iter`/`IterMut` and UTF-8-check that.
         if let Some(local) = vm_state.find_local_by_address(&value.z3_term)
             && let Some((alloc_id, _end_offset)) = vm_state.iter_utf8_buffer(local) {
-                return self.check_utf8_alloc(vm_state, solver, alloc_id);
+                return self.check_utf8_alloc(vm_state, &solver, alloc_id);
             }
         CheckResult::ProvedByRule
     }

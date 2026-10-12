@@ -82,10 +82,11 @@ impl PropertyChecker {
     pub(super) fn check_valid_cstr<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
+        let solver = Solver::new(vm_state.z3_ctx);
+        vm_state.assert_all(&solver);
         let value = self
             .target_value(vm_state, checkpoint, property)
             .or_else(|| {
@@ -154,7 +155,7 @@ impl PropertyChecker {
             // 2. Try byte_value-based symbolic check via SMT
             if let Some(size) = buffer_size
                 && let Some(r) =
-                    self.check_valid_cstr_from_byte_values(vm_state, solver, alloc_id, &size)
+                    self.check_valid_cstr_from_byte_values(vm_state, &solver, alloc_id, &size)
                 {
                     return r;
                 }

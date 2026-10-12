@@ -16,6 +16,7 @@ impl PropertyChecker {
         &self,
         vm_state: &VmState<'z3, 'tcx>,
         checkpoint: &Checkpoint<'tcx>,
+        _property: &Property<'tcx>,
     ) -> CheckResult {
         match crate::verify::vm::alias::check_alias_vm(vm_state, checkpoint) {
             crate::verify::vm::alias::VmAliasResult::Proved => CheckResult::ProvedByRule,

@@ -25,10 +25,11 @@ impl PropertyChecker {
     pub(super) fn check_in_bound<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
+        let solver = Solver::new(vm_state.z3_ctx);
+        vm_state.assert_all(&solver);
         // Fast-path: contract with for_each guarantees all elements
         // of the index array are in bounds.
         if property.for_each().is_some() {
@@ -38,7 +39,7 @@ impl PropertyChecker {
         if let Some(PropertyArg::Expr(ContractExpr::IndexAccess { .. })) =
             property.args().first()
         {
-            return self.check_in_bound_slice(vm_state, solver, checkpoint, property);
+            return self.check_in_bound_slice(vm_state, &solver, checkpoint, property);
         }
 
         let required_ty = Self::ty_arg(property, 1);
@@ -403,10 +404,11 @@ impl PropertyChecker {
     pub(super) fn check_non_overlap<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
-        solver: &Solver<'z3>,
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
+        let solver = Solver::new(vm_state.z3_ctx);
+        vm_state.assert_all(&solver);
         let Some(v1) = self.target_value(vm_state, checkpoint, property) else {
             return CheckResult::Unknown(UnknownReason::Unimplemented);
         };

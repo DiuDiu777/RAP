@@ -18,6 +18,7 @@ impl PropertyChecker {
     pub(super) fn check_valid_transmute<'z3, 'tcx>(
         &self,
         vm_state: &VmState<'z3, 'tcx>,
+        _checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
         let src = Self::ty_arg(property, 0);

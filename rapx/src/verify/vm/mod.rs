@@ -13,6 +13,7 @@ pub(crate) mod display;
 pub(crate) mod exec;
 pub(crate) mod memory;
 pub(crate) mod region;
+pub(crate) mod rules;
 pub(crate) mod state;
 
 use rustc_middle::ty::TyCtxt;
