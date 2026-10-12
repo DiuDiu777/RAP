@@ -37,8 +37,6 @@ pub(crate) struct CallDependencySummary {
     /// argument is *not* listed here — that is the "may-write" set, which this
     /// summary does not compute.
     pub must_write_args: Vec<usize>,
-    /// True when this summary is conservative rather than precise.
-    pub unsupported: bool,
 }
 
 impl CallDependencySummary {
@@ -47,17 +45,12 @@ impl CallDependencySummary {
         Self {
             return_depends_on_args: (0..arg_count).collect(),
             must_write_args: Vec::new(),
-            unsupported: true,
         }
     }
 }
 
 /// Effect summary consumed by the forward visitor.
-#[derive(Clone, Debug)]
-pub(crate) struct CallEffectSummary {
-    /// Effects that can be applied to the path-local abstract state.
-    pub effects: Vec<CallEffect>,
-}
+pub(crate) type CallEffectSummary = Vec<CallEffect>;
 
 /// Path-local effect produced by a retained call.
 #[derive(Clone, Debug)]
@@ -274,7 +267,6 @@ pub(crate) fn dependency_summary<'tcx>(
                         .into_iter()
                         .filter(|index| *index < arg_count)
                         .collect(),
-                    unsupported: false,
                 };
             }
         // `Try::branch` (`Option<T>` -> `ControlFlow<Option<!>, T>`): the
@@ -285,7 +277,6 @@ pub(crate) fn dependency_summary<'tcx>(
             return CallDependencySummary {
                 return_depends_on_args: vec![0],
                 must_write_args: Vec::new(),
-                unsupported: false,
             };
         }
         if let Some(return_deps) = interprocedural::local_return_dependencies(tcx, callee) {
@@ -295,7 +286,6 @@ pub(crate) fn dependency_summary<'tcx>(
                     .filter(|index| *index < arg_count)
                     .collect(),
                 must_write_args: Vec::new(),
-                unsupported: false,
             };
         }
     }

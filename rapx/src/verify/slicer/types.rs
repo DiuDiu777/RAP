@@ -51,9 +51,4 @@ pub(crate) enum RelevantItem<'tcx> {
     /// A contract fact injected by the engine before the forward visit.
     /// Never produced by the backward visitor itself.
     ContractFact { property: contract::Property<'tcx> },
-    /// An unknown call with no summary (`unsupported`): its effects cannot be
-    /// modeled, so the slicer keeps the terminator but conservatively drops
-    /// precision on the relevant state it touches. The forward VM is a no-op on
-    /// this marker.
-    UnknownCall,
 }

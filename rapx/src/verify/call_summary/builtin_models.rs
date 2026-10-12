@@ -239,9 +239,7 @@ pub(crate) fn lookup_effect<'tcx>(
                 func,
                 dest,
             };
-            return Some(CallEffectSummary {
-                effects: (e.effects)(&ctx),
-            });
+            return Some((e.effects)(&ctx));
         }
     }
     None
@@ -620,9 +618,7 @@ fn eff_box_from_vec(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
 /// has no match: the return aliases the receiver's inner value.
 pub(crate) fn effect_summary<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<CallEffectSummary> {
     if let Some(peel) = transparent_deref_peel(tcx, func) {
-        return Some(CallEffectSummary {
-            effects: vec![CallEffect::ReturnTransparentDeref { arg: 0, peel }],
-        });
+        return Some(vec![CallEffect::ReturnTransparentDeref { arg: 0, peel }]);
     }
     None
 }

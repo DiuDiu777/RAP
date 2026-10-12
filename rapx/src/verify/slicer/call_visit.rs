@@ -49,9 +49,6 @@ pub(crate) fn visit<'tcx>(
     let summary = call_summary::dependency_summary(tcx, func, args.len(), &call_context_from_args(args));
 
     if defs.intersects(relevant) {
-        if summary.unsupported {
-            items.push(RelevantItem::UnknownCall);
-        }
         items.push(RelevantItem::Terminator { def_id, block, switch_succ: None });
         relevant.remove_all(&defs);
         relevant.extend(call_args_uses_at(args, &summary.return_depends_on_args));
@@ -70,9 +67,6 @@ pub(crate) fn visit<'tcx>(
         TyKind::RawPtr(..) | TyKind::Ref(..)
     );
     if dest_is_ptr && summary.must_write_args.is_empty() {
-        if summary.unsupported {
-            items.push(RelevantItem::UnknownCall);
-        }
         items.push(RelevantItem::Terminator { def_id, block, switch_succ: None });
         relevant.remove_all(&defs);
         relevant.extend(call_args_uses_at(args, &summary.return_depends_on_args));
@@ -86,11 +80,8 @@ pub(crate) fn visit<'tcx>(
     let summarized_write = !summary.must_write_args.is_empty();
     if relevant_written_arg
         || summarized_write
-        || (summary.unsupported && arg_uses.intersects(relevant))
+        || arg_uses.intersects(relevant)
     {
-        if summary.unsupported {
-            items.push(RelevantItem::UnknownCall);
-        }
         items.push(RelevantItem::Terminator { def_id, block, switch_succ: None });
         relevant.extend(call_args_uses_at(args, &summary.must_write_args));
     }

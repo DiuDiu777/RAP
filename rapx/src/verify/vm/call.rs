@@ -75,8 +75,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             destination,
         ).or_else(|| call_summary::builtin_models::effect_summary(self.tcx, func));
 
-        if let Some(summary) = summary {
-            for effect in &summary.effects {
+        if let Some(effects) = summary {
+            for effect in &effects {
                 self.apply_call_effect(effect, &arg_values, &caller_arg_locals, destination, callee, func);
             }
         } else if let Some(c) = callee && self.tcx.is_mir_available(c) {

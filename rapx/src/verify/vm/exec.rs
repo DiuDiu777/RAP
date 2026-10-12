@@ -66,7 +66,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 RelevantItem::ContractFact { property } => {
                     self.assert_contract_fact(property);
                 }
-                RelevantItem::UnknownCall => {}
             }
         }
     }
