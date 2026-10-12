@@ -638,21 +638,10 @@ fn transparent_deref_peel<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Opti
     if tcx.is_lang_item(did, LangItem::ManuallyDrop) {
         return Some(2);
     }
-    if is_maybe_dangling(tcx, did) {
+    if tcx.is_lang_item(did, LangItem::MaybeDangling) {
         return Some(1);
     }
     None
-}
-
-fn is_maybe_dangling(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    #[cfg(rapx_has_maybe_dangling_lang_item)]
-    {
-        tcx.is_lang_item(did, LangItem::MaybeDangling)
-    }
-    #[cfg(not(rapx_has_maybe_dangling_lang_item))]
-    {
-        tcx.def_path_str(did).contains("MaybeDangling")
-    }
 }
 
 // ── Collection element-size helpers ─────────────────────────────────

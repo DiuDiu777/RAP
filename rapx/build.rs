@@ -15,7 +15,6 @@ fn main() {
     emit_check_cfg("rapx_rvalue_has_reborrow");
     emit_check_cfg("rapx_scalar_to_pointer_interp_result");
     emit_check_cfg("rapx_has_fnptr_asptr");
-    emit_check_cfg("rapx_has_maybe_dangling_lang_item");
     emit_check_cfg("rapx_has_attr_ir");
     emit_check_cfg("rapx_rvalue_has_nullary_op");
     emit_check_cfg("rapx_constkind_alias");
@@ -74,11 +73,6 @@ fn main() {
     emit_cfg(
         "rapx_has_fnptr_asptr",
         rustc_src_contains_path("compiler/rustc_middle/src/ty/instance.rs", "FnPtrAsPtr"),
-    );
-    emit_cfg(
-        "rapx_has_maybe_dangling_lang_item",
-        rustc_src_contains_path("compiler/rustc_hir/src/lang_items.rs", "MaybeDangling")
-            || rustc_src_contains_path("compiler/rustc_attr_ir/src/lang_items.rs", "MaybeDangling"),
     );
     // `LangItem` / `Attribute` / `AttributeKind` / `find_attr!` moved from
     // `rustc_hir` into the new `rustc_attr_ir` crate around 2026-09 (nightly
