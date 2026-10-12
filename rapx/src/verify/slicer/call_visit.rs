@@ -15,7 +15,7 @@ use crate::analysis::dataflow::types::DataflowGraph;
 
 use super::super::{
     call_summary,
-    def_use::{PlaceKey, RelevantPlaces, call_args_uses_at, operand_uses},
+    def_use::{PlaceKey, RelevantPlaces, call_args_uses_at},
 };
 
 use super::types::RelevantItem;
@@ -73,15 +73,8 @@ pub(crate) fn visit<'tcx>(
         return;
     }
 
-    let relevant_written_arg = summary.must_write_args.iter().any(|index| {
-        args.get(*index)
-            .is_some_and(|arg| operand_uses(&arg.node).intersects(relevant))
-    });
     let summarized_write = !summary.must_write_args.is_empty();
-    if relevant_written_arg
-        || summarized_write
-        || arg_uses.intersects(relevant)
-    {
+    if summarized_write || arg_uses.intersects(relevant) {
         items.push(RelevantItem::Terminator { def_id, block, switch_succ: None });
         relevant.extend(call_args_uses_at(args, &summary.must_write_args));
     }
