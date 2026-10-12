@@ -20,15 +20,11 @@ use crate::compat::FxHashMap;
 use crate::helpers::mir_utils;
 use crate::verify::api_classify::is_branch;
 
-/// Caller constraints that affect a callee's path feasibility, propagated down
-/// the call chain during must-write summarization. Only concrete literal
-/// arguments are carried for now; symbolic path conditions come later.
-#[derive(Clone, Debug, Default)]
-pub(crate) struct CallContext {
-    /// Concrete literal argument values, keyed by 0-based argument index
-    /// (matching `trace_to_callee_arg`).
-    pub concrete: FxHashMap<usize, i128>,
-}
+/// Concrete literal argument values keyed by 0-based argument index (matching
+/// `trace_to_callee_arg`), propagated down the call chain during must-write
+/// summarization. Only concrete literals for now; symbolic path conditions
+/// come later.
+pub(crate) type CallContext = FxHashMap<usize, i128>;
 
 /// Dependency summary consumed by the backward visitor.
 #[derive(Clone, Debug)]
@@ -61,18 +57,6 @@ impl CallDependencySummary {
 pub(crate) struct CallEffectSummary {
     /// Effects that can be applied to the path-local abstract state.
     pub effects: Vec<CallEffect>,
-    /// True when this summary is conservative rather than precise.
-    pub unsupported: bool,
-}
-
-impl CallEffectSummary {
-    /// Build a conservative summary for an unsupported call.
-    pub(super) fn unknown() -> Self {
-        Self {
-            effects: Vec::new(),
-            unsupported: true,
-        }
-    }
 }
 
 /// Path-local effect produced by a retained call.

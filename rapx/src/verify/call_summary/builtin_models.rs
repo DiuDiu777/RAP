@@ -241,7 +241,6 @@ pub(crate) fn lookup_effect<'tcx>(
             };
             return Some(CallEffectSummary {
                 effects: (e.effects)(&ctx),
-                unsupported: false,
             });
         }
     }
@@ -619,14 +618,13 @@ fn eff_box_from_vec(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
 
 /// Transparent-wrapper deref (`ManuallyDrop`/`MaybeDangling`) when the registry
 /// has no match: the return aliases the receiver's inner value.
-pub(crate) fn effect_summary<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> CallEffectSummary {
+pub(crate) fn effect_summary<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<CallEffectSummary> {
     if let Some(peel) = transparent_deref_peel(tcx, func) {
-        return CallEffectSummary {
+        return Some(CallEffectSummary {
             effects: vec![CallEffect::ReturnTransparentDeref { arg: 0, peel }],
-            unsupported: false,
-        };
+        });
     }
-    CallEffectSummary::unknown()
+    None
 }
 
 fn transparent_deref_peel<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<usize> {

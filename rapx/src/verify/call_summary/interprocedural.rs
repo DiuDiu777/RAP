@@ -143,7 +143,7 @@ type MustWriteMemo = HashMap<(DefId, usize, Vec<(usize, i128)>), Option<HashSet<
 /// Canonical, sortable representation of a [`CallContext`]'s concrete
 /// arguments, used as part of the memo key (`FxHashMap` is not `Hash`).
 fn context_key(context: &CallContext) -> Vec<(usize, i128)> {
-    let mut entries: Vec<(usize, i128)> = context.concrete.iter().map(|(k, v)| (*k, *v)).collect();
+    let mut entries: Vec<(usize, i128)> = context.iter().map(|(k, v)| (*k, *v)).collect();
     entries.sort_unstable();
     entries
 }
@@ -226,7 +226,7 @@ fn path_infeasible_under_context(
     path: &[usize],
     context: &CallContext,
 ) -> bool {
-    if context.concrete.is_empty() {
+    if context.is_empty() {
         return false;
     }
     for window in path.windows(2) {
@@ -272,7 +272,7 @@ fn switch_discriminant_concrete(
     while let Some(current) = queue.pop_front() {
         let cidx = current.as_usize();
         if cidx >= 1 && cidx <= body.arg_count {
-            return context.concrete.get(&(cidx - 1)).copied();
+            return context.get(&(cidx - 1)).copied();
         }
         for bb in body.basic_blocks.iter() {
             for stmt in &bb.statements {
@@ -385,10 +385,10 @@ fn nested_call_context<'tcx>(
     let mut nested_context = CallContext::default();
     for (i, arg) in args.iter().enumerate() {
         if let Some(v) = helpers::operand_const_u64(&arg.node) {
-            nested_context.concrete.insert(i, v as i128);
+            nested_context.insert(i, v as i128);
         } else if let Some(outer) = trace_to_callee_arg(body, &arg.node)
-            && let Some(v) = context.concrete.get(&outer) {
-                nested_context.concrete.insert(i, *v);
+            && let Some(v) = context.get(&outer) {
+                nested_context.insert(i, *v);
             }
     }
     nested_context

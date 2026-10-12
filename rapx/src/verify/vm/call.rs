@@ -73,9 +73,9 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             callee,
             func,
             destination,
-        ).unwrap_or_else(|| call_summary::builtin_models::effect_summary(self.tcx, func));
+        ).or_else(|| call_summary::builtin_models::effect_summary(self.tcx, func));
 
-        if !summary.unsupported {
+        if let Some(summary) = summary {
             for effect in &summary.effects {
                 self.apply_call_effect(effect, &arg_values, &caller_arg_locals, destination, callee, func);
             }

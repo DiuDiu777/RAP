@@ -135,5 +135,5 @@ fn call_context_from_args(args: &[Spanned<Operand<'_>>]) -> call_summary::CallCo
             concrete.insert(i, v as i128);
         }
     }
-    call_summary::CallContext { concrete }
+    concrete
 }
