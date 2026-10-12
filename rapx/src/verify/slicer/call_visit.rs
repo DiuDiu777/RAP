@@ -1,7 +1,7 @@
 //! Call-terminator visiting logic.
 //!
 //! When the backward visitor encounters a call terminator, it delegates to this
-//! module, which consults the interprocedural dependency summaries to decide
+//! module, which consults the dependency summaries to decide
 //! which arguments flow through to the destination and whether the call may
 //! modify relevant state.
 
@@ -20,7 +20,7 @@ use super::super::{
 
 use super::types::RelevantItem;
 
-/// Visit a call terminator using an interprocedural dependency summary.
+/// Visit a call terminator using a dependency summary.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn visit<'tcx>(
     tcx: TyCtxt<'tcx>,

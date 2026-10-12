@@ -941,10 +941,10 @@ impl PropertyChecker {
             for stmt in &block.statements {
                 if let StatementKind::Assign(assign) = &stmt.kind {
                     let (dest, rvalue) = &**assign;
-                    if dest.local == local && dest.projection.is_empty() {
-                        if let Rvalue::Use(src_op, ..) = rvalue {
-                            return self.trace_value(vm_state, src_op);
-                        }
+                    if dest.local == local && dest.projection.is_empty()
+                        && let Rvalue::Use(src_op, ..) = rvalue
+                    {
+                        return self.trace_value(vm_state, src_op);
                     }
                 }
             }

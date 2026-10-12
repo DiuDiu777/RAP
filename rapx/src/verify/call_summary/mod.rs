@@ -243,33 +243,24 @@ pub(crate) fn dependency_summary<'tcx>(
         if tcx.intrinsic(callee).is_some() || mir_utils::is_drop_in_place(callee) {
             return CallDependencySummary::fallback(arg_count);
         }
-        if let Some(must_write_args) = dependencies::local_must_write_args(tcx, callee)
-            && !must_write_args.is_empty() {
-                return CallDependencySummary {
-                    return_depends_on_args: Vec::new(),
-                    must_write_args: must_write_args
-                        .into_iter()
-                        .filter(|index| *index < arg_count)
-                        .collect(),
-                };
-            }
-        // `Try::branch` (`Option<T>` -> `ControlFlow<Option<!>, T>`): the
-        // `Continue` payload is the input's `Some` payload, so the return value
-        // depends on the input.  Matched by `DefId` (the trait method's `self`
-        // type is generic, so the type check below is skipped here).
-        if is_branch(Some(callee)) {
+
+        // Writes and return-dependencies are orthogonal: a callee can both
+        // write an argument and return a value depending on another, so compute
+        // both rather than clearing `return_depends_on_args` when a write exists.
+        let must_write_args = dependencies::local_must_write_args(tcx, callee)
+            .map(|args| args.into_iter().filter(|i| *i < arg_count).collect::<Vec<_>>())
+            .filter(|args| !args.is_empty());
+        let return_deps = if is_branch(Some(callee)) {
+            Some(vec![0])
+        } else {
+            dependencies::local_return_dependencies(tcx, callee)
+                .map(|args| args.into_iter().filter(|i| *i < arg_count).collect::<Vec<_>>())
+        };
+
+        if must_write_args.is_some() || return_deps.is_some() {
             return CallDependencySummary {
-                return_depends_on_args: vec![0],
-                must_write_args: Vec::new(),
-            };
-        }
-        if let Some(return_deps) = dependencies::local_return_dependencies(tcx, callee) {
-            return CallDependencySummary {
-                return_depends_on_args: return_deps
-                    .into_iter()
-                    .filter(|index| *index < arg_count)
-                    .collect(),
-                must_write_args: Vec::new(),
+                return_depends_on_args: return_deps.unwrap_or_default(),
+                must_write_args: must_write_args.unwrap_or_default(),
             };
         }
     }

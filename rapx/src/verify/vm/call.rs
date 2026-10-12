@@ -291,14 +291,12 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             if let TerminatorKind::Call {
                 func, destination, ..
             } = &terminator.kind
+                && destination.local == p.local
+                && destination.projection.is_empty()
+                && let Some(callee) = mir_utils::dep_callee_def_id(func)
+                && api_classify::is_ub_checks_gate(self.tcx, callee)
             {
-                if destination.local == p.local
-                    && destination.projection.is_empty()
-                    && let Some(callee) = mir_utils::dep_callee_def_id(func)
-                    && api_classify::is_ub_checks_gate(self.tcx, callee)
-                {
-                    return Some(0);
-                }
+                return Some(0);
             }
         }
         None
