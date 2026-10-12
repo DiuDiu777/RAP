@@ -136,12 +136,8 @@ pub(super) fn local_return_dependencies(tcx: TyCtxt<'_>, callee: DefId) -> Optio
     .ok()
 }
 
-/// Cached must-write summaries, keyed by `(callee, depth, context)`. Depth is
-/// part of the key because the `depth > 4` cutoff makes a summary computed
-/// deeper in the wrapper chain less complete than one computed higher up, and
-/// the DFS reaches the deep ones first. The context is part of the key because
-/// one query can reach the same callee with different concrete arguments, which
-/// prune different paths.
+/// Memo keyed by `(callee, depth, context)`, shared within a single
+/// `local_must_write_args` recursion.
 type MustWriteMemo = HashMap<(DefId, usize, Vec<(usize, i128)>), Option<HashSet<usize>>>;
 
 /// Canonical, sortable representation of a [`CallContext`]'s concrete

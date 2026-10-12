@@ -73,7 +73,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             callee,
             func,
             destination,
-        ).unwrap_or_else(|| call_summary::effect_summary(self.tcx, func));
+        ).unwrap_or_else(|| call_summary::builtin_models::effect_summary(self.tcx, func));
 
         if !summary.unsupported {
             for effect in &summary.effects {
@@ -1325,9 +1325,9 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                         if is_vec && !is_external {
                             let elem_ty = match arg_val.ty.kind() {
                                 TyKind::Ref(_, inner, _) | TyKind::RawPtr(inner, _) => {
-                                    crate::verify::call_summary::vec_elem_ty(self.tcx, *inner)
+                                    crate::verify::call_summary::builtin_models::vec_elem_ty(*inner)
                                 }
-                                _ => crate::verify::call_summary::vec_elem_ty(self.tcx, arg_val.ty),
+                                _ => crate::verify::call_summary::builtin_models::vec_elem_ty(arg_val.ty),
                             };
                             let heap_align = elem_ty
                                 .map(|ty| self.align_sym(ty))
@@ -1410,7 +1410,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     (args.get(*pointer_arg), args.get(*size_arg))
                 {
                     let dest_ty = self.body().local_decls[dest].ty;
-                    let elem_ty = crate::verify::call_summary::from_raw_parts_elem_ty(
+                    let elem_ty = crate::verify::call_summary::builtin_models::from_raw_parts_elem_ty(
                         self.tcx,
                         self.current_frame.current_def_id,
                         Some(dest),
@@ -1615,7 +1615,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             } => {
                 if let Some(size_val) = args.get(*size_arg) {
                     let dest_ty = self.body().local_decls[dest].ty;
-                    let elem_ty = crate::verify::call_summary::vec_elem_ty(self.tcx, dest_ty);
+                    let elem_ty = crate::verify::call_summary::builtin_models::vec_elem_ty(dest_ty);
                     // A generic element type (`elem_size == 0`) uses the shared
                     // symbolic `sizeof_T` so the allocation size stays consistent
                     // with pointer strides (mirrors `ReturnFreshAllocation`).
@@ -1680,7 +1680,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             CallEffect::ReturnNewAllocationFromCap { cap_arg, elem_size } => {
                 if let Some(cap_val) = args.get(*cap_arg) {
                     let dest_ty = self.body().local_decls[dest].ty;
-                    let elem_ty = crate::verify::call_summary::vec_elem_ty(self.tcx, dest_ty);
+                    let elem_ty = crate::verify::call_summary::builtin_models::vec_elem_ty(dest_ty);
                     // A generic element type (`elem_size == 0`) uses the shared
                     // symbolic `sizeof_T` so the allocation size stays consistent
                     // with pointer strides (mirrors `ReturnFreshAllocation`).
@@ -1746,7 +1746,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 // and `slice::to_vec` (a fresh copy of a slice).
                 self.ensure_local_allocation(dest);
                 let dest_ty = self.body().local_decls[dest].ty;
-                let elem_ty = crate::verify::call_summary::vec_elem_ty(self.tcx, dest_ty);
+                let elem_ty = crate::verify::call_summary::builtin_models::vec_elem_ty(dest_ty);
                 let heap_align = elem_ty
                     .map(|ty| self.align_sym(ty))
                     .unwrap_or_else(|| Int::from_u64(self.z3_ctx, 1));

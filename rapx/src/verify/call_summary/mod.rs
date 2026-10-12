@@ -5,27 +5,20 @@
 //! visitor needs effect information: after a retained call, what facts about the
 //! return value or arguments can be added or forgotten?
 //!
-//! This module keeps those summaries in one place.  Standard unsafe/std APIs
-//! are summarized by name.  Local callees can additionally use the existing
-//! dataflow graph to approximate which arguments flow into the return value.
+//! This module keeps those summaries in one place: standard APIs are matched by
+//! `DefId` in [`builtin_models`], and local callees use the dataflow graph to
+//! approximate argument-to-return flow.
 pub(crate) mod builtin_models;
 pub(crate) mod interprocedural;
 
-#[cfg(rapx_has_attr_ir)]
-use rustc_attr_ir::LangItem;
-#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100)))]
-use rustc_hir::LangItem;
-#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100))]
-use rustc_hir::attrs::lang_items::LangItem;
-use rustc_hir::def_id::DefId;
 use rustc_middle::{
-    mir::{Local, Operand},
-    ty::{Ty, TyCtxt, TyKind},
+    mir::Operand,
+    ty::TyCtxt,
 };
 
 use crate::compat::FxHashMap;
 use crate::helpers::mir_utils;
-use crate::verify::api_classify::{is_branch, is_std_vec};
+use crate::verify::api_classify::is_branch;
 
 /// Caller constraints that affect a callee's path feasibility, propagated down
 /// the call chain during must-write summarization. Only concrete literal
@@ -74,7 +67,7 @@ pub(crate) struct CallEffectSummary {
 
 impl CallEffectSummary {
     /// Build a conservative summary for an unsupported call.
-    fn unknown() -> Self {
+    pub(super) fn unknown() -> Self {
         Self {
             effects: Vec::new(),
             unsupported: true,
@@ -324,109 +317,4 @@ pub(crate) fn dependency_summary<'tcx>(
     }
 
     CallDependencySummary::unknown(arg_count)
-}
-
-/// Non-registry effect fallback for a MIR call terminator: the
-/// transparent-wrapper deref, otherwise unknown. The registry lookup itself runs
-/// earlier in `exec_call` so it can also gate inlining.
-pub(crate) fn effect_summary<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> CallEffectSummary {
-    // Transparent-wrapper deref: `<ManuallyDrop<T> as Deref>::deref` /
-    // `deref_mut` (and `MaybeDangling::as_ref`/`as_mut`) return a reference to
-    // the inner value at the same address.  The std MIR for these is
-    // unavailable cross-crate, so model them with field-value peeling.
-    if let Some(peel) = transparent_deref_peel(tcx, func) {
-        return CallEffectSummary {
-            effects: vec![CallEffect::ReturnTransparentDeref { arg: 0, peel }],
-            unsupported: false,
-        };
-    }
-
-    CallEffectSummary::unknown()
-}
-
-/// Detect a transparent-wrapper deref whose receiver is `ManuallyDrop<T>` or
-/// `MaybeDangling<T>`, and return how many leading field-0 hops must be peeled
-/// to reach the inner `T`:
-///   * `ManuallyDrop<T> { value: MaybeDangling<T> }` → 2 (`value` → `MaybeDangling.0`)
-///   * `MaybeDangling<P>(P)` → 1.
-fn transparent_deref_peel<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<usize> {
-    let self_ty = mir_utils::fn_def_first_type_arg(func)?;
-    let TyKind::Adt(adt_def, _) = self_ty.kind() else {
-        return None;
-    };
-    let did = adt_def.did();
-    if tcx.is_lang_item(did, LangItem::ManuallyDrop) {
-        return Some(2);
-    }
-    if is_maybe_dangling(tcx, did) {
-        return Some(1);
-    }
-    None
-}
-
-/// Whether `did` is the `MaybeDangling` lang item.
-///
-/// The `MaybeDangling` lang item was only added to rustc's table after
-/// nightly-2026-02-05 (the `verify-std` toolchain), so gate the lang-item
-/// lookup behind a build-time check and fall back to name matching on
-/// toolchains that lack it.
-fn is_maybe_dangling(tcx: TyCtxt<'_>, did: DefId) -> bool {
-    #[cfg(rapx_has_maybe_dangling_lang_item)]
-    {
-        tcx.is_lang_item(did, LangItem::MaybeDangling)
-    }
-    #[cfg(not(rapx_has_maybe_dangling_lang_item))]
-    {
-        tcx.def_path_str(did).contains("MaybeDangling")
-    }
-}
-
-// ── Collection element-size helpers ──────────────────────────────
-// Used by [`builtin_models`] and the VM to size `from_raw_parts`/`Vec`
-// results; moved here from `helpers::mir_utils` because they depend on the
-// [`crate::verify::api_classify`] classifiers.
-
-/// Element type of a `Vec<T>`, if `ty` is a `Vec`.
-pub(crate) fn vec_elem_ty<'tcx>(_tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
-    if let TyKind::Adt(adt_def, substs) = ty.kind()
-        && is_std_vec(adt_def.did()) {
-            return substs.first().and_then(|s| s.as_type());
-        }
-    None
-}
-
-/// Element type of a `from_raw_parts` result: `&[T]`/`*[T]`/`Vec<T>` yield `T`;
-/// other types (including `String`) return `None`.
-pub(crate) fn from_raw_parts_elem_ty<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    dest: Option<Local>,
-) -> Option<Ty<'tcx>> {
-    let d = dest?;
-    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
-    match ty.kind() {
-        TyKind::Ref(_, inner, _) => match inner.kind() {
-            TyKind::Slice(e) => Some(*e),
-            _ => None,
-        },
-        TyKind::RawPtr(inner, _) => match inner.kind() {
-            TyKind::Slice(e) => Some(*e),
-            _ => None,
-        },
-        TyKind::Adt(..) => vec_elem_ty(tcx, ty),
-        _ => None,
-    }
-}
-
-/// Element size of a `from_raw_parts` result. Covers `&[T]`/`*[T]` (borrowed
-/// slice) and `Vec<T>` (owned); `String` and unknown layouts fall back to 1
-/// (`String`'s element is `u8`, so 1 is correct).
-pub(crate) fn from_raw_parts_elem_size<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    caller: DefId,
-    dest: Option<Local>,
-) -> u64 {
-    from_raw_parts_elem_ty(tcx, caller, dest)
-        .and_then(|e| mir_utils::type_layout(tcx, caller, e).map(|(_, s)| s))
-        .unwrap_or(1)
 }

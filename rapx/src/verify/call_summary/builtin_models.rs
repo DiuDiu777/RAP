@@ -12,11 +12,16 @@
 //! 2. **Effect functions** — produce the `Vec<CallEffect>` for a single API.
 
 use crate::helpers::mir_utils;
+#[cfg(rapx_has_attr_ir)]
+use rustc_attr_ir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), not(rapx_ge_100)))]
+use rustc_hir::LangItem;
+#[cfg(all(not(rapx_has_attr_ir), rapx_ge_100))]
+use rustc_hir::attrs::lang_items::LangItem;
 use rustc_hir::def_id::DefId;
-use rustc_middle::mir::Operand;
-use rustc_middle::ty::{Ty, TyCtxt};
+use rustc_middle::mir::{Local, Operand};
+use rustc_middle::ty::{Ty, TyCtxt, TyKind};
 
-use super::from_raw_parts_elem_size;
 use super::{CallEffect, CallEffectSummary};
 use crate::def_id;
 use crate::helpers::mir_utils::{destination_stride, pointee_alignment, pointee_ty, type_layout};
@@ -482,13 +487,6 @@ fn eff_mem_replace(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
 fn eff_from_raw_parts(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     let elem = from_raw_parts_elem_size(ctx.tcx, ctx.caller, ctx.dest);
     let mut eff = vec![
-        // ReturnAliasArg keeps the legacy PointsTo chain intact so the
-        // legacy SMT Align checker can trace through as_ptr() → reference
-        // provenance.  Without it, place_is_reference_aligned cannot
-        // prove alignment for the pointer argument.
-        CallEffect::ReturnAliasArg { arg: 0 },
-        // ReturnFreshAllocation provides the allocation-tracking hint
-        // used by the VM backend's memory model.
         CallEffect::ReturnFreshAllocation {
             pointer_arg: 0,
             size_arg: 1,
@@ -510,11 +508,11 @@ fn eff_new_allocation(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     }]
 }
 
-fn eff_box_alloc(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+fn eff_box_alloc(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReturnBoxAllocation]
 }
 
-fn eff_exchange_malloc(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+fn eff_exchange_malloc(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReturnExchangeMalloc { size_arg: 0 }]
 }
 
@@ -526,18 +524,17 @@ fn eff_new_allocation_from_cap(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     }]
 }
 
-fn eff_vec_from_box(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+fn eff_vec_from_box(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReturnNewAllocationFromBox]
 }
 
-fn eff_layout_align(_ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
+fn eff_layout_align(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReturnPowerOfTwo]
 }
 
 fn eff_layout_const(ctx: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     layout_constant_effect(ctx.tcx, ctx.caller, ctx.func)
-        .into_iter()
-        .collect()
+        .map_or_else(Vec::new, |e| vec![e])
 }
 
 fn eff_branch(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
@@ -616,4 +613,90 @@ fn layout_constant_effect<'tcx>(
 
 fn eff_box_from_vec(_: &EffCtx<'_, '_>) -> Vec<CallEffect> {
     vec![CallEffect::ReturnBoxFromVec { arg: 0 }]
+}
+
+// ── Non-registry effect fallback ────────────────────────────────────
+
+/// Transparent-wrapper deref (`ManuallyDrop`/`MaybeDangling`) when the registry
+/// has no match: the return aliases the receiver's inner value.
+pub(crate) fn effect_summary<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> CallEffectSummary {
+    if let Some(peel) = transparent_deref_peel(tcx, func) {
+        return CallEffectSummary {
+            effects: vec![CallEffect::ReturnTransparentDeref { arg: 0, peel }],
+            unsupported: false,
+        };
+    }
+    CallEffectSummary::unknown()
+}
+
+fn transparent_deref_peel<'tcx>(tcx: TyCtxt<'tcx>, func: &Operand<'tcx>) -> Option<usize> {
+    let self_ty = mir_utils::fn_def_first_type_arg(func)?;
+    let TyKind::Adt(adt_def, _) = self_ty.kind() else {
+        return None;
+    };
+    let did = adt_def.did();
+    if tcx.is_lang_item(did, LangItem::ManuallyDrop) {
+        return Some(2);
+    }
+    if is_maybe_dangling(tcx, did) {
+        return Some(1);
+    }
+    None
+}
+
+fn is_maybe_dangling(tcx: TyCtxt<'_>, did: DefId) -> bool {
+    #[cfg(rapx_has_maybe_dangling_lang_item)]
+    {
+        tcx.is_lang_item(did, LangItem::MaybeDangling)
+    }
+    #[cfg(not(rapx_has_maybe_dangling_lang_item))]
+    {
+        tcx.def_path_str(did).contains("MaybeDangling")
+    }
+}
+
+// ── Collection element-size helpers ─────────────────────────────────
+
+/// Element type of a `Vec<T>`, if `ty` is a `Vec`.
+pub(crate) fn vec_elem_ty<'tcx>(ty: Ty<'tcx>) -> Option<Ty<'tcx>> {
+    if let TyKind::Adt(adt_def, substs) = ty.kind()
+        && api_classify::is_std_vec(adt_def.did()) {
+            return substs.first().and_then(|s| s.as_type());
+        }
+    None
+}
+
+/// Element type of a `from_raw_parts` result: `&[T]`/`*[T]`/`Vec<T>` yield `T`;
+/// other types (including `String`) return `None`.
+pub(crate) fn from_raw_parts_elem_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    dest: Option<Local>,
+) -> Option<Ty<'tcx>> {
+    let d = dest?;
+    let ty = tcx.optimized_mir(caller).local_decls[d].ty;
+    match ty.kind() {
+        TyKind::Ref(_, inner, _) => match inner.kind() {
+            TyKind::Slice(e) => Some(*e),
+            _ => None,
+        },
+        TyKind::RawPtr(inner, _) => match inner.kind() {
+            TyKind::Slice(e) => Some(*e),
+            _ => None,
+        },
+        TyKind::Adt(..) => vec_elem_ty(ty),
+        _ => None,
+    }
+}
+
+/// Element size of a `from_raw_parts` result; `String`/unknown layouts fall
+/// back to 1 (`String`'s element is `u8`).
+pub(crate) fn from_raw_parts_elem_size<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    dest: Option<Local>,
+) -> u64 {
+    from_raw_parts_elem_ty(tcx, caller, dest)
+        .and_then(|e| mir_utils::type_layout(tcx, caller, e).map(|(_, s)| s))
+        .unwrap_or(1)
 }
