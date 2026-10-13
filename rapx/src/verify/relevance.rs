@@ -1,19 +1,19 @@
-//! Verify-specific extensions for def-use computation.
+//! Contract- and property-aware relevance roots for the backward slicer.
 //!
-//! Re-exports core types from `helpers/def_use` and augments
-//! `PlaceKey` / `RelevantPlaces` with contract/property-aware methods.
-
-pub(crate) use crate::helpers::def_use::*;
+//! Extends the core [`crate::helpers::def_use`] `PlaceKey`/`RelevantPlaces`
+//! types with contract/property-aware methods, plus call-site root binding.
 
 use rustc_middle::mir::Operand;
 use rustc_middle::ty::TyCtxt;
+
+use crate::helpers::def_use::{operand_uses, PlaceBaseKey, PlaceKey, RelevantPlaces};
+use crate::helpers::mir_scan::Checkpoint;
+use crate::helpers::mir_utils::callee_param_index_for_local;
 
 use super::contract::{
     ContractExpr, ContractPlace, ContractProjection, NumericPredicate, PlaceBase, Property,
     PropertyArg, PropertyKind,
 };
-use crate::helpers::mir_scan::Checkpoint;
-use crate::helpers::mir_utils::callee_param_index_for_local;
 
 impl PlaceKey {
     /// Build a relevance place key from a parsed contract place.
@@ -46,7 +46,7 @@ impl RelevantPlaces {
     }
 
     /// Insert a contract place as a relevance root.
-    pub(crate) fn insert_contract_place(&mut self, place: &ContractPlace<'_>) {
+    fn insert_contract_place(&mut self, place: &ContractPlace<'_>) {
         self.insert_place_key(PlaceKey::from_contract_place(place));
     }
 

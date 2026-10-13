@@ -274,7 +274,7 @@ impl PropertyChecker {
         checkpoint: &Checkpoint<'tcx>,
         place: &ContractPlace<'tcx>,
     ) -> bool {
-        use crate::verify::def_use::{PlaceBaseKey, PlaceKey};
+        use crate::helpers::def_use::{PlaceBaseKey, PlaceKey};
         let key = PlaceKey::from_contract_place(place);
         let local = match key.base {
             PlaceBaseKey::Local(n) => Local::from_usize(n),

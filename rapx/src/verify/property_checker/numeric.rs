@@ -10,7 +10,7 @@ use crate::verify::api_classify;
 use crate::verify::contract::{
     ContractExpr, NumericBinOp, PlaceBase, Property, PropertyArg, RelOp,
 };
-use crate::verify::def_use::PlaceKey;
+use crate::helpers::def_use::PlaceKey;
 use crate::verify::report::{CheckResult, UnknownReason};
 use crate::verify::vm::state::VmState;
 use rustc_hash::FxHashSet;

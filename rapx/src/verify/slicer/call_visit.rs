@@ -13,10 +13,8 @@ use rustc_middle::ty::{TyCtxt, TyKind};
 
 use crate::analysis::dataflow::types::DataflowGraph;
 
-use super::super::{
-    call_summary,
-    def_use::{PlaceKey, RelevantPlaces, call_args_uses_at},
-};
+use super::super::call_summary;
+use crate::helpers::def_use::{call_args_uses_at, PlaceKey, RelevantPlaces};
 
 use super::types::RelevantItem;
 
@@ -91,8 +89,8 @@ pub(crate) fn visit<'tcx>(
                 if let Some(arg_key) = arg_place {
                     let matches = relevant.need_len.contains(&arg_key)
                         || relevant.need_len.iter().any(|nl| {
-                            crate::verify::def_use::trace_place_origin(flow, nl)
-                                == crate::verify::def_use::trace_place_origin(flow, &arg_key)
+                            crate::helpers::def_use::trace_place_origin(flow, nl)
+                                == crate::helpers::def_use::trace_place_origin(flow, &arg_key)
                         });
                     if matches {
                         let dest_key = PlaceKey::from_mir_place(destination);

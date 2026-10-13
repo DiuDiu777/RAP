@@ -46,9 +46,10 @@ use rustc_middle::{
 
 use super::{
     contract::{ContractExpr, NumericPredicate, Property, PropertyArg, PropertyKind, RelOp},
-    def_use::{RelevantPlaces, bind_callsite_roots},
+    relevance::bind_callsite_roots,
     target::FunctionTarget,
 };
+use crate::helpers::def_use::RelevantPlaces;
 use crate::helpers::mir_scan::Checkpoint;
 
 use crate::limit::{

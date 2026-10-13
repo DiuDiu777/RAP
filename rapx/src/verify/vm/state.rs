@@ -16,7 +16,7 @@ use z3::{
 };
 
 use crate::compat::{FxHashMap, FxHashSet};
-use crate::verify::def_use::PlaceKey;
+use crate::helpers::def_use::PlaceKey;
 
 /// Unique identifier for a heap or stack allocation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]

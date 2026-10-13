@@ -1,7 +1,7 @@
 //! Backward path visitor — walks a finite path backward from a checkpoint and
 //! keeps only MIR items that can affect the required property.
 //!
-//! The def-use layer lives in [`super::super::def_use`]; this module focuses on
+//! The def-use layer lives in [`crate::helpers::def_use`]; this module focuses on
 //! the path-level control flow decisions: calls, SCC exits, and path-condition
 //! branches.
 
@@ -18,10 +18,11 @@ use crate::analysis::dataflow::types::DataflowGraph;
 
 use super::super::{
     contract,
-    def_use::{
-        RelevantPlaces, bind_callsite_roots, call_args_uses_at, operand_uses, terminator_use_def,
-    },
     path_extractor::{Path, PathStep},
+    relevance::bind_callsite_roots,
+};
+use crate::helpers::def_use::{
+    call_args_uses_at, operand_uses, terminator_use_def, RelevantPlaces,
 };
 use crate::helpers::mir_scan::{Checkpoint, CheckpointKind, CheckpointLocation};
 
@@ -395,7 +396,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
         for (si, stmt) in block_data.statements.iter().enumerate().rev() {
             let defs = match &stmt.kind {
                 rustc_middle::mir::StatementKind::Assign(assign) => {
-                    let mut d = crate::verify::def_use::RelevantPlaces::new();
+                    let mut d = crate::helpers::def_use::RelevantPlaces::new();
                     d.insert_mir_place(&assign.0);
                     d
                 }
@@ -589,7 +590,7 @@ impl<'tcx> BackwardSlicer<'tcx> {
             // the current definition.  When the uses of this statement
             // would re-add a place whose definition was already found earlier
             // in the walk, skip it to prevent wrong (duplicate) matches.
-            let already_seen: crate::compat::FxHashSet<crate::verify::def_use::PlaceKey> =
+            let already_seen: crate::compat::FxHashSet<crate::helpers::def_use::PlaceKey> =
                 relevant.places.clone();
             relevant.remove_all(&defs);
             uses.places.retain(|p| !already_seen.contains(p));
@@ -761,7 +762,7 @@ fn collect_statement_uses<'tcx>(
     // so we need the direct operand uses to reach through.
     if let StatementKind::Assign(assign) = &statement.kind {
         let (_, rvalue) = &**assign;
-        for operand in super::super::def_use::rvalue_operands(rvalue) {
+        for operand in crate::helpers::def_use::rvalue_operands(rvalue) {
             uses.extend(operand_uses(operand));
         }
         // A reborrow (`_p = &(*_q)`, `_p = &raw (*_q)`) carries no operands, so

@@ -21,10 +21,11 @@ use crate::{
             ContractExpr, ContractKind, ContractPlace, ContractProjection, PlaceBase, Property,
             PropertyArg, PropertyKind,
         },
-        def_use::PlaceKey,
         slicer::RelevantItem,
     },
 };
+
+use crate::helpers::def_use::PlaceKey;
 
 use super::state::{
     AllocId, ElementTy, ValueSource, OffsetKind, Provenance, ValueFacts, VmState,

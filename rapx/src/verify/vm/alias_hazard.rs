@@ -24,8 +24,8 @@ use rustc_middle::{
 use crate::analysis::alias::{FieldOrigin, resolve_any_field_origin, resolve_self_field_origin};
 use crate::helpers::fn_info::is_externally_reachable;
 use crate::{
+    helpers::def_use::{PlaceBaseKey, PlaceKey},
     helpers::mir_scan::check_safety,
-    verify::def_use::{PlaceBaseKey, PlaceKey},
 };
 
 // Re-export the mir_utils helpers still consumed by `vm/alias.rs`.
