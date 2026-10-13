@@ -7,6 +7,18 @@
 use rustc_middle::mir::Local;
 use rustc_middle::ty::{Region, Ty};
 
+/// The `Ident` a contract uses for the `'static` lifetime. `'static` is a Rust
+/// keyword, so after the leading `'` is stripped it cannot be a plain ident
+/// token; `attr::strip_lifetime_ticks` maps it to this name.
+pub(crate) const STATIC_LIFETIME_IDENT: &str = "static_lifetime";
+
+/// Whether a contract lifetime ident names the `'static` lifetime, accepting
+/// both the plain `"static"` spelling and [`STATIC_LIFETIME_IDENT`] (the
+/// keyword-stripped form produced by `attr::strip_lifetime_ticks`).
+pub(crate) fn is_static_lifetime_ident(name: &str) -> bool {
+    name == "static" || name == STATIC_LIFETIME_IDENT
+}
+
 /// The root of a contract place: a function's return value, an argument, or a
 /// raw MIR local.  `Return` ⇔ `Local(0)`; `Arg(n)` ⇔ `Local(n + 1)`.
 #[derive(Clone, Debug, PartialEq)]

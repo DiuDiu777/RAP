@@ -115,7 +115,6 @@ impl<'tcx> VerifyEngine<'tcx> {
             let wrapped = crate::verify::slicer::ProofGoal {
                 path: backward.path,
                 items,
-                block_fn: backward.block_fn,
             };
 
             let vm_state = self.vm.run(&z3_ctx, self.tcx, wrapped);

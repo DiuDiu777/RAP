@@ -8,7 +8,7 @@
 use crate::helpers::mir_utils;
 use crate::helpers::mir_scan::Checkpoint;
 use crate::verify::api_classify;
-use crate::verify::contract::{ContractExpr, Property, PropertyArg};
+use crate::verify::contract::{ContractExpr, Property, PropertyArg, is_static_lifetime_ident};
 use crate::verify::report::{CheckResult, UnknownReason};
 use crate::verify::vm::state::{AllocId, OffsetKind, VmState, VmValue};
 use rustc_hash::FxHashSet;
@@ -926,8 +926,7 @@ impl PropertyChecker {
                     // instantiated from the caller's return reference region.
                     let check_region = property.args().get(1).and_then(|a| match a {
                         PropertyArg::Region(r) => Some(*r),
-                        PropertyArg::Ident(name)
-                            if name == "static" || name == "static_lifetime" =>
+                        PropertyArg::Ident(name) if is_static_lifetime_ident(name) =>
                         {
                             Some(vm_state.tcx.lifetimes.re_static)
                         }
@@ -956,6 +955,7 @@ impl PropertyChecker {
                                 vm_state.tcx,
                                 *src_region,
                                 self_ty,
+                                r,
                             )
                         });
                         if !outlives && !implied {

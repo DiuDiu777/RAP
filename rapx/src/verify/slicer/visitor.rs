@@ -152,7 +152,6 @@ impl<'tcx> BackwardSlicer<'tcx> {
                     steps,
                 },
                 items,
-                block_fn: tree.block_fns().to_vec(),
             });
         }
         results

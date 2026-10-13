@@ -17,9 +17,6 @@ pub(crate) struct ProofGoal<'tcx> {
     pub path: Path,
     /// Items kept from the path.
     pub items: Vec<RelevantItem<'tcx>>,
-    /// Per-global-block function ownership `(def_id, local_index)`, populated
-    /// for inlined multi-function paths. Empty for single-function goals.
-    pub block_fn: Vec<(DefId, usize)>,
 }
 
 /// One relevant item kept from the backward slice.

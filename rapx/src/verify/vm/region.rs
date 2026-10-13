@@ -3,6 +3,8 @@
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::{EarlyParamRegion, GenericParamDefKind, Region, RegionKind, Ty, TyCtxt};
 
+use crate::verify::contract::is_static_lifetime_ident;
+
 /// Resolve a lifetime name from a contract (e.g. `"a"`, `"static"`) to a
 /// concrete `Region`. `name` is the raw ident, without the leading `'`.
 pub(crate) fn resolve_region_name<'tcx>(
@@ -10,14 +12,14 @@ pub(crate) fn resolve_region_name<'tcx>(
     def_id: DefId,
     name: &str,
 ) -> Option<Region<'tcx>> {
-    if name == "static" || name == "static_lifetime" {
+    if is_static_lifetime_ident(name) {
         return Some(tcx.lifetimes.re_static);
     }
     let ticked = format!("'{name}");
     let generics = tcx.generics_of(def_id);
     for param in &generics.own_params {
         if matches!(param.kind, GenericParamDefKind::Lifetime)
-            && (param.name.as_str() == name || param.name.as_str() == ticked.as_str())
+            && param.name.as_str() == ticked.as_str()
         {
             return Some(Region::new_early_param(
                 tcx,
@@ -80,21 +82,29 @@ fn free_region_outlives<'tcx>(
     env.free_region_map().sub_free_regions(tcx, ret, src)
 }
 
-/// Whether `src_region` provably outlives the reference region of `self_ty`
-/// via the type's own well-formedness.  A reference parameter `&'r SliceHost<'s>`
-/// requires its pointee's regions to outlive `'r` (`'s: 'r`), which the
-/// where-clause-only [`region_outlives`] cannot see.  Complements it with the
-/// implied outlives components of `self_ty`.
+/// Whether `src_region` provably outlives `demand` via the well-formedness of a
+/// reference parameter `&'r Self<'a>`: the reference requires its pointee's
+/// regions to outlive `'r` (`'a: 'r`), which the where-clause-only
+/// [`region_outlives`] cannot see.  This holds when `demand` is exactly the
+/// reference's own region `'r` and `src_region` is one of the pointee's outlives
+/// components.
 pub(crate) fn region_outlives_implied<'tcx>(
     tcx: TyCtxt<'tcx>,
     src_region: Region<'tcx>,
     self_ty: Ty<'tcx>,
+    demand: Region<'tcx>,
 ) -> bool {
     use rustc_data_structures::smallvec::SmallVec;
     use rustc_middle::ty::outlives::{Component, push_outlives_components};
 
+    let rustc_middle::ty::TyKind::Ref(ref_region, pointee, _) = self_ty.kind() else {
+        return false;
+    };
+    if *ref_region != demand {
+        return false;
+    }
     let mut out: SmallVec<[Component<TyCtxt<'tcx>>; 4]> = SmallVec::new();
-    push_outlives_components(tcx, self_ty, &mut out);
+    push_outlives_components(tcx, *pointee, &mut out);
     out.iter()
         .any(|c| matches!(c, Component::Region(r) if *r == src_region))
 }

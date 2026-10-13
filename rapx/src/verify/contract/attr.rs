@@ -244,7 +244,7 @@ fn strip_lifetime_ticks(s: &str) -> String {
                 if rest.starts_with("static")
                     && chars.get(i + 1 + "static".len()).is_none_or(|&c| !c.is_ascii_alphanumeric() && c != '_')
                 {
-                    out.push_str("static_lifetime");
+                    out.push_str(super::STATIC_LIFETIME_IDENT);
                     i += 1 + "static".len();
                     continue;
                 }
