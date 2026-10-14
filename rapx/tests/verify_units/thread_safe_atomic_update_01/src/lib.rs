@@ -9,6 +9,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 // mutated through `AtomicUsize::fetch_add`, so the aliased updates are atomic
 // and therefore Send-safe.
 #[rapx::invariant(Owning(ptr))]
+#[rapx::invariant(Alias(ptr))]
 #[rapx::invariant(Allocated(ptr))]
 pub struct MyArc {
     ptr: *mut MyArcInner,

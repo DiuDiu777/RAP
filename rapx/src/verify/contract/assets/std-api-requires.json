@@ -3394,6 +3394,19 @@
   ],
   "core::ptr::drop_in_place": [
     {
+      "tag": "Owning",
+      "args": [
+        "to_drop"
+      ]
+    },
+    {
+      "tag": "Alias",
+      "kind": "hazard",
+      "args": [
+        "to_drop"
+      ]
+    },
+    {
       "tag": "ValidPtr",
       "args": [
         "to_drop",
@@ -4569,6 +4582,12 @@
       ]
     },
     {
+      "tag": "Owning",
+      "args": [
+        "ptr"
+      ]
+    },
+    {
       "tag": "Alias",
       "kind": "hazard",
       "args": [
@@ -4674,6 +4693,12 @@
         "ptr",
         "T",
         "capacity"
+      ]
+    },
+    {
+      "tag": "Owning",
+      "args": [
+        "ptr"
       ]
     },
     {
@@ -4880,8 +4905,7 @@
       "tag": "Alias",
       "kind": "hazard",
       "args": [
-        "raw",
-        "ret"
+        "raw"
       ]
     }
   ],
@@ -4958,8 +4982,7 @@
       "tag": "Alias",
       "kind": "hazard",
       "args": [
-        "raw",
-        "ret"
+        "raw"
       ]
     }
   ],
@@ -5071,8 +5094,7 @@
       "tag": "Alias",
       "kind": "hazard",
       "args": [
-        "ptr",
-        "ret"
+        "ptr"
       ]
     }
   ],

@@ -422,6 +422,46 @@ impl<'tcx> Property<'tcx> {
         }
     }
 
+    /// Defer `ContractKind::Hazard` atoms to the use point, returning `None`
+    /// when only hazards remain.  A hazard (e.g. `Alias`) is *marked* in a
+    /// struct invariant to document the exclusive-ownership intent, but it is
+    /// not a standing fact: it is enforced at the operation that consumes the
+    /// pointer (whose `requires` names it), not verified at construction nor
+    /// carried as an entry fact (where `assert_contract_fact` would treat
+    /// `Alias` as an *accepted* structural-alias hazard via `alias_hazard_allocs`).
+    pub(crate) fn strip_hazards(&self) -> Option<Property<'tcx>> {
+        match self {
+            Property::Atom(atom) if atom.contract_kind == ContractKind::Hazard => None,
+            Property::Atom(_) => Some(self.clone()),
+            Property::And(and) => {
+                let conjuncts: Vec<Property<'tcx>> =
+                    and.conjuncts.iter().filter_map(Property::strip_hazards).collect();
+                match conjuncts.len() {
+                    0 => None,
+                    1 => conjuncts.into_iter().next(),
+                    _ => {
+                        let mut stripped = and.clone();
+                        stripped.conjuncts = conjuncts;
+                        Some(Property::And(stripped))
+                    }
+                }
+            }
+            Property::Or(or) => {
+                let disjuncts: Vec<Property<'tcx>> =
+                    or.disjuncts.iter().filter_map(Property::strip_hazards).collect();
+                match disjuncts.len() {
+                    0 => None,
+                    1 => disjuncts.into_iter().next(),
+                    _ => {
+                        let mut stripped = or.clone();
+                        stripped.disjuncts = disjuncts;
+                        Some(Property::Or(stripped))
+                    }
+                }
+            }
+        }
+    }
+
     pub(crate) fn for_each(&self) -> Option<&ContractPlace<'tcx>> {
         match self {
             Property::Atom(a) => a.for_each.as_ref(),

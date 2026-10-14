@@ -5,6 +5,7 @@
 // A generic Rc-like type: `Send` needs a `T: Send` bound; `Sync` always fails
 // because the raw pointer is not synchronized.
 #[rapx::invariant(Owning(ptr))]
+#[rapx::invariant(Alias(ptr))]
 #[rapx::invariant(Allocated(ptr))]
 pub struct MyRcGeneric<T> {
     ptr: *mut MyRcBoxGeneric<T>,

@@ -9,10 +9,12 @@ use std::marker::PhantomData;
 #[rapx::invariant(Allocated(prev.unwrap_some(), Node, 1))]
 #[rapx::invariant(Typed(prev.unwrap_some(), Node))]
 #[rapx::invariant(Owning(prev.unwrap_some()))]
+#[rapx::invariant(Alias(prev.unwrap_some()))]
 #[rapx::invariant(Align(next.unwrap_some(), Node))]
 #[rapx::invariant(Allocated(next.unwrap_some(), Node, 1))]
 #[rapx::invariant(Typed(next.unwrap_some(), Node))]
 #[rapx::invariant(Owning(next.unwrap_some()))]
+#[rapx::invariant(Alias(next.unwrap_some()))]
 struct Node<T> {
     value: T,
     prev: Option<NonNull<Node<T>>>,
@@ -23,10 +25,12 @@ struct Node<T> {
 #[rapx::invariant(Allocated(head.unwrap_some(), Node, 1))]
 #[rapx::invariant(Typed(head.unwrap_some(), Node))]
 #[rapx::invariant(Owning(head.unwrap_some()))]
+#[rapx::invariant(Alias(head.unwrap_some()))]
 #[rapx::invariant(Align(tail.unwrap_some(), Node))]
 #[rapx::invariant(Allocated(tail.unwrap_some(), Node, 1))]
 #[rapx::invariant(Typed(tail.unwrap_some(), Node))]
 #[rapx::invariant(Owning(tail.unwrap_some()))]
+#[rapx::invariant(Alias(tail.unwrap_some()))]
 struct LinkedList<T> {
     head: Option<NonNull<Node<T>>>,
     tail: Option<NonNull<Node<T>>>,

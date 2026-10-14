@@ -766,6 +766,16 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             })
             .unwrap_or_default();
 
+        // Hazard atoms in a struct invariant (e.g. `Alias` alongside `Owning`)
+        // are *use-point* obligations: they are marked here to document the
+        // exclusive-ownership intent, but deferred to the operation that consumes
+        // the pointer — not verified at construction nor carried as entry facts
+        // (where `assert_contract_fact` would accept, not enforce, `Alias`).
+        struct_invariants = struct_invariants
+            .into_iter()
+            .filter_map(|inv| inv.strip_hazards())
+            .collect();
+
         // Struct invariants are implicit preconditions for every method:
         // safe methods need them as automatic entry facts (no requires
         // needed), and unsafe constructors verify they hold at return.

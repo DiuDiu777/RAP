@@ -7,6 +7,7 @@ pub trait RawExpose {
 }
 
 #[rapx::invariant(Owning(self.ptr))]
+#[rapx::invariant(Alias(self.ptr))]
 pub struct TraitSlot {
     ptr: *mut u32,
 }

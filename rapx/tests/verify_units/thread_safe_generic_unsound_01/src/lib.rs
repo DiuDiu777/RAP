@@ -5,6 +5,7 @@
 // A generic Rc-like type without `T: Send`/`T: Sync` bounds: the `T` value
 // field is unconstrained, so the impl cannot be proven sound.
 #[rapx::invariant(Owning(ptr))]
+#[rapx::invariant(Alias(ptr))]
 #[rapx::invariant(Allocated(ptr))]
 pub struct MyRcGeneric<T> {
     ptr: *mut MyRcBoxGeneric<T>,

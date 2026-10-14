@@ -7,6 +7,7 @@ use std::ptr::NonNull;
 #[rapx::invariant(Allocated(ptr, u8, capacity))]
 #[rapx::invariant(Align(ptr, usize))]
 #[rapx::invariant(Owning(ptr))]
+#[rapx::invariant(Alias(ptr))]
 #[rapx::invariant(InBound(ptr, u8, capacity))]
 pub struct BumpAllocator {
     ptr: NonNull<u8>,

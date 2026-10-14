@@ -4,16 +4,16 @@
 
 use std::marker::PhantomData;
 
-#[rapx::invariant(any(Null(prev), (Align(prev, Node), ValidPtr(prev, Node, 1), Allocated(prev, Node, 1), Typed(prev, Node), Owning(prev))))]
-#[rapx::invariant(any(Null(next), (Align(next, Node), ValidPtr(next, Node, 1), Allocated(next, Node, 1), Typed(next, Node), Owning(next))))]
+#[rapx::invariant(any(Null(prev), (Align(prev, Node), ValidPtr(prev, Node, 1), Allocated(prev, Node, 1), Typed(prev, Node), Owning(prev), Alias(prev))))]
+#[rapx::invariant(any(Null(next), (Align(next, Node), ValidPtr(next, Node, 1), Allocated(next, Node, 1), Typed(next, Node), Owning(next), Alias(next))))]
 struct Node<T> {
     value: T,
     prev: *mut Node<T>,
     next: *mut Node<T>,
 }
 
-#[rapx::invariant(any(Null(head), (Align(head, Node), ValidPtr(head, Node, 1), Allocated(head, Node, 1), Typed(head, Node), Owning(head))))]
-#[rapx::invariant(any(Null(tail), (Align(tail, Node), ValidPtr(tail, Node, 1), Allocated(tail, Node, 1), Typed(tail, Node), Owning(tail))))]
+#[rapx::invariant(any(Null(head), (Align(head, Node), ValidPtr(head, Node, 1), Allocated(head, Node, 1), Typed(head, Node), Owning(head), Alias(head))))]
+#[rapx::invariant(any(Null(tail), (Align(tail, Node), ValidPtr(tail, Node, 1), Allocated(tail, Node, 1), Typed(tail, Node), Owning(tail), Alias(tail))))]
 struct LinkedList<T> {
     head: *mut Node<T>,
     tail: *mut Node<T>,

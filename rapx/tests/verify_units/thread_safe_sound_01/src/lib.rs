@@ -7,6 +7,7 @@ use std::sync::Mutex;
 
 // A read-only raw pointer: `*const` mutates nothing, so it is Send-safe.
 #[rapx::invariant(Owning(ptr))]
+#[rapx::invariant(Alias(ptr))]
 #[rapx::invariant(Allocated(ptr))]
 pub struct ReadOnlyPtr {
     ptr: *const u8,
@@ -18,6 +19,7 @@ unsafe impl Send for ReadOnlyPtr {}
 // A `*mut` field written through exclusively (no `Clone` => no aliasing): the
 // write is not a cross-thread data race, so Send-safe.
 #[rapx::invariant(Owning(ptr))]
+#[rapx::invariant(Alias(ptr))]
 #[rapx::invariant(Allocated(ptr))]
 pub struct MyRc {
     ptr: *mut MyRcBox,

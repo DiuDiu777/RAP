@@ -21,7 +21,7 @@ use std::ptr::NonNull;
 // RAPx invariant on `next`: it is either Null, or points to a valid,
 // aligned, allocated, and owned FreeBlock.
 #[repr(C)]
-#[rapx::invariant(any(Null(next), (Align(next.unwrap_some(), FreeBlock), Allocated(next.unwrap_some(), FreeBlock, 1), Typed(next.unwrap_some(), FreeBlock), Owning(next.unwrap_some()))))]
+#[rapx::invariant(any(Null(next), (Align(next.unwrap_some(), FreeBlock), Allocated(next.unwrap_some(), FreeBlock, 1), Typed(next.unwrap_some(), FreeBlock), Owning(next.unwrap_some()), Alias(next.unwrap_some()))))]
 pub struct FreeBlock {
     /// Total size of this free region in bytes (header + usable space).
     size: usize,
@@ -44,12 +44,14 @@ pub struct FreeBlock {
 #[rapx::invariant(Allocated(heap, u8, size))]
 #[rapx::invariant(Align(heap, FreeBlock))]
 #[rapx::invariant(Owning(heap))]
+#[rapx::invariant(Alias(heap))]
 #[rapx::invariant(InBound(heap, u8, size))]
 #[rapx::invariant(ValidNum(size <= isize::MAX))]
 #[rapx::invariant(Align(head.unwrap_some(), FreeBlock))]
 #[rapx::invariant(Allocated(head.unwrap_some(), FreeBlock, 1))]
 #[rapx::invariant(Typed(head.unwrap_some(), FreeBlock))]
 #[rapx::invariant(Owning(head.unwrap_some()))]
+#[rapx::invariant(Alias(head.unwrap_some()))]
 pub struct FreeListAllocator {
     /// Backing buffer (leaked `Vec<u8>`), aligned to `FreeBlock`.
     heap: NonNull<u8>,

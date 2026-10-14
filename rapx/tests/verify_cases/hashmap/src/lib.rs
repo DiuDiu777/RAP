@@ -2,7 +2,7 @@
 #![register_tool(rapx)]
 #![allow(unused)]
 
-#[rapx::invariant(any(Null(next), (Align(next, Entry), ValidPtr(next, Entry, 1), Allocated(next, Entry, 1), Typed(next, Entry), Owning(next))))]
+#[rapx::invariant(any(Null(next), (Align(next, Entry), ValidPtr(next, Entry, 1), Allocated(next, Entry, 1), Typed(next, Entry), Owning(next), Alias(next))))]
 struct Entry {
     key: i32,
     value: i32,
@@ -13,6 +13,7 @@ struct Entry {
 #[rapx::invariant(Allocated(buckets.iter(), Entry, 1))]
 #[rapx::invariant(Typed(buckets.iter(), Entry))]
 #[rapx::invariant(Owning(buckets.iter()))]
+#[rapx::invariant(Alias(buckets.iter()))]
 struct HashMap {
     buckets: Box<[*mut Entry]>,
     cap: usize,

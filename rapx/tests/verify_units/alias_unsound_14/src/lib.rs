@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 #[rapx::invariant(Owning(self.ptr))]
+#[rapx::invariant(Alias(self.ptr))]
 pub struct SplitSlot {
     ptr: *mut u32,
 }
