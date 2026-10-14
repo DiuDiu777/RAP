@@ -114,7 +114,7 @@ static SPECS: &[PropertySpec] = &[
         &[&[Target]],
         ContractKind::Precond,
         BuildKind::Uniform,
-        "ownership(*{0}) = none: no live owner aliases the pointee",
+        "ownership(*{0}) = none: no other live owner points to the pointee",
     ),
     // Unverified: the checker returns `Unknown` (no implementation yet).
     ps(

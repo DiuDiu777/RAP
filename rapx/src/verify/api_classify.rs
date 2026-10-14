@@ -58,20 +58,20 @@ pub fn is_ownership_reconstruction(callee: Option<DefId>) -> bool {
 /// the pointee's allocation without the `ManuallyDrop` wrapper's own (no-op)
 /// drop glue.
 pub fn is_manually_drop_drop(callee: Option<DefId>) -> bool {
-    any_opt(callee, &[def_id::manually_drop()])
+    callee.is_some_and(|c| def_id::manually_drop() == Some(c))
 }
 
 /// Whether `callee` is `std::mem::drop` / `core::mem::drop` — the value drop
 /// that frees the argument's heap allocation.
 pub fn is_std_drop(callee: Option<DefId>) -> bool {
-    any_opt(callee, &[def_id::drop()])
+    callee.is_some_and(|c| def_id::drop() == Some(c))
 }
 
 /// Whether `callee` is `drop_in_place::<T>` — the MIR drop shim that drops the
 /// pointee in place and (for an owning pointee like `Box`/`Vec`) frees its
 /// heap allocation.
 pub fn is_drop_in_place(callee: Option<DefId>) -> bool {
-    any_opt(callee, &[def_id::drop_in_place()])
+    callee.is_some_and(|c| def_id::drop_in_place() == Some(c))
 }
 
 // ── Pointer extraction / cast ─────────────────────────────────────

@@ -78,13 +78,9 @@ use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
 ///   path endpoints (non-constructor methods).
 pub(crate) struct VerifyDriver<'target, 'tcx> {
     tcx: TyCtxt<'tcx>,
-
     target: &'target FunctionTarget<'tcx>,
-
     path_info: Vec<CallGroup<'tcx>>,
-
     engine: VerifyEngine<'tcx>,
-
     allow_repeat: usize,
 }
 
