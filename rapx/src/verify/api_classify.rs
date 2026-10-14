@@ -18,17 +18,17 @@
 
 use crate::def_id;
 use rustc_hir::def_id::DefId;
-use rustc_middle::ty::{Ty, TyKind};
+use rustc_middle::ty::Ty;
 use rustc_middle::ty::TyCtxt;
 
 /// Whether `callee` is `Some` and matches any item in the (Option<DefId>) list.
-fn any_of(callee: Option<DefId>, items: &[Option<DefId>]) -> bool {
+fn any_opt(callee: Option<DefId>, items: &[Option<DefId>]) -> bool {
     callee.is_some_and(|c| items.contains(&Some(c)))
 }
 
 /// Whether `callee` is `Some` and matches any resolved DefId in the slice.
-fn any_fn(callee: Option<DefId>, fns: &[DefId]) -> bool {
-    callee.is_some_and(|c| fns.contains(&c))
+fn any_def(callee: Option<DefId>, defs: &[DefId]) -> bool {
+    callee.is_some_and(|c| defs.contains(&c))
 }
 
 // ── Ownership reconstruction ──────────────────────────────────────
@@ -39,7 +39,7 @@ fn any_fn(callee: Option<DefId>, fns: &[DefId]) -> bool {
 /// (`CString::from_vec_with_nul_unchecked`). Distinct from
 /// [`is_from_raw_parts`], which builds a slice/`Vec` from `(ptr, len[, cap])`.
 pub fn is_ownership_reconstruction(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::box_from_raw(),
@@ -58,20 +58,20 @@ pub fn is_ownership_reconstruction(callee: Option<DefId>) -> bool {
 /// the pointee's allocation without the `ManuallyDrop` wrapper's own (no-op)
 /// drop glue.
 pub fn is_manually_drop_drop(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::manually_drop()])
+    any_opt(callee, &[def_id::manually_drop()])
 }
 
 /// Whether `callee` is `std::mem::drop` / `core::mem::drop` — the value drop
 /// that frees the argument's heap allocation.
 pub fn is_std_drop(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::drop()])
+    any_opt(callee, &[def_id::drop()])
 }
 
 /// Whether `callee` is `drop_in_place::<T>` — the MIR drop shim that drops the
 /// pointee in place and (for an owning pointee like `Box`/`Vec`) frees its
 /// heap allocation.
 pub fn is_drop_in_place(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::drop_in_place()])
+    any_opt(callee, &[def_id::drop_in_place()])
 }
 
 // ── Pointer extraction / cast ─────────────────────────────────────
@@ -84,7 +84,7 @@ pub fn is_drop_in_place(callee: Option<DefId>) -> bool {
 /// produce a raw pointer (and `new_unchecked` must not mark its result
 /// non-null, or it would hide `new_unchecked(null)` unsoundness).
 pub fn is_as_ptr(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::slice_as_ptr(),
@@ -126,7 +126,7 @@ pub fn is_as_ptr(callee: Option<DefId>) -> bool {
 /// them on the MIR-inlining path rather than the `ReturnPointerFromArg` model
 /// (which asserts those facts).
 pub(crate) fn is_raw_ptr_cast(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::const_ptr_cast(),
@@ -148,35 +148,10 @@ pub fn is_as_ptr_valid(callee: Option<DefId>) -> bool {
     is_as_ptr(callee) && !is_raw_ptr_cast(callee)
 }
 
-/// Whether `callee` is an `as_ptr`/`as_mut_ptr` method on a recognized
-/// pointer-container ADT (`Vec`/`NonNull`/`Box`/`MaybeUninit`/`CString`).
-///
-/// Unlike [`is_as_ptr`] (which matches the std functions by exact full path),
-/// this matches by the *self type* — resolved from the method's impl — so it
-/// also catches the std-challenge suites' local re-implementations without the
-/// broad `::as_ptr` name suffix.
-pub fn is_container_as_ptr(tcx: TyCtxt<'_>, callee: DefId) -> bool {
-    let name = tcx.item_name(callee);
-    if name.as_str() != "as_ptr" && name.as_str() != "as_mut_ptr" {
-        return false;
-    }
-    let Some(self_ty) = crate::helpers::name::get_struct_self_ty(tcx, callee) else {
-        return false;
-    };
-    let TyKind::Adt(adt, _) = self_ty.kind() else {
-        return false;
-    };
-    is_std_vec(adt.did())
-        || is_std_nonnull(adt.did())
-        || is_std_box(adt.did())
-        || is_maybe_uninit_type(adt.did())
-        || is_std_cstring(adt.did())
-}
-
 /// `str::as_bytes`: reinterprets `&str` as `&[u8]` — same data pointer and
 /// byte length, so the result aliases the argument.
 pub fn is_str_as_bytes(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::str_as_bytes()])
+    any_opt(callee, &[def_id::str_as_bytes()])
 }
 
 /// `core::ub_checks::check_language_ub` (and its `runtime`/`compiletime`
@@ -199,7 +174,7 @@ pub fn is_ub_checks_gate(tcx: TyCtxt<'_>, callee: DefId) -> bool {
 /// (stride = `size_of::<T>()`). `offset_from`/`offset_from_unsigned` are *not*
 /// matched (they subtract two pointers into an `isize`).
 pub(crate) fn is_element_ptr_add(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::const_ptr_add(),
@@ -218,7 +193,7 @@ pub(crate) fn is_element_ptr_add(callee: Option<DefId>) -> bool {
 
 /// Element-strided `sub`/`wrapping_sub` (stride = `size_of::<T>()`).
 pub(crate) fn is_element_ptr_sub(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::const_ptr_sub(),
@@ -233,7 +208,7 @@ pub(crate) fn is_element_ptr_sub(callee: Option<DefId>) -> bool {
 /// Byte-granular `byte_add`/`wrapping_byte_add` and signed
 /// `byte_offset`/`wrapping_byte_offset` (stride 1).
 pub(crate) fn is_byte_ptr_add(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::const_ptr_byte_add(),
@@ -252,7 +227,7 @@ pub(crate) fn is_byte_ptr_add(callee: Option<DefId>) -> bool {
 
 /// Byte-granular `byte_sub`/`wrapping_byte_sub` (stride 1).
 pub(crate) fn is_byte_ptr_sub(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::const_ptr_byte_sub(),
@@ -282,7 +257,7 @@ pub fn is_pointer_sub(callee: Option<DefId>) -> bool {
 /// `align_of::<T>()`. The runtime intrinsics (`size_of_val`, `align_of_val`,
 /// `pref_align_of`, `*_val_raw`, …) are *not* classified here.
 pub fn is_layout_constant(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::mem_size_of(),
@@ -296,7 +271,7 @@ pub fn is_layout_constant(callee: Option<DefId>) -> bool {
 /// Whether `callee` is `ptr::align_offset` / `NonNull::align_offset` /
 /// `*const T::align_offset` / `*mut T::align_offset`.
 pub fn is_align_offset(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::ptr_align_offset(),
@@ -312,7 +287,7 @@ pub fn is_align_offset(callee: Option<DefId>) -> bool {
 /// Whether `callee` writes through a raw pointer to its first argument
 /// (`ptr::write`, `write_bytes`, `write_unaligned`, `write_volatile`).
 pub fn is_ptr_write(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::ptr_write(),
@@ -327,7 +302,7 @@ pub fn is_ptr_write(callee: Option<DefId>) -> bool {
 /// (`ptr::read`/`read_unaligned`/`read_volatile`, `copy_to`/`copy_from`,
 /// `MaybeUninit::assume_init_read`, and intrinsics `copy`/`copy_nonoverlapping`).
 pub fn is_ptr_read(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::ptr_read(),
@@ -349,18 +324,18 @@ pub fn is_ptr_read(callee: Option<DefId>) -> bool {
 /// Whether `callee` is `MaybeUninit::write`, which initializes the slot (unlike
 /// raw `ptr::write`, handled by [`is_mem_copy_or_write`]).
 pub fn is_maybe_uninit_write(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::maybe_uninit_write()])
+    any_opt(callee, &[def_id::maybe_uninit_write()])
 }
 
 /// Whether `callee` is `MaybeUninit::uninit` (a new uninitialized slot).
 pub fn is_maybe_uninit_uninit(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::maybe_uninit_uninit()])
+    any_opt(callee, &[def_id::maybe_uninit_uninit()])
 }
 
 /// Whether `callee` is a `MaybeUninit` "assume initialized" accessor
 /// (`assume_init`, `assume_init_read`, `assume_init_ref`, `assume_init_mut`).
 pub fn is_maybe_uninit_assume_init(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::maybe_uninit_assume_init(),
@@ -376,7 +351,7 @@ pub fn is_maybe_uninit_assume_init(callee: Option<DefId>) -> bool {
 /// `write_bytes`, `copy_nonoverlapping`, `ptr::copy`). Used by the checker to
 /// discharge `Init`/`Typed` obligations on `MaybeUninit` targets.
 pub fn is_mem_copy_or_write(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::intrinsics_copy(),
@@ -396,16 +371,16 @@ pub fn is_mem_copy_or_write(callee: Option<DefId>) -> bool {
 /// crates *and* the local crate — so the std-challenge suites' re-implemented
 /// `len` methods are modelled too, without substring-matching a `def_path_str`.
 pub fn is_len(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::len_fns())
+    any_def(callee, def_id::len_fns())
 }
 
 /// Whether `callee` is a `capacity` query method.
 pub fn is_capacity(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::capacity_fns())
+    any_def(callee, def_id::capacity_fns())
 }
 
 pub fn is_unwrap(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::option_unwrap(),
@@ -427,23 +402,23 @@ pub fn is_unwrap(callee: Option<DefId>) -> bool {
 /// [`crate::def_id::from_raw_parts_fns`] (resolved from `fn_defs()`, including
 /// local re-implementations), instead of substring-matching `def_path_str`.
 pub fn is_from_raw_parts(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::from_raw_parts_fns())
+    any_def(callee, def_id::from_raw_parts_fns())
 }
 
 /// Whether `callee` is a `from_raw_parts_mut` constructor.
 pub fn is_from_raw_parts_mut(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::from_raw_parts_mut_fns())
+    any_def(callee, def_id::from_raw_parts_mut_fns())
 }
 
 pub fn is_cstr_from_ptr(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::cstr_from_ptr()])
+    any_opt(callee, &[def_id::cstr_from_ptr()])
 }
 
 /// `_unchecked` C-string constructors whose caller must guarantee NUL
 /// termination (`CStr::from_bytes_with_nul_unchecked`,
 /// `CString::from_vec_with_nul_unchecked`).
 pub fn is_cstr_unchecked_constructor(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::cstr_from_bytes_with_nul_unchecked(),
@@ -455,7 +430,7 @@ pub fn is_cstr_unchecked_constructor(callee: Option<DefId>) -> bool {
 // ── Vec constructors / methods ────────────────────────────────────
 
 pub fn is_vec_push_or_reserve(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::vec_push(),
@@ -465,10 +440,10 @@ pub fn is_vec_push_or_reserve(callee: Option<DefId>) -> bool {
     )
 }
 pub fn is_vec_alloc_constructor(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::vec_from_elem()])
+    any_opt(callee, &[def_id::vec_from_elem()])
 }
 pub fn is_vec_from_box(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::slice_into_vec(),
@@ -484,20 +459,20 @@ pub fn is_exchange_malloc(callee: Option<DefId>) -> bool {
 /// `slice::to_vec` (`<[T]>::to_vec` via `to_vec_in::ConvertVec::to_vec`) —
 /// allocates a fresh buffer and copies the slice's elements.
 pub fn is_slice_to_vec(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::slice_to_vec()])
+    any_opt(callee, &[def_id::slice_to_vec()])
 }
 /// `Vec::with_capacity` — matched by `DefId` via
 /// [`crate::def_id::with_capacity_fns`].
 pub fn is_vec_with_capacity(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::with_capacity_fns())
+    any_def(callee, def_id::with_capacity_fns())
 }
 /// `Box::new` / `new_in` / `new_uninit` / `new_uninit_in` (and `try_` variants)
 /// — fresh heap allocation constructors.
 pub fn is_box_alloc_ctor(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::box_alloc_ctors())
+    any_def(callee, def_id::box_alloc_ctors())
 }
 pub fn is_into_boxed_slice(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::vec_into_boxed_slice()])
+    any_opt(callee, &[def_id::vec_into_boxed_slice()])
 }
 
 // ── Alias-hazard classification ───────────────────────────────────
@@ -518,12 +493,12 @@ pub fn is_ownership_transfer(callee: Option<DefId>) -> bool {
 }
 
 pub fn is_vec_ownership_transfer(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::vec_ownership_transfer_fns())
+    any_def(callee, def_id::vec_ownership_transfer_fns())
 }
 
 /// Whether `callee` is `NonNull::new` (the null-checked constructor).
 pub(crate) fn is_nonnull_checked_new(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::nonnull_new()])
+    any_opt(callee, &[def_id::nonnull_new()])
 }
 
 /// Whether `callee` is `NonNull::new_unchecked` (the unchecked transparent
@@ -532,12 +507,12 @@ pub(crate) fn is_nonnull_checked_new(callee: Option<DefId>) -> bool {
 /// `new_unchecked(ptr.add(1))`); non-nullness is inherited from the source, not
 /// asserted, so `new_unchecked(null)` unsoundness is still caught.
 pub(crate) fn is_nonnull_new_unchecked(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::nonnull_new_unchecked()])
+    any_opt(callee, &[def_id::nonnull_new_unchecked()])
 }
 
 /// Whether `callee` is `NonNull::as_ref` or `NonNull::as_mut`.
 pub fn is_nonnull_as_ref_as_mut(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::nonnull_as_ref(),
@@ -548,13 +523,13 @@ pub fn is_nonnull_as_ref_as_mut(callee: Option<DefId>) -> bool {
 
 /// Whether `callee` is `NonNull::as_mut` (produces an exclusive `&mut`).
 pub fn is_nonnull_as_mut(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::nonnull_as_mut()])
+    any_opt(callee, &[def_id::nonnull_as_mut()])
 }
 
 /// Whether `callee` is `select_unpredictable` (the intrinsic or its
 /// `hint::`/`intrinsics::` wrappers): returns one of two candidate values.
 pub(crate) fn is_select_unpredictable(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::select_unpredictable(),
@@ -566,7 +541,7 @@ pub(crate) fn is_select_unpredictable(callee: Option<DefId>) -> bool {
 /// Whether `callee` is a `Vec` method that may reallocate (invalidating any
 /// outstanding raw pointers derived from it).
 pub fn is_vec_invalidating_method(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::vec_push(),
@@ -586,7 +561,7 @@ pub fn is_vec_invalidating_method(callee: Option<DefId>) -> bool {
 /// Whether `callee` returns ownership of an allocation as a raw pointer
 /// (`Box::into_raw`, `CString::into_raw`, `Arc::into_raw`, `Rc::into_raw`, ...).
 pub fn is_ownership_return(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::box_into_raw(),
@@ -600,7 +575,7 @@ pub fn is_ownership_return(callee: Option<DefId>) -> bool {
 /// Whether `callee` is a benign, read-only use of a raw-pointer origin
 /// (`len`, `is_empty`, `is_null`, `addr`, `as_ptr`/`as_mut_ptr`, `cast`).
 pub fn is_benign_origin_use(callee: Option<DefId>) -> bool {
-    any_of(
+    any_opt(
         callee,
         &[
             def_id::const_ptr_is_null(),
@@ -692,49 +667,49 @@ pub fn is_std_ordering(def_id: DefId) -> bool {
 // [`crate::def_id`] for the exact method-name patterns each group collects.
 
 pub fn is_min_like(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::min_like_fns())
+    any_def(callee, def_id::min_like_fns())
 }
 pub fn is_max(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::max_fns())
+    any_def(callee, def_id::max_fns())
 }
 pub fn is_clamp(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::clamp_fns())
+    any_def(callee, def_id::clamp_fns())
 }
 pub fn is_abs(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::abs_fns())
+    any_def(callee, def_id::abs_fns())
 }
 pub fn is_neg(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::neg_fns())
+    any_def(callee, def_id::neg_fns())
 }
 pub fn is_sat_unchecked_add(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::sat_unchecked_add_fns())
+    any_def(callee, def_id::sat_unchecked_add_fns())
 }
 pub fn is_sat_unchecked_mul(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::sat_unchecked_mul_fns())
+    any_def(callee, def_id::sat_unchecked_mul_fns())
 }
 pub fn is_checked_add(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::checked_add_fns())
+    any_def(callee, def_id::checked_add_fns())
 }
 pub fn is_checked_mul(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::checked_mul_fns())
+    any_def(callee, def_id::checked_mul_fns())
 }
 pub fn is_overflowing_abs_neg(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::overflowing_nz_fns())
+    any_def(callee, def_id::overflowing_nz_fns())
 }
 pub fn is_bit_preserving_nz(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::bit_preserving_nz_fns())
+    any_def(callee, def_id::bit_preserving_nz_fns())
 }
 pub fn is_checked_nonzero_iff(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::checked_nonzero_iff_fns())
+    any_def(callee, def_id::checked_nonzero_iff_fns())
 }
 pub fn is_checked_next_pow2(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::checked_next_pow2_fns())
+    any_def(callee, def_id::checked_next_pow2_fns())
 }
 pub fn is_layout_align(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::layout_align_fns())
+    any_def(callee, def_id::layout_align_fns())
 }
 pub fn is_split_at(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::split_at_fns())
+    any_def(callee, def_id::split_at_fns())
 }
 
 // ── Open-ended operation classifiers ──────────────────────────────
@@ -745,33 +720,33 @@ pub fn is_split_at(callee: Option<DefId>) -> bool {
 // `DefId` like the other classifiers.
 
 pub fn is_align_to_local(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::align_to_local_fns())
+    any_def(callee, def_id::align_to_local_fns())
 }
 pub fn is_iter_position(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::iter_position_fns())
+    any_def(callee, def_id::iter_position_fns())
 }
 pub fn is_strlen(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::strlen_fns())
+    any_def(callee, def_id::strlen_fns())
 }
 pub fn is_slice_get_unchecked(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::slice_get_unchecked_fns())
+    any_def(callee, def_id::slice_get_unchecked_fns())
 }
 
 /// Whether `callee` is `<[T]>::get` / `<[T]>::get_mut` (the slice-side range
 /// getters returning `Option<&[T]>`).
 pub fn is_slice_get(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::slice_get_fns())
+    any_def(callee, def_id::slice_get_fns())
 }
 
 /// Whether `callee` is the `Index::index` / `IndexMut::index_mut` trait method
 /// (the `a[b]` indexing sugar).
 pub fn is_index_method(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::index_fns())
+    any_def(callee, def_id::index_fns())
 }
 
 /// Whether `callee` is the `PartialEq::eq` comparison method.
 pub fn is_eq_call(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::eq_fns())
+    any_def(callee, def_id::eq_fns())
 }
 
 /// Whether `callee` is `SliceIndex::get_unchecked`/`get_unchecked_mut` (the
@@ -780,41 +755,41 @@ pub fn is_eq_call(callee: Option<DefId>) -> bool {
 /// methods whose receiver is the slice): the result aliases argument 1, not
 /// argument 0.
 pub fn is_sliceindex_get_unchecked(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::sliceindex_get_unchecked_fns())
+    any_def(callee, def_id::sliceindex_get_unchecked_fns())
 }
 
 /// Whether `callee` is `Range::next` / `RangeInclusive::next` (or their
 /// `spec_next` impls). Distinct from the slice-side getters above: the receiver
 /// is `&mut Range<A>`, and the returned element is the current `start`.
 pub fn is_range_next(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::range_next_fns())
+    any_def(callee, def_id::range_next_fns())
 }
 
 /// Whether `callee` is a slice iterator's `next` (`Iter::next` /
 /// `IterMut::next`, or the `Iterator::next` trait method they forward to).
 pub fn is_iter_next(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::iter_next_fns())
+    any_def(callee, def_id::iter_next_fns())
 }
 
 /// Whether `callee` is a slice iterator's `len` (`Iter::len` / `IterMut::len`).
 pub fn is_iter_len(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::iter_len_fns())
+    any_def(callee, def_id::iter_len_fns())
 }
 
 /// Whether `callee` is a slice iterator's `is_empty`
 /// (`Iter::is_empty` / `IterMut::is_empty`).
 pub fn is_iter_is_empty(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::iter_is_empty_fns())
+    any_def(callee, def_id::iter_is_empty_fns())
 }
 
 /// Whether `callee` is `<Option<T> as Try>::branch`.
 pub fn is_branch(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::branch_fns())
+    any_def(callee, def_id::branch_fns())
 }
 
 /// Whether `callee` is a `gcd` const fn.
 pub fn is_gcd(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::gcd_fns())
+    any_def(callee, def_id::gcd_fns())
 }
 
 /// Whether `def_id` is `core::range::IndexRange` (or a local re-implementation).
@@ -825,11 +800,11 @@ pub fn is_index_range(def_id: DefId) -> bool {
 /// Whether `callee` is `slice::range(range, bounds)` — the range normalizer that
 /// returns `Range { start, end }` with `0 <= start <= end <= bounds.end`.
 pub fn is_slice_range(callee: Option<DefId>) -> bool {
-    any_fn(callee, def_id::slice_range_fns())
+    any_def(callee, def_id::slice_range_fns())
 }
 
 /// Whether `callee` is `mem::replace(dest, src)` — returns `*dest` (the old
 /// value), so the summary must deref the reference argument.
 pub fn is_mem_replace(callee: Option<DefId>) -> bool {
-    any_of(callee, &[def_id::replace()])
+    any_opt(callee, &[def_id::replace()])
 }

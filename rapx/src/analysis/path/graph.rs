@@ -645,18 +645,9 @@ impl<'tcx> PathGraph<'tcx> {
                 };
                 let has_fn_sim =
                     crate::verify::call_summary::effects::is_modeled(Some(callee));
-                // A couple of helpers stay opaque because the VM's
-                // interprocedural execution is more precise than their inlined
-                // body:
-                // - `as_ptr`/`as_mut_ptr` (local re-implementations) lose the
-                //   provenance that `eff_alias_ptr`/`handle_callee_entry`
-                //   otherwise reconstruct from the argument.
-                let is_container_as_ptr =
-                    crate::verify::api_classify::is_container_as_ptr(tcx, callee);
                 if !tcx.is_mir_available(callee)
                     || expanded.contains(&callee)
                     || has_fn_sim
-                    || is_container_as_ptr
                 {
                     continue;
                 }

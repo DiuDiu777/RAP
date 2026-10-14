@@ -733,6 +733,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                                     _ => pointee,
                                 };
                                 self.materialize_external_field(local, idx, field_ty, elem_ty, None);
+                            } else if !adt.is_enum() && api_classify::is_std_vec(adt.did()) {
+                                self.materialize_vec_ptr_field(local, vec![idx], field_ty);
                             }
                     } else if matches!(
                         field_ty.kind(),
@@ -853,6 +855,21 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         elem_ty: Ty<'tcx>,
         alive_region: Option<Region<'tcx>>,
     ) {
+        self.materialize_external_field_at(local, vec![idx], field_ty, elem_ty, alive_region);
+    }
+
+    /// Materialize an external (unbounded) allocation and bind it as the value at
+    /// `path`, carrying data provenance and an optional liveness region. Shared by
+    /// the whole-field (`materialize_external_field`) and pointer-subfield
+    /// (`materialize_vec_ptr_field`) materialization paths.
+    fn materialize_external_field_at(
+        &mut self,
+        local: Local,
+        path: Vec<usize>,
+        field_ty: Ty<'tcx>,
+        elem_ty: Ty<'tcx>,
+        alive_region: Option<Region<'tcx>>,
+    ) {
         let align = self.align_sym(elem_ty);
         let max_size = Int::from_u64(self.z3_ctx, i64::MAX as u64);
         let (alloc_id, base) = self.allocate_external(max_size, align, Some(elem_ty));
@@ -862,7 +879,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         }
         self.set_field_value(
             local,
-            vec![idx],
+            path,
             VmValue {
                 z3_term: base,
                 ty: field_ty,
@@ -1078,6 +1095,43 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 },
             );
         }
+    }
+
+    /// Materialize only the owning pointer field of a non-generic `Vec`-like ADT
+    /// field (e.g. `struct Vec { ptr: NonNull<u8>, len, cap }`), so an inlined
+    /// `Vec::as_ptr`'s `_2 = copy (*self).ptr` resolves to the data provenance.
+    /// The scalar `len`/`cap` fields are deliberately left unmaterialized — their
+    /// `ValidNum` invariants are established separately by the struct-invariant
+    /// assertion, not by fresh unconstrained symbols (which would fail `ValidNum`).
+    /// The caller has already ensured `field_ty` is a non-enum `Vec`.
+    fn materialize_vec_ptr_field(
+        &mut self,
+        local: Local,
+        prefix: Vec<usize>,
+        field_ty: Ty<'tcx>,
+    ) -> bool {
+        use rustc_middle::ty::TyKind;
+        let TyKind::Adt(adt_def, substs) = field_ty.kind() else {
+            return false;
+        };
+        let variant = adt_def.non_enum_variant();
+        for (i, field_def) in variant.fields.iter().enumerate() {
+            let ft = mir_utils::field_ty(self.tcx, field_def, substs);
+            let Some(pointee) = self.find_nn_pointee(ft) else {
+                continue;
+            };
+            let mut path = prefix.clone();
+            path.push(i);
+            self.materialize_external_field_at(
+                local,
+                path,
+                ft,
+                pointee,
+                Some(self.tcx.lifetimes.re_static),
+            );
+            return true;
+        }
+        false
     }
 
     /// Read a scalar field's value back out of the byte layer over

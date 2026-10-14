@@ -110,7 +110,7 @@ impl<'tcx> VerifyEngine<'tcx> {
             // Insert inlined-callee boundary markers (argument binding / return
             // write-back) based on def_id transitions across the path.
             items =
-                Self::inject_inline_boundaries(items, tree, &local_to_global, checkpoint.caller);
+                Self::inject_inline_boundaries(self.tcx, items, tree, &local_to_global, checkpoint.caller);
 
             let wrapped = crate::verify::slicer::ProofGoal {
                 path: backward.path,
@@ -283,6 +283,7 @@ impl<'tcx> VerifyEngine<'tcx> {
     /// caller so it can be reused across every checkpoint instead of rebuilt
     /// per path.
     fn inject_inline_boundaries(
+        tcx: TyCtxt<'tcx>,
         items: Vec<RelevantItem<'tcx>>,
         tree: &PathTree,
         local_to_global: &HashMap<(DefId, usize), Vec<usize>>,
@@ -292,6 +293,12 @@ impl<'tcx> VerifyEngine<'tcx> {
         // Start in the caller so a path that begins inside an inlined callee
         // still emits its CalleeEntry on the first item.
         let mut prev_def_id: Option<DefId> = Some(caller);
+        // The caller's argument local defined by the previous retained `Assign`
+        // statement. Used to disambiguate a callee inlined at several call sites:
+        // each call site passes a distinct borrow temp, so matching it against the
+        // entry binding's `arg_locals` keeps the positional cursor from mis-binding
+        // when one call site's body is sliced out.
+        let mut prev_arg: Option<usize> = None;
         // Stack of entered callees, innermost last: (def_id, dest_local,
         // entry global block). The entry block lets us resolve each callee's
         // parent (`tree.inline_parent`) so a *nested* callee — one whose body
@@ -306,10 +313,21 @@ impl<'tcx> VerifyEngine<'tcx> {
         let mut entry_cursor: HashMap<(DefId, DefId), usize> = HashMap::new();
 
         for item in items {
-            let cur_def_id = match &item {
-                RelevantItem::Statement { def_id, .. }
-                | RelevantItem::Terminator { def_id, .. } => Some(*def_id),
-                _ => None,
+            let (cur_def_id, cur_arg) = match &item {
+                RelevantItem::Statement {
+                    def_id,
+                    block,
+                    statement_index,
+                } => {
+                    let body = tcx.optimized_mir(*def_id);
+                    let dest = match &body.basic_blocks[*block].statements[*statement_index].kind {
+                        StatementKind::Assign(assign) => Some(assign.0.local.as_usize()),
+                        _ => None,
+                    };
+                    (Some(*def_id), dest)
+                }
+                RelevantItem::Terminator { def_id, .. } => (Some(*def_id), None),
+                _ => (None, None),
             };
 
             if let Some(cur) = cur_def_id {
@@ -374,16 +392,39 @@ impl<'tcx> VerifyEngine<'tcx> {
                                 // matches the current innermost frame.
                                 let mut cur_entry: Option<usize> = None;
                                 if let Some(globals) = local_to_global.get(&(cur, 0)) {
-                                    let matching: Vec<usize> = globals
+                                    let mut matching: Vec<usize> = globals
                                         .iter()
                                         .copied()
                                         .filter(|&g| eff_parent(g) == current_parent)
                                         .collect();
-                                    let pool: &[usize] = if matching.is_empty() {
-                                        globals.as_slice()
-                                    } else {
-                                        matching.as_slice()
-                                    };
+                                    if matching.is_empty() {
+                                        matching = globals.to_vec();
+                                    }
+                                    // Disambiguate by the caller's argument local when
+                                    // the callee takes a single argument (e.g. the
+                                    // `&mut` borrow temp passed to `as_ptr`/`as_mut_ptr`).
+                                    // Multi-arg callees are left to the positional cursor:
+                                    // their argument temps may be reused across call sites,
+                                    // so a local index is not a reliable discriminator.
+                                    if let Some(arg) = prev_arg
+                                        && matching.iter().all(|&g| {
+                                            tree.inline_binding(g).map(|b| b.arg_locals.len())
+                                                == Some(1)
+                                        })
+                                    {
+                                        let by_arg: Vec<usize> = matching
+                                            .iter()
+                                            .copied()
+                                            .filter(|&g| {
+                                                tree.inline_binding(g)
+                                                    .is_some_and(|b| b.arg_locals.contains(&arg))
+                                            })
+                                            .collect();
+                                        if !by_arg.is_empty() {
+                                            matching = by_arg;
+                                        }
+                                    }
+                                    let pool: &[usize] = matching.as_slice();
                                     let idx = if pool.len() == 1 {
                                         0
                                     } else {
@@ -451,6 +492,7 @@ impl<'tcx> VerifyEngine<'tcx> {
                         }
                     }
                 prev_def_id = Some(cur);
+                prev_arg = cur_arg;
             }
 
             out.push(item);
