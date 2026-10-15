@@ -24,7 +24,7 @@ use super::super::{
 use crate::helpers::def_use::{
     call_args_uses_at, operand_uses, terminator_use_def, RelevantPlaces,
 };
-use crate::helpers::mir_scan::{Checkpoint, CheckpointKind, CheckpointLocation};
+use crate::verify::checkpoint::{Checkpoint, CheckpointKind, CheckpointLocation};
 
 use crate::analysis::path::{PathNode, PathTree};
 

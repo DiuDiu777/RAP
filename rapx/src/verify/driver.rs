@@ -46,7 +46,7 @@ use super::{
 
 use crate::helpers::mir_utils::{collect_return_block_indices, is_return_block};
 
-use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
+use crate::verify::checkpoint::{Checkpoint, CheckpointLocation};
 
 /// Orchestrates the three-stage verification pipeline (backward data-dependency
 /// analysis → forward state simulation → SMT checking) for a single function

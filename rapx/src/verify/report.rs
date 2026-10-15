@@ -7,7 +7,7 @@
 use rustc_hir::def_id::DefId;
 
 use super::contract::Property;
-use crate::helpers::mir_scan::CheckpointLocation;
+use crate::verify::checkpoint::CheckpointLocation;
 
 /// Why a [`CheckResult::Unknown`] could not be discharged.
 ///

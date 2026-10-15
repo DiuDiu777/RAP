@@ -5,7 +5,7 @@
 //! size assertions.
 
 use crate::helpers::mir_utils;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::contract::{ContractExpr, Property, PropertyArg};
 use crate::verify::report::{CheckResult, UnknownReason};
 use crate::verify::vm::state::VmState;

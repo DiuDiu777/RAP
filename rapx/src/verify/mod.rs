@@ -6,6 +6,7 @@
 
 pub(crate) mod api_classify;
 pub(crate) mod call_summary;
+pub(crate) mod checkpoint;
 pub(crate) mod contract;
 pub(crate) mod display;
 pub(crate) mod driver;

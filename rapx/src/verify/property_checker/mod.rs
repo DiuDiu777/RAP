@@ -5,7 +5,7 @@
 //! submodules (`memory`, `bounds`, `typed`, `numeric`, `string`, `alias`,
 //! `cstr`, `transmute`).  Shared helpers live in `util`.
 
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::vm::state::{OffsetKind, VmState};
 use crate::verify::{
     contract::{Property, PropertyKind},

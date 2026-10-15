@@ -29,7 +29,8 @@ use crate::{
 };
 
 // Re-export the mir_utils helpers still consumed by `vm/alias.rs`.
-pub(super) use crate::helpers::mir_utils::{call_destination, operand_mir_place, operand_place};
+pub(super) use crate::helpers::mir_utils::{operand_mir_place, operand_place};
+pub(super) use crate::verify::checkpoint::call_destination;
 // Remaining mir_utils helpers used only within this module.
 use crate::helpers::mir_utils::{blocks_reachable_after_call, rvalue_any_place_matching};
 

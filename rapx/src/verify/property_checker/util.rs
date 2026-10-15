@@ -6,7 +6,7 @@
 
 use crate::helpers::mir_utils;
 use crate::def_id;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::contract::{
     ContractExpr, ContractPlace, ContractProjection, NumericBinOp, PlaceBase, Property,
     PropertyArg, RelOp,

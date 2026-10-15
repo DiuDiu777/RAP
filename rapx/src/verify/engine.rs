@@ -19,7 +19,7 @@ use super::{
     report::{CheckResult, UnknownReason},
     slicer::{BackwardSlicer, RelevantItem},
 };
-use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
+use crate::verify::checkpoint::{Checkpoint, CheckpointLocation};
 
 use super::{
     property_checker::PropertyChecker,
@@ -695,7 +695,7 @@ impl<'tcx> VerifyEngine<'tcx> {
                 callee: None,
                 block: checkpoint.block,
                 args: Vec::new(),
-                kind: crate::helpers::mir_scan::CheckpointKind::UnsafeCall,
+                kind: crate::verify::checkpoint::CheckpointKind::UnsafeCall,
                 destination: None,
                 is_mut_ref: false,
                 statement_index: 0,

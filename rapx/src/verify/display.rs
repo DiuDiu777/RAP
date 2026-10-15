@@ -12,7 +12,7 @@ use crate::helpers::fn_info::get_cons;
 use indexmap::IndexMap;
 
 use super::report::PropertyCheckResult;
-use crate::helpers::mir_scan::CheckpointLocation;
+use crate::verify::checkpoint::CheckpointLocation;
 use crate::verify::contract::render::display_expr_user_friendly;
 
 type CountEntry = (

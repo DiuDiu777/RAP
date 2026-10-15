@@ -7,7 +7,7 @@ use rustc_middle::mir::Operand;
 use rustc_middle::ty::TyCtxt;
 
 use crate::helpers::def_use::{operand_uses, PlaceBaseKey, PlaceKey, RelevantPlaces};
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::helpers::mir_utils::callee_param_index_for_local;
 
 use super::contract::{

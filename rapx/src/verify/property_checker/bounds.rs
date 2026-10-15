@@ -4,7 +4,7 @@
 //! invariants, or an SMT coverage check over allocation base/size.
 //! `NonOverlap` uses provenance-distinctness and range-overlap reasoning.
 
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::helpers::mir_utils;
 use crate::verify::api_classify;
 use crate::verify::contract::{

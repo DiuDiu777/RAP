@@ -11,7 +11,7 @@ use crate::analysis::safety_flow::root::{
 };
 use crate::cli::VerifyMode;
 use crate::compat::FxHashMap;
-use crate::helpers::mir_scan::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
+use crate::verify::checkpoint::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
 use crate::helpers::name::short_fn_name;
 #[cfg(rapx_has_attr_ir)]
 use rustc_attr_ir::LangItem;
@@ -41,7 +41,7 @@ use super::{
     type_invariants::build_type_invariants_from_params,
 };
 use crate::helpers::fn_info::get_adt_def_id_by_adt_method;
-use crate::helpers::mir_scan::{Checkpoint, collect_unsafe_callsites};
+use crate::verify::checkpoint::{Checkpoint, collect_unsafe_callsites};
 use crate::helpers::mir_utils::{
     collect_return_block_indices, has_rapx_verify_attr, is_std_crate_def_id, is_trait_unsafe,
     resolve_impl_self_ty_def_id,
@@ -175,19 +175,19 @@ impl<'tcx> FunctionTarget<'tcx> {
     ) -> &[Property<'tcx>] {
         let loc = checkpoint.location();
         match checkpoint.kind {
-            crate::helpers::mir_scan::CheckpointKind::RawPtrDeref => self
+            crate::verify::checkpoint::CheckpointKind::RawPtrDeref => self
                 .raw_ptr_deref_checks
                 .iter()
                 .find(|(candidate, _)| candidate.location() == loc)
                 .map(|(_, properties)| properties.as_slice())
                 .unwrap_or(&[]),
-            crate::helpers::mir_scan::CheckpointKind::StaticMutAccess => self
+            crate::verify::checkpoint::CheckpointKind::StaticMutAccess => self
                 .static_mut_checks
                 .iter()
                 .find(|(candidate, _)| candidate.location() == loc)
                 .map(|(_, properties)| properties.as_slice())
                 .unwrap_or(&[]),
-            crate::helpers::mir_scan::CheckpointKind::UnsafeCall => checkpoint
+            crate::verify::checkpoint::CheckpointKind::UnsafeCall => checkpoint
                 .callee
                 .and_then(|callee| self.callee_requires.get(&callee))
                 .map(Vec::as_slice)
@@ -1857,7 +1857,7 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     callee: None,
                     block: info.block,
                     args: vec![info.ptr_operand],
-                    kind: crate::helpers::mir_scan::CheckpointKind::RawPtrDeref,
+                    kind: crate::verify::checkpoint::CheckpointKind::RawPtrDeref,
                     destination: Some(info.destination),
                     is_mut_ref: info.is_mut_ref,
                     statement_index: info.statement_index,
@@ -1908,7 +1908,7 @@ fn build_static_mut_checks<'tcx>(
                     callee: None,
                     block: info.block,
                     args: vec![info.ptr_operand],
-                    kind: crate::helpers::mir_scan::CheckpointKind::StaticMutAccess,
+                    kind: crate::verify::checkpoint::CheckpointKind::StaticMutAccess,
                     destination: None,
                     is_mut_ref: false,
                     statement_index: 0,

@@ -50,7 +50,7 @@ use super::{
     target::FunctionTarget,
 };
 use crate::helpers::def_use::RelevantPlaces;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 
 use crate::limit::{
     DEFAULT_LOOP_CARRIED_BACKEDGES, DEFAULT_NUMERIC_WITNESS_ITERATION, MAX_AUTO_REPEAT,

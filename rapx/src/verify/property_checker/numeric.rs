@@ -5,7 +5,7 @@
 //! contract expression and the VM's computed terms.
 
 use crate::helpers::mir_utils;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::api_classify;
 use crate::verify::contract::{
     ContractExpr, NumericBinOp, PlaceBase, Property, PropertyArg, RelOp,

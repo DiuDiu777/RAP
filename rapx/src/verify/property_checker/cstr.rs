@@ -8,7 +8,7 @@ use z3::{
 };
 
 use crate::compat::FxHashMap;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::helpers::mir_utils::dep_callee_def_id;
 use crate::verify::api_classify::is_as_ptr;
 use crate::verify::vm::state::{AllocId, VmState};

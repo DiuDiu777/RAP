@@ -29,7 +29,7 @@ use std::collections::HashSet;
 use crate::compat::SkipNormWip;
 
 use crate::def_id;
-use crate::{compat::FxHashMap, helpers::mir_scan::Checkpoint};
+use crate::compat::FxHashMap;
 
 use super::def_use::PlaceKey;
 
@@ -411,19 +411,6 @@ pub fn operand_mir_place<'a, 'tcx>(operand: &'a Operand<'tcx>) -> Option<&'a Pla
         Operand::Copy(place) | Operand::Move(place) => Some(place),
         _ => None,
     }
-}
-
-/// Return the destination local for a checkpoint's call or deref.
-pub fn call_destination<'tcx>(tcx: TyCtxt<'tcx>, checkpoint: &Checkpoint<'tcx>) -> Option<Local> {
-    if checkpoint.kind == crate::helpers::mir_scan::CheckpointKind::RawPtrDeref {
-        return checkpoint.destination;
-    }
-    let body = tcx.optimized_mir(checkpoint.caller);
-    let terminator = body.basic_blocks[checkpoint.block].terminator();
-    let TerminatorKind::Call { destination, .. } = &terminator.kind else {
-        return None;
-    };
-    Some(destination.local)
 }
 
 // ── Place resolution utilities ───────────────────────────────────

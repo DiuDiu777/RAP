@@ -1,6 +1,6 @@
 //! Checker for `ValidString`: UTF-8 validity of tracked byte buffers.
 
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::contract::Property;
 use crate::verify::report::CheckResult;
 use crate::verify::vm::state::VmState;

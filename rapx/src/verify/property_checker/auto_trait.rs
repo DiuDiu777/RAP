@@ -27,7 +27,7 @@ use rustc_middle::ty::{ClauseKind, GenericArgKind, ParamTy, Ty, TyCtxt, TyKind};
 
 use crate::compat::FxHashMap;
 use crate::def_id;
-use crate::helpers::mir_scan::{Checkpoint, has_atomic_call, has_raw_ptr_write};
+use crate::verify::checkpoint::{Checkpoint, has_atomic_call, has_raw_ptr_write};
 use crate::verify::vm::state::VmState;
 use crate::verify::{
     contract::{Property, PropertyArg, PropertyKind},

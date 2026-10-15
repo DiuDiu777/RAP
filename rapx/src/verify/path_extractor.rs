@@ -26,7 +26,7 @@ use crate::analysis::path::{
     graph::{PathEnumerator, PathGraph},
 };
 
-use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
+use crate::verify::checkpoint::{Checkpoint, CheckpointLocation};
 
 /// Enumerates finite, acyclic verification paths from function entry to each
 /// unsafe checkpoint in one function body.

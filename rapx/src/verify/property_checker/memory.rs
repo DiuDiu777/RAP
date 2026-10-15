@@ -6,7 +6,7 @@
 //! `value.z3_term` and allocation base/size.
 
 use crate::helpers::mir_utils;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::api_classify;
 use crate::verify::contract::{ContractExpr, Property, PropertyArg, is_static_lifetime_ident};
 use crate::verify::report::{CheckResult, UnknownReason};

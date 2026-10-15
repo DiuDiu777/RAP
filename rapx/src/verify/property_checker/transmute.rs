@@ -3,7 +3,7 @@
 use crate::helpers::mir_utils;
 use rustc_middle::ty::{GenericArgKind, Ty, TyKind};
 
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::vm::state::VmState;
 use crate::verify::{
     contract::{Property, PropertyArg},

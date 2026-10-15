@@ -4,7 +4,7 @@
 //! is a simple liveness check on the target allocation.
 
 use crate::helpers::mir_utils;
-use crate::helpers::mir_scan::Checkpoint;
+use crate::verify::checkpoint::Checkpoint;
 use crate::verify::contract::Property;
 use crate::verify::report::{CheckResult, UnknownReason};
 use crate::verify::vm::state::VmState;
