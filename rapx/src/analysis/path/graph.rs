@@ -1191,7 +1191,7 @@ impl<'tcx> PathGraph<'tcx> {
             let callee_def_id = self.cfg.block(next).def_id;
             for (i, &arg_local) in binding.arg_locals.iter().enumerate() {
                 let caller_arg = self.remap_local(caller_def_id, arg_local);
-                if self.is_nonzero(caller_arg, cs) {
+                if self.local_is_known_nonnull(cs, caller_arg) {
                     cs.consts.insert(self.remap_local(callee_def_id, i + 1), usize::MAX);
                 }
                 if let Some(len) = self.resolve_length(caller_arg, cs) {
@@ -1275,32 +1275,6 @@ impl<'tcx> PathGraph<'tcx> {
         }
     }
 
-    /// Whether `local` is known non-zero (the `usize::MAX` sentinel), following
-    /// constraint copies and casts.
-    fn is_nonzero(&self, local: usize, cs: &ConstraintSet) -> bool {
-        let mut stack = vec![local];
-        let mut seen = FxHashSet::default();
-        while let Some(cur) = stack.pop() {
-            if !seen.insert(cur) {
-                continue;
-            }
-            if let Some(&val) = cs.consts.get(&cur)
-                && val == usize::MAX
-            {
-                return true;
-            }
-            for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
-                    stack.push(src);
-                }
-            }
-            if let Some(&cast_src) = self.cast_chains.get(&cur) {
-                stack.push(cast_src);
-            }
-        }
-        false
-    }
-
     /// Record the relational fact `lhs < rhs` (strict) or `lhs <= rhs` (non-strict).
     fn record_bound(cs: &mut ConstraintSet, lhs: usize, rhs: usize, strict: bool) {
         let entry = cs.bounds.entry(lhs).or_default();
@@ -1373,22 +1347,14 @@ impl<'tcx> PathGraph<'tcx> {
         }
     }
 
-    /// Canonicalize a local to a stable key, following field projections,
-    /// aggregate field sources, and whole-place copies.
+    /// Canonicalize a local to a stable key, following field projections and
+    /// whole-place copies.
     fn canonical_field(&self, local: usize) -> usize {
         let mut cur = local;
         let mut seen = FxHashSet::default();
         loop {
             if !seen.insert(cur) {
                 return cur;
-            }
-            if let Some((agg, field)) = decode_aggregate_field(cur)
-                && let Some(&actual) = self
-                    .aggregate_field_sources
-                    .get(&encode_aggregate_field(agg, field))
-            {
-                cur = actual;
-                continue;
             }
             if let Some(&encoded) = self.field_projection_source.get(&cur) {
                 cur = encoded;
@@ -1723,7 +1689,7 @@ impl<'tcx> PathGraph<'tcx> {
                 // A `switchInt` on `ptr as usize` (lowered `!ptr.is_null()`): the
                 // `0` arm is unreachable when the pointer is known non-null.
                 if let Some(discr_local) = discr_local
-                    && self.is_nonzero(discr_local, cs)
+                    && self.local_is_known_nonnull(cs, discr_local)
                     && targets.iter().any(|(v, _)| v == 0)
                 {
                     let zero_target = base + resolve_switch_target(targets, 0);
