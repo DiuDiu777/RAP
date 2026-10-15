@@ -28,38 +28,16 @@ use crate::analysis::path::{
 
 use crate::helpers::mir_scan::{Checkpoint, CheckpointLocation};
 
-/// Enumerates finite, SCC-aware verification paths from the function entry
-/// to each unsafe checkpoint in a single function body.
+/// Enumerates finite, acyclic verification paths from function entry to each
+/// unsafe checkpoint in one function body.
 ///
-/// `PathExtractor` is the **first stage** of the verification pipeline.  It
-/// takes a function's MIR control-flow graph and a list of unsafe checkpoints,
-/// then produces a [`CheckpointPaths`] value that maps every checkpoint to a set
-/// of acyclic block-level paths reaching it.
+/// `run` builds a [`PathGraph`], inlines callees, finds SCCs, then enumerates
+/// acyclic paths with `allow_repeat` extra loop iterations.  The result is
+/// grouped by callee: one [`CallGroup`] per unique callee `DefId`, sharing a
+/// single [`PathTree`].
 ///
-/// # Pipeline role
-///
-/// ```text
-/// PathExtractor ──► BackwardSlicer ──► ForwardVerifier ──► SmtChecker
-///    (paths)          (relevant items)    (abstract facts)    (satisfiability)
-/// ```
-///
-/// The paths produced here determine *which* MIR instructions the slicer
-/// will inspect and in what order, so path quality directly affects
-/// verification precision.
-///
-/// # SCC handling
-///
-/// Loops (strongly connected components) are detected and collapsed by
-/// [`PathGraph`].  The `allow_repeat` parameter controls how many extra
-/// iterations of each SCC postfix are appended beyond the first — useful
-/// for modeling loop-carried effects without unrolling indefinitely.
-///
-/// # Path limit
-///
-/// Whole-CFG path enumeration is capped at
-/// [`crate::limit::path_limit`] (the `--path-limit` CLI value, or
-/// [`crate::limit::PATH_LIMIT`]) to prevent exponential blow-up in
-/// functions with many branches.
+/// Enumeration is capped at [`crate::limit::path_limit`] to avoid exponential
+/// blow-up.
 pub(crate) struct PathExtractor<'tcx> {
     /// Compiler type context used for MIR access and name resolution.
     tcx: TyCtxt<'tcx>,
@@ -149,45 +127,22 @@ fn group_by_callee<'tcx>(
         .collect()
 }
 
-/// One finite, acyclic execution trace from the function entry to a target
-/// checkpoint, represented as an ordered sequence of MIR basic blocks.
+/// One finite, acyclic execution trace from function entry to a checkpoint,
+/// represented as an ordered sequence of MIR basic blocks.
 ///
-/// A `Path` is the core currency flowing through the verification pipeline.
-/// It is produced by [`PathExtractor`], then consumed by the
-/// [`BackwardSlicer`](super::slicer::BackwardSlicer) to determine which MIR
-/// instructions are relevant to the safety property being checked.
+/// Built by the [`BackwardSlicer`](super::slicer::BackwardSlicer) from the
+/// [`PathTree`] produced by [`PathExtractor`]; the VM later consumes it to
+/// know which MIR instructions are relevant and in what order.
 ///
-/// # Structure
-///
-/// Each path consists of:
-/// - **`target`** — the [`CheckpointLocation`] identifying the specific call
-///   terminator (or synthetic checkpoint) this path reaches.  Redundant
-///   with the final step but stored separately for fast lookup.
-/// - **`steps`** — an ordered list of [`PathStep`] values.  Intermediate
-///   steps are MIR basic blocks; the final step is always
-///   `PathStep::Checkpoint(target)`.  The path always starts at function
-///   entry (block `bb0`).
-///
-/// # Reachability
-///
-/// Every `Path` returned by `PathExtractor` is guaranteed to be *reachable*
-/// in the function's CFG.  Paths that cannot be validated against the
-/// SCC-aware [`PathGraph`] are silently discarded during extraction.
-///
-/// # Example (compact notation)
-///
-/// ```text
-/// bb2 -> bb3 -> bb4 -> checkpoint@bb5::unsafe_fn
-/// ```
-///
-/// In the path above, blocks 2, 3, and 4 are intermediate MIR blocks;
-/// block 5 contains the unsafecall terminator that the path targets.
+/// Every path is validated against the SCC-aware [`PathGraph`]; unreachable
+/// sequences are silently discarded during extraction.
 #[derive(Clone, Debug)]
 pub(crate) struct Path {
-    /// The checkpoint location (function + basic block) reached by this path.
+    /// The [`CheckpointLocation`] (function + basic block) reached by this
+    /// path, also recorded as the final `PathStep::Checkpoint`.
     pub target: CheckpointLocation,
-    /// Ordered sequence of basic blocks from function entry to `target`,
-    /// terminated by a `PathStep::Checkpoint`.
+    /// Ordered block sequence from function entry to `target`, terminated by a
+    /// `PathStep::Checkpoint`.
     pub steps: Vec<PathStep>,
 }
 
