@@ -63,29 +63,19 @@ pub struct SccPath {
     pub exit_successors: Vec<usize>,
 }
 
-/// Per-block info collected during construction for path reachability
-/// analysis.  Each block's assignments, constants, and copy chains are
-/// stored together so they can be read with a single index lookup.
+/// Per-block facts collected during construction for path reachability
+/// analysis: which locals are assigned, their concrete constants, copy sources,
+/// defining expressions, and non-null facts.
 #[derive(Clone, Debug, Default)]
-pub struct BlockConstantInfo {
+pub struct BlockFacts {
     pub assigned_locals: Vec<usize>,
     pub constants: FxHashMap<usize, usize>,
     pub constraint_copies: FxHashMap<usize, usize>,
-    /// Maps a local assigned by `AddWithOverflow(src, const)` to `(src, const)`.
-    pub increments: FxHashMap<usize, (usize, usize)>,
-    /// Maps a local assigned by `AddWithOverflow(lhs, rhs)` (both locals) to
-    /// `(lhs, rhs)`.
-    pub var_sums: FxHashMap<usize, (usize, usize)>,
-    /// Maps a local assigned by `Rem(src, const)` to `(src, divisor)`.
-    pub remainders: FxHashMap<usize, (usize, usize)>,
-    /// Maps a boolean local (e.g., a guard result) to the binary comparison
-    /// that produced it: `(op, lhs_local, rhs_kind)`.
-    pub comparison_sources: FxHashMap<usize, ComparisonSource>,
+    /// Maps a local to the single expression that defined its value.
+    pub expr: FxHashMap<usize, Expr>,
     /// Set of locals that are provably non-null (e.g. assigned from
     /// `Box::into_raw`).  Used for path reachability pruning.
     pub known_nonnull_locals: FxHashSet<usize>,
-    pub negation_sources: FxHashMap<usize, usize>,
-    pub and_sources: FxHashMap<usize, (usize, usize)>,
 }
 /// Records the origin of a boolean temporary produced by a binary
 /// comparison during guard-clause evaluation.
@@ -93,8 +83,31 @@ pub struct BlockConstantInfo {
 pub struct ComparisonSource {
     pub op: rustc_middle::mir::BinOp,
     pub lhs_local: usize,
-    pub rhs_local: usize,
-    pub rhs_is_constant: bool,
+    pub rhs: Rhs,
+}
+
+/// The right-hand operand of a sum/comparison: a constant or a local.
+#[derive(Clone, Copy, Debug)]
+pub enum Rhs {
+    /// A compile-time constant.
+    Const(usize),
+    /// A local.
+    Local(usize),
+}
+
+/// The single MIR expression that defined a local's value.
+#[derive(Clone, Debug)]
+pub enum Expr {
+    /// `dest = lhs + rhs`.
+    Add { lhs: usize, rhs: Rhs },
+    /// `dest = src % divisor`.
+    Rem { src: usize, divisor: usize },
+    /// `dest = !src`.
+    Not { src: usize },
+    /// `dest = lhs & rhs` (a boolean conjunction).
+    And { lhs: usize, rhs: usize },
+    /// `dest = lhs <op> rhs` (`Lt`/`Le`/`Gt`/`Ge`/`Eq`/`Ne`).
+    Cmp(ComparisonSource),
 }
 
 /// Encode a `(local, field_index)` pair into a single `usize`.
@@ -158,7 +171,7 @@ pub(crate) struct ConstraintSet {
 #[derive(Clone)]
 pub struct PathGraph<'tcx> {
     pub cfg: ControlFlowGraph<'tcx>,
-    pub block_info: Vec<BlockConstantInfo>,
+    pub block_info: Vec<BlockFacts>,
     pub disc_info: DiscriminantInfo,
     /// Global store: maps encoded `(local, field_idx)` to source local from Aggregates.
     pub aggregate_field_sources: FxHashMap<usize, usize>,
@@ -208,7 +221,7 @@ fn build_function_info<'tcx>(
     local_base: usize,
     body: &Body<'tcx>,
 ) -> (
-    Vec<BlockConstantInfo>,
+    Vec<BlockFacts>,
     DiscriminantInfo,
     FxHashMap<usize, usize>,
     FxHashMap<usize, usize>,
@@ -225,7 +238,7 @@ fn build_function_info<'tcx>(
 
     for i in 0..basicblocks.len() {
         let bb = &basicblocks[BasicBlock::from(i)];
-        let mut info = BlockConstantInfo::default();
+        let mut info = BlockFacts::default();
 
         for stmt in &bb.statements {
             if let StatementKind::Assign(assign) = &stmt.kind {
@@ -318,24 +331,22 @@ fn build_function_info<'tcx>(
                                 .map(|f| encode_aggregate_field(local_base + l.local.as_usize(), f)),
                             _ => None,
                         } {
-                            let incr = match rhs {
+                            let rhs_kind = match rhs {
                                 Operand::Constant(c) => {
                                     let typing_env = TypingEnv::post_analysis(tcx, def_id);
-                                    c.const_.try_eval_bits(tcx, typing_env).map(|v| v as usize)
+                                    c.const_
+                                        .try_eval_bits(tcx, typing_env)
+                                        .map(|v| Rhs::Const(v as usize))
                                 }
-                                _ => None,
-                            };
-                            if let Some(incr) = incr {
-                                info.increments.insert(dest, (lhs_local, incr));
-                            } else if let Some(rhs_local) = match rhs {
                                 Operand::Copy(r) | Operand::Move(r)
                                     if r.projection.is_empty() =>
                                 {
-                                    Some(local_base + r.local.as_usize())
+                                    Some(Rhs::Local(local_base + r.local.as_usize()))
                                 }
                                 _ => None,
-                            } {
-                                info.var_sums.insert(dest, (lhs_local, rhs_local));
+                            };
+                            if let Some(rhs_kind) = rhs_kind {
+                                info.expr.insert(dest, Expr::Add { lhs: lhs_local, rhs: rhs_kind });
                             }
                         }
                     }
@@ -360,36 +371,41 @@ fn build_function_info<'tcx>(
                             _ => None,
                         };
                         if let Some(lhs_local) = lhs_local {
-                            let rhs_eval = match rhs {
+                            let rhs_kind = match rhs {
                                 Operand::Constant(c) => {
                                     let typing_env = TypingEnv::post_analysis(tcx, def_id);
                                     c.const_
                                         .try_eval_bits(tcx, typing_env)
-                                        .map(|v| (v as usize, true))
+                                        .map(|v| Rhs::Const(v as usize))
                                 }
                                 Operand::Copy(r) | Operand::Move(r)
                                     if r.projection.is_empty() =>
                                 {
-                                    Some((local_base + r.local.as_usize(), false))
+                                    Some(Rhs::Local(local_base + r.local.as_usize()))
                                 }
                                 _ => None,
                             };
-                            let Some((rhs_local, rhs_is_constant)) = rhs_eval else {
+                            let Some(rhs_kind) = rhs_kind else {
                                 continue;
                             };
-                            info.comparison_sources.insert(
-                                dest,
-                                ComparisonSource {
-                                    op: *op,
-                                    lhs_local,
-                                    rhs_local,
-                                    rhs_is_constant,
-                                },
-                            );
-                            if matches!(op, BinOp::BitAnd)
-                                && matches!(body.local_decls[place.local].ty.kind(), TyKind::Bool)
-                            {
-                                info.and_sources.insert(dest, (lhs_local, rhs_local));
+                            if matches!(op, BinOp::BitAnd) {
+                                // `dest = lhs & rhs`: only a boolean conjunction
+                                // (and thus resolvable) when `dest` is a bool and
+                                // `rhs` is a local.
+                                if let Rhs::Local(rhs_local) = rhs_kind
+                                    && matches!(body.local_decls[place.local].ty.kind(), TyKind::Bool)
+                                {
+                                    info.expr.insert(dest, Expr::And { lhs: lhs_local, rhs: rhs_local });
+                                }
+                            } else {
+                                info.expr.insert(
+                                    dest,
+                                    Expr::Cmp(ComparisonSource {
+                                        op: *op,
+                                        lhs_local,
+                                        rhs: rhs_kind,
+                                    }),
+                                );
                             }
                         }
                     }
@@ -411,7 +427,7 @@ fn build_function_info<'tcx>(
                             };
                             if let Some(divisor) = divisor
                                 && divisor != 0 {
-                                    info.remainders.insert(dest, (lhs_local, divisor));
+                                    info.expr.insert(dest, Expr::Rem { src: lhs_local, divisor });
                                 }
                         }
                     }
@@ -419,8 +435,8 @@ fn build_function_info<'tcx>(
                         if matches!(unop, UnOp::Not)
                             && let Operand::Copy(src) | Operand::Move(src) = operand
                         {
-                            info.negation_sources
-                                .insert(dest, local_base + src.local.as_usize());
+                            info.expr
+                                .insert(dest, Expr::Not { src: local_base + src.local.as_usize() });
                         }
                     }
                     Rvalue::Cast(_, operand, _) => {
@@ -1258,18 +1274,17 @@ impl<'tcx> PathGraph<'tcx> {
             return;
         };
         let cond_local = self.remap_local(self.cfg.block(cur).def_id, p.local.as_usize());
-        let Some(cmp) = self
+        let Some(Expr::Cmp(cmp)) = self
             .block_info
             .iter()
-            .find_map(|info| info.comparison_sources.get(&cond_local))
+            .find_map(|info| info.expr.get(&cond_local))
         else {
             return;
         };
-        let nonzero = cmp.rhs_is_constant
-            && matches!(
-                (cmp.op, cmp.rhs_local),
-                (BinOp::Gt, 0) | (BinOp::Ge, 1) | (BinOp::Ne, 0)
-            );
+        let nonzero = matches!(
+            (cmp.op, cmp.rhs),
+            (BinOp::Gt, Rhs::Const(0)) | (BinOp::Ge, Rhs::Const(1)) | (BinOp::Ne, Rhs::Const(0))
+        );
         if nonzero {
             cs.consts.insert(cmp.lhs_local, usize::MAX);
         }
@@ -1301,10 +1316,9 @@ impl<'tcx> PathGraph<'tcx> {
     /// recorded relational bounds, or `None` when undetermined.
     fn relation_status(&self, cmp: &ComparisonSource, cs: &ConstraintSet) -> Option<bool> {
         let l = self.canonical_field(cmp.lhs_local);
-        let r = if cmp.rhs_is_constant {
-            cmp.rhs_local
-        } else {
-            self.canonical_field(cmp.rhs_local)
+        let r = match cmp.rhs {
+            Rhs::Const(v) => v,
+            Rhs::Local(l) => self.canonical_field(l),
         };
         match cmp.op {
             BinOp::Lt => {
@@ -1433,12 +1447,14 @@ impl<'tcx> PathGraph<'tcx> {
             }
         }
         for info in &self.block_info {
-            if let Some(&(lhs, rhs)) = info.var_sums.get(&cur) {
-                let (r_base, r_k) = self.resolve_rhs_sum(rhs);
-                return Some((lhs, r_base, r_k));
-            }
-            if let Some(&(base, k)) = info.increments.get(&cur) {
-                return Some((base, usize::MAX, k));
+            if let Some(Expr::Add { lhs, rhs }) = info.expr.get(&cur) {
+                return match rhs {
+                    Rhs::Local(r) => {
+                        let (r_base, r_k) = self.resolve_rhs_sum(*r);
+                        Some((*lhs, r_base, r_k))
+                    }
+                    Rhs::Const(k) => Some((*lhs, usize::MAX, *k)),
+                };
             }
         }
         Some((cur, usize::MAX, 0))
@@ -1472,8 +1488,8 @@ impl<'tcx> PathGraph<'tcx> {
             }
         }
         for info in &self.block_info {
-            if let Some(&(src, k)) = info.increments.get(&cur) {
-                return (src, k);
+            if let Some(Expr::Add { lhs, rhs: Rhs::Const(k) }) = info.expr.get(&cur) {
+                return (*lhs, *k);
             }
         }
         (cur, 0)
@@ -1538,21 +1554,21 @@ impl<'tcx> PathGraph<'tcx> {
             {
                 return Some(val);
             }
-            if let Some(cmp) = info.comparison_sources.get(&local)
+            if let Some(Expr::Cmp(cmp)) = info.expr.get(&local)
                 && matches!(cmp.op, BinOp::Eq | BinOp::Ne) {
                     let is_eq = matches!(cmp.op, BinOp::Eq);
-                    if cmp.rhs_is_constant {
+                    if let Rhs::Const(rhs_val) = cmp.rhs {
                         if let Some(lhs_val) = self.resolve_local_value(cmp.lhs_local, cs)
                         {
                             return Some(if is_eq {
-                                if lhs_val == cmp.rhs_local { 1 } else { 0 }
+                                if lhs_val == rhs_val { 1 } else { 0 }
                             } else {
-                                if lhs_val != cmp.rhs_local { 1 } else { 0 }
+                                if lhs_val != rhs_val { 1 } else { 0 }
                             });
                         }
-                    } else {
+                    } else if let Rhs::Local(rhs_local) = cmp.rhs {
                         let lhs_val = self.resolve_local_value(cmp.lhs_local, cs);
-                        let rhs_val = self.resolve_local_value(cmp.rhs_local, cs);
+                        let rhs_val = self.resolve_local_value(rhs_local, cs);
                         if let Some(lhs_val) = lhs_val {
                             if let Some(rhs_val) = rhs_val {
                                 return Some(if is_eq {
@@ -1593,12 +1609,12 @@ impl<'tcx> PathGraph<'tcx> {
                 if let Some(&src) = info.constraint_copies.get(&cur) {
                     stack.push((src, negated));
                 }
-                if let Some(&src) = info.negation_sources.get(&cur) {
-                    stack.push((src, !negated));
+                if let Some(Expr::Not { src }) = info.expr.get(&cur) {
+                    stack.push((*src, !negated));
                 }
-                if let Some(&(lhs, rhs)) = info.and_sources.get(&cur) {
-                    let a = self.resolve_simple_bool(lhs, cs);
-                    let b = self.resolve_simple_bool(rhs, cs);
+                if let Some(Expr::And { lhs, rhs }) = info.expr.get(&cur) {
+                    let a = self.resolve_simple_bool(*lhs, cs);
+                    let b = self.resolve_simple_bool(*rhs, cs);
                     if let (Some(a), Some(b)) = (a, b) {
                         let r = if a == 1 && b == 1 { 1 } else { 0 };
                         return Some(if negated { 1 - r } else { r });
@@ -1706,11 +1722,10 @@ impl<'tcx> PathGraph<'tcx> {
                 // zero-capacity path) is pruned.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(cmp) = info.comparison_sources.get(&discr_local)
-                    && cmp.rhs_is_constant
+                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
                     && matches!(
-                        (cmp.op, cmp.rhs_local),
-                        (BinOp::Gt, 0) | (BinOp::Ge, 1) | (BinOp::Ne, 0)
+                        (cmp.op, cmp.rhs),
+                        (BinOp::Gt, Rhs::Const(0)) | (BinOp::Ge, Rhs::Const(1)) | (BinOp::Ne, Rhs::Const(0))
                     )
                     && next == base + targets.otherwise().as_usize()
                 {
@@ -1721,7 +1736,7 @@ impl<'tcx> PathGraph<'tcx> {
                 // (e.g. `_X = Ne(ptr, 0)`) when we know whether `ptr` is null.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(cmp) = info.comparison_sources.get(&discr_local)
+                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
                     && matches!(cmp.op, BinOp::Ne | BinOp::Eq)
                 {
                     let is_ne = matches!(cmp.op, BinOp::Ne);
@@ -1759,10 +1774,9 @@ impl<'tcx> PathGraph<'tcx> {
                     // and prune the infeasible branch when both are known.
                     let is_eq = matches!(cmp.op, BinOp::Eq);
                     let lhs_val = self.resolve_local_value(cmp.lhs_local, cs);
-                    let rhs_val = if cmp.rhs_is_constant {
-                        Some(cmp.rhs_local)
-                    } else {
-                        self.resolve_local_value(cmp.rhs_local, cs)
+                    let rhs_val = match cmp.rhs {
+                        Rhs::Const(v) => Some(v),
+                        Rhs::Local(l) => self.resolve_local_value(l, cs),
                     };
                     if let (Some(lhs), Some(rhs)) = (lhs_val, rhs_val) {
                         let val = if is_eq {
@@ -1789,15 +1803,14 @@ impl<'tcx> PathGraph<'tcx> {
                 // SCC boundaries).
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(cmp) = info.comparison_sources.get(&discr_local)
+                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
                     && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
                 {
                     // Resolve LHS directly from constants (no increment chains)
                     let lhs_val = self.resolve_local_value_direct(cmp.lhs_local, cs);
-                    let rhs_val = if cmp.rhs_is_constant {
-                        Some(cmp.rhs_local)
-                    } else {
-                        self.resolve_local_value_direct(cmp.rhs_local, cs)
+                    let rhs_val = match cmp.rhs {
+                        Rhs::Const(v) => Some(v),
+                        Rhs::Local(l) => self.resolve_local_value_direct(l, cs),
                     };
                     if let (Some(lhs), Some(rhs)) = (lhs_val, rhs_val) {
                         let val = match cmp.op {
@@ -1849,18 +1862,18 @@ impl<'tcx> PathGraph<'tcx> {
                 // infeasible `i >= bytes.len()` branch.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(cmp) = info.comparison_sources.get(&discr_local)
+                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
                     && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
                 {
                     let taken_true = next == base + resolve_switch_target(targets, 1);
-                    if !cmp.rhs_is_constant {
+                    if let Rhs::Local(rhs_local) = cmp.rhs {
                         // Canonicalize to `a < b` (strict) / `a <= b` and record
                         // the branch actually taken (its negation on the false arm).
                         let (a, b, strict) = match cmp.op {
-                            BinOp::Lt => (cmp.lhs_local, cmp.rhs_local, true),
-                            BinOp::Le => (cmp.lhs_local, cmp.rhs_local, false),
-                            BinOp::Gt => (cmp.rhs_local, cmp.lhs_local, true),
-                            BinOp::Ge => (cmp.rhs_local, cmp.lhs_local, false),
+                            BinOp::Lt => (cmp.lhs_local, rhs_local, true),
+                            BinOp::Le => (cmp.lhs_local, rhs_local, false),
+                            BinOp::Gt => (rhs_local, cmp.lhs_local, true),
+                            BinOp::Ge => (rhs_local, cmp.lhs_local, false),
                             _ => unreachable!(),
                         };
                         if taken_true {
@@ -2034,14 +2047,15 @@ impl<'tcx> PathGraph<'tcx> {
                 }
                 // Follow increments: if cur = src + incr, the effective value
                 // of cur is value_of(src) + incr + offset.
-                if let Some(&(incr_src, incr_amt)) = info.increments.get(&cur) {
-                    stack.push((incr_src, offset + incr_amt as isize));
+                if let Some(Expr::Add { lhs, rhs: Rhs::Const(incr_amt) }) = info.expr.get(&cur)
+                {
+                    stack.push((*lhs, offset + *incr_amt as isize));
                 }
                 // Follow remainder: cur = rem_src % rem_div.
                 // Resolve rem_src recursively, compute remainder, then apply offset.
-                if let Some(&(rem_src, rem_div)) = info.remainders.get(&cur)
-                    && let Some(src_val) = self.resolve_local_value(rem_src, cs) {
-                        let rem = src_val % rem_div;
+                if let Some(Expr::Rem { src: rem_src, divisor: rem_div }) = info.expr.get(&cur)
+                    && let Some(src_val) = self.resolve_local_value(*rem_src, cs) {
+                        let rem = src_val % *rem_div;
                         let result = if offset >= 0 {
                             Some(rem + offset as usize)
                         } else {
@@ -2219,7 +2233,7 @@ impl<'tcx> PathGraph<'tcx> {
 /// Hash of the constraint state accumulated along a path prefix.
 ///
 /// Computed by walking the prefix, collecting `(local → constant_value)`
-/// bindings from each block's [`BlockConstantInfo`], sorting them, and
+/// bindings from each block's [`BlockFacts`], sorting them, and
 /// hashing the result.  Used by [`PathEnumerator::visited_sccs`] to
 /// skip redundant re-entries into the same SCC with the same state.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq, Default)]
@@ -2282,7 +2296,7 @@ pub struct SccKey {
 /// The **constraint hash** used by `visited_sccs` is a
 /// [`ConstraintHash`]: it walks the current path prefix, accumulates
 /// `(local → constant_value)` bindings from each block's
-/// [`BlockConstantInfo`], sorts them, and hashes the result.  Different
+/// [`BlockFacts`], sorts them, and hashes the result.  Different
 /// constraint states (e.g. a loop variable changing from `true` to
 /// `false`) produce different hashes.
 ///
