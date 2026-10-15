@@ -79,6 +79,7 @@ static REGISTRY: &[Entry] = &[
     ED_INLINE!(api_classify::is_nonnull_checked_new, eff_nonnull_new),
     ED_INLINE!(api_classify::is_iter_next, eff_iter_next),
     ED_INLINE!(api_classify::is_range_next, eff_range_next),
+    ED_INLINE!(api_classify::is_eq_call, eff_none),
     // ── Intrinsics — no MIR body ────────────────────────────────────
     // Compiler intrinsics (`core::intrinsics::*`) have no MIR to inline, so the
     // hand-written effect is the *only* model. `mem::size_of`/`align_of` are
@@ -211,6 +212,13 @@ static REGISTRY: &[Entry] = &[
 /// CFG when the VM models their semantics more precisely).
 pub(crate) fn is_modeled(callee: Option<DefId>) -> bool {
     REGISTRY.iter().any(|e| e.opaque && (e.matches)(callee))
+}
+
+/// True when the VM has a symbolic model for `callee` (any registry entry). A
+/// cross-crate trait method matching here stays opaque in the path graph rather
+/// than being resolved to its impl and inlined.
+pub(crate) fn is_symbolically_modeled(callee: Option<DefId>) -> bool {
+    REGISTRY.iter().any(|e| (e.matches)(callee))
 }
 
 pub(crate) fn lookup_effect<'tcx>(

@@ -10,8 +10,8 @@ use std::collections::{HashMap, HashSet};
 
 use super::mir_utils::dep_callee_def_id;
 
-/// Checks the safety of a function signature.
-pub fn check_safety(tcx: TyCtxt<'_>, def_id: DefId) -> Safety {
+/// Returns the [`Safety`] (`Safe`/`Unsafe`) of a function's signature.
+pub fn get_fn_safety(tcx: TyCtxt<'_>, def_id: DefId) -> Safety {
     let poly_fn_sig = tcx.fn_sig(def_id);
     let fn_sig = poly_fn_sig.skip_binder();
     fn_sig.safety()
@@ -110,7 +110,7 @@ pub fn get_unsafe_callees(tcx: TyCtxt<'_>, def_id: DefId) -> HashSet<DefId> {
         for bb in body.basic_blocks.iter() {
             if let TerminatorKind::Call { func, .. } = &bb.terminator().kind
                 && let Some(callee_def_id) = dep_callee_def_id(func)
-                    && check_safety(tcx, callee_def_id) == Safety::Unsafe {
+                    && get_fn_safety(tcx, callee_def_id) == Safety::Unsafe {
                         unsafe_callees.insert(callee_def_id);
                     }
         }

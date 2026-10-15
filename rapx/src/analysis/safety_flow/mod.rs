@@ -81,7 +81,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
 
         // If the function is entirely safe (no unsafe code, no unsafe callees,
         // no raw pointer dereferences, and no static mutable accesses), skip.
-        if check_safety(self.tcx, def_id) == Safety::Safe
+        if get_fn_safety(self.tcx, def_id) == Safety::Safe
             && root.unsafe_callees.is_empty()
             && root.raw_ptr_locals.is_empty()
             && root.static_muts.is_empty()
@@ -247,7 +247,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
             // Edge from mutable access to the caller.
             for mut_method_id in &unit.mut_methods {
                 let node_type = get_type(self.tcx, *mut_method_id);
-                let fn_safety = check_safety(self.tcx, *mut_method_id);
+                let fn_safety = get_fn_safety(self.tcx, *mut_method_id);
                 let node = FnInfo::new(*mut_method_id, fn_safety, node_type);
 
                 module_data.add_node(self.tcx, node, None);

@@ -1,4 +1,4 @@
-use crate::helpers::mir_scan::check_safety;
+use crate::helpers::mir_scan::get_fn_safety;
 use crate::helpers::mir_utils::dep_callee_def_id;
 use crate::helpers::name::get_cleaned_def_path_name;
 use rustc_hir::{Safety, def_id::DefId};
@@ -68,7 +68,7 @@ fn find_unsafe_callees_in_function(tcx: TyCtxt, def_id: DefId) -> Vec<(DefId, St
 fn extract_unsafe_callee(tcx: TyCtxt<'_>, terminator: &Terminator<'_>) -> Option<(DefId, String)> {
     if let TerminatorKind::Call { func, .. } = &terminator.kind
         && let Some(callee_def_id) = dep_callee_def_id(func)
-            && check_safety(tcx, callee_def_id) == Safety::Unsafe {
+            && get_fn_safety(tcx, callee_def_id) == Safety::Unsafe {
                 let func_name = get_cleaned_def_path_name(tcx, callee_def_id);
                 return Some((callee_def_id, func_name));
             }

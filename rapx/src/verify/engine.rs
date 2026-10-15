@@ -679,6 +679,17 @@ impl<'tcx> VerifyEngine<'tcx> {
 
         let z3_ctx = Self::new_z3_context();
 
+        // Map (def_id, local block) -> global block(s), computed once and reused
+        // by `inject_inline_boundaries` for every path (mirrors
+        // `check_callsite_from_tree`).
+        let mut local_to_global: HashMap<(DefId, usize), Vec<usize>> = HashMap::new();
+        for (global, (def_id, local)) in tree.block_fns().iter().enumerate() {
+            local_to_global
+                .entry((*def_id, *local))
+                .or_default()
+                .push(global);
+        }
+
         for mut backward in backward_items {
             let path_desc = backward.path.describe_indices();
 
@@ -687,6 +698,16 @@ impl<'tcx> VerifyEngine<'tcx> {
                 items.append(&mut backward.items);
                 backward.items = items;
             }
+
+            // Insert inlined-callee boundary markers (argument binding / return
+            // write-back) based on def_id transitions across the path.
+            backward.items = Self::inject_inline_boundaries(
+                self.tcx,
+                backward.items,
+                tree,
+                &local_to_global,
+                def_id,
+            );
 
             let vm_state = self.vm.run(&z3_ctx, self.tcx, backward);
 

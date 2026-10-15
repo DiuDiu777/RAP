@@ -1,7 +1,7 @@
-use crate::compat::FxHashSet;
+use crate::compat::{FxHashMap, FxHashSet};
 use crate::graphs::scc::{Scc, SccExit, SccInfo};
 use rustc_middle::{
-    mir::{BasicBlock, Terminator},
+    mir::{BasicBlock, Body, Terminator},
     ty::TyCtxt,
 };
 use rustc_span::def_id::DefId;
@@ -66,6 +66,15 @@ pub struct ControlFlowGraph<'tcx> {
     pub tcx: TyCtxt<'tcx>,
     /// All CFG blocks for the current body.
     pub blocks: Vec<CfgBlock>,
+    /// Monomorphized MIR bodies for inlined generic callees, keyed by DefId.
+    ///
+    /// A generic callee like `slice::get::<Range<usize>>` has a body whose
+    /// trait-method calls (`SliceIndex::get`) only resolve once the concrete
+    /// type argument is substituted in. Its inlined blocks are therefore backed
+    /// by a monomorphized body fetched via [`Instance::instantiate_mir`], and
+    /// [`ControlFlowGraph::terminator`] prefers this map over the generic
+    /// `optimized_mir` when present.
+    monomorphized: FxHashMap<DefId, Body<'tcx>>,
 }
 
 impl<'tcx> ControlFlowGraph<'tcx> {
@@ -75,7 +84,14 @@ impl<'tcx> ControlFlowGraph<'tcx> {
             def_id,
             tcx,
             blocks,
+            monomorphized: FxHashMap::default(),
         }
+    }
+
+    /// Register a monomorphized body for the blocks added to this CFG by
+    /// inlining `def_id` with concrete generic arguments.
+    pub fn set_monomorphized(&mut self, def_id: DefId, body: Body<'tcx>) {
+        self.monomorphized.insert(def_id, body);
     }
 
     /// Get an immutable reference to a block by index.
@@ -94,7 +110,10 @@ impl<'tcx> ControlFlowGraph<'tcx> {
     /// elaborated (which is unusual for optimized MIR).
     pub fn terminator(&self, index: usize) -> Option<&Terminator<'tcx>> {
         let block = self.blocks.get(index)?;
-        let body = self.tcx.optimized_mir(block.def_id);
+        let body = self
+            .monomorphized
+            .get(&block.def_id)
+            .unwrap_or_else(|| self.tcx.optimized_mir(block.def_id));
         body.basic_blocks
             .get(BasicBlock::from(block.local_index))
             .and_then(|bb| bb.terminator.as_ref())

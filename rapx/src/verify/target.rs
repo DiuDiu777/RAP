@@ -1392,32 +1392,29 @@ impl<'tcx> PrepareTargets<'tcx> {
             return path_map;
         }
 
-        let groups =
-            PathExtractor::new(self.tcx, target.def_id, target.checkpoints.clone(), 0).run();
+        let tree = PathExtractor::new(self.tcx, target.def_id, 0).run();
 
-        for group in &groups {
-            for checkpoint in &group.checkpoints {
-                if let Some(callee_def_id) = checkpoint.callee {
-                    let block_idx = checkpoint.block.as_usize();
-                    let mut path_strings: Vec<String> = Vec::new();
-                    let _ = group.tree.walk_prefixes(
-                        checkpoint.block.as_usize(),
-                        &mut |prefix: &[usize]| -> bool {
-                            let desc = prefix
-                                .iter()
-                                .map(usize::to_string)
-                                .collect::<Vec<_>>()
-                                .join(" -> ");
-                            path_strings.push(desc);
-                            true
-                        },
-                    );
+        for checkpoint in &target.checkpoints {
+            if let Some(callee_def_id) = checkpoint.callee {
+                let block_idx = checkpoint.block.as_usize();
+                let mut path_strings: Vec<String> = Vec::new();
+                let _ = tree.walk_prefixes(
+                    checkpoint.block.as_usize(),
+                    &mut |prefix: &[usize]| -> bool {
+                        let desc = prefix
+                            .iter()
+                            .map(usize::to_string)
+                            .collect::<Vec<_>>()
+                            .join(" -> ");
+                        path_strings.push(desc);
+                        true
+                    },
+                );
 
-                    path_map
-                        .entry(callee_def_id)
-                        .or_default()
-                        .push((block_idx, path_strings));
-                }
+                path_map
+                    .entry(callee_def_id)
+                    .or_default()
+                    .push((block_idx, path_strings));
             }
         }
 

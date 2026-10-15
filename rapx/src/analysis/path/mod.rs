@@ -263,6 +263,23 @@ impl PathTree {
         Self::walk_prefixes_impl(root, &mut path, target_block, false, f)
     }
 
+    /// Build a subtree holding only the prefixes that end at `target_block`,
+    /// preserving the block-function and inlining metadata so a sliced subtree
+    /// still resolves inlined-callee blocks.
+    pub fn subtree_to(&self, target_block: usize) -> PathTree {
+        let mut sub = PathTree::new();
+        sub.block_fn = self.block_fn.clone();
+        sub.inline_bindings = self.inline_bindings.clone();
+        sub.inline_parents = self.inline_parents.clone();
+        sub.inlined_call_blocks = self.inlined_call_blocks.clone();
+        sub.truncated = self.truncated;
+        let _ = self.walk_prefixes(target_block, &mut |prefix| {
+            sub.insert(prefix);
+            true
+        });
+        sub
+    }
+
     /// Like [`walk_prefixes`] but continues past the target block into
     /// children, finding ALL occurrences (e.g. multiple iterations of the
     /// same checkpoint block in a loop).

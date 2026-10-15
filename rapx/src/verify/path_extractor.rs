@@ -17,7 +17,6 @@
 //! [`crate::limit::PATH_LIMIT`]). Enumeration stops producing new paths once
 //! the limit is reached and the tree is marked truncated.
 
-use crate::compat::FxHashMap;
 use rustc_hir::def_id::DefId;
 use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
 
@@ -26,15 +25,15 @@ use crate::analysis::path::{
     graph::{PathEnumerator, PathGraph},
 };
 
-use crate::verify::checkpoint::{Checkpoint, CheckpointLocation};
+use crate::verify::checkpoint::CheckpointLocation;
 
 /// Enumerates finite, acyclic verification paths from function entry to each
 /// unsafe checkpoint in one function body.
 ///
 /// `run` builds a [`PathGraph`], inlines callees, finds SCCs, then enumerates
-/// acyclic paths with `allow_repeat` extra loop iterations.  The result is
-/// grouped by callee: one [`CallGroup`] per unique callee `DefId`, sharing a
-/// single [`PathTree`].
+/// acyclic paths with `allow_repeat` extra loop iterations.  The resulting
+/// [`PathTree`] holds all whole-CFG paths; checkpoints and struct invariants
+/// slice their own prefixes from it via `walk_prefixes`/`subtree_to`.
 ///
 /// Enumeration is capped at [`crate::limit::path_limit`] to avoid exponential
 /// blow-up.
@@ -43,41 +42,31 @@ pub(crate) struct PathExtractor<'tcx> {
     tcx: TyCtxt<'tcx>,
     /// The function whose MIR body is being analyzed.
     def_id: DefId,
-    /// Unsafe checkpoints (call terminators, raw-ptr derefs, static mut accesses)
-    /// discovered in the function's MIR body.
-    checkpoints: Vec<Checkpoint<'tcx>>,
     /// Number of extra SCC postfix repetitions allowed (default 0).
     allow_repeat: usize,
 }
 
 impl<'tcx> PathExtractor<'tcx> {
-    /// Create a path extractor for `def_id` and the checkpoints found in that body.
+    /// Create a path extractor for `def_id`.
     ///
     /// Path extraction (SCC detection, enumeration, filtering) is deferred
     /// until [`run`] is called.
     ///
     /// `allow_repeat` controls how many times a repeated SCC postfix segment
     /// is allowed beyond the first occurrence. Default is 0 (no extra repeats).
-    pub(crate) fn new(
-        tcx: TyCtxt<'tcx>,
-        def_id: DefId,
-        checkpoints: Vec<Checkpoint<'tcx>>,
-        allow_repeat: usize,
-    ) -> Self {
+    pub(crate) fn new(tcx: TyCtxt<'tcx>, def_id: DefId, allow_repeat: usize) -> Self {
         Self {
             tcx,
             def_id,
-            checkpoints,
             allow_repeat,
         }
     }
 
     /// Run path extraction, consuming the extractor.
     ///
-    /// Returns a `Vec<CallGroup>` — one entry per unique callee DefId.
-    /// Checkpoints that target the same callee share a single `PathTree`,
-    /// avoiding redundant subtree construction.
-    pub(crate) fn run(self) -> Vec<CallGroup<'tcx>> {
+    /// Returns the whole-CFG [`PathTree`], with inlined callees and the
+    /// block-function metadata attached.
+    pub(crate) fn run(self) -> PathTree {
         let mut graph = PathGraph::new(self.tcx, self.def_id);
         graph.inline_callees();
         graph.find_scc();
@@ -96,35 +85,8 @@ impl<'tcx> PathExtractor<'tcx> {
             graph.inline_parents.clone(),
             graph.inlined_call_blocks.clone(),
         );
-        group_by_callee(self.checkpoints, &tree)
+        tree
     }
-}
-
-/// Checkpoints targeting the same callee, grouped for shared path analysis.
-///
-/// One `CallGroup` is produced per unique callee `DefId` in the function.
-/// All checkpoints in the group share the same `PathTree`; individual paths
-/// are filtered by `checkpoint.block` at query time.
-pub(crate) struct CallGroup<'tcx> {
-    /// Shared full-CFG prefix tree, built once for all checkpoints in the group.
-    pub tree: PathTree,
-    /// Checkpoints that target this callee.
-    pub checkpoints: Vec<Checkpoint<'tcx>>,
-}
-
-fn group_by_callee<'tcx>(
-    checkpoints: Vec<Checkpoint<'tcx>>,
-    tree: &PathTree,
-) -> Vec<CallGroup<'tcx>> {
-    let mut groups: FxHashMap<Option<DefId>, Vec<Checkpoint<'tcx>>> = FxHashMap::default();
-    for cs in checkpoints {
-        groups.entry(cs.callee).or_default().push(cs);
-    }
-    groups.into_values().map(|checkpoints| CallGroup {
-            tree: tree.clone(),
-            checkpoints,
-        })
-        .collect()
 }
 
 /// One finite, acyclic execution trace from function entry to a checkpoint,

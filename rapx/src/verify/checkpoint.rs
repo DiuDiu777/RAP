@@ -25,7 +25,7 @@ use rustc_middle::ty::TyKind;
 use rustc_middle::mir::CastKind;
 use std::collections::HashSet;
 
-use crate::helpers::mir_scan::{check_safety, place_has_raw_deref};
+use crate::helpers::mir_scan::{get_fn_safety, place_has_raw_deref};
 use crate::helpers::mir_utils::{dep_callee_def_id, pointee_ty, resolve_callee_impl};
 use crate::helpers::name::get_cleaned_def_path_name;
 /// Stable MIR location for a call terminator inside one function body.
@@ -173,7 +173,7 @@ pub fn collect_unsafe_callsites<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Vec<C
         #[cfg(rapx_ge_99)]
         let callee_args = callee_args.skip_binder();
 
-        if check_safety(tcx, *callee_def_id) != Safety::Unsafe {
+        if get_fn_safety(tcx, *callee_def_id) != Safety::Unsafe {
             continue;
         }
 

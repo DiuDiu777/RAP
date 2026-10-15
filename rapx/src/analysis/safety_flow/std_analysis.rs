@@ -55,7 +55,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
                         return true;
                     }
                     if chain.len() == 1
-                        && check_safety(self.tcx, def_id) == Safety::Unsafe {
+                        && get_fn_safety(self.tcx, def_id) == Safety::Unsafe {
                             return true;
                         }
                     false
@@ -93,7 +93,7 @@ impl<'tcx> SafetyFlowAnalysis<'tcx> {
         }
         match self.tcx.def_kind(def_id) {
             DefKind::Fn | DefKind::AssocFn => {
-                if check_safety(self.tcx, def_id) == Safety::Unsafe
+                if get_fn_safety(self.tcx, def_id) == Safety::Unsafe
                     && self.tcx.visibility(def_id) == Visibility::Public
                 {
                     unsafe_fn.insert(def_id);

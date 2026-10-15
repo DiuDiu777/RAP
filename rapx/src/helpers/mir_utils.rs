@@ -197,9 +197,31 @@ pub(crate) fn resolve_callee_impl<'tcx>(
     }
 }
 
+/// Resolve a call's `func` to its monomorphized [`Instance`], so a generic
+/// wrapper like `slice::get::<Range<usize>>` can be inlined with `I` substituted.
+pub(crate) fn resolve_callee_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    func: &Operand<'tcx>,
+) -> Option<rustc_middle::ty::Instance<'tcx>> {
+    let Operand::Constant(c) = func else {
+        return None;
+    };
+    let TyKind::FnDef(def_id, callee_args) = c.const_.ty().kind() else {
+        return None;
+    };
+    #[cfg(rapx_ge_99)]
+    let callee_args = callee_args.skip_binder();
+    let typing_env = TypingEnv::post_analysis(tcx, caller);
+    rustc_middle::ty::Instance::try_resolve(tcx, typing_env, *def_id, callee_args)
+        .ok()
+        .flatten()
+}
+
 /// Like [`dep_callee_def_id`], but resolves trait-method callees to their
-/// concrete impl so cross-crate `Deref`/`DerefMut` bodies — whose trait-method
-/// DefId has no available MIR — can still be inlined.
+/// concrete impl so a required trait method — whose trait DefId has no
+/// available MIR — can still be inlined against the dispatched impl's body
+/// (e.g. `SliceIndex::get`'s range check, `Deref::deref`'s transparent access).
 pub(crate) fn dep_callee_resolved_def_id<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: DefId,

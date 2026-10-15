@@ -8,10 +8,7 @@
 
 use crate::helpers::mir_utils;
 use crate::analysis::Analysis;
-use crate::analysis::path::{
-    PathTree,
-    graph::{PathEnumerator, PathGraph},
-};
+use crate::analysis::path::PathTree;
 use crate::cli::VerifyMode;
 use crate::helpers::fn_info::{
     FnKind, get_cons, get_mutated_fields, get_muts, get_type, returns_wrapped_self,
@@ -36,7 +33,7 @@ use super::{
     },
     engine::VerifyEngine,
     loop_sensitivity::{LoopSensitivityAnalyzer, RepeatStrategy},
-    path_extractor::{CallGroup, PathExtractor},
+    path_extractor::PathExtractor,
     report::{CheckResult, PropertyCheckResult, UnknownReason, VerificationReport},
     slicer::RelevantItem,
     target::{
@@ -59,16 +56,13 @@ use crate::verify::checkpoint::{Checkpoint, CheckpointLocation};
 ///    what entry assumptions (from `#[rapx::requires]`) and struct invariants
 ///    apply.
 ///
-/// 2. The **reachability model** (`path_info`) — SCC-aware acyclic paths
-///    from function entry to each checkpoint, produced by flattening the MIR
-///    control-flow graph with bounded loop unrolling.
+/// 2. The **reachability model** (`path_tree`) — SCC-aware acyclic whole-CFG
+///    paths from function entry (with inlined callees), produced by flattening
+///    the MIR control-flow graph with bounded loop unrolling.  Checkpoints and
+///    struct invariants slice their own prefixes from it.
 ///
 /// 3. The **verification engine** (`engine`) — a stateless pipeline shared
 ///    across all (checkpoint, path, property) triples.
-///
-/// 4. The **loop-unrolling budget** (`allow_repeat`) — caps how many extra
-///    iterations a loop body may appear beyond its first occurrence, trading
-///    completeness against path enumeration cost.
 ///
 /// Verification proceeds in two phases per driver instance:
 /// - [`verify_function`](Self::verify_function): checks safety properties at
@@ -79,9 +73,9 @@ use crate::verify::checkpoint::{Checkpoint, CheckpointLocation};
 pub(crate) struct VerifyDriver<'target, 'tcx> {
     tcx: TyCtxt<'tcx>,
     target: &'target FunctionTarget<'tcx>,
-    path_info: Vec<CallGroup<'tcx>>,
+    path_tree: PathTree,
+    checkpoints: Vec<Checkpoint<'tcx>>,
     engine: VerifyEngine<'tcx>,
-    allow_repeat: usize,
 }
 
 impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
@@ -90,14 +84,14 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         target: &'target FunctionTarget<'tcx>,
         allow_repeat: usize,
     ) -> Self {
-        let all_checkpoints: Vec<_> = target.all_checkpoints().into_iter().cloned().collect();
-        let path_info = PathExtractor::new(tcx, target.def_id, all_checkpoints, allow_repeat).run();
+        let checkpoints: Vec<_> = target.all_checkpoints().into_iter().cloned().collect();
+        let path_tree = PathExtractor::new(tcx, target.def_id, allow_repeat).run();
         Self {
             tcx,
             target,
-            path_info,
+            path_tree,
+            checkpoints,
             engine: VerifyEngine::new(tcx),
-            allow_repeat,
         }
     }
 
@@ -225,26 +219,24 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         self.target.properties_for_callsite(checkpoint)
     }
 
-    /// Iterate over checkpoints together with their shared path tree and properties.
+    /// Iterate over checkpoints together with the shared path tree and properties.
     pub(crate) fn iter_callsite_checks(
         &self,
     ) -> impl Iterator<Item = CheckpointCheckView<'_, 'target, 'tcx>> + '_ {
         let mut checkpoint_index = 0usize;
-        self.path_info.iter().flat_map(move |group| {
-            group.checkpoints.iter().filter_map(move |checkpoint| {
-                let properties = self.properties_for_callsite(checkpoint);
-                if properties.is_empty() {
-                    return None;
-                }
-                let view = CheckpointCheckView {
-                    checkpoint_index,
-                    checkpoint,
-                    tree: &group.tree,
-                    properties,
-                };
-                checkpoint_index += 1;
-                Some(view)
-            })
+        self.checkpoints.iter().filter_map(move |checkpoint| {
+            let properties = self.properties_for_callsite(checkpoint);
+            if properties.is_empty() {
+                return None;
+            }
+            let view = CheckpointCheckView {
+                checkpoint_index,
+                checkpoint,
+                tree: &self.path_tree,
+                properties,
+            };
+            checkpoint_index += 1;
+            Some(view)
         })
     }
 
@@ -252,8 +244,8 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
     ///
     /// For constructors (functions returning `Self`), paths are filtered to
     /// return blocks to avoid unwinding paths where the struct may not be
-    /// fully initialised. For methods, all whole-CFG paths from
-    /// `PathGraph::enumerate_paths_repeat` are used directly.
+    /// fully initialised. For methods, the invariant is re-proved at every
+    /// exit block of the shared whole-CFG path tree.
     pub(crate) fn verify_struct_invariants(&self) -> VerificationReport<'tcx> {
         let mut report = VerificationReport::new(self.target.def_id);
         let invariants = &self.target.struct_invariants;
@@ -426,11 +418,6 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         is_constructor: bool,
         check_unwind: bool,
     ) -> FxHashMap<CheckpointLocation, PathTree> {
-        let mut pg = PathGraph::new(self.tcx, self.target.def_id);
-        pg.find_scc();
-        let mut enumerator = PathEnumerator::new(&pg);
-        let all_paths = enumerator.enumerate_paths_repeat(self.allow_repeat);
-
         let kind_label = if is_constructor {
             "constructor"
         } else {
@@ -438,7 +425,7 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         };
         rap_debug!(
             "[rapx::verify] struct invariant ({kind_label}): {} whole-cfg path(s) for {}",
-            all_paths.len(),
+            self.path_tree.len(),
             self.tcx.def_path_str(self.target.def_id),
         );
 
@@ -451,52 +438,38 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
                     caller: self.target.def_id,
                     block: return_block,
                 };
-                let mut tree = PathTree::new();
-                let _ = all_paths.walk_prefixes(
-                    return_block.as_usize(),
-                    &mut |prefix: &[usize]| -> bool {
-                        if tree.len() >= crate::limit::path_limit() {
-                            return false;
-                        }
-                        tree.insert(prefix);
-                        true
-                    },
-                );
+                let tree = self.path_tree.subtree_to(return_block.as_usize());
                 if !tree.is_empty() {
                     trees_by_checkpoint.insert(checkpoint, tree);
                 }
             }
         } else {
-            // Method: re-prove the invariant at *every* exit block of the CFG —
-            // each complete path's last block.  This covers both the normal
-            // `Return` blocks and the panic-unwind exits (an explicit `resume`,
-            // or a diverging `unwind continue` call such as `panic!`).  On a
-            // panic path the *return value* is never initialized, so its
-            // invariants are filtered out in `run_invariant_checks`; the
-            // *receiver's* invariant must still hold there — the borrow ends on
-            // unwind and the owner drops the pointee.
-            let mut exit_blocks: FxHashSet<BasicBlock> = FxHashSet::default();
-            for path in all_paths.to_vecs() {
+            let mut exit_blocks: FxHashSet<usize> = FxHashSet::default();
+            for path in self.path_tree.to_vecs() {
                 if let Some(&last) = path.last() {
-                    exit_blocks.insert(BasicBlock::from_usize(last));
+                    exit_blocks.insert(last);
                 }
             }
             for exit_block in exit_blocks {
+                // Only the *caller's* own exit blocks terminate the method.
+                // Inlined callees' diverging blocks (e.g. an `UnwindResume`
+                // whose caller unwind is `Terminate`) also end whole-CFG paths,
+                // but the struct invariant is re-proved at the method's exits,
+                // not deep inside an inlined callee. The caller is the root of
+                // the inlined CFG, so its global block index equals its local
+                // MIR block index and the checkpoint location stays in the
+                // caller's local namespace.
+                let Some((def_id, local)) = self.path_tree.block_fn_of(exit_block) else {
+                    continue;
+                };
+                if def_id != self.target.def_id {
+                    continue;
+                }
                 let checkpoint = CheckpointLocation {
                     caller: self.target.def_id,
-                    block: exit_block,
+                    block: BasicBlock::from_usize(local),
                 };
-                let mut tree = PathTree::new();
-                let _ = all_paths.walk_prefixes(
-                    exit_block.as_usize(),
-                    &mut |prefix: &[usize]| -> bool {
-                        if tree.len() >= crate::limit::path_limit() {
-                            return false;
-                        }
-                        tree.insert(prefix);
-                        true
-                    },
-                );
+                let tree = self.path_tree.subtree_to(exit_block);
                 if !tree.is_empty() {
                     trees_by_checkpoint.insert(checkpoint, tree);
                 }

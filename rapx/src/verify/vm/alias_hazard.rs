@@ -25,7 +25,7 @@ use crate::analysis::alias::{FieldOrigin, resolve_any_field_origin, resolve_self
 use crate::helpers::fn_info::is_externally_reachable;
 use crate::{
     helpers::def_use::{PlaceBaseKey, PlaceKey},
-    helpers::mir_scan::check_safety,
+    helpers::mir_scan::get_fn_safety,
 };
 
 // Re-export the mir_utils helpers still consumed by `vm/alias.rs`.
@@ -328,7 +328,7 @@ pub(super) fn escaped_self_field_violation(
             if !matches!(tcx.def_kind(*item), DefKind::Fn | DefKind::AssocFn) {
                 continue;
             }
-            if check_safety(tcx, *item) == Safety::Unsafe {
+            if get_fn_safety(tcx, *item) == Safety::Unsafe {
                 continue;
             }
             let Some(assoc) = tcx.opt_associated_item(*item) else {
@@ -354,7 +354,7 @@ pub(super) fn escaped_self_field_violation(
         if fn_def_id == current {
             continue;
         }
-        if check_safety(tcx, fn_def_id) == Safety::Unsafe {
+        if get_fn_safety(tcx, fn_def_id) == Safety::Unsafe {
             continue;
         }
         if !tcx.is_mir_available(fn_def_id) {

@@ -9,7 +9,7 @@ use syn::Expr;
 
 use crate::def_id;
 
-pub use super::mir_scan::check_safety;
+pub use super::mir_scan::get_fn_safety;
 pub use super::name::get_cleaned_def_path_name;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
@@ -293,7 +293,7 @@ pub fn get_muts(tcx: TyCtxt<'_>, def_id: DefId) -> Vec<DefId> {
 }
 
 pub fn append_fn_with_types(tcx: TyCtxt, def_id: DefId) -> FnInfo {
-    FnInfo::new(def_id, check_safety(tcx, def_id), get_type(tcx, def_id))
+    FnInfo::new(def_id, get_fn_safety(tcx, def_id), get_type(tcx, def_id))
 }
 
 pub fn get_ptr_deref_dummy_def_id(tcx: TyCtxt<'_>) -> Option<DefId> {
