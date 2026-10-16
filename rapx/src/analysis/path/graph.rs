@@ -75,10 +75,9 @@ pub struct BlockFacts {
     pub expr: FxHashMap<usize, Expr>,
     /// Set of locals that are provably non-null (e.g. assigned from
     /// `Box::into_raw`).  Used for path reachability pruning.
-    pub known_nonnull_locals: FxHashSet<usize>,
+    pub nonnull_locals: FxHashSet<usize>,
 }
-/// Records the origin of a boolean temporary produced by a binary
-/// comparison during guard-clause evaluation.
+/// The operator and operands of a binary comparison that produced a local.
 #[derive(Clone, Debug)]
 pub struct ComparisonSource {
     pub op: rustc_middle::mir::BinOp,
@@ -473,7 +472,7 @@ fn build_function_info<'tcx>(
             } = terminator.kind
                 && let Some(did) = mir_utils::dep_callee_def_id(func) {
                     if def_id::known_nonnull_fns().contains(&did) {
-                        info.known_nonnull_locals
+                        info.nonnull_locals
                             .insert(local_base + destination.local.as_usize());
                     }
                     if def_id::null_ptr_fns().contains(&did) {
@@ -1059,7 +1058,7 @@ impl<'tcx> PathGraph<'tcx> {
                 }
                 cs.consts.remove(local);
             }
-            for local in &info.known_nonnull_locals {
+            for local in &info.nonnull_locals {
                 cs.consts.insert(*local, usize::MAX);
             }
             for local in &info.assigned_locals {
@@ -1088,7 +1087,7 @@ impl<'tcx> PathGraph<'tcx> {
                 if let Some(block_info) = self.block_info.get(cur) {
                     if let Some(&val) = block_info.constants.get(&local) {
                         cs.consts.insert(local, val);
-                    } else if block_info.known_nonnull_locals.contains(&local) {
+                    } else if block_info.nonnull_locals.contains(&local) {
                         cs.consts.insert(local, usize::MAX);
                     } else {
                         cs.consts.remove(&local);
