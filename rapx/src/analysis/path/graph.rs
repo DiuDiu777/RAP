@@ -64,18 +64,12 @@ pub struct SccPath {
 }
 
 /// Per-block facts collected during construction for path reachability
-/// analysis: which locals are assigned, their concrete constants, copy sources,
-/// defining expressions, and non-null facts.
+/// analysis: which locals are assigned, and the origin of each local's value.
 #[derive(Clone, Debug, Default)]
 pub struct BlockFacts {
     pub assigned_locals: Vec<usize>,
-    pub constants: FxHashMap<usize, usize>,
-    pub constraint_copies: FxHashMap<usize, usize>,
-    /// Maps a local to the single expression that defined its value.
-    pub expr: FxHashMap<usize, Expr>,
-    /// Set of locals that are provably non-null (e.g. assigned from
-    /// `Box::into_raw`).  Used for path reachability pruning.
-    pub nonnull_locals: FxHashSet<usize>,
+    /// Maps a local to the origin of its value.
+    pub origin: FxHashMap<usize, LocalOrigin>,
 }
 /// The operator and operands of a binary comparison that produced a local.
 #[derive(Clone, Debug)]
@@ -107,6 +101,38 @@ pub enum Expr {
     And { lhs: usize, rhs: usize },
     /// `dest = lhs <op> rhs` (`Lt`/`Le`/`Gt`/`Ge`/`Eq`/`Ne`).
     Cmp(ComparisonSource),
+}
+
+/// The origin of a local's value: a constant, a copy of another local, an
+/// expression result, or a provably non-null pointer.
+#[derive(Clone, Debug)]
+pub enum LocalOrigin {
+    /// `dest` is the given constant value.
+    Const(usize),
+    /// `dest` is a copy of another local.
+    Copy(usize),
+    /// `dest` is an expression result.
+    Expr(Expr),
+    /// `dest` is a provably non-null pointer.
+    NonNull,
+}
+
+impl LocalOrigin {
+    /// The copied-from local, if this is a copy origin.
+    fn as_copy(&self) -> Option<&usize> {
+        match self {
+            LocalOrigin::Copy(src) => Some(src),
+            _ => None,
+        }
+    }
+
+    /// The constant value, if this is a constant origin.
+    fn as_const(&self) -> Option<&usize> {
+        match self {
+            LocalOrigin::Const(val) => Some(val),
+            _ => None,
+        }
+    }
 }
 
 /// Encode a `(local, field_index)` pair into a single `usize`.
@@ -159,7 +185,7 @@ pub(crate) struct ConstraintSet {
     lengths: FxHashMap<usize, (usize, usize)>,
 }
 
-/// CFG augmented with per-block constant info and discriminant metadata
+/// CFG augmented with per-block facts and discriminant metadata
 /// for path reachability analysis.
 ///
 /// `PathGraph` wraps a `ControlFlowGraph` and adds block-indexed data
@@ -267,7 +293,7 @@ fn build_function_info<'tcx>(
                             _ => None,
                         };
                         if let Some(val) = val {
-                            info.constants.insert(dest, val);
+                            info.origin.insert(dest, LocalOrigin::Const(val));
                         }
                     }
                     Rvalue::Use(Operand::Copy(src) | Operand::Move(src), ..) => {
@@ -276,7 +302,7 @@ fn build_function_info<'tcx>(
                             let encoded = encode_aggregate_field(src_local, field_proj);
                             field_projection_source.insert(dest, encoded);
                         }
-                        info.constraint_copies.insert(dest, src_local);
+                        info.origin.insert(dest, LocalOrigin::Copy(src_local));
                     }
                     Rvalue::Discriminant(rv_place) => {
                         let src_local = local_base + rv_place.local.as_usize();
@@ -307,7 +333,7 @@ fn build_function_info<'tcx>(
                             _ => None,
                         };
                         if let Some(discr) = discr {
-                            info.constants.insert(dest, discr);
+                            info.origin.insert(dest, LocalOrigin::Const(discr));
                             if let std::collections::hash_map::Entry::Vacant(e) = disc_info.variant_count_of.entry(dest) {
                                 let dest_ty = body.local_decls[place.local].ty;
                                 if let TyKind::Adt(adt_def, _) = dest_ty.kind() {
@@ -345,7 +371,7 @@ fn build_function_info<'tcx>(
                                 _ => None,
                             };
                             if let Some(rhs_kind) = rhs_kind {
-                                info.expr.insert(dest, Expr::Add { lhs: lhs_local, rhs: rhs_kind });
+                                info.origin.insert(dest, LocalOrigin::Expr(Expr::Add { lhs: lhs_local, rhs: rhs_kind }));
                             }
                         }
                     }
@@ -394,16 +420,16 @@ fn build_function_info<'tcx>(
                                 if let Rhs::Local(rhs_local) = rhs_kind
                                     && matches!(body.local_decls[place.local].ty.kind(), TyKind::Bool)
                                 {
-                                    info.expr.insert(dest, Expr::And { lhs: lhs_local, rhs: rhs_local });
+                                    info.origin.insert(dest, LocalOrigin::Expr(Expr::And { lhs: lhs_local, rhs: rhs_local }));
                                 }
                             } else {
-                                info.expr.insert(
+                                info.origin.insert(
                                     dest,
-                                    Expr::Cmp(ComparisonSource {
+                                    LocalOrigin::Expr(Expr::Cmp(ComparisonSource {
                                         op: *op,
                                         lhs_local,
                                         rhs: rhs_kind,
-                                    }),
+                                    })),
                                 );
                             }
                         }
@@ -426,7 +452,7 @@ fn build_function_info<'tcx>(
                             };
                             if let Some(divisor) = divisor
                                 && divisor != 0 {
-                                    info.expr.insert(dest, Expr::Rem { src: lhs_local, divisor });
+                                    info.origin.insert(dest, LocalOrigin::Expr(Expr::Rem { src: lhs_local, divisor }));
                                 }
                         }
                     }
@@ -434,8 +460,8 @@ fn build_function_info<'tcx>(
                         if matches!(unop, UnOp::Not)
                             && let Operand::Copy(src) | Operand::Move(src) = operand
                         {
-                            info.expr
-                                .insert(dest, Expr::Not { src: local_base + src.local.as_usize() });
+                            info.origin
+                                .insert(dest, LocalOrigin::Expr(Expr::Not { src: local_base + src.local.as_usize() }));
                         }
                     }
                     Rvalue::Cast(_, operand, _) => {
@@ -472,12 +498,12 @@ fn build_function_info<'tcx>(
             } = terminator.kind
                 && let Some(did) = mir_utils::dep_callee_def_id(func) {
                     if def_id::known_nonnull_fns().contains(&did) {
-                        info.nonnull_locals
-                            .insert(local_base + destination.local.as_usize());
+                        info.origin
+                            .insert(local_base + destination.local.as_usize(), LocalOrigin::NonNull);
                     }
                     if def_id::null_ptr_fns().contains(&did) {
-                        info.constants
-                            .insert(local_base + destination.local.as_usize(), 0);
+                        info.origin
+                            .insert(local_base + destination.local.as_usize(), LocalOrigin::Const(0));
                     }
                 }
 
@@ -1041,7 +1067,7 @@ impl<'tcx> PathGraph<'tcx> {
                 cs.bounds.remove(&self.canonical_field(*local));
                 cs.lengths.remove(local);
                 cs.lengths.remove(&self.canonical_field(*local));
-                if let Some(&src) = info.constraint_copies.get(local) {
+                if let Some(&src) = info.origin.get(local).and_then(LocalOrigin::as_copy) {
                     if let Some(val) = self.resolve_local_value(src, cs) {
                         cs.consts.insert(*local, val);
                         continue;
@@ -1052,14 +1078,16 @@ impl<'tcx> PathGraph<'tcx> {
                         continue;
                     }
                 }
-                if let Some(&val) = info.constants.get(local) {
+                if let Some(&val) = info.origin.get(local).and_then(LocalOrigin::as_const) {
                     cs.consts.insert(*local, val);
                     continue;
                 }
                 cs.consts.remove(local);
             }
-            for local in &info.nonnull_locals {
-                cs.consts.insert(*local, usize::MAX);
+            for (local, origin) in &info.origin {
+                if matches!(origin, LocalOrigin::NonNull) {
+                    cs.consts.insert(*local, usize::MAX);
+                }
             }
             for local in &info.assigned_locals {
                 self.derive_increment_bound(*local, cs);
@@ -1085,9 +1113,9 @@ impl<'tcx> PathGraph<'tcx> {
                 cs.bounds.remove(&local);
                 cs.lengths.remove(&local);
                 if let Some(block_info) = self.block_info.get(cur) {
-                    if let Some(&val) = block_info.constants.get(&local) {
+                    if let Some(&val) = block_info.origin.get(&local).and_then(LocalOrigin::as_const) {
                         cs.consts.insert(local, val);
-                    } else if block_info.nonnull_locals.contains(&local) {
+                    } else if matches!(block_info.origin.get(&local), Some(LocalOrigin::NonNull)) {
                         cs.consts.insert(local, usize::MAX);
                     } else {
                         cs.consts.remove(&local);
@@ -1273,10 +1301,10 @@ impl<'tcx> PathGraph<'tcx> {
             return;
         };
         let cond_local = self.remap_local(self.cfg.block(cur).def_id, p.local.as_usize());
-        let Some(Expr::Cmp(cmp)) = self
+        let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = self
             .block_info
             .iter()
-            .find_map(|info| info.expr.get(&cond_local))
+            .find_map(|info| info.origin.get(&cond_local))
         else {
             return;
         };
@@ -1375,7 +1403,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
             let mut next: Option<usize> = None;
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     next = Some(src);
                     break;
                 }
@@ -1400,7 +1428,7 @@ impl<'tcx> PathGraph<'tcx> {
                 return Some(len);
             }
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     stack.push(src);
                 }
             }
@@ -1435,7 +1463,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
             let mut next: Option<usize> = None;
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     next = Some(src);
                     break;
                 }
@@ -1446,7 +1474,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
         }
         for info in &self.block_info {
-            if let Some(Expr::Add { lhs, rhs }) = info.expr.get(&cur) {
+            if let Some(LocalOrigin::Expr(Expr::Add { lhs, rhs })) = info.origin.get(&cur) {
                 return match rhs {
                     Rhs::Local(r) => {
                         let (r_base, r_k) = self.resolve_rhs_sum(*r);
@@ -1459,7 +1487,7 @@ impl<'tcx> PathGraph<'tcx> {
         Some((cur, usize::MAX, 0))
     }
 
-    /// Resolve the `rhs` of a variable sum to `(base, k)` (`rhs == base + k`),
+    /// Resolve the `rhs` of an add to `(base, k)` (`rhs == base + k`),
     /// following field projections and copies to the underlying increment.
     fn resolve_rhs_sum(&self, rhs: usize) -> (usize, usize) {
         let mut cur = rhs;
@@ -1476,7 +1504,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
             let mut next: Option<usize> = None;
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     next = Some(src);
                     break;
                 }
@@ -1487,7 +1515,7 @@ impl<'tcx> PathGraph<'tcx> {
             }
         }
         for info in &self.block_info {
-            if let Some(Expr::Add { lhs, rhs: Rhs::Const(k) }) = info.expr.get(&cur) {
+            if let Some(LocalOrigin::Expr(Expr::Add { lhs, rhs: Rhs::Const(k) })) = info.origin.get(&cur) {
                 return (*lhs, *k);
             }
         }
@@ -1548,12 +1576,12 @@ impl<'tcx> PathGraph<'tcx> {
             return Some(val);
         }
         for info in &self.block_info {
-            if let Some(&val) = info.constants.get(&local)
+            if let Some(&val) = info.origin.get(&local).and_then(LocalOrigin::as_const)
                 && val <= 1
             {
                 return Some(val);
             }
-            if let Some(Expr::Cmp(cmp)) = info.expr.get(&local)
+            if let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&local)
                 && matches!(cmp.op, BinOp::Eq | BinOp::Ne) {
                     let is_eq = matches!(cmp.op, BinOp::Eq);
                     if let Rhs::Const(rhs_val) = cmp.rhs {
@@ -1605,13 +1633,13 @@ impl<'tcx> PathGraph<'tcx> {
                 return Some(if negated { 1 - v } else { v });
             }
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     stack.push((src, negated));
                 }
-                if let Some(Expr::Not { src }) = info.expr.get(&cur) {
+                if let Some(LocalOrigin::Expr(Expr::Not { src })) = info.origin.get(&cur) {
                     stack.push((*src, !negated));
                 }
-                if let Some(Expr::And { lhs, rhs }) = info.expr.get(&cur) {
+                if let Some(LocalOrigin::Expr(Expr::And { lhs, rhs })) = info.origin.get(&cur) {
                     let a = self.resolve_simple_bool(*lhs, cs);
                     let b = self.resolve_simple_bool(*rhs, cs);
                     if let (Some(a), Some(b)) = (a, b) {
@@ -1721,7 +1749,7 @@ impl<'tcx> PathGraph<'tcx> {
                 // zero-capacity path) is pruned.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
                     && matches!(
                         (cmp.op, cmp.rhs),
                         (BinOp::Gt, Rhs::Const(0)) | (BinOp::Ge, Rhs::Const(1)) | (BinOp::Ne, Rhs::Const(0))
@@ -1735,7 +1763,7 @@ impl<'tcx> PathGraph<'tcx> {
                 // (e.g. `_X = Ne(ptr, 0)`) when we know whether `ptr` is null.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
                     && matches!(cmp.op, BinOp::Ne | BinOp::Eq)
                 {
                     let is_ne = matches!(cmp.op, BinOp::Ne);
@@ -1798,11 +1826,11 @@ impl<'tcx> PathGraph<'tcx> {
                 // reasoning (handles Lt/Le/Gt/Ge with fully known operands).
                 // Only filter when the discriminant resolves to a definite value
                 // from a comparison with BOTH operands as known constants
-                // (not derived via increments, which may be imprecise across
+                // (not derived via add increments, which may be imprecise across
                 // SCC boundaries).
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
                     && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
                 {
                     // Resolve LHS directly from constants (no increment chains)
@@ -1861,7 +1889,7 @@ impl<'tcx> PathGraph<'tcx> {
                 // infeasible `i >= bytes.len()` branch.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(Expr::Cmp(cmp)) = info.expr.get(&discr_local)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
                     && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
                 {
                     let taken_true = next == base + resolve_switch_target(targets, 1);
@@ -1969,7 +1997,7 @@ impl<'tcx> PathGraph<'tcx> {
             return;
         };
         let mut current = local;
-        while let Some(&src) = info.constraint_copies.get(&current) {
+        while let Some(&src) = info.origin.get(&current).and_then(LocalOrigin::as_copy) {
             if current == src {
                 break;
             }
@@ -1998,10 +2026,10 @@ impl<'tcx> PathGraph<'tcx> {
                     return Some(val);
                 }
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     stack.push(src);
                 }
-                if let Some(&val) = info.constants.get(&cur) {
+                if let Some(&val) = info.origin.get(&cur).and_then(LocalOrigin::as_const) {
                     return Some(val);
                 }
             }
@@ -2034,25 +2062,25 @@ impl<'tcx> PathGraph<'tcx> {
             }
             // Follow constraint copies in any block (per-block metadata).
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     stack.push((src, offset));
                 }
-                if let Some(&val) = info.constants.get(&cur) {
+                if let Some(&val) = info.origin.get(&cur).and_then(LocalOrigin::as_const) {
                     if offset >= 0 {
                         return Some(val + offset as usize);
                     } else {
                         return val.checked_sub((-offset) as usize);
                     }
                 }
-                // Follow increments: if cur = src + incr, the effective value
+                // Follow a constant add: if cur = src + incr, the effective value
                 // of cur is value_of(src) + incr + offset.
-                if let Some(Expr::Add { lhs, rhs: Rhs::Const(incr_amt) }) = info.expr.get(&cur)
+                if let Some(LocalOrigin::Expr(Expr::Add { lhs, rhs: Rhs::Const(incr_amt) })) = info.origin.get(&cur)
                 {
                     stack.push((*lhs, offset + *incr_amt as isize));
                 }
                 // Follow remainder: cur = rem_src % rem_div.
                 // Resolve rem_src recursively, compute remainder, then apply offset.
-                if let Some(Expr::Rem { src: rem_src, divisor: rem_div }) = info.expr.get(&cur)
+                if let Some(LocalOrigin::Expr(Expr::Rem { src: rem_src, divisor: rem_div })) = info.origin.get(&cur)
                     && let Some(src_val) = self.resolve_local_value(*rem_src, cs) {
                         let rem = src_val % *rem_div;
                         let result = if offset >= 0 {
@@ -2152,7 +2180,7 @@ impl<'tcx> PathGraph<'tcx> {
                 return true;
             }
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     stack.push(src);
                 }
             }
@@ -2177,7 +2205,7 @@ impl<'tcx> PathGraph<'tcx> {
                 return true;
             }
             for info in &self.block_info {
-                if let Some(&src) = info.constraint_copies.get(&cur) {
+                if let Some(&src) = info.origin.get(&cur).and_then(LocalOrigin::as_copy) {
                     stack.push(src);
                 }
             }
@@ -2246,7 +2274,7 @@ impl ConstraintHash {
         for &block in path.iter() {
             if let Some(info) = graph.block_info.get(block) {
                 for local in &info.assigned_locals {
-                    if let Some(&src) = info.constraint_copies.get(local) {
+                    if let Some(&src) = info.origin.get(local).and_then(LocalOrigin::as_copy) {
                         if let Some(&src_val) = constraints.consts.get(&src) {
                             constraints.consts.insert(*local, src_val);
                             continue;
@@ -2257,7 +2285,7 @@ impl ConstraintHash {
                             continue;
                         }
                     }
-                    if let Some(&val) = info.constants.get(local) {
+                    if let Some(&val) = info.origin.get(local).and_then(LocalOrigin::as_const) {
                         constraints.consts.insert(*local, val);
                         continue;
                     }
