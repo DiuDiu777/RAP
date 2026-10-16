@@ -3,7 +3,6 @@ use crate::helpers::mir_utils::{dep_callee_def_id, instance_def_id, resolve_call
 use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
-use std::collections::HashSet;
 
 pub struct CallGraphVisitor<'b, 'tcx> {
     tcx: TyCtxt<'tcx>,
@@ -66,20 +65,7 @@ impl<'b, 'tcx> CallGraphVisitor<'b, 'tcx> {
         }
 
         // Step 2: Find all impls of the virtual function;
-        let mut candidates: HashSet<DefId> = HashSet::new();
-        if let Some(trait_def_id) = self.tcx.trait_of_assoc(stub_def_id) {
-            rap_debug!(
-                "[Callgraph] Virtual fn {:?} belongs to trait {:?}",
-                stub_def_id,
-                trait_def_id
-            );
-            for impl_id in self.tcx.all_impls(trait_def_id) {
-                let impl_map = self.tcx.impl_item_implementor_ids(impl_id);
-                if let Some(candidate_def_id) = impl_map.get(&stub_def_id) {
-                    candidates.insert(*candidate_def_id);
-                }
-            }
-        }
+        let candidates = crate::helpers::mir_utils::trait_impl_candidates(self.tcx, stub_def_id);
         rap_debug!(
             "[Callgraph] Implementors of {:?}: {:?}",
             stub_def_id,

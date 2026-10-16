@@ -70,6 +70,28 @@ pub(crate) const LOCAL_INLINE_BLOCK_LIMIT: usize = 32;
 /// through the Rust call stack, so this caps nesting.
 pub(crate) const MAX_INLINE_DEPTH: usize = 5;
 
+/// Maximum number of trait impls inlined for a virtual (trait-object) call.
+/// Overridable via the `--trait-impl-limit` CLI flag. A call whose trait has
+/// more impls than this is truncated to the first `n` (an under-approximation).
+pub(crate) const TRAIT_IMPL_LIMIT: usize = 3;
+
+/// Runtime override for [`TRAIT_IMPL_LIMIT`], set from `--trait-impl-limit`.
+/// `0` means "not overridden" (the default above applies).
+static TRAIT_IMPL_LIMIT_OVERRIDE: AtomicUsize = AtomicUsize::new(0);
+
+/// Set the `--trait-impl-limit` override; `0` restores [`TRAIT_IMPL_LIMIT`].
+pub(crate) fn set_trait_impl_limit(n: usize) {
+    TRAIT_IMPL_LIMIT_OVERRIDE.store(n, Ordering::Relaxed);
+}
+
+/// The effective trait-impl cap (override, or [`TRAIT_IMPL_LIMIT`]).
+pub(crate) fn trait_impl_limit() -> usize {
+    match TRAIT_IMPL_LIMIT_OVERRIDE.load(Ordering::Relaxed) {
+        0 => TRAIT_IMPL_LIMIT,
+        n => n,
+    }
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Loop sensitivity / postfix repeat
 // ─────────────────────────────────────────────────────────────────────────────

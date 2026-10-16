@@ -260,6 +260,22 @@ pub(crate) fn instance_def_id<'tcx>(
     (def_id, is_virtual)
 }
 
+/// Enumerate the concrete impl methods that could be dispatched for a trait
+/// method (the set of targets behind a trait-object / virtual call). Each
+/// returned `DefId` is an impl's override of `method_def_id`.
+pub(crate) fn trait_impl_candidates(tcx: TyCtxt<'_>, method_def_id: DefId) -> Vec<DefId> {
+    let mut candidates = Vec::new();
+    if let Some(trait_def_id) = tcx.trait_of_assoc(method_def_id) {
+        for impl_id in tcx.all_impls(trait_def_id) {
+            let impl_map = tcx.impl_item_implementor_ids(impl_id);
+            if let Some(candidate_def_id) = impl_map.get(&method_def_id) {
+                candidates.push(*candidate_def_id);
+            }
+        }
+    }
+    candidates
+}
+
 /// Resolve a trait-method callee to its concrete impl `DefId`. Returns `None`
 /// when it is not a trait method or has no distinct concrete target (e.g. still
 /// generic/virtual).

@@ -760,6 +760,28 @@ fn trait_unsound_verify() {
     assert_contain(&output, "verification: deferred");
 }
 
+// ================ Trait Object Inline =============
+#[test]
+fn trait_obj_inline_default_limit() {
+    let output = run_with_args("verify_units/trait_obj_inline_1", CMD_VERIFY_TARGETED);
+    // Single-implementor trait: inlined, so the sole impl's `dangling()` pointer
+    // proves NonNull.
+    assert_function_result(&output, "single_impl_sound", "SOUND");
+    // Multi-implementor trait truncated to the first three impls (all dangling),
+    // so NonNull is proved; the null-returning `Dd` is dropped.
+    assert_function_result(&output, "multi_impl_truncated", "SOUND");
+}
+
+#[test]
+fn trait_obj_inline_limit_four() {
+    let output = run_with_args(
+        "verify_units/trait_obj_inline_1",
+        &["verify", "--mode", "targeted", "--trait-impl-limit", "4"],
+    );
+    // All four impls inlined: `Dd`'s null pointer now fails NonNull.
+    assert_function_result(&output, "multi_impl_truncated", "UNSOUND");
+}
+
 // ================ Module/Crate Filter Tests =============
 #[test]
 fn filter_by_module() {

@@ -737,6 +737,35 @@ impl<'tcx> PathGraph<'tcx> {
                 } else {
                     base_callee
                 };
+                // A trait-method call that cannot be monomorphized to a single
+                // impl — a trait object (`&dyn Bound`) or a still-generic
+                // `T: Bound` — enumerates every impl and inlines up to
+                // `trait_impl_limit` of them, truncating the rest.
+                if is_trait_method {
+                    let cannot_monomorphize = match mir_utils::resolve_callee_instance(
+                        tcx,
+                        self.cfg.block(i).def_id,
+                        func,
+                    ) {
+                        None => true,
+                        Some(inst) => mir_utils::instance_def_id(tcx, inst).1,
+                    };
+                    if cannot_monomorphize {
+                        if !crate::verify::call_summary::effects::is_modeled(Some(base_callee)) {
+                            // Inline up to `trait_impl_limit` impls; any remaining
+                            // impls are dropped (an under-approximation that may
+                            // miss a violating impl).
+                            let candidates = mir_utils::trait_impl_candidates(tcx, base_callee);
+                            for cand in candidates.into_iter().take(crate::limit::trait_impl_limit())
+                            {
+                                if tcx.is_mir_available(cand) && !expanded.contains(&cand) {
+                                    pending.push((i, cand, None));
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                }
                 // Monomorphize the generic `slice::get`/`get_mut` wrapper so its
                 // `SliceIndex::get` delegation resolves.
                 let instance = if cross_crate

@@ -71,6 +71,10 @@ pub struct VerifyArgs {
     /// path coverage (paths past the cap are treated as proved).
     #[arg(long)]
     pub path_limit: Option<usize>,
+    /// Cap on the number of trait impls inlined for a virtual (trait-object)
+    /// call; a trait with more impls is truncated to the first `n`. Defaults to 3.
+    #[arg(long)]
+    pub trait_impl_limit: Option<usize>,
     /// Print all contract resolutions for every verification target: each
     /// unsafe callee with its resolved contracts, and the caller's own
     /// contracts (expanded form).  Useful for debugging missing or unexpected
