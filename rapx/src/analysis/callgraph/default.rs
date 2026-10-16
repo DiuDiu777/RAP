@@ -119,7 +119,7 @@ impl<'tcx> CallGraph<'tcx> {
     }
 
     /// Add a function call to the call graph.
-    pub fn add_funciton_call(
+    pub fn add_function_call(
         &mut self,
         caller_id: DefId,
         callee_id: DefId,

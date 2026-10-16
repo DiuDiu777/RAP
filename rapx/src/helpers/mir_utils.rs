@@ -8,6 +8,8 @@ use rustc_hir::{
     ItemKind,
     def_id::{DefId, LocalDefId},
 };
+#[cfg(rapx_ge_99)]
+use rustc_middle::ty::ShimKind;
 #[cfg(rapx_const_ext)]
 use rustc_middle::ty::consts::ConstExt;
 use rustc_middle::{
@@ -17,8 +19,8 @@ use rustc_middle::{
         TerminatorKind,
     },
     ty::{
-        ConstKind, FieldDef, GenericArgKind, GenericArgsRef, PseudoCanonicalInput, Ty, TyCtxt,
-        TyKind, TypingEnv,
+        ConstKind, FieldDef, GenericArgKind, GenericArgsRef, Instance, InstanceKind,
+        PseudoCanonicalInput, Ty, TyCtxt, TyKind, TypingEnv,
     },
 };
 use rustc_span::{DUMMY_SP, Symbol};
@@ -28,8 +30,8 @@ use std::collections::HashSet;
 #[cfg(not(rapx_has_skip_norm_wip))]
 use crate::compat::SkipNormWip;
 
-use crate::def_id;
 use crate::compat::FxHashMap;
+use crate::def_id;
 
 use super::def_use::PlaceKey;
 
@@ -168,11 +170,99 @@ pub(crate) fn is_range_type(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         || tcx.is_lang_item(def_id, LangItem::RangeFull)
 }
 
-/// Resolve a (possibly trait-method) callee to the concrete impl method that
-/// will actually be dispatched, given the caller context and the callee's
-/// generic arguments. Returns `None` when the callee cannot be resolved to a
-/// distinct concrete item (e.g. still generic/virtual), or is not a trait
-/// method at all (callers should then keep the original DefId).
+/// Resolve a `FnDef(def_id, args)` (already `skip_binder`d by the caller) to
+/// its monomorphized [`Instance`] in `caller`'s post-analysis typing env.
+pub(crate) fn resolve_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    caller: DefId,
+    def_id: DefId,
+    args: GenericArgsRef<'tcx>,
+) -> Option<Instance<'tcx>> {
+    let typing_env = TypingEnv::post_analysis(tcx, caller);
+    Instance::try_resolve(tcx, typing_env, def_id, args)
+        .ok()
+        .flatten()
+}
+
+/// Map a resolved [`Instance`] to its concrete target `DefId` and whether the
+/// dispatch is virtual. `None` for kinds with no single target (e.g. a closure's
+/// `Clone` shim).
+pub(crate) fn instance_def_id<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    instance: Instance<'tcx>,
+) -> (Option<DefId>, bool) {
+    let mut is_virtual = false;
+    #[cfg(rapx_ge_99)]
+    let def_id = match instance.def {
+        InstanceKind::Item(def_id) => Some(def_id),
+        InstanceKind::Intrinsic(def_id) => Some(def_id),
+        InstanceKind::Virtual(def_id, _) => {
+            is_virtual = true;
+            Some(def_id)
+        }
+        InstanceKind::Shim(shim_kind) => match shim_kind {
+            ShimKind::VTable(def_id) => Some(def_id),
+            ShimKind::Reify(def_id, _) => Some(def_id),
+            ShimKind::FnPtr(def_id, _) => Some(def_id),
+            ShimKind::ClosureOnce { call_once, .. } => Some(call_once),
+            ShimKind::ConstructCoroutineInClosure {
+                coroutine_closure_def_id,
+                ..
+            } => Some(coroutine_closure_def_id),
+            ShimKind::ThreadLocal(def_id) => Some(def_id),
+            ShimKind::DropGlue(def_id, _) => Some(def_id),
+            #[cfg(rapx_has_fnptr_asptr)]
+            ShimKind::FnPtrAsPtr(def_id, _) => Some(def_id),
+            #[cfg(not(rapx_has_fnptr_asptr))]
+            ShimKind::FnPtrAddr(def_id, _) => Some(def_id),
+            ShimKind::AsyncDropGlueCtor(def_id, _) => Some(def_id),
+            ShimKind::Clone(def_id, _) => {
+                if !tcx.is_closure_like(def_id) {
+                    Some(def_id)
+                } else {
+                    None
+                }
+            }
+            _ => todo!(),
+        },
+        #[allow(unreachable_patterns)]
+        _ => None,
+    };
+    #[cfg(not(rapx_ge_99))]
+    let def_id = match instance.def {
+        InstanceKind::Item(def_id) => Some(def_id),
+        InstanceKind::Intrinsic(def_id) => Some(def_id),
+        InstanceKind::VTableShim(def_id) => Some(def_id),
+        InstanceKind::ReifyShim(def_id, _) => Some(def_id),
+        InstanceKind::FnPtrShim(def_id, _) => Some(def_id),
+        InstanceKind::Virtual(def_id, _) => {
+            is_virtual = true;
+            Some(def_id)
+        }
+        InstanceKind::ClosureOnceShim { call_once, .. } => Some(call_once),
+        InstanceKind::ConstructCoroutineInClosureShim {
+            coroutine_closure_def_id,
+            ..
+        } => Some(coroutine_closure_def_id),
+        InstanceKind::ThreadLocalShim(def_id) => Some(def_id),
+        InstanceKind::DropGlue(def_id, _) => Some(def_id),
+        InstanceKind::FnPtrAddrShim(def_id, _) => Some(def_id),
+        InstanceKind::AsyncDropGlueCtorShim(def_id, _) => Some(def_id),
+        InstanceKind::CloneShim(def_id, _) => {
+            if !tcx.is_closure_like(def_id) {
+                Some(def_id)
+            } else {
+                None
+            }
+        }
+        _ => todo!(),
+    };
+    (def_id, is_virtual)
+}
+
+/// Resolve a trait-method callee to its concrete impl `DefId`. Returns `None`
+/// when it is not a trait method or has no distinct concrete target (e.g. still
+/// generic/virtual).
 pub(crate) fn resolve_callee_impl<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller_def_id: DefId,
@@ -181,13 +271,9 @@ pub(crate) fn resolve_callee_impl<'tcx>(
 ) -> Option<DefId> {
     let assoc = tcx.opt_associated_item(callee_def_id)?;
     assoc.trait_container(tcx)?;
-    let typing_env = TypingEnv::post_analysis(tcx, caller_def_id);
-    let instance =
-        rustc_middle::ty::Instance::try_resolve(tcx, typing_env, callee_def_id, callee_args)
-            .ok()
-            .flatten()?;
+    let instance = resolve_instance(tcx, caller_def_id, callee_def_id, callee_args)?;
     let resolved = match instance.def {
-        rustc_middle::ty::InstanceKind::Item(def_id) => def_id,
+        InstanceKind::Item(def_id) => def_id,
         _ => return None,
     };
     if resolved == callee_def_id {
@@ -197,13 +283,12 @@ pub(crate) fn resolve_callee_impl<'tcx>(
     }
 }
 
-/// Resolve a call's `func` to its monomorphized [`Instance`], so a generic
-/// wrapper like `slice::get::<Range<usize>>` can be inlined with `I` substituted.
+/// Resolve a call `func` operand to its monomorphized [`Instance`].
 pub(crate) fn resolve_callee_instance<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: DefId,
     func: &Operand<'tcx>,
-) -> Option<rustc_middle::ty::Instance<'tcx>> {
+) -> Option<Instance<'tcx>> {
     let Operand::Constant(c) = func else {
         return None;
     };
@@ -212,16 +297,11 @@ pub(crate) fn resolve_callee_instance<'tcx>(
     };
     #[cfg(rapx_ge_99)]
     let callee_args = callee_args.skip_binder();
-    let typing_env = TypingEnv::post_analysis(tcx, caller);
-    rustc_middle::ty::Instance::try_resolve(tcx, typing_env, *def_id, callee_args)
-        .ok()
-        .flatten()
+    resolve_instance(tcx, caller, *def_id, callee_args)
 }
 
-/// Like [`dep_callee_def_id`], but resolves trait-method callees to their
-/// concrete impl so a required trait method — whose trait DefId has no
-/// available MIR — can still be inlined against the dispatched impl's body
-/// (e.g. `SliceIndex::get`'s range check, `Deref::deref`'s transparent access).
+/// Like [`dep_callee_def_id`], but resolves trait-method callees to the concrete
+/// impl (whose MIR is what actually gets inlined).
 pub(crate) fn dep_callee_resolved_def_id<'tcx>(
     tcx: TyCtxt<'tcx>,
     caller: DefId,

@@ -71,14 +71,6 @@ pub struct BlockFacts {
     /// Maps a local to the origin of its value.
     pub origin: FxHashMap<usize, LocalOrigin>,
 }
-/// The operator and operands of a binary comparison that produced a local.
-#[derive(Clone, Debug)]
-pub struct ComparisonSource {
-    pub op: rustc_middle::mir::BinOp,
-    pub lhs_local: usize,
-    pub rhs: Rhs,
-}
-
 /// The right-hand operand of a sum/comparison: a constant or a local.
 #[derive(Clone, Copy, Debug)]
 pub enum Rhs {
@@ -100,7 +92,7 @@ pub enum Expr {
     /// `dest = lhs & rhs` (a boolean conjunction).
     And { lhs: usize, rhs: usize },
     /// `dest = lhs <op> rhs` (`Lt`/`Le`/`Gt`/`Ge`/`Eq`/`Ne`).
-    Cmp(ComparisonSource),
+    Cmp { op: BinOp, lhs: usize, rhs: Rhs },
 }
 
 /// The origin of a local's value: a constant, a copy of another local, an
@@ -425,11 +417,11 @@ fn build_function_info<'tcx>(
                             } else {
                                 info.origin.insert(
                                     dest,
-                                    LocalOrigin::Expr(Expr::Cmp(ComparisonSource {
+                                    LocalOrigin::Expr(Expr::Cmp {
                                         op: *op,
-                                        lhs_local,
+                                        lhs: lhs_local,
                                         rhs: rhs_kind,
-                                    })),
+                                    }),
                                 );
                             }
                         }
@@ -1301,19 +1293,19 @@ impl<'tcx> PathGraph<'tcx> {
             return;
         };
         let cond_local = self.remap_local(self.cfg.block(cur).def_id, p.local.as_usize());
-        let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = self
+        let Some(LocalOrigin::Expr(Expr::Cmp { op, lhs, rhs })) = self
             .block_info
             .iter()
-            .find_map(|info| info.origin.get(&cond_local))
+            .find_map(|info| info.origin.get(&cond_local).cloned())
         else {
             return;
         };
         let nonzero = matches!(
-            (cmp.op, cmp.rhs),
+            (op, rhs),
             (BinOp::Gt, Rhs::Const(0)) | (BinOp::Ge, Rhs::Const(1)) | (BinOp::Ne, Rhs::Const(0))
         );
         if nonzero {
-            cs.consts.insert(cmp.lhs_local, usize::MAX);
+            cs.consts.insert(lhs, usize::MAX);
         }
     }
 
@@ -1341,13 +1333,13 @@ impl<'tcx> PathGraph<'tcx> {
 
     /// Resolve an order comparison to `Some(true)` / `Some(false)` from the
     /// recorded relational bounds, or `None` when undetermined.
-    fn relation_status(&self, cmp: &ComparisonSource, cs: &ConstraintSet) -> Option<bool> {
-        let l = self.canonical_field(cmp.lhs_local);
-        let r = match cmp.rhs {
+    fn relation_status(&self, op: BinOp, lhs: usize, rhs: Rhs, cs: &ConstraintSet) -> Option<bool> {
+        let l = self.canonical_field(lhs);
+        let r = match rhs {
             Rhs::Const(v) => v,
             Rhs::Local(l) => self.canonical_field(l),
         };
-        match cmp.op {
+        match op {
             BinOp::Lt => {
                 if self.bound_lt_known(l, r, cs) {
                     return Some(true);
@@ -1581,38 +1573,39 @@ impl<'tcx> PathGraph<'tcx> {
             {
                 return Some(val);
             }
-            if let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&local)
-                && matches!(cmp.op, BinOp::Eq | BinOp::Ne) {
-                    let is_eq = matches!(cmp.op, BinOp::Eq);
-                    if let Rhs::Const(rhs_val) = cmp.rhs {
-                        if let Some(lhs_val) = self.resolve_local_value(cmp.lhs_local, cs)
-                        {
+            if let Some(LocalOrigin::Expr(Expr::Cmp { op, lhs, rhs })) =
+                info.origin.get(&local).cloned()
+                && matches!(op, BinOp::Eq | BinOp::Ne)
+            {
+                let is_eq = matches!(op, BinOp::Eq);
+                if let Rhs::Const(rhs_val) = rhs {
+                    if let Some(lhs_val) = self.resolve_local_value(lhs, cs) {
+                        return Some(if is_eq {
+                            if lhs_val == rhs_val { 1 } else { 0 }
+                        } else {
+                            if lhs_val != rhs_val { 1 } else { 0 }
+                        });
+                    }
+                } else if let Rhs::Local(rhs_local) = rhs {
+                    let lhs_val = self.resolve_local_value(lhs, cs);
+                    let rhs_val = self.resolve_local_value(rhs_local, cs);
+                    if let Some(lhs_val) = lhs_val {
+                        if let Some(rhs_val) = rhs_val {
                             return Some(if is_eq {
                                 if lhs_val == rhs_val { 1 } else { 0 }
                             } else {
                                 if lhs_val != rhs_val { 1 } else { 0 }
                             });
                         }
-                    } else if let Rhs::Local(rhs_local) = cmp.rhs {
-                        let lhs_val = self.resolve_local_value(cmp.lhs_local, cs);
-                        let rhs_val = self.resolve_local_value(rhs_local, cs);
-                        if let Some(lhs_val) = lhs_val {
-                            if let Some(rhs_val) = rhs_val {
-                                return Some(if is_eq {
-                                    if lhs_val == rhs_val { 1 } else { 0 }
-                                } else {
-                                    if lhs_val != rhs_val { 1 } else { 0 }
-                                });
-                            }
-                        } else if let Some(rhs_val) = rhs_val {
-                            return Some(if is_eq {
-                                if cmp.lhs_local == rhs_val { 1 } else { 0 }
-                            } else {
-                                if cmp.lhs_local != rhs_val { 1 } else { 0 }
-                            });
-                        }
+                    } else if let Some(rhs_val) = rhs_val {
+                        return Some(if is_eq {
+                            if lhs == rhs_val { 1 } else { 0 }
+                        } else {
+                            if lhs != rhs_val { 1 } else { 0 }
+                        });
                     }
                 }
+            }
         }
         None
     }
@@ -1749,27 +1742,28 @@ impl<'tcx> PathGraph<'tcx> {
                 // zero-capacity path) is pruned.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp { op, lhs, rhs })) =
+                        info.origin.get(&discr_local).cloned()
                     && matches!(
-                        (cmp.op, cmp.rhs),
+                        (op, rhs),
                         (BinOp::Gt, Rhs::Const(0)) | (BinOp::Ge, Rhs::Const(1)) | (BinOp::Ne, Rhs::Const(0))
                     )
                     && next == base + targets.otherwise().as_usize()
                 {
-                    cs.consts.insert(cmp.lhs_local, usize::MAX);
+                    cs.consts.insert(lhs, usize::MAX);
                 }
 
                 // Try to infer the discriminant from a comparison source
                 // (e.g. `_X = Ne(ptr, 0)`) when we know whether `ptr` is null.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
-                    && matches!(cmp.op, BinOp::Ne | BinOp::Eq)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp { op, lhs, rhs })) =
+                        info.origin.get(&discr_local).cloned()
+                    && matches!(op, BinOp::Ne | BinOp::Eq)
                 {
-                    let is_ne = matches!(cmp.op, BinOp::Ne);
-                    let pointer_is_nonnull =
-                        self.local_is_known_nonnull(cs, cmp.lhs_local);
-                    let pointer_is_null = self.local_is_known_null(cs, cmp.lhs_local);
+                    let is_ne = matches!(op, BinOp::Ne);
+                    let pointer_is_nonnull = self.local_is_known_nonnull(cs, lhs);
+                    let pointer_is_null = self.local_is_known_null(cs, lhs);
                     if pointer_is_nonnull {
                         let expected_val = if is_ne { 1 } else { 0 };
                         let expected = resolve_switch_target(targets, expected_val);
@@ -1799,17 +1793,17 @@ impl<'tcx> PathGraph<'tcx> {
 
                     // General Eq/Ne integer comparison: resolve both operands
                     // and prune the infeasible branch when both are known.
-                    let is_eq = matches!(cmp.op, BinOp::Eq);
-                    let lhs_val = self.resolve_local_value(cmp.lhs_local, cs);
-                    let rhs_val = match cmp.rhs {
+                    let is_eq = matches!(op, BinOp::Eq);
+                    let lhs_val = self.resolve_local_value(lhs, cs);
+                    let rhs_val = match rhs {
                         Rhs::Const(v) => Some(v),
                         Rhs::Local(l) => self.resolve_local_value(l, cs),
                     };
-                    if let (Some(lhs), Some(rhs)) = (lhs_val, rhs_val) {
+                    if let (Some(lhs_val), Some(rhs_val)) = (lhs_val, rhs_val) {
                         let val = if is_eq {
-                            if lhs == rhs { 1 } else { 0 }
+                            if lhs_val == rhs_val { 1 } else { 0 }
                         } else {
-                            if lhs != rhs { 1 } else { 0 }
+                            if lhs_val != rhs_val { 1 } else { 0 }
                         };
                         let expected = resolve_switch_target(targets, val as u128);
                         if let Some(local) = constraint_local {
@@ -1830,17 +1824,18 @@ impl<'tcx> PathGraph<'tcx> {
                 // SCC boundaries).
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
-                    && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp { op, lhs, rhs })) =
+                        info.origin.get(&discr_local).cloned()
+                    && matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
                 {
                     // Resolve LHS directly from constants (no increment chains)
-                    let lhs_val = self.resolve_local_value_direct(cmp.lhs_local, cs);
-                    let rhs_val = match cmp.rhs {
+                    let lhs_val = self.resolve_local_value_direct(lhs, cs);
+                    let rhs_val = match rhs {
                         Rhs::Const(v) => Some(v),
                         Rhs::Local(l) => self.resolve_local_value_direct(l, cs),
                     };
                     if let (Some(lhs), Some(rhs)) = (lhs_val, rhs_val) {
-                        let val = match cmp.op {
+                        let val = match op {
                             BinOp::Lt => {
                                 if lhs < rhs {
                                     1
@@ -1889,18 +1884,19 @@ impl<'tcx> PathGraph<'tcx> {
                 // infeasible `i >= bytes.len()` branch.
                 if let Some(discr_local) = discr_local
                     && let Some(info) = self.block_info.get(cur)
-                    && let Some(LocalOrigin::Expr(Expr::Cmp(cmp))) = info.origin.get(&discr_local)
-                    && matches!(cmp.op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
+                    && let Some(LocalOrigin::Expr(Expr::Cmp { op, lhs, rhs })) =
+                        info.origin.get(&discr_local).cloned()
+                    && matches!(op, BinOp::Lt | BinOp::Le | BinOp::Gt | BinOp::Ge)
                 {
                     let taken_true = next == base + resolve_switch_target(targets, 1);
-                    if let Rhs::Local(rhs_local) = cmp.rhs {
+                    if let Rhs::Local(rhs_local) = rhs {
                         // Canonicalize to `a < b` (strict) / `a <= b` and record
                         // the branch actually taken (its negation on the false arm).
-                        let (a, b, strict) = match cmp.op {
-                            BinOp::Lt => (cmp.lhs_local, rhs_local, true),
-                            BinOp::Le => (cmp.lhs_local, rhs_local, false),
-                            BinOp::Gt => (rhs_local, cmp.lhs_local, true),
-                            BinOp::Ge => (rhs_local, cmp.lhs_local, false),
+                        let (a, b, strict) = match op {
+                            BinOp::Lt => (lhs, rhs_local, true),
+                            BinOp::Le => (lhs, rhs_local, false),
+                            BinOp::Gt => (rhs_local, lhs, true),
+                            BinOp::Ge => (rhs_local, lhs, false),
                             _ => unreachable!(),
                         };
                         if taken_true {
@@ -1919,7 +1915,7 @@ impl<'tcx> PathGraph<'tcx> {
                             );
                         }
                     }
-                    if let Some(holds) = self.relation_status(cmp, cs) {
+                    if let Some(holds) = self.relation_status(op, lhs, rhs, cs) {
                         let expected = resolve_switch_target(targets, holds as u128);
                         if let Some(local) = constraint_local {
                             cs.consts.insert(local, holds as usize);
