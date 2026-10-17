@@ -303,8 +303,10 @@ pub(crate) fn fmt_contract_expanded<'tcx>(
         }
         PropertyKind::Alias => {
             let p1 = args.first().map(|s| s.as_str()).unwrap_or("p1");
-            let p2 = args.get(1).map(|s| s.as_str()).unwrap_or("p2");
-            format!("{p1} and {p2} alias each other (hazard)")
+            match args.get(1) {
+                Some(p2) => format!("{p1} and {p2} alias each other (hazard)"),
+                None => format!("{p1} aliases another live place (hazard)"),
+            }
         }
         _ => fmt_meaning_template(crate::verify::contract::spec::kind_meaning(kind), &args),
     };
