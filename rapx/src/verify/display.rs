@@ -289,13 +289,13 @@ pub(crate) fn fmt_contract_expanded<'tcx>(
         }
         PropertyKind::Allocated => {
             let ptr = args.first().map(|s| s.as_str()).unwrap_or("ptr");
-            if args.len() >= 3 {
-                format!(
+            match args.len() {
+                n if n >= 3 => format!(
                     "{ptr} points to a live allocation of size: size_of({}) * {}",
                     args[1], args[2]
-                )
-            } else {
-                format!("{ptr} points to a live allocation")
+                ),
+                2 => format!("{ptr} points to a live allocation of size: size_of({})", args[1]),
+                _ => format!("{ptr} points to a live allocation"),
             }
         }
         PropertyKind::NonOverlap => {

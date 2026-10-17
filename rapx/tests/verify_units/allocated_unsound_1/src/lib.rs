@@ -2,7 +2,7 @@
 #![register_tool(rapx)]
 #![allow(dead_code)]
 
-#[rapx::requires(Allocated(_ptr, u32, 1), kind = "precond")]
+#[rapx::requires(Allocated(_ptr, u32), kind = "precond")]
 unsafe fn require_allocated_u32(_ptr: *const u32) {}
 
 // UNSOUND: a null pointer is not backed by any allocation.

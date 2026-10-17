@@ -28,7 +28,9 @@ pub(crate) enum BuildKind {
     Uniform,
     /// `Size(T, sized | unsized | const)` — second arg is an ident or a const.
     Size,
-    /// `Allocated(target[, T, n[, allocator]])` — 1/3/4-argument forms.
+    /// `Allocated(target[, T[, n[, allocator]]])` — 1/2/3/4-argument forms:
+    /// a missing `T` is inferred from the target's pointee, a missing `n`
+    /// defaults to `1`, and a missing allocator defaults to `global`.
     Allocated,
     /// `InBound(index | target,index | target,T,n)` — index + for_each variants.
     InBound,
@@ -283,7 +285,7 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "Allocated",
         PropertyKind::Allocated,
-        &[&[Target], &[Target, Ty, Expr], &[Target, Ty, Expr, Ident]],
+        &[&[Target], &[Target, Ty], &[Target, Ty, Expr], &[Target, Ty, Expr, Ident]],
         ContractKind::Precond,
         BuildKind::Allocated,
         "{0} points to a live allocation of size: size_of({1}) * {2}",

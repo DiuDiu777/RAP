@@ -140,6 +140,16 @@ impl<'tcx> Property<'tcx> {
                 PropertyKind::Allocated,
                 vec![super::resolve::parse_target_arg(tcx, def_id, target)],
             ),
+            [target_expr, ty_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Allocated") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                Self::new_atom(
+                    PropertyKind::Allocated,
+                    vec![target, PropertyArg::Ty(ty)],
+                )
+            }
             [target_expr, ty_expr, len_expr] => {
                 let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
                 let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Allocated") else {
@@ -172,7 +182,7 @@ impl<'tcx> Property<'tcx> {
             }
             _ => {
                 rap_error!(
-                    "Wrong args length for Allocated Tag! expected 1, 3 or 4, got {}",
+                    "Wrong args length for Allocated Tag! expected 1, 2, 3 or 4, got {}",
                     exprs.len()
                 );
                 Self::new_simple(PropertyKind::Unknown)
