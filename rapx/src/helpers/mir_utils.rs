@@ -369,6 +369,59 @@ pub(crate) fn enumerate_mono_instances<'tcx>(
         .collect()
 }
 
+/// Whether `def_id`'s body (or any callee it would inline) contains a
+/// trait-method call whose `Instance` resolution returns `None` (a still-generic
+/// `T: Bound`) *and* that has no symbolic model — i.e. a call whose opaque
+/// fallback would lose dataflow and therefore benefits from caller
+/// monomorphization.
+pub(crate) fn has_unmodeled_generic_call<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
+    let mut visited = HashSet::default();
+    has_unmodeled_generic_call_rec(tcx, def_id, &mut visited)
+}
+
+fn has_unmodeled_generic_call_rec<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    visited: &mut HashSet<DefId>,
+) -> bool {
+    if !visited.insert(def_id) || !tcx.is_mir_available(def_id) {
+        return false;
+    }
+    let body = tcx.optimized_mir(def_id);
+    for bb in body.basic_blocks.iter() {
+        let Some(term) = &bb.terminator else {
+            continue;
+        };
+        let TerminatorKind::Call { func, .. } = &term.kind else {
+            continue;
+        };
+        let Some(callee) = dep_callee_def_id(func) else {
+            continue;
+        };
+        let is_trait_method = tcx
+            .opt_associated_item(callee)
+            .and_then(|a| a.trait_container(tcx))
+            .is_some();
+        if is_trait_method {
+            // `Some(_)` means the call resolves (concrete impl or virtual), so it
+            // needs no monomorphization; only a `None` (uninstantiated `T: Bound`)
+            // with no model is a candidate.
+            if resolve_callee_instance(tcx, def_id, func).is_none()
+                && !crate::verify::call_summary::effects::is_symbolically_modeled(Some(callee))
+            {
+                return true;
+            }
+            continue;
+        }
+        // A concrete callee gets inlined, so recurse to surface its own
+        // unmodeled generic trait calls.
+        if has_unmodeled_generic_call_rec(tcx, callee, visited) {
+            return true;
+        }
+    }
+    false
+}
+
 /// Resolve a trait-method callee to its concrete impl `DefId`. Returns `None`
 /// when it is not a trait method or has no distinct concrete target (e.g. still
 /// generic/virtual).

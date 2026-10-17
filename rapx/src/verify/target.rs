@@ -818,8 +818,12 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
     }
 
     /// Build one target per monomorphized instance when `def_id` has an
-    /// enumerable generic type parameter, or a single non-generic target.
+    /// unmodeled generic trait call (monomorphization is the fallback for an
+    /// opaque call with no summary), or a single non-generic target.
     fn build_function_targets(&mut self, def_id: DefId) -> Vec<FunctionTarget<'tcx>> {
+        if !crate::helpers::mir_utils::has_unmodeled_generic_call(self.tcx, def_id) {
+            return vec![self.build_function_target(def_id, None)];
+        }
         let instances = crate::helpers::mir_utils::enumerate_mono_instances(
             self.tcx,
             def_id,
