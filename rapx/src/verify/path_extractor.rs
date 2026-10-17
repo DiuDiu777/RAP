@@ -18,7 +18,10 @@
 //! the limit is reached and the tree is marked truncated.
 
 use rustc_hir::def_id::DefId;
-use rustc_middle::{mir::BasicBlock, ty::TyCtxt};
+use rustc_middle::{
+    mir::BasicBlock,
+    ty::{EarlyBinder, Instance, TyCtxt, TypingEnv},
+};
 
 use crate::analysis::path::{
     PathTree,
@@ -44,21 +47,31 @@ pub(crate) struct PathExtractor<'tcx> {
     def_id: DefId,
     /// Number of extra SCC postfix repetitions allowed (default 0).
     allow_repeat: usize,
+    /// An optional monomorphized instance; when set, `run` verifies the
+    /// instance's instantiated body instead of `optimized_mir(def_id)`.
+    instance: Option<Instance<'tcx>>,
 }
 
 impl<'tcx> PathExtractor<'tcx> {
-    /// Create a path extractor for `def_id`.
+    /// Create a path extractor that verifies `def_id`, optionally against a
+    /// monomorphized instance body (when `instance` is `Some`).
     ///
     /// Path extraction (SCC detection, enumeration, filtering) is deferred
     /// until [`run`] is called.
     ///
     /// `allow_repeat` controls how many times a repeated SCC postfix segment
     /// is allowed beyond the first occurrence. Default is 0 (no extra repeats).
-    pub(crate) fn new(tcx: TyCtxt<'tcx>, def_id: DefId, allow_repeat: usize) -> Self {
+    pub(crate) fn new_with_instance(
+        tcx: TyCtxt<'tcx>,
+        def_id: DefId,
+        allow_repeat: usize,
+        instance: Option<Instance<'tcx>>,
+    ) -> Self {
         Self {
             tcx,
             def_id,
             allow_repeat,
+            instance,
         }
     }
 
@@ -67,7 +80,18 @@ impl<'tcx> PathExtractor<'tcx> {
     /// Returns the whole-CFG [`PathTree`], with inlined callees and the
     /// block-function metadata attached.
     pub(crate) fn run(self) -> PathTree {
-        let mut graph = PathGraph::new(self.tcx, self.def_id);
+        let body = match self.instance {
+            Some(inst) => {
+                let mir = self.tcx.optimized_mir(self.def_id);
+                inst.instantiate_mir_and_normalize_erasing_regions(
+                    self.tcx,
+                    TypingEnv::post_analysis(self.tcx, self.def_id),
+                    EarlyBinder::bind(self.tcx, mir.clone()),
+                )
+            }
+            None => self.tcx.optimized_mir(self.def_id).clone(),
+        };
+        let mut graph = PathGraph::new_with_body(self.tcx, self.def_id, &body);
         graph.inline_callees();
         graph.find_scc();
         let mut tree = {

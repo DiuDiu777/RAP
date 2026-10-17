@@ -19,8 +19,8 @@ use rustc_middle::{
         TerminatorKind,
     },
     ty::{
-        ConstKind, FieldDef, GenericArgKind, GenericArgsRef, Instance, InstanceKind,
-        PseudoCanonicalInput, Ty, TyCtxt, TyKind, TypingEnv,
+        ConstKind, FieldDef, GenericArgKind, GenericArgs, GenericArgsRef, GenericParamDefKind,
+        Instance, InstanceKind, PseudoCanonicalInput, Ty, TyCtxt, TyKind, TypingEnv,
     },
 };
 use rustc_span::{DUMMY_SP, Symbol};
@@ -274,6 +274,99 @@ pub(crate) fn trait_impl_candidates(tcx: TyCtxt<'_>, method_def_id: DefId) -> Ve
         }
     }
     candidates
+}
+
+/// Build a partially-monomorphized [`Instance`] for `def_id`, replacing the type
+/// parameter named `param_name` with `concrete_ty` and leaving every other
+/// parameter (const params in particular) as `Param`. Returns `None` when
+/// `def_id` has no such type parameter.
+pub(crate) fn monomorphize_instance<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    param_name: Symbol,
+    concrete_ty: Ty<'tcx>,
+) -> Option<Instance<'tcx>> {
+    let mut replaced = false;
+    let args = GenericArgs::for_item(tcx, def_id, |param, _| {
+        if matches!(param.kind, GenericParamDefKind::Type { .. }) && param.name == param_name {
+            replaced = true;
+            concrete_ty.into()
+        } else {
+            tcx.mk_param_from_def(param)
+        }
+    });
+    replaced.then(|| Instance::new_raw(def_id, args))
+}
+
+/// Enumerate the concrete self types implementing a type parameter's trait
+/// bounds. Chooses the bound with the fewest concrete (non-generic) impls —
+/// the "small" helper trait that usually pins the supported types (e.g.
+/// `GetDisjointMutIndex` over the generic `SliceIndex`/`Clone` bounds) — and
+/// returns its concrete impl self types.
+pub(crate) fn type_param_impl_tys<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    param_ty: Ty<'tcx>,
+) -> Vec<Ty<'tcx>> {
+    if !matches!(param_ty.kind(), TyKind::Param(_)) {
+        return Vec::new();
+    }
+    let param_env = tcx.param_env(def_id);
+    let mut best: Option<Vec<Ty<'tcx>>> = None;
+    for clause in param_env.caller_bounds() {
+        let Some(trait_clause) = clause.as_trait_clause() else {
+            continue;
+        };
+        let self_ty = trait_clause.self_ty().skip_binder();
+        if self_ty != param_ty {
+            continue;
+        }
+        let impl_tys: Vec<Ty<'tcx>> = tcx
+            .all_impls(trait_clause.def_id())
+            .map(|impl_def_id| tcx.type_of(impl_def_id).skip_binder())
+            // Only concrete self types are usable as monomorphization candidates
+            // (a generic `impl<T: Clone> Clone for Range<T>` must not count).
+            .filter(|ty| !ty_has_type_param(*ty))
+            .collect();
+        if impl_tys.is_empty() {
+            continue;
+        }
+        best = Some(match best {
+            None => impl_tys,
+            Some(prev) if impl_tys.len() < prev.len() => impl_tys,
+            Some(prev) => prev,
+        });
+    }
+    best.unwrap_or_default()
+}
+
+/// Enumerate partially-monomorphized instances of a generic function by
+/// replacing its first unbound type parameter with each concrete impl of that
+/// parameter's bounds (see [`type_param_impl_tys`]), capped at `limit`. Empty
+/// for non-generic functions or when the parameter has no enumerable impls.
+pub(crate) fn enumerate_mono_instances<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    limit: usize,
+) -> Vec<Instance<'tcx>> {
+    let generics = tcx.generics_of(def_id);
+    let Some(type_param) = generics
+        .own_params
+        .iter()
+        .find(|p| matches!(p.kind, GenericParamDefKind::Type { .. }))
+    else {
+        return Vec::new();
+    };
+    let param_ty = tcx.mk_param_from_def(type_param).expect_ty();
+    let impl_tys = type_param_impl_tys(tcx, def_id, param_ty);
+    if impl_tys.is_empty() {
+        return Vec::new();
+    }
+    impl_tys
+        .into_iter()
+        .take(limit)
+        .filter_map(|ty| monomorphize_instance(tcx, def_id, type_param.name, ty))
+        .collect()
 }
 
 /// Resolve a trait-method callee to its concrete impl `DefId`. Returns `None`

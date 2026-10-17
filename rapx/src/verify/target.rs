@@ -28,7 +28,7 @@ use rustc_hir::{
 use rustc_attr_ir::Attribute;
 #[cfg(not(rapx_has_attr_ir))]
 use rustc_hir::Attribute;
-use rustc_middle::{hir::nested_filter, ty::TyCtxt};
+use rustc_middle::{hir::nested_filter, ty::Instance, ty::TyCtxt};
 use rustc_span::Span;
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -84,6 +84,11 @@ pub(crate) type StructInvariants<'tcx> = Vec<Property<'tcx>>;
 pub(crate) struct FunctionTarget<'tcx> {
     /// The function being verified.
     pub def_id: DefId,
+
+    /// An optional monomorphized instance; when set, path extraction and
+    /// verification run against the instance's instantiated body (used to
+    /// verify generic functions per concrete impl).
+    pub instance: Option<Instance<'tcx>>,
 
     /// Owning struct when this function is an associated method (e.g.
     /// `impl MyStruct { fn foo(...) }`).  `None` for free functions.
@@ -730,7 +735,11 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
     }
 
     /// Builds a function target to verify from a function definition.
-    fn build_function_target(&mut self, def_id: DefId) -> FunctionTarget<'tcx> {
+    fn build_function_target(
+        &mut self,
+        def_id: DefId,
+        instance: Option<Instance<'tcx>>,
+    ) -> FunctionTarget<'tcx> {
         let checkpoints = collect_unsafe_callsites(self.tcx, def_id);
         let unsafe_callees: HashSet<_> = checkpoints
             .iter()
@@ -796,6 +805,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
 
         FunctionTarget {
             def_id,
+            instance,
             owner_struct_def_id,
             checkpoints,
             callee_requires,
@@ -804,6 +814,24 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             type_invariants,
             raw_ptr_deref_checks,
             static_mut_checks,
+        }
+    }
+
+    /// Build one target per monomorphized instance when `def_id` has an
+    /// enumerable generic type parameter, or a single non-generic target.
+    fn build_function_targets(&mut self, def_id: DefId) -> Vec<FunctionTarget<'tcx>> {
+        let instances = crate::helpers::mir_utils::enumerate_mono_instances(
+            self.tcx,
+            def_id,
+            crate::limit::trait_impl_limit(),
+        );
+        if instances.is_empty() {
+            vec![self.build_function_target(def_id, None)]
+        } else {
+            instances
+                .into_iter()
+                .map(|inst| self.build_function_target(def_id, Some(inst)))
+                .collect()
         }
     }
 
@@ -866,8 +894,10 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             }
             self.module_filter_matched = true;
 
-            let function_target = self.build_function_target(def_id);
-            self.push_function_target(function_target);
+            let function_targets = self.build_function_targets(def_id);
+            for function_target in function_targets {
+                self.push_function_target(function_target);
+            }
         }
     }
 
@@ -1070,16 +1100,17 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         }
         self.module_filter_matched = true;
 
-        let function_target = self.build_function_target(def_id);
+        let function_targets = self.build_function_targets(def_id);
 
         match self.mode {
             VerifyMode::Targeted => {}
             VerifyMode::Scan => {
-                if function_target.checkpoints.is_empty()
-                    && function_target.raw_ptr_deref_checks.is_empty()
-                    && function_target.static_mut_checks.is_empty()
+                if let Some(first) = function_targets.first()
+                    && first.checkpoints.is_empty()
+                    && first.raw_ptr_deref_checks.is_empty()
+                    && first.static_mut_checks.is_empty()
                 {
-                    if !function_target.struct_invariants.is_empty() {
+                    if !first.struct_invariants.is_empty() {
                         if self.skip_invariant {
                             return;
                         }
@@ -1093,7 +1124,9 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
             }
         }
 
-        self.push_function_target(function_target);
+        for function_target in function_targets {
+            self.push_function_target(function_target);
+        }
     }
 }
 
@@ -1392,7 +1425,8 @@ impl<'tcx> PrepareTargets<'tcx> {
             return path_map;
         }
 
-        let tree = PathExtractor::new(self.tcx, target.def_id, 0).run();
+        let tree = PathExtractor::new_with_instance(self.tcx, target.def_id, 0, target.instance)
+            .run();
 
         for checkpoint in &target.checkpoints {
             if let Some(callee_def_id) = checkpoint.callee {

@@ -782,6 +782,18 @@ fn trait_obj_inline_limit_four() {
     assert_function_result(&output, "multi_impl_truncated", "UNSOUND");
 }
 
+// ================ Generic Monomorphization =============
+#[test]
+fn generic_mono() {
+    let output = run_with_args("verify_units/generic_mono_1", CMD_VERIFY_TARGETED);
+    // The generic caller is monomorphized per impl and merged into one report:
+    //   I = Dangling -> inlined `dangling()` -> NonNull Proved
+    //   I = Null     -> inlined `null()`     -> NonNull Failed
+    // so the merged verdict is UNSOUND (a generic function must be sound for
+    // every impl).
+    assert_function_result(&output, "generic_ptr", "UNSOUND");
+}
+
 // ================ Module/Crate Filter Tests =============
 #[test]
 fn filter_by_module() {

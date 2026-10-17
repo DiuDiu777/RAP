@@ -515,6 +515,13 @@ fn build_function_info<'tcx>(
 impl<'tcx> PathGraph<'tcx> {
     pub fn new(tcx: TyCtxt<'tcx>, def_id: DefId) -> PathGraph<'tcx> {
         let body = tcx.optimized_mir(def_id);
+        Self::new_with_body(tcx, def_id, body)
+    }
+
+    /// Build a path graph from an explicit MIR body (rather than
+    /// `optimized_mir(def_id)`). Used to verify a monomorphized body whose
+    /// `def_id` is still the generic function.
+    pub fn new_with_body(tcx: TyCtxt<'tcx>, def_id: DefId, body: &Body<'tcx>) -> PathGraph<'tcx> {
         let basicblocks = &body.basic_blocks;
         let mut cfg_blocks = Vec::<CfgBlock>::new();
 
@@ -623,7 +630,11 @@ impl<'tcx> PathGraph<'tcx> {
             cfg_blocks.push(cfg_block);
         }
 
-        let cfg = ControlFlowGraph::new(def_id, tcx, cfg_blocks);
+        let mut cfg = ControlFlowGraph::new(def_id, tcx, cfg_blocks);
+        // Back the root blocks with the supplied body so terminator lookups use
+        // it (rather than `optimized_mir(def_id)`) — essential when the body is a
+        // monomorphized instance whose trait-method calls carry concrete types.
+        cfg.set_monomorphized(def_id, body.clone());
         let (
             block_info,
             disc_info,
@@ -737,24 +748,20 @@ impl<'tcx> PathGraph<'tcx> {
                 } else {
                     base_callee
                 };
-                // A trait-method call that cannot be monomorphized to a single
-                // impl — a trait object (`&dyn Bound`) or a still-generic
-                // `T: Bound` — enumerates every impl and inlines up to
-                // `trait_impl_limit` of them, truncating the rest.
+                // A trait-object call (`&dyn Bound`) has no single target:
+                // enumerate every impl and inline up to `trait_impl_limit` of
+                // them. Generic `T: Bound` never reaches here — caller
+                // monomorphization gives it a concrete `Self`, so it falls
+                // through to the normal inline path below.
                 if is_trait_method {
-                    let cannot_monomorphize = match mir_utils::resolve_callee_instance(
+                    let is_virtual = mir_utils::resolve_callee_instance(
                         tcx,
                         self.cfg.block(i).def_id,
                         func,
-                    ) {
-                        None => true,
-                        Some(inst) => mir_utils::instance_def_id(tcx, inst).1,
-                    };
-                    if cannot_monomorphize {
+                    )
+                    .is_some_and(|inst| mir_utils::instance_def_id(tcx, inst).1);
+                    if is_virtual {
                         if !crate::verify::call_summary::effects::is_modeled(Some(base_callee)) {
-                            // Inline up to `trait_impl_limit` impls; any remaining
-                            // impls are dropped (an under-approximation that may
-                            // miss a violating impl).
                             let candidates = mir_utils::trait_impl_candidates(tcx, base_callee);
                             for cand in candidates.into_iter().take(crate::limit::trait_impl_limit())
                             {

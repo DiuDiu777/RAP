@@ -22,6 +22,7 @@ use crate::verify::target::get_contract_from_annotation;
 
 use crate::compat::FxHashMap;
 use crate::compat::FxHashSet;
+use rustc_hir::def_id::DefId;
 use rustc_middle::mir::BasicBlock;
 use rustc_middle::ty::TyCtxt;
 
@@ -85,7 +86,9 @@ impl<'target, 'tcx> VerifyDriver<'target, 'tcx> {
         allow_repeat: usize,
     ) -> Self {
         let checkpoints: Vec<_> = target.all_checkpoints().into_iter().cloned().collect();
-        let path_tree = PathExtractor::new(tcx, target.def_id, allow_repeat).run();
+        let path_tree =
+            PathExtractor::new_with_instance(tcx, target.def_id, allow_repeat, target.instance)
+                .run();
         Self {
             tcx,
             target,
@@ -616,6 +619,7 @@ impl<'tcx> VerifyRun<'tcx> {
 
         FunctionTarget {
             def_id: read_def_id,
+            instance: read_target.instance,
             owner_struct_def_id: read_target.owner_struct_def_id,
             checkpoints: read_target.checkpoints.clone(),
             callee_requires: read_target.callee_requires.clone(),
@@ -718,6 +722,11 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             return;
         }
 
+        // Verify every target, then merge results per function so that a
+        // generic function's monomorphized instances are reported once.
+        let mut by_fn: FxHashMap<DefId, (Vec<PropertyCheckResult<'tcx>>, Option<String>, bool)> =
+            FxHashMap::default();
+
         for target in &collector.function_targets {
             let target_path = fmt_fn_path_with_bounds(self.tcx, target.def_id);
             let mut all_results: Vec<PropertyCheckResult<'_>> = Vec::new();
@@ -740,9 +749,6 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                     Ok(struct_report) => {
                         rap_debug!("{}", struct_report.describe());
                         all_results.extend(struct_report.results.clone());
-                        // Record the per-struct verdict so the type-level
-                        // `Allocated`/`Owning` checks can discharge the field
-                        // invariants only when they actually hold.
                         if let Some(struct_id) = target.owner_struct_def_id {
                             let verdict = struct_report
                                 .results
@@ -780,6 +786,38 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
                 }
             }
 
+            let all_callees_skipped = !target.checkpoints.is_empty()
+                && target.checkpoints.iter().all(|ckpt| {
+                    ckpt.callee.is_some_and(|callee| {
+                        target
+                            .callee_requires
+                            .get(&callee)
+                            .is_none_or(|c| c.is_empty())
+                    })
+                });
+            let no_checkpoints = all_results.is_empty()
+                && (target.checkpoints.is_empty() || all_callees_skipped)
+                && target.raw_ptr_deref_checks.is_empty()
+                && target.static_mut_checks.is_empty()
+                && target.struct_invariants.is_empty()
+                && target.type_invariants.is_empty();
+
+            let entry = by_fn
+                .entry(target.def_id)
+                .or_insert_with(|| (Vec::new(), None, false));
+            entry.0.extend(all_results);
+            if fn_crashed.is_some() {
+                entry.1 = fn_crashed;
+            }
+            entry.2 |= no_checkpoints;
+        }
+
+        let mut ordered: Vec<DefId> = by_fn.keys().copied().collect();
+        ordered.sort_by_key(|d| self.tcx.def_path_str(*d));
+        for def_id in ordered {
+            let (all_results, fn_crashed, no_checkpoints) = by_fn.remove(&def_id).unwrap();
+            let target_path = fmt_fn_path_with_bounds(self.tcx, def_id);
+
             if let Some(msg) = &fn_crashed {
                 rap_info!("============================================================");
                 rap_info!("[rapx::verify] function: {target_path}");
@@ -790,26 +828,12 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
             }
 
             if all_results.is_empty() {
-                let all_callees_skipped = !target.checkpoints.is_empty()
-                    && target.checkpoints.iter().all(|ckpt| {
-                        ckpt.callee.is_some_and(|callee| {
-                            target
-                                .callee_requires
-                                .get(&callee)
-                                .is_none_or(|c| c.is_empty())
-                        })
-                    });
-                if (target.checkpoints.is_empty() || all_callees_skipped)
-                    && target.raw_ptr_deref_checks.is_empty()
-                    && target.static_mut_checks.is_empty()
-                    && target.struct_invariants.is_empty()
-                    && target.type_invariants.is_empty()
-                {
+                if no_checkpoints {
                     rap_info!("============================================================");
                     rap_info!("[rapx::verify] function: {target_path}");
                     rap_info!("============================================================");
                     if self.skip_invariant {
-                        let cons = get_cons(self.tcx, target.def_id);
+                        let cons = get_cons(self.tcx, def_id);
                         for con in &cons {
                             rap_info!("  + constructor: {}", self.tcx.def_path_str(*con));
                         }
@@ -825,14 +849,14 @@ impl<'tcx> Analysis for VerifyRun<'tcx> {
 
             // When --skip-invariant is set, skip standalone emission for methods that
             // have constructors — sequences will generate dedicated entries.
-            if self.skip_invariant && !get_cons(self.tcx, target.def_id).is_empty() {
+            if self.skip_invariant && !get_cons(self.tcx, def_id).is_empty() {
                 continue;
             }
 
             emit_verify_summary(
                 self.tcx,
                 &target_path,
-                target.def_id,
+                def_id,
                 &all_results,
                 self.skip_invariant,
             );
