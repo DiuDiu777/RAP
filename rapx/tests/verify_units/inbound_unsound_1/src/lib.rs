@@ -2,7 +2,7 @@
 #![register_tool(rapx)]
 #![allow(dead_code)]
 
-#[rapx::requires(InBound(_ptr, u32, 1), kind = "precond")]
+#[rapx::requires(InBound(_ptr), kind = "precond")]
 unsafe fn require_ptr_add_inbound(_ptr: *const u32) {}
 
 // UNSOUND: simulates `ptr.add(index)` without proving `index < data.len()`.

@@ -61,6 +61,8 @@ pub(crate) struct CompoundSpec {
     pub name: String,
     pub params: Vec<String>,
     pub param_tys: Vec<String>,
+    /// Number of leading required parameters; the rest are optional.
+    pub required: usize,
     pub body: CompoundBody,
     pub doc: Vec<String>,
 }
@@ -171,7 +173,7 @@ fn parse_one_compound_block(s: &str) -> (Option<CompoundSpec>, usize) {
     }
     let body = s[body_start..j].trim();
 
-    let (params, param_tys) = parse_equation_params(params_str);
+    let (params, param_tys, required) = parse_equation_params(params_str);
     let Some(body_ast) = super::pest_conv::parse_compound_body(body, &params) else {
         return (None, 0);
     };
@@ -180,32 +182,40 @@ fn parse_one_compound_block(s: &str) -> (Option<CompoundSpec>, usize) {
         name,
         params,
         param_tys,
+        required,
         body: body_ast,
         doc: Vec::new(),
     };
     (Some(compound), j + 1)
 }
 
-fn parse_equation_params(params_str: &str) -> (Vec<String>, Vec<String>) {
+fn parse_equation_params(params_str: &str) -> (Vec<String>, Vec<String>, usize) {
     let mut params = Vec::new();
     let mut param_tys = Vec::new();
+    let mut required = 0usize;
+    let mut seen_optional = false;
     for seg in params_str.split(',') {
         let seg = seg.trim();
         if seg.is_empty() {
             continue;
         }
-        match seg.split_once(':') {
-            Some((p, ty)) => {
-                params.push(p.trim().to_string());
-                param_tys.push(ty.trim().to_string());
-            }
-            None => {
-                params.push(seg.to_string());
-                param_tys.push(String::new());
-            }
+        let (name, ty) = match seg.split_once(':') {
+            Some((p, ty)) => (p.trim().to_string(), ty.trim().to_string()),
+            None => (seg.to_string(), String::new()),
+        };
+        let (ty, optional) = match ty.strip_suffix('?') {
+            Some(stripped) => (stripped.to_string(), true),
+            None => (ty, false),
+        };
+        if optional {
+            seen_optional = true;
+        } else if !seen_optional {
+            required += 1;
         }
+        params.push(name);
+        param_tys.push(ty);
     }
-    (params, param_tys)
+    (params, param_tys, required)
 }
 
 /// Render a `syn::Expr` back to source-like text.  `proc_macro2` stringifies
@@ -378,7 +388,7 @@ fn expand_compound_body<'tcx>(
                 match a {
                     CompoundArg::Param(i) => {
                         let Some(e) = exprs.get(*i) else {
-                            return vec![unknown_property()];
+                            break;
                         };
                         resolved.push(e.clone());
                     }
@@ -573,10 +583,14 @@ pub(crate) fn expand_compound<'tcx>(
     exprs: &[Expr],
 ) -> Option<Vec<Property<'tcx>>> {
     let compound = find_compound(def_id.krate, name)?;
-    if compound.params.len() != exprs.len() {
+    if exprs.len() < compound.required || exprs.len() > compound.params.len() {
+        let expected = if compound.required == compound.params.len() {
+            compound.params.len().to_string()
+        } else {
+            format!("{}-{}", compound.required, compound.params.len())
+        };
         rap_warn!(
-            "contract compound `{name}` expects {} argument(s), got {}",
-            compound.params.len(),
+            "contract compound `{name}` expects {expected} argument(s), got {}",
             exprs.len()
         );
         return None;

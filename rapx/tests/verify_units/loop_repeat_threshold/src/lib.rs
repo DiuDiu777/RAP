@@ -19,7 +19,7 @@ unsafe fn require_allocated_u32(_ptr: *const u32) {}
 #[rapx::requires(ValidPtr(_ptr, u32, 1), kind = "precond")]
 unsafe fn require_validptr_u32(_ptr: *const u32) {}
 
-#[rapx::requires(Deref(_ptr, u32, 1), kind = "precond")]
+#[rapx::requires(Deref(_ptr), kind = "precond")]
 unsafe fn require_deref_u32(_ptr: *const u32) {}
 
 #[rapx::requires(Init(_ptr, u32, 1), kind = "precond")]

@@ -263,7 +263,7 @@ pub(crate) fn fmt_contract_expanded<'tcx>(
                         .args()
                         .get(2)
                         .map(|a| a.display_for_report(tcx, struct_def_id, fn_def_id))
-                        .unwrap_or_else(|| "?".to_string());
+                        .unwrap_or_else(|| "1".to_string());
                     format!("same_alloc([{ptr}, {ptr} + sizeof({ty})*{cnt}])")
                 }
                 _ => placeholder,

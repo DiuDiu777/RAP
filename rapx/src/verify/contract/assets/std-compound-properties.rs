@@ -10,7 +10,7 @@
 // ── Compound safety properties (primitive-sp.md §2.2) ──
 
 /// The pointer can be safely dereferenced: in-bounds and within a live allocation.
-Deref(p: Ptr, T: Ty, n: Expr) { Allocated(p, T, n) && InBound(p, T, n) }
+Deref(p: Ptr, T: Ty?, n: Expr?) { Allocated(p, T, n) && InBound(p, T, n) }
 
 /// A valid pointer (valid for reads/writes): non-null, and dereferenceable
 /// (in-bounds within a live allocation) — vacuously satisfied for a ZST, where

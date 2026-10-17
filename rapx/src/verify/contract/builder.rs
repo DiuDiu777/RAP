@@ -203,15 +203,22 @@ impl<'tcx> Property<'tcx> {
                     vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(length)],
                 )
             }
-            [target, index_expr] => {
-                let slice = super::resolve::expr_to_pest(tcx, def_id, target);
-                let index = super::resolve::expr_to_pest(tcx, def_id, index_expr);
+            [target_expr, second_expr] => {
+                if let Some(ty) = super::resolve::parse_type(tcx, def_id, second_expr, "InBound") {
+                    let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                    return Self::new_atom(
+                        PropertyKind::InBound,
+                        vec![target, PropertyArg::Ty(ty)],
+                    );
+                }
+                let slice = super::resolve::expr_to_pest(tcx, def_id, target_expr);
+                let index = super::resolve::expr_to_pest(tcx, def_id, second_expr);
                 if matches!(slice, ContractExpr::Unknown) || matches!(index, ContractExpr::Unknown)
                 {
                     return Self::new_simple(PropertyKind::Unknown);
                 }
                 // Auto-detect array index for for_each
-                let for_each = super::place::detect_array_for_each(tcx, def_id, index_expr);
+                let for_each = super::place::detect_array_for_each(tcx, def_id, second_expr);
                 let mut prop = Self::new_atom(
                     PropertyKind::InBound,
                     vec![PropertyArg::Expr(ContractExpr::IndexAccess {
@@ -222,9 +229,13 @@ impl<'tcx> Property<'tcx> {
                 prop.set_for_each(for_each);
                 prop
             }
+            [target_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                Self::new_atom(PropertyKind::InBound, vec![target])
+            }
             _ => {
                 rap_error!(
-                    "Wrong args length for InBound Tag! expected 2 or 3, got {}",
+                    "Wrong args length for InBound Tag! expected 1, 2 or 3, got {}",
                     exprs.len()
                 );
                 Self::new_simple(PropertyKind::Unknown)

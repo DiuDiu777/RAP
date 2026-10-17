@@ -28,11 +28,9 @@ pub(crate) enum BuildKind {
     Uniform,
     /// `Size(T, sized | unsized | const)` — second arg is an ident or a const.
     Size,
-    /// `Allocated(target[, T[, n[, allocator]]])` — 1/2/3/4-argument forms:
-    /// a missing `T` is inferred from the target's pointee, a missing `n`
-    /// defaults to `1`, and a missing allocator defaults to `global`.
+    /// `Allocated(target[, T[, n[, allocator]]])` — 1/2/3/4-argument forms.
     Allocated,
-    /// `InBound(index | target,index | target,T,n)` — index + for_each variants.
+    /// `InBound(target[, T[, n]] | slice, index)` — 1/2/3-arg pointer + slice-index.
     InBound,
     /// `NonOverlap(indices | a,b,T,count)` — 1/4-argument forms.
     NonOverlap,
@@ -293,7 +291,7 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "InBound",
         PropertyKind::InBound,
-        &[&[Expr], &[Target, Expr], &[Target, Ty, Expr]],
+        &[&[Target], &[Target, Ty], &[Target, Expr], &[Target, Ty, Expr]],
         ContractKind::Precond,
         BuildKind::InBound,
         "same_alloc([{0}, {0} + sizeof({1})*{2}])",

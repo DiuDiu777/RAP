@@ -2,7 +2,7 @@
 #![register_tool(rapx)]
 #![allow(dead_code)]
 
-#[rapx::requires(Deref(_ptr, u32, 1), kind = "precond")]
+#[rapx::requires(Deref(_ptr, u32), kind = "precond")]
 unsafe fn require_deref_one(_ptr: *const u32) {}
 
 // UNSOUND: one-past provenance is not dereferenceable for one element.
