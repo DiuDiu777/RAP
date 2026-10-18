@@ -27,6 +27,8 @@ impl<'tcx> Property<'tcx> {
             spec::BuildKind::Size => Self::build_size(tcx, def_id, exprs),
             spec::BuildKind::Allocated => Self::build_allocated(tcx, def_id, exprs),
             spec::BuildKind::InBound => Self::build_inbound(tcx, def_id, exprs),
+            spec::BuildKind::Init => Self::build_init(tcx, def_id, exprs),
+            spec::BuildKind::Typed => Self::build_typed(tcx, def_id, exprs),
             spec::BuildKind::NonOverlap => Self::build_nonoverlap(tcx, def_id, exprs),
             spec::BuildKind::ValidNum => Self::build_validnum(tcx, def_id, exprs),
             spec::BuildKind::Pinned => Self::build_pinned(tcx, def_id, exprs),
@@ -249,6 +251,63 @@ impl<'tcx> Property<'tcx> {
             _ => {
                 rap_error!(
                     "Wrong args length for InBound Tag! expected 1, 2 or 3, got {}",
+                    exprs.len()
+                );
+                Self::new_simple(PropertyKind::Unknown)
+            }
+        }
+    }
+
+    fn build_init(tcx: TyCtxt<'tcx>, def_id: DefId, exprs: &[Expr]) -> Self {
+        match exprs {
+            [target_expr, ty_expr, count_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Init") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                let count = super::resolve::expr_to_pest(tcx, def_id, count_expr);
+                Self::new_atom(
+                    PropertyKind::Init,
+                    vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(count)],
+                )
+            }
+            [target_expr, ty_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Init") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                Self::new_atom(PropertyKind::Init, vec![target, PropertyArg::Ty(ty)])
+            }
+            [target_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                Self::new_atom(PropertyKind::Init, vec![target])
+            }
+            _ => {
+                rap_error!(
+                    "Wrong args length for Init Tag! expected 1, 2 or 3, got {}",
+                    exprs.len()
+                );
+                Self::new_simple(PropertyKind::Unknown)
+            }
+        }
+    }
+
+    fn build_typed(tcx: TyCtxt<'tcx>, def_id: DefId, exprs: &[Expr]) -> Self {
+        match exprs {
+            [target_expr, ty_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Typed") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                Self::new_atom(PropertyKind::Typed, vec![target, PropertyArg::Ty(ty)])
+            }
+            [target_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                Self::new_atom(PropertyKind::Typed, vec![target])
+            }
+            _ => {
+                rap_error!(
+                    "Wrong args length for Typed Tag! expected 1 or 2, got {}",
                     exprs.len()
                 );
                 Self::new_simple(PropertyKind::Unknown)

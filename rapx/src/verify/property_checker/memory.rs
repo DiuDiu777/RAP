@@ -664,8 +664,7 @@ impl PropertyChecker {
         // Zero elements: `Init(p, T, 0)` is vacuously satisfied (the empty
         // range is trivially initialized, regardless of whether `p` is a
         // dangling pointer), mirroring `check_allocated`'s fast-path.
-        let count_arg = if property.args().len() >= 3 { 2 } else { 1 };
-        if self.count_is_zero(vm_state, checkpoint, property, count_arg) {
+        if self.count_is_zero(vm_state, checkpoint, property, 2) {
             return CheckResult::ProvedByRule;
         }
 
@@ -681,23 +680,16 @@ impl PropertyChecker {
                 return CheckResult::ProvedByRule;
             }
 
-        // Compute the required init range: count * sizeof(T) bytes.  The
-        // two-argument form `Init(self, n)` carries no `T`; `access_bytes`
-        // falls back to the target's pointee element type.
-        let access = if property.args().len() >= 3 {
-            Some(self.access_bytes(vm_state, property, 1, count_arg, checkpoint, &value))
-        } else if property.args().len() == 2 {
-            Some(self.access_bytes(vm_state, property, 0, count_arg, checkpoint, &value))
-        } else {
-            None
-        };
+        // `access_bytes` falls back to the target's pointee element type when
+        // `T` is omitted and to `count = 1` when `count` is omitted.
+        let access = self.access_bytes(vm_state, property, 1, 2, checkpoint, &value);
 
         if let Some(id) = value.provenance_alloc_id() {
             rap_debug!(
                 "check_init: alloc={} init_set={} access={:?}",
                 id.0,
                 vm_state.content(id).facts.initialized,
-                access.as_ref().and_then(|a| a.as_u64())
+                access.as_u64()
             );
             if vm_state.alloc(id).facts.dead {
                 // `assume_init_drop` (and other MaybeUninit drop/read ops)
@@ -710,8 +702,8 @@ impl PropertyChecker {
                 }
             }
             // Verify the entire access range is covered
-            if let Some(ref access_term) = access
-                && let (Some(access_val), Some(prov)) = (access_term.as_u64(), &value.provenance)
+            if let Some(access_val) = access.as_u64()
+                && let Some(prov) = &value.provenance
                     && let Some(prov_off) = prov.offset.as_u64() {
                         let end = prov_off + access_val;
                         let all_init = (prov_off as usize..end as usize)
@@ -721,17 +713,13 @@ impl PropertyChecker {
                         }
                     }
             if vm_state.content(id).facts.initialized {
-                if let Some(ref access_term) = access {
-                    let size = vm_state.allocation_size(id);
-                    if let (Some(access_val), Some(size_val)) =
-                        (access_term.as_u64(), size.as_u64())
-                    {
-                        // `size_val == 0` means the element type is generic
-                        // (size unknown), so the required access can't exceed a
-                        // meaningful allocation size; skip the bound check.
-                        if size_val > 0 && access_val > size_val {
-                            return CheckResult::Failed;
-                        }
+                let size = vm_state.allocation_size(id);
+                if let (Some(access_val), Some(size_val)) = (access.as_u64(), size.as_u64()) {
+                    // `size_val == 0` means the element type is generic
+                    // (size unknown), so the required access can't exceed a
+                    // meaningful allocation size; skip the bound check.
+                    if size_val > 0 && access_val > size_val {
+                        return CheckResult::Failed;
                     }
                 }
                 return CheckResult::ProvedByRule;
@@ -764,36 +752,29 @@ impl PropertyChecker {
         if let Some(origin_op) = checkpoint.args.first() {
             let origin_val = vm_state.value_of_operand(origin_op);
             if let Some(prov) = &origin_val.provenance
-                && vm_state.content(prov.alloc_id).facts.initialized
-                    && let Some(ref access_term) = access {
-                        let size = vm_state.allocation_size(prov.alloc_id);
-                        if let (Some(access_val), Some(size_val)) =
-                            (access_term.as_u64(), size.as_u64())
-                        {
+                && vm_state.content(prov.alloc_id).facts.initialized {
+                    let size = vm_state.allocation_size(prov.alloc_id);
+                    if let (Some(access_val), Some(size_val)) = (access.as_u64(), size.as_u64()) {
+                        if access_val <= size_val {
+                            return CheckResult::ProvedByRule;
+                        }
+                        // Required bytes exceed allocation → not fully init
+                    } else {
+                        return CheckResult::ProvedByRule;
+                    }
+                }
+            if let Operand::Copy(place) | Operand::Move(place) = origin_op {
+                for alloc_id in self.trace_alloc_ids(vm_state, place.local) {
+                    if vm_state.content(alloc_id).facts.initialized {
+                        let size = vm_state.allocation_size(alloc_id);
+                        if let (Some(access_val), Some(size_val)) = (access.as_u64(), size.as_u64()) {
                             if access_val <= size_val {
                                 return CheckResult::ProvedByRule;
                             }
-                            // Required bytes exceed allocation → not fully init
                         } else {
                             return CheckResult::ProvedByRule;
                         }
                     }
-                    // access=None: can't verify size, fall through
-            if let Operand::Copy(place) | Operand::Move(place) = origin_op {
-                for alloc_id in self.trace_alloc_ids(vm_state, place.local) {
-                    if vm_state.content(alloc_id).facts.initialized
-                        && let Some(ref access_term) = access {
-                            let size = vm_state.allocation_size(alloc_id);
-                            if let (Some(access_val), Some(size_val)) =
-                                (access_term.as_u64(), size.as_u64())
-                            {
-                                if access_val <= size_val {
-                                    return CheckResult::ProvedByRule;
-                                }
-                            } else {
-                                return CheckResult::ProvedByRule;
-                            }
-                        }
                 }
             }
             // No path proved init.  If the value traces to a known allocation

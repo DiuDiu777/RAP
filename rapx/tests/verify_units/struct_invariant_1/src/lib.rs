@@ -47,7 +47,7 @@ impl<T> Wrapper<T> {
     #[rapx::verify]
     #[rapx::requires(Align(self.ptr, u32), kind = "precond")]
     #[rapx::requires(InBound(self.ptr, u32, 1), kind = "precond")]
-    #[rapx::requires(Init(self.ptr, u32, 1), kind = "precond")]
+    #[rapx::requires(Init(self.ptr, u32), kind = "precond")]
     unsafe fn read_unchecked(&self) -> u32 {
         let ptr = self.ptr;
 

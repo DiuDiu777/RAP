@@ -32,6 +32,10 @@ pub(crate) enum BuildKind {
     Allocated,
     /// `InBound(target[, T[, n]] | slice, index)` — 1/2/3-arg pointer + slice-index.
     InBound,
+    /// `Init(target[, T[, n]])` — 1/2/3-argument forms.
+    Init,
+    /// `Typed(target[, T])` — 1/2-argument forms.
+    Typed,
     /// `NonOverlap(indices | a,b,T,count)` — 1/4-argument forms.
     NonOverlap,
     /// `ValidNum(predicate | value, interval)`.
@@ -145,17 +149,17 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "Typed",
         PropertyKind::Typed,
-        &[&[Target, Ty]],
+        &[&[Target], &[Target, Ty]],
         ContractKind::Precond,
-        BuildKind::Uniform,
+        BuildKind::Typed,
         "*{0} holds TypeInvariant({1})",
     ),
     ps(
         "Init",
         PropertyKind::Init,
-        &[&[Target, Ty, Expr], &[Target, Expr]],
+        &[&[Target], &[Target, Ty], &[Target, Ty, Expr]],
         ContractKind::Precond,
-        BuildKind::Uniform,
+        BuildKind::Init,
         "forall i in 0..{2}: *({0} + i*sizeof({1})) |= type_invariant({1}), and the {2} value(s) are initialized",
     ),
     ps(

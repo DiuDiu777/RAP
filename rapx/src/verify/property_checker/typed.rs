@@ -30,14 +30,14 @@ impl PropertyChecker {
         let Some(value) = self.target_value(vm_state, checkpoint, property) else {
             return CheckResult::Unknown(UnknownReason::Unimplemented);
         };
-        let expected = Self::ty_arg(property, 1);
+        let value_elem_ty = match value.ty.kind() {
+            TyKind::RawPtr(inner, _) | TyKind::Ref(_, inner, _) => *inner,
+            _ => value.ty,
+        };
+        // A missing `Ty` is inferred from the target's pointee type.
+        let expected = Self::ty_arg(property, 1).or(Some(value_elem_ty));
         if let Some(expected_ty) = expected {
             let expected_ty = self.instantiate_callsite_ty(vm_state, checkpoint, expected_ty);
-
-            let value_elem_ty = match value.ty.kind() {
-                TyKind::RawPtr(inner, _) | TyKind::Ref(_, inner, _) => *inner,
-                _ => value.ty,
-            };
 
             // `MaybeUninit<T>` (and slices/arrays of it) carries no validity
             // invariant: any byte pattern is a valid `MaybeUninit<T>`.  A byte

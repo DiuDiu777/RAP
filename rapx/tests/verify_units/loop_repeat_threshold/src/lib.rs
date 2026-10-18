@@ -22,10 +22,10 @@ unsafe fn require_validptr_u32(_ptr: *const u32) {}
 #[rapx::requires(Deref(_ptr), kind = "precond")]
 unsafe fn require_deref_u32(_ptr: *const u32) {}
 
-#[rapx::requires(Init(_ptr, u32, 1), kind = "precond")]
+#[rapx::requires(Init(_ptr), kind = "precond")]
 unsafe fn require_init_u32(_ptr: *const u32) {}
 
-#[rapx::requires(Typed(_ptr, u32), kind = "precond")]
+#[rapx::requires(Typed(_ptr), kind = "precond")]
 unsafe fn require_typed_u32(_ptr: *const u32) {}
 
 #[rapx::requires(ValidNum(_value < 4), kind = "precond")]
