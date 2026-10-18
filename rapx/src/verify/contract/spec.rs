@@ -36,7 +36,11 @@ pub(crate) enum BuildKind {
     Init,
     /// `Typed(target[, T])` — 1/2-argument forms.
     Typed,
-    /// `NonOverlap(indices | a,b,T,count)` — 1/4-argument forms.
+    /// `NonVolatile(target[, T[, len]])` — 1/2/3-argument forms.
+    NonVolatile,
+    /// `Owning(target[, T[, n]])` — 1/2/3-argument forms.
+    Owning,
+    /// `NonOverlap(indices | a, b[, T[, count]])` — 1/2/3/4-argument forms.
     NonOverlap,
     /// `ValidNum(predicate | value, interval)`.
     ValidNum,
@@ -115,9 +119,9 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "Owning",
         PropertyKind::Owning,
-        &[&[Target]],
+        &[&[Target], &[Target, Ty], &[Target, Ty, Expr]],
         ContractKind::Precond,
-        BuildKind::Uniform,
+        BuildKind::Owning,
         "ownership(*{0}) = none: no other live owner points to the pointee",
     ),
     // Unverified: the checker returns `Unknown` (no implementation yet).
@@ -174,9 +178,9 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "NonVolatile",
         PropertyKind::NonVolatile,
-        &[&[Target, Ty, Expr]],
+        &[&[Target], &[Target, Ty], &[Target, Ty, Expr]],
         ContractKind::Precond,
-        BuildKind::Uniform,
+        BuildKind::NonVolatile,
         "{0} does not reference volatile memory",
     ),
     ps(
@@ -303,7 +307,7 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "NonOverlap",
         PropertyKind::NonOverlap,
-        &[&[Target], &[Target, Target, Ty, Expr]],
+        &[&[Target], &[Target, Target], &[Target, Target, Ty], &[Target, Target, Ty, Expr]],
         ContractKind::Precond,
         BuildKind::NonOverlap,
         "[{0}] are pairwise disjoint memory ranges",

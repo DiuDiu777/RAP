@@ -71,7 +71,7 @@ impl CStr {
     ///
     /// `ptr` must be non-null and point to a valid, nul-terminated buffer.
     #[rapx::verify]
-    #[rapx::requires(Allocated(ptr, u8, 1, global))]
+    #[rapx::requires(Allocated(ptr, u8, 1, Global))]
     #[rapx::requires(ValidCStr(ptr, 1))]
     #[rapx::requires(NonNull(ptr))]
     #[rapx::requires(Alias(ptr, return))]

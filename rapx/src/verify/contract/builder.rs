@@ -29,6 +29,8 @@ impl<'tcx> Property<'tcx> {
             spec::BuildKind::InBound => Self::build_inbound(tcx, def_id, exprs),
             spec::BuildKind::Init => Self::build_init(tcx, def_id, exprs),
             spec::BuildKind::Typed => Self::build_typed(tcx, def_id, exprs),
+            spec::BuildKind::NonVolatile => Self::build_nonvolatile(tcx, def_id, exprs),
+            spec::BuildKind::Owning => Self::build_owning(tcx, def_id, exprs),
             spec::BuildKind::NonOverlap => Self::build_nonoverlap(tcx, def_id, exprs),
             spec::BuildKind::ValidNum => Self::build_validnum(tcx, def_id, exprs),
             spec::BuildKind::Pinned => Self::build_pinned(tcx, def_id, exprs),
@@ -171,7 +173,7 @@ impl<'tcx> Property<'tcx> {
                 let length = super::resolve::expr_to_pest(tcx, def_id, len_expr);
                 let allocator = access_ident_recursive(allocator_expr)
                     .map(|(name, _)| name)
-                    .unwrap_or_else(|| "global".to_string());
+                    .unwrap_or_else(|| "Global".to_string());
                 Self::new_atom(
                     PropertyKind::Allocated,
                     vec![
@@ -315,6 +317,76 @@ impl<'tcx> Property<'tcx> {
         }
     }
 
+    fn build_nonvolatile(tcx: TyCtxt<'tcx>, def_id: DefId, exprs: &[Expr]) -> Self {
+        match exprs {
+            [target_expr, ty_expr, len_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "NonVolatile")
+                else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                let len = super::resolve::expr_to_pest(tcx, def_id, len_expr);
+                Self::new_atom(
+                    PropertyKind::NonVolatile,
+                    vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(len)],
+                )
+            }
+            [target_expr, ty_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "NonVolatile")
+                else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                Self::new_atom(PropertyKind::NonVolatile, vec![target, PropertyArg::Ty(ty)])
+            }
+            [target_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                Self::new_atom(PropertyKind::NonVolatile, vec![target])
+            }
+            _ => {
+                rap_error!(
+                    "Wrong args length for NonVolatile Tag! expected 1, 2 or 3, got {}",
+                    exprs.len()
+                );
+                Self::new_simple(PropertyKind::Unknown)
+            }
+        }
+    }
+
+    fn build_owning(tcx: TyCtxt<'tcx>, def_id: DefId, exprs: &[Expr]) -> Self {
+        match exprs {
+            [target_expr, ty_expr, count_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Owning") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                let count = super::resolve::expr_to_pest(tcx, def_id, count_expr);
+                Self::new_atom(
+                    PropertyKind::Owning,
+                    vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(count)],
+                )
+            }
+            [target_expr, ty_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Owning") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                Self::new_atom(PropertyKind::Owning, vec![target, PropertyArg::Ty(ty)])
+            }
+            [target_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                Self::new_atom(PropertyKind::Owning, vec![target])
+            }
+            _ => {
+                rap_error!(
+                    "Wrong args length for Owning Tag! expected 1, 2 or 3, got {}",
+                    exprs.len()
+                );
+                Self::new_simple(PropertyKind::Unknown)
+            }
+        }
+    }
+
     fn build_nonoverlap(tcx: TyCtxt<'tcx>, def_id: DefId, exprs: &[Expr]) -> Self {
         match exprs {
             [indices] => {
@@ -334,9 +406,39 @@ impl<'tcx> Property<'tcx> {
                     vec![left, right, PropertyArg::Ty(ty), PropertyArg::Expr(count)],
                 )
             }
+            [a, b, ty_expr] => {
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "NonOverlap")
+                else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                let left = super::resolve::parse_target_arg(tcx, def_id, a);
+                let right = super::resolve::parse_target_arg(tcx, def_id, b);
+                Self::new_atom(PropertyKind::NonOverlap, vec![left, right, PropertyArg::Ty(ty)])
+            }
+            [a, b] => {
+                let left = super::resolve::parse_target_arg(tcx, def_id, a);
+                let right = super::resolve::parse_target_arg(tcx, def_id, b);
+                let ta = super::place::parse_expr_into_local_and_ty(tcx, def_id, a)
+                    .and_then(|(_, _, ty)| crate::helpers::mir_utils::pointee_ty(ty));
+                let tb = super::place::parse_expr_into_local_and_ty(tcx, def_id, b)
+                    .and_then(|(_, _, ty)| crate::helpers::mir_utils::pointee_ty(ty));
+                match (ta, tb) {
+                    (Some(ta), Some(tb)) if ta == tb => Self::new_atom(
+                        PropertyKind::NonOverlap,
+                        vec![left, right, PropertyArg::Ty(ta)],
+                    ),
+                    (Some(_), Some(_)) => {
+                        rap_error!(
+                            "NonOverlap(a, b): `a` and `b` have different pointee types; specify `T` explicitly"
+                        );
+                        Self::new_simple(PropertyKind::Unknown)
+                    }
+                    _ => Self::new_atom(PropertyKind::NonOverlap, vec![left, right]),
+                }
+            }
             _ => {
                 rap_error!(
-                    "Wrong args length for NonOverlap Tag! expected 1 or 4, got {}",
+                    "Wrong args length for NonOverlap Tag! expected 1, 2, 3 or 4, got {}",
                     exprs.len()
                 );
                 Self::new_simple(PropertyKind::Unknown)
