@@ -211,6 +211,19 @@ impl<'tcx> Property<'tcx> {
                         vec![target, PropertyArg::Ty(ty)],
                     );
                 }
+                if let Some((_, _, ty)) =
+                    super::place::parse_expr_into_local_and_ty(tcx, def_id, target_expr)
+                    && !matches!(
+                        ty.peel_refs().kind(),
+                        rustc_middle::ty::TyKind::Slice(..)
+                            | rustc_middle::ty::TyKind::Array(..)
+                    )
+                {
+                    rap_error!(
+                        "InBound(slice, index): first argument must be a slice or array, got `{ty}`"
+                    );
+                    return Self::new_simple(PropertyKind::Unknown);
+                }
                 let slice = super::resolve::expr_to_pest(tcx, def_id, target_expr);
                 let index = super::resolve::expr_to_pest(tcx, def_id, second_expr);
                 if matches!(slice, ContractExpr::Unknown) || matches!(index, ContractExpr::Unknown)
