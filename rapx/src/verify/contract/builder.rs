@@ -296,6 +296,17 @@ impl<'tcx> Property<'tcx> {
 
     fn build_typed(tcx: TyCtxt<'tcx>, def_id: DefId, exprs: &[Expr]) -> Self {
         match exprs {
+            [target_expr, ty_expr, count_expr] => {
+                let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
+                let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Typed") else {
+                    return Self::new_simple(PropertyKind::Unknown);
+                };
+                let count = super::resolve::expr_to_pest(tcx, def_id, count_expr);
+                Self::new_atom(
+                    PropertyKind::Typed,
+                    vec![target, PropertyArg::Ty(ty), PropertyArg::Expr(count)],
+                )
+            }
             [target_expr, ty_expr] => {
                 let target = super::resolve::parse_target_arg(tcx, def_id, target_expr);
                 let Some(ty) = super::resolve::parse_type(tcx, def_id, ty_expr, "Typed") else {
@@ -309,7 +320,7 @@ impl<'tcx> Property<'tcx> {
             }
             _ => {
                 rap_error!(
-                    "Wrong args length for Typed Tag! expected 1 or 2, got {}",
+                    "Wrong args length for Typed Tag! expected 1, 2 or 3, got {}",
                     exprs.len()
                 );
                 Self::new_simple(PropertyKind::Unknown)

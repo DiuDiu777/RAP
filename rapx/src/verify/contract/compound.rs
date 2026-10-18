@@ -384,13 +384,26 @@ fn expand_compound_body<'tcx>(
             }
 
             let mut resolved: Vec<Expr> = Vec::with_capacity(args.len());
-            for a in args {
+            for (idx, a) in args.iter().enumerate() {
                 match a {
                     CompoundArg::Param(i) => {
-                        let Some(e) = exprs.get(*i) else {
-                            break;
-                        };
-                        resolved.push(e.clone());
+                        match exprs.get(*i) {
+                            Some(e) => resolved.push(e.clone()),
+                            None => {
+                                // Omitted trailing optional parameter. Truncate
+                                // the call only when the remaining args are all
+                                // params too; a literal after the omitted param
+                                // (e.g. `Size(T, 0)` with `T` omitted) has no
+                                // sensible partial form — drop the whole call.
+                                if args[idx..]
+                                    .iter()
+                                    .any(|a| matches!(a, CompoundArg::Lit(_)))
+                                {
+                                    return Vec::new();
+                                }
+                                break;
+                            }
+                        }
                     }
                     CompoundArg::Lit(s) => {
                         let Ok(mut e) = syn::parse_str::<Expr>(s) else {

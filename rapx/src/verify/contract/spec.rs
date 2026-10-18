@@ -34,7 +34,7 @@ pub(crate) enum BuildKind {
     InBound,
     /// `Init(target[, T[, n]])` — 1/2/3-argument forms.
     Init,
-    /// `Typed(target[, T])` — 1/2-argument forms.
+    /// `Typed(target[, T[, n]])` — 1/2/3-argument forms.
     Typed,
     /// `NonVolatile(target[, T[, len]])` — 1/2/3-argument forms.
     NonVolatile,
@@ -153,7 +153,7 @@ static SPECS: &[PropertySpec] = &[
     ps(
         "Typed",
         PropertyKind::Typed,
-        &[&[Target], &[Target, Ty]],
+        &[&[Target], &[Target, Ty], &[Target, Ty, Expr]],
         ContractKind::Precond,
         BuildKind::Typed,
         "*{0} holds TypeInvariant({1})",

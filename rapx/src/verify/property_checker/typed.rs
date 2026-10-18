@@ -34,6 +34,24 @@ impl PropertyChecker {
             TyKind::RawPtr(inner, _) | TyKind::Ref(_, inner, _) => *inner,
             _ => value.ty,
         };
+        // Checker-level count: the accessed range `size_of(T) * count` must lie
+        // within the allocation (a missing `count` defaults to `1`).
+        if let Some(alloc_id) = value.provenance_alloc_id() {
+            let access = self.access_bytes(vm_state, property, 1, 2, checkpoint, &value);
+            let size = vm_state.allocation_size(alloc_id);
+            if let (Some(off), Some(size_val), Some(access_val)) = (
+                value
+                    .provenance
+                    .as_ref()
+                    .and_then(|p| p.offset.simplify().as_u64()),
+                size.as_u64(),
+                access.as_u64(),
+            ) {
+                if off.saturating_add(access_val) > size_val {
+                    return CheckResult::Failed;
+                }
+            }
+        }
         // A missing `Ty` is inferred from the target's pointee type.
         let expected = Self::ty_arg(property, 1).or(Some(value_elem_ty));
         if let Some(expected_ty) = expected {

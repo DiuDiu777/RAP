@@ -16,7 +16,7 @@ Deref(p: Ptr, T: Ty?, n: Expr?) { Allocated(p, T, n) && InBound(p, T, n) }
 /// (in-bounds within a live allocation) — vacuously satisfied for a ZST, where
 /// non-nullness alone suffices ("every non-null pointer is valid for size-0
 /// accesses"; a null pointer is *never* valid).
-ValidPtr(p: Ptr, T: Ty, n: Expr) { NonNull(p) && (Size(T, 0) || Deref(p, T, n)) }
+ValidPtr(p: Ptr, T: Ty?, n: Expr?) { NonNull(p) && (Size(T, 0) || Deref(p, T, n)) }
 
 /// A raw pointer meets all requirements for sound `&T`/`&mut T` conversion:
 /// initialized, valid (non-null + dereferenceable), aligned, no aliasing
@@ -33,7 +33,7 @@ Ptr2RefUninit(p: Ptr, T: Ty) { Typed(p, T) && ValidPtr(p, T, 1) && Align(p, T) &
 /// value (`ValidPtr`), and after the drop the freed memory must not be used
 /// again (`Alias` hazard — the `ManuallyDrop` wrapper stays live, so a later use
 /// reads through the freed allocation).
-Drop(p: Ptr, T: Ty) { ValidPtr(p, T, 1) && Alias(p) }
+Drop(p: Ptr, T: Ty?) { ValidPtr(p, T) && Alias(p) }
 
 /// The pointer matches the `Layout` it was allocated with (`realloc`/`dealloc`
 /// require "the same layout that was used to allocate the block"): aligned to
