@@ -32,7 +32,7 @@ pub unsafe fn unchecked_sub_ext(lhs: u32, rhs: u32) -> u32 {
 
 /// `u32::unchecked_mul`: `lhs * rhs`, no overflow (non-linear product is a trust boundary).
 #[rapx::verify]
-#[rapx::requires(ValidNum(0 == 0), kind = "precond")]
+#[rapx::requires(ValidNum(lhs * rhs <= u32::MAX), kind = "precond")]
 pub unsafe fn unchecked_mul_ext(lhs: u32, rhs: u32) -> u32 {
     // SAFETY: the caller guarantees `lhs * rhs` does not overflow.
     unsafe { lhs.unchecked_mul(rhs) }

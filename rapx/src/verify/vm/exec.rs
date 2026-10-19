@@ -2843,6 +2843,20 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                 let r = self.eval_contract_expr_simple(rhs)?;
                 self.eval_numeric_binary(&l, &r, *op)
             }
+            ContractExpr::Unary { op, expr } => {
+                let v = self.eval_contract_expr_simple(expr)?;
+                match op {
+                    crate::verify::contract::NumericUnaryOp::Neg => {
+                        let zero = Int::from_u64(self.z3_ctx, 0);
+                        Some(Int::sub(self.z3_ctx, &[&zero, &v]))
+                    }
+                    crate::verify::contract::NumericUnaryOp::Not => {
+                        let zero = Int::from_u64(self.z3_ctx, 0);
+                        let one = Int::from_u64(self.z3_ctx, 1);
+                        Some(v._eq(&zero).ite(&one, &zero))
+                    }
+                }
+            }
             ContractExpr::Const(n) => Some(Int::from_u64(self.z3_ctx, *n as u64)),
             _ => None,
         }

@@ -779,7 +779,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "cond"
+        "cond != 0"
       ]
     }
   ],
@@ -5960,7 +5960,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "cond"
+        "cond != 0"
       ]
     }
   ],
@@ -6230,7 +6230,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self * rhs",
+        "[Self::MIN, Self::MAX]"
       ]
     }
   ],
@@ -6238,7 +6239,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self + rhs",
+        "[Self::MIN, Self::MAX]"
       ]
     }
   ],
@@ -6246,7 +6248,8 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "self - rhs",
+        "[Self::MIN, Self::MAX]"
       ]
     }
   ],
@@ -6254,7 +6257,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "rhs < Self::BITS"
       ]
     }
   ],
@@ -6262,7 +6265,7 @@
     {
       "tag": "ValidNum",
       "args": [
-        "0 == 0"
+        "rhs < Self::BITS"
       ]
     }
   ],

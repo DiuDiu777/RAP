@@ -17,7 +17,7 @@ use rustc_hash::FxHashSet;
 use rustc_middle::mir::Operand;
 use rustc_middle::ty::TyKind;
 use z3::{
-    SatResult, Solver,
+    SatResult, Solver, Tactic,
     ast::{Ast, Bool, Int},
 };
 
@@ -169,6 +169,8 @@ impl PropertyChecker {
         // predicate — these are not visible in the ContractExpr tree.
         self.inject_vm_div_axioms(vm_state, solver, &pred.lhs);
         self.inject_vm_div_axioms(vm_state, solver, &pred.rhs);
+        self.inject_int_range_axioms(vm_state, solver, checkpoint, &pred.lhs);
+        self.inject_int_range_axioms(vm_state, solver, checkpoint, &pred.rhs);
         // For Ne(pred != 0): assert path conditions so that layout
         // constants (e.g. align_of >= 1) constrain the solver,
         // while regular parameters remain unconstrained.
@@ -199,6 +201,8 @@ impl PropertyChecker {
             self.inject_nia_axioms(vm_state, solver, checkpoint, &pred.rhs);
             self.inject_vm_div_axioms(vm_state, solver, &pred.lhs);
             self.inject_vm_div_axioms(vm_state, solver, &pred.rhs);
+            self.inject_int_range_axioms(vm_state, solver, checkpoint, &pred.lhs);
+            self.inject_int_range_axioms(vm_state, solver, checkpoint, &pred.rhs);
             solver.assert(&condition.not());
             r = match solver.check() {
                 SatResult::Unsat => Some(CheckResult::ProvedBySmt),
@@ -207,7 +211,104 @@ impl PropertyChecker {
             };
         }
         solver.pop(1);
+        // If NIA left the check inconclusive and the predicate involves a
+        // multiplication, retry with bit-blasting (`nla2bv`), which is decidable
+        // for the bounded integer variables the range axioms pin down.
+        if r.is_none()
+            && (self.expr_has_mul(&pred.lhs) || self.expr_has_mul(&pred.rhs))
+        {
+            let bv_solver = Tactic::new(vm_state.z3_ctx, "nla2bv").solver();
+            vm_state.assert_all(&bv_solver);
+            self.inject_nia_axioms(vm_state, &bv_solver, checkpoint, &pred.lhs);
+            self.inject_nia_axioms(vm_state, &bv_solver, checkpoint, &pred.rhs);
+            self.inject_int_range_axioms(vm_state, &bv_solver, checkpoint, &pred.lhs);
+            self.inject_int_range_axioms(vm_state, &bv_solver, checkpoint, &pred.rhs);
+            bv_solver.assert(&condition.not());
+            r = match bv_solver.check() {
+                SatResult::Unsat => Some(CheckResult::ProvedBySmt),
+                SatResult::Sat => Some(CheckResult::Failed),
+                _ => r,
+            };
+        }
         r
+    }
+
+    fn expr_has_mul<'tcx>(&self, expr: &ContractExpr<'tcx>) -> bool {
+        match expr {
+            ContractExpr::Binary { op: NumericBinOp::Mul, .. } => true,
+            ContractExpr::Binary { lhs, rhs, .. } => {
+                self.expr_has_mul(lhs) || self.expr_has_mul(rhs)
+            }
+            ContractExpr::Unary { expr, .. } => self.expr_has_mul(expr),
+            ContractExpr::Len(inner) => self.expr_has_mul(inner),
+            ContractExpr::If {
+                then_expr,
+                else_expr,
+                ..
+            } => self.expr_has_mul(then_expr) || self.expr_has_mul(else_expr),
+            _ => false,
+        }
+    }
+
+    /// Inject `T::MIN <= term <= T::MAX` for every integer-typed place in
+    /// `expr`, so that range-redundant bounds (e.g. `lhs - rhs <= u32::MAX`
+    /// for `unchecked_sub`) become provable from the operands' types alone.
+    fn inject_int_range_axioms<'z3, 'tcx>(
+        &self,
+        vm_state: &VmState<'z3, 'tcx>,
+        solver: &Solver<'z3>,
+        checkpoint: Option<&Checkpoint<'tcx>>,
+        expr: &ContractExpr<'tcx>,
+    ) {
+        match expr {
+            ContractExpr::Place(_) => {
+                let Some(v) = self.eval_contract_expr_to_value(vm_state, checkpoint, expr) else {
+                    return;
+                };
+                let bits = vm_state.size_of_ty(v.ty) * 8;
+                if !(bits > 0 && bits < 128) {
+                    return;
+                }
+                let Some((min, max)) =
+                    crate::verify::contract::resolve::int_type_min_max(vm_state.tcx, v.ty)
+                else {
+                    return;
+                };
+                let Some(term) = self.eval_contract_expr(vm_state, checkpoint, expr) else {
+                    return;
+                };
+                match v.ty.kind() {
+                    TyKind::Int(_) => {
+                        solver.assert(&term.ge(&Int::from_i64(vm_state.z3_ctx, -(min as i128) as i64)));
+                        solver.assert(&term.le(&Int::from_i64(vm_state.z3_ctx, max as i64)));
+                    }
+                    TyKind::Uint(_) => {
+                        solver.assert(&term.ge(&Int::from_u64(vm_state.z3_ctx, 0)));
+                        solver.assert(&term.le(&Int::from_u64(vm_state.z3_ctx, max as u64)));
+                    }
+                    _ => {}
+                }
+            }
+            ContractExpr::Binary { lhs, rhs, .. } => {
+                self.inject_int_range_axioms(vm_state, solver, checkpoint, lhs);
+                self.inject_int_range_axioms(vm_state, solver, checkpoint, rhs);
+            }
+            ContractExpr::Unary { expr, .. } => {
+                self.inject_int_range_axioms(vm_state, solver, checkpoint, expr);
+            }
+            ContractExpr::Len(inner) => {
+                self.inject_int_range_axioms(vm_state, solver, checkpoint, inner);
+            }
+            ContractExpr::If {
+                then_expr,
+                else_expr,
+                ..
+            } => {
+                self.inject_int_range_axioms(vm_state, solver, checkpoint, then_expr);
+                self.inject_int_range_axioms(vm_state, solver, checkpoint, else_expr);
+            }
+            _ => {}
+        }
     }
 
     pub(super) fn inject_nia_axioms<'z3, 'tcx>(

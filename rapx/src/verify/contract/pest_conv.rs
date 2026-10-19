@@ -112,12 +112,7 @@ fn conv_predicate<'tcx>(
                     let rhs = conv_bit_or(tcx, def_id, inner.next()?);
                     Some(NumericPredicate::new(lhs, op, rhs))
                 }
-                // Bare expression → `expr != 0`.
-                None => Some(NumericPredicate::new(
-                    lhs,
-                    RelOp::Ne,
-                    ContractExpr::Const(0),
-                )),
+                None => None,
             }
         }
         Rule::not_is_empty => {

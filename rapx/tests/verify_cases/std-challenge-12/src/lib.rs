@@ -209,7 +209,7 @@ pub fn saturating_mul_ext(a: NonZero<u32>, b: NonZero<u32>) -> NonZero<u32> {
 /// # Safety
 /// Overflow is unchecked; it is UB to overflow even if the result would wrap to a non-zero value.
 #[rapx::verify]
-#[rapx::requires(ValidNum(0 == 0))]
+#[rapx::requires(ValidNum(a.0 * b.0 <= u32::MAX))]
 pub unsafe fn unchecked_mul_ext(a: NonZero<u32>, b: NonZero<u32>) -> NonZero<u32> {
     // SAFETY: the caller ensures there is no overflow, and the product of two
     // non-zero values is non-zero.
@@ -262,7 +262,7 @@ pub fn saturating_add_ext(a: NonZero<u32>, other: u32) -> NonZero<u32> {
 /// # Safety
 /// Overflow is unchecked; it is UB to overflow even if the result would wrap to a non-zero value.
 #[rapx::verify]
-#[rapx::requires(ValidNum(get_ext(a) <= u32::MAX - other))]
+#[rapx::requires(ValidNum(a.0 <= u32::MAX - other))]
 pub unsafe fn unchecked_add_ext(a: NonZero<u32>, other: u32) -> NonZero<u32> {
     // SAFETY: the caller ensures there is no overflow, and the sum has a
     // non-zero addend, so it is non-zero.

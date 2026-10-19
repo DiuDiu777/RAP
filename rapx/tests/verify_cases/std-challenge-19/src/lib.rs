@@ -252,7 +252,8 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be the layout used to construct `self`; its size must be a multiple of its alignment.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size * self.cap <= usize::MAX))]
     unsafe fn current_memory_ext(&self, elem_layout: Layout) -> Option<(NonNull<u8>, Layout)> {
         if elem_layout.size() == 0 || self.cap == 0 {
             None
@@ -271,7 +272,7 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be valid for `self`; its size a multiple of its alignment.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
     unsafe fn try_reserve_ext(
         &mut self,
         len: usize,
@@ -290,7 +291,7 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be valid for `self`; its size a multiple of its alignment.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
     unsafe fn try_reserve_exact_ext(
         &mut self,
         len: usize,
@@ -323,7 +324,7 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be valid for `self` (size a multiple of its alignment); `len + additional` must exceed the current capacity.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
     unsafe fn grow_amortized_ext(
         &mut self,
         len: usize,
@@ -358,7 +359,7 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be valid for `self` (size a multiple of its alignment); `len + additional` must exceed the current capacity.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
     unsafe fn grow_exact_ext(
         &mut self,
         len: usize,
@@ -384,7 +385,8 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be valid for `self` (size a multiple of its alignment); `cap` must exceed the current capacity.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size * self.cap <= usize::MAX))]
     unsafe fn finish_grow_ext(
         &self,
         cap: usize,
@@ -413,7 +415,7 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `elem_layout` must be valid for `self` (size a multiple of its alignment); `cap` must be <= `self.capacity(...)`.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
     unsafe fn shrink_ext(&mut self, cap: usize, elem_layout: Layout) -> Result<(), TryReserveErrorExt> {
         assert!(cap <= self.capacity_ext(elem_layout.size()), "Tried to shrink to a larger capacity");
         // SAFETY: just checked this isn't trying to grow.
@@ -425,8 +427,8 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// `cap <= self.capacity()`.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(cap <= self.capacity_ext(elem_layout.size())))]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(cap <= self.capacity_ext(elem_layout.size)))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
     unsafe fn shrink_unchecked_ext(
         &mut self,
         cap: usize,
@@ -476,7 +478,8 @@ impl<A: Allocator> RawVecInner<A> {
     /// # Safety
     /// Deallocates without updating `ptr`/`cap`; do not use the buffer after this returns.
     #[rapx::verify]
-    #[rapx::requires(ValidNum(elem_layout.size() % elem_layout.align() == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size % elem_layout.align == 0))]
+    #[rapx::requires(ValidNum(elem_layout.size * self.cap <= usize::MAX))]
     unsafe fn deallocate_ext(&mut self, elem_layout: Layout) {
         // SAFETY: precondition passed to caller.
         if !(elem_layout.size() == 0 || self.cap == 0) {
