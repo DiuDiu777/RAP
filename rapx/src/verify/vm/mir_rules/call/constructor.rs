@@ -4,6 +4,7 @@ use rustc_middle::{
 };
 use z3::ast::Int;
 
+use crate::def_ids::other_api;
 use crate::helpers::mir_utils;
 use crate::verify::api_classify;
 
@@ -19,6 +20,25 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         has_invariant: bool,
     ) {
         let ty = self.body().local_decls[destination].ty;
+        if other_api::is_nonnull_dangling(self.tcx, callee)
+            && let TyKind::Adt(_, substs) = ty.kind()
+            && let Some(pointee) = substs.first().and_then(|arg| arg.as_type())
+            && let Some(field_ty) = self.field_type_at(destination, &[0])
+        {
+            // `dangling()` returns an aligned address without allocation
+            // provenance. NonNull's type invariant alone only proves non-null.
+            let align = self.align_sym(pointee);
+            let mut result = VmValue::new(align.clone(), ty);
+            result.facts.non_null = true;
+            result.facts.dangling = true;
+            result.facts.init = true;
+            result.facts.align_n = Some(align);
+            let mut pointer = result.clone();
+            pointer.ty = field_ty;
+            self.set_local(destination, result);
+            self.set_field_value(destination, vec![0], pointer);
+            return;
+        }
         if !has_invariant {
             self.set_local(
                 destination,
@@ -65,7 +85,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             self.set_field_value(destination, path, field);
             return;
         }
-        let box_value_constructor = api_classify::is_std_box_value_constructor(self.tcx, callee);
+        let box_new = other_api::is_box_new(self.tcx, callee);
         if let TyKind::Adt(adt, _) = ty.kind()
             && (api_classify::is_std_vec(adt.did())
                 || api_classify::is_std_box(adt.did())
@@ -76,7 +96,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     && (matches!(value.ty.kind(), TyKind::RawPtr(..))
                         || matches!(value.ty.kind(), TyKind::Adt(def, _) if api_classify::is_std_nonnull(def.did())))
             })
-            && !box_value_constructor
+            && !box_new
             && let Some(path) = self.container_ptr_field(ty)
         {
             let mut result = pointer.clone();
@@ -114,7 +134,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         if self.init_box_vec_param(destination, ty, destination.as_usize(), &mut facts)
             || self.init_struct_param(destination, ty, destination.as_usize(), &mut facts)
         {
-            if box_value_constructor
+            if box_new
                 && let Some(operand) = first_operand
                 && let Some(pointee_ty) = args.first().map(|value| value.ty)
                 && let Some(heap_id) = self

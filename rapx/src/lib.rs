@@ -41,7 +41,7 @@ use crate::{
     cli::{
         AliasStrategyKind, AnalysisKind, CheckArgs, Commands, PostfixRepeat, RapxArgs, VerifyArgs,
     },
-    verify::{driver::VerifyRun, loop_sensitivity::RepeatStrategy, target::PrepareTargets},
+    verify::{driver::VerifyRun, path::RepeatStrategy, target::PrepareTargets},
 };
 use analysis::{
     Analysis,
@@ -62,8 +62,6 @@ use rustc_ast::ast;
 use rustc_driver::{Callbacks, Compilation};
 use rustc_interface::interface::{self, Compiler};
 use rustc_middle::{ty::TyCtxt, util::Providers};
-#[cfg(not(rapx_ge_95))]
-use rustc_session::search_paths::PathKind;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -110,13 +108,8 @@ impl Callbacks for RapCallback {
                 // HACK: rustc will emit "crate ... required to be available in rlib format, but
                 // was not found in this form" errors once we use `tcx.dependency_formats()` if
                 // there's no rlib provided, so setting a dummy path here to workaround those errors.
-                #[cfg(rapx_ge_95)]
                 {
                     Arc::make_mut(&mut crate_source).rlib = Some(PathBuf::new());
-                }
-                #[cfg(not(rapx_ge_95))]
-                {
-                    Arc::make_mut(&mut crate_source).rlib = Some((PathBuf::new(), PathKind::All));
                 }
                 crate_source
             };
@@ -144,7 +137,7 @@ impl Callbacks for RapCallback {
     fn after_analysis<'tcx>(&mut self, _compiler: &Compiler, tcx: TyCtxt<'tcx>) -> Compilation {
         rap_trace!("Execute after_analysis() of compiler callbacks");
         rustc_public::rustc_internal::run(tcx, || {
-            def_ids::init(tcx);
+            def_ids::type_ids::init(tcx);
             if self.is_building_test_crate() {
                 start_analyzer(tcx, self);
             } else {
@@ -283,7 +276,7 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             postfix_repeat,
             mode,
             skip_invariant,
-            inline_ctor,
+            constructor_mir,
             crate_name,
             module,
             debug_contracts,
@@ -291,12 +284,12 @@ pub fn start_analyzer(tcx: TyCtxt, callback: &RapCallback) {
             trait_impl_limit,
             ..
         }) => {
-            crate::verify::options::set_inline_ctor(if *skip_invariant
-                && matches!(*inline_ctor, crate::cli::InlineCtor::Default)
+            crate::verify::constructor_policy::set_constructor_mir_mode(if *skip_invariant
+                && matches!(*constructor_mir, crate::cli::ConstructorMirMode::Default)
             {
-                crate::cli::InlineCtor::True
+                crate::cli::ConstructorMirMode::True
             } else {
-                *inline_ctor
+                *constructor_mir
             });
             if let Some(n) = path_limit {
                 crate::limit::set_path_limit(*n);

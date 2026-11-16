@@ -1,9 +1,8 @@
-//! Discovery of verification targets and their contract obligations.
+//! Collection of verification targets and their contract obligations.
 //!
-//! `VerifyTargetCollector` walks the crate's HIR (in `targeted` or `scan`
-//! mode), and for each candidate assembles a [`FunctionTarget`]: unsafe
-//! call-site checkpoints with per-callee preconditions, raw-pointer/static-mut
-//! synthetic checkpoints, struct invariants, and std type invariants.
+//! [`VerifyTargetCollector`] walks the current crate in targeted or scan mode.
+//! It collects function checkpoints, their required contracts, struct and type
+//! invariants, and obligations from unsafe trait implementations.
 
 use crate::analysis::Analysis;
 use crate::analysis::safety_flow::root::{
@@ -14,8 +13,6 @@ use crate::compat::FxHashMap;
 use crate::def_ids::lang_api::{self, LangItem};
 use crate::helpers::name::short_fn_name;
 use crate::verify::checkpoint::{collect_raw_ptr_deref_info, collect_static_mut_access_info};
-#[cfg(rapx_attr_requires_ext)]
-use rustc_ast::attr::AttributeExt;
 #[cfg(rapx_has_attr_ir)]
 use rustc_attr_ir::Attribute;
 #[cfg(not(rapx_has_attr_ir))]
@@ -46,42 +43,21 @@ use crate::helpers::mir_utils::{
     collect_return_block_indices, has_rapx_verify_attr, is_std_crate_def_id, is_trait_unsafe,
     resolve_impl_self_ty_def_id,
 };
-use crate::verify::checkpoint::{Checkpoint, collect_unsafe_callsites};
+use crate::verify::checkpoint::{Checkpoint, CheckpointKind, collect_unsafe_callsites};
 
-/// A list of parsed `requires` contracts.
+/// Preconditions associated with a function or unsafe callee.
 pub(crate) type FnContracts<'tcx> = Vec<Property<'tcx>>;
 
-/// A list of parsed struct invariants.
+/// Invariants declared on a struct.
 pub(crate) type StructInvariants<'tcx> = Vec<Property<'tcx>>;
+/// Instantiated MIR bodies for direct generic callees.
 pub(crate) type CalleeBodies<'tcx> = FxHashMap<DefId, &'tcx Body<'tcx>>;
 
-/// Collected verification data for a single function under analysis.
+/// Checkpoints, contracts, and invariants for one function.
 ///
-/// `FunctionTarget` is the complete **problem statement** for one function: it
-/// records every unsafe operation found in the function's MIR body, the safety
-/// contracts that each operation demands, and any contracts or invariants that
-/// serves as entry assumptions or structural guarantees.
-///
-/// # How it is built
-///
-/// [`VerifyTargetCollector::build_function_target`] assembles a `FunctionTarget`
-/// in one pass over the MIR body:
-///
-/// 1. Unsafe checkpoints are collected via [`collect_unsafe_callsites`].
-/// 2. Each unique callee `DefId` gets its `#[rapx::requires]` contracts parsed
-///    (with fallback to bundled JSON contracts for standard-library callees).
-/// 3. Raw pointer dereferences are detected and converted into synthetic
-///    (pseudo-checkpoint, `[ValidPtr, Align, (Typed)]`) pairs.
-/// 4. The caller's own `#[rapx::requires]` contracts become entry assumptions.
-/// 5. If the function is a method on a struct, struct-level `#[rapx::invariant]`
-///    and `#[rapx::requires]` annotations are collected.
-///
-/// # Role in the pipeline
-///
-/// The [`VerifyDriver`](super::driver::VerifyDriver) consumes a `FunctionTarget`
-/// to route each unsafe operation to the verifier engine along reachability paths
-/// extracted from the MIR CFG.  The target is the primary data carrier between
-/// the *target collection* stage and the *path extraction / verification* stage.
+/// The collector records unsafe calls, raw pointer dereferences, and static mut
+/// accesses as checkpoints. It attaches callee preconditions and the caller's
+/// entry assumptions, then passes the target to the path and verification stages.
 #[derive(Clone, Debug)]
 pub(crate) struct FunctionTarget<'tcx> {
     /// The function being verified.
@@ -89,71 +65,37 @@ pub(crate) struct FunctionTarget<'tcx> {
 
     /// Instantiated MIR shared by path extraction, slicing, and symbolic replay.
     pub body: Option<&'tcx rustc_middle::mir::Body<'tcx>>,
+
     /// Unique direct generic callees instantiated in the root's parameter environment.
     pub callee_bodies: CalleeBodies<'tcx>,
 
-    /// Owning struct when this function is an associated method (e.g.
-    /// `impl MyStruct { fn foo(...) }`).  `None` for free functions.
-    ///
-    /// Used to associate struct invariants and to group method-level
-    /// verification results under the owning struct in diagnostic output.
+    /// Owning struct for an associated method; `None` for a free function.
     pub owner_struct_def_id: Option<DefId>,
 
-    /// All call-terminator-based unsafe checkpoints found in this function's MIR.
-    ///
-    /// Each [`Checkpoint`] records the callee `DefId`, the source-span of the
-    /// call, the basic-block location, and the MIR operands passed as arguments.
+    /// Unsafe call checkpoints found in the function's MIR.
     pub checkpoints: Vec<Checkpoint<'tcx>>,
 
-    /// Safety contracts demanded by each unique unsafe callee reachable from
-    /// this function, keyed by callee `DefId`.
-    ///
-    /// Contracts are sourced from `#[rapx::requires(...)]` annotations on the
-    /// callee (inline mode) or from a bundled JSON contract database for
-    /// standard-library functions.  Each value is a `Vec<Property>` — the
-    /// concrete safety requirements the callee expects its caller to satisfy.
+    /// Preconditions for each direct unsafe callee, keyed by its `DefId`.
+    /// Sources include annotations, bundled JSON, and inherited call contracts.
     pub callee_requires: HashMap<DefId, FnContracts<'tcx>>,
 
-    /// Safety contracts that the **caller itself** requires as entry
-    /// assumptions, parsed from `#[rapx::requires(...)]` on this function.
-    ///
-    /// During verification the engine prepends these properties as *facts* that
-    /// are assumed to hold at function entry, constraining the backward
-    /// data-dependency analysis and forward simulation.
+    /// Entry assumptions from this function's preconditions and invariants.
     pub caller_requires: FnContracts<'tcx>,
 
-    /// Struct invariants that methods of the owning struct must maintain.
-    ///
-    /// Collected from `#[rapx::invariant(...)]` / `#[rapx::requires(...)]`
-    /// annotations on the struct definition.  Checked at constructor return
-    /// blocks and at all path endpoints for non-constructor methods.
+    /// Invariants declared on the owning struct and checked by this method.
     pub struct_invariants: Vec<Property<'tcx>>,
 
-    /// Built-in type invariants (e.g. the synthesized `NonNull`/`Init`/`Alive`
-    /// slice invariant for `&[T]`/`&mut [T]` receivers and returns).
-    ///
-    /// These are assumed at entry (via `caller_requires`) and checked at exit
-    /// when the body has a checkable unsafe operation and the value is live.
+    /// Built-in invariants for parameter and return types.
+    /// They also contribute to `caller_requires` at function entry.
     pub type_invariants: Vec<Property<'tcx>>,
 
-    /// Raw pointer dereference checks with their required safety properties.
-    ///
-    /// Each entry is a `(Checkpoint, Vec<Property>)` pair where the `Checkpoint`
-    /// carries a synthetic dummy `DefId` (so the path extractor can treat
-    /// dereferences uniformly with checkpoints) and the properties encode the
-    /// pointer-validity requirements: always [`Allocated`](PropertyKind::Allocated),
-    /// [`InBound`](PropertyKind::InBound), and [`Align`](PropertyKind::Align);
-    /// additionally [`Typed`](PropertyKind::Typed) when the dereference is a read.
+    /// Synthetic checkpoints and obligations for raw pointer dereferences.
+    /// Obligations include `Allocated`, `InBound`, and `Align`, plus `Typed`
+    /// for reads and extra checks when creating a reference from a pointer.
     pub raw_ptr_deref_checks: Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)>,
 
-    /// Static mut access checks with their required safety properties.
-    ///
-    /// Each entry is a `(Checkpoint, Vec<Property>)` pair following the same
-    /// pattern as [`raw_ptr_deref_checks`](Self::raw_ptr_deref_checks).  The
-    /// properties are [`Allocated`](PropertyKind::Allocated),
-    /// [`InBound`](PropertyKind::InBound), [`Align`](PropertyKind::Align),
-    /// and [`Init`](PropertyKind::Init)
-    /// (conservatively checked for both reads and writes).
+    /// Synthetic checkpoints and obligations for static mut accesses.
+    /// Each requires `Allocated`, `InBound`, `Align`, and `Init`.
     pub static_mut_checks: Vec<(Checkpoint<'tcx>, Vec<Property<'tcx>>)>,
 }
 
@@ -181,22 +123,27 @@ impl<'tcx> FunctionTarget<'tcx> {
             )
     }
 
-    pub(crate) fn properties_for_callsite(
-        &self,
-        checkpoint: &Checkpoint<'tcx>,
-    ) -> &[Property<'tcx>] {
+    pub(crate) fn properties_for_callsite<'a>(
+        &'a self,
+        checkpoint: &'a Checkpoint<'tcx>,
+    ) -> &'a [Property<'tcx>] {
         let loc = checkpoint.location();
         match checkpoint.kind {
             crate::verify::checkpoint::CheckpointKind::RawPtrDeref => self
                 .raw_ptr_deref_checks
                 .iter()
-                .find(|(candidate, _)| candidate.location() == loc)
+                .find(|(candidate, _)| {
+                    candidate.location() == loc
+                        && candidate.statement_index == checkpoint.statement_index
+                })
                 .map(|(_, properties)| properties.as_slice())
                 .unwrap_or(&[]),
             crate::verify::checkpoint::CheckpointKind::StaticMutAccess => self
                 .static_mut_checks
                 .iter()
-                .find(|(candidate, _)| candidate.location() == loc)
+                .find(|(candidate, _)| {
+                    candidate.location() == loc && candidate.site_ordinal == checkpoint.site_ordinal
+                })
                 .map(|(_, properties)| properties.as_slice())
                 .unwrap_or(&[]),
             crate::verify::checkpoint::CheckpointKind::UnsafeCall => checkpoint
@@ -204,45 +151,49 @@ impl<'tcx> FunctionTarget<'tcx> {
                 .and_then(|callee| self.callee_requires.get(&callee))
                 .map(Vec::as_slice)
                 .unwrap_or(&[]),
+            crate::verify::checkpoint::CheckpointKind::CopyNonOverlapping => &checkpoint.requires,
         }
     }
 }
 
-/// Collected verification data for a struct that owns methods marked with `#[rapx::verify]`.
+/// Invariants and selected methods for one struct.
 pub(crate) struct StructTarget<'tcx> {
-    /// Struct that owns one or more methods selected as targets to verify.
+    /// Struct that owns the selected methods.
     pub def_id: DefId,
-    /// Parsed `invariant` contracts attached to the struct.
+
+    /// Parsed invariants declared on the struct.
     pub invariants: StructInvariants<'tcx>,
-    /// Methods of this struct selected as targets to verify.
+
+    /// Methods selected for verification.
     pub function_targets: Vec<FunctionTarget<'tcx>>,
 }
 
-/// Collected verification data for an `impl unsafe Trait for Type` block.
+/// Obligations from an unsafe trait implementation.
 ///
-/// Covers two cases, distinguished by whether the trait has methods:
-/// - marker traits (`Send`/`Sync`) carry *type-level* obligations, and
-/// - unsafe traits with methods carry *method-level* `ensures` contracts.
+/// `Send` and `Sync` use type-level obligations. Other unsafe traits use
+/// method-level `ensures` contracts.
 #[derive(Clone)]
 pub(crate) struct TraitEnsurance<'tcx> {
     /// The trait being implemented.
     pub def_id: DefId,
-    /// The `impl ... for Type` block's DefId (carries the impl's generic bounds,
-    /// e.g. `T: Send`).
+
+    /// Implementation block, including its generic bounds.
     pub impl_def_id: DefId,
-    /// The concrete type that implements the trait (e.g. `SomeStruct`).
+
+    /// Implementing type, when it resolves to an ADT.
     pub self_ty_def_id: Option<DefId>,
-    /// The obligations to verify, keyed by whether the trait has methods.
+
+    /// Type-level or method-level obligations.
     pub kind: TraitEnsuranceKind<'tcx>,
 }
 
 /// What a [`TraitEnsurance`] must verify.
 #[derive(Clone)]
 pub(crate) enum TraitEnsuranceKind<'tcx> {
-    /// A marker trait (`Send`/`Sync`, no methods): type-level obligations
-    /// generated from the bundled `std-trait.json` template.
+    /// `Send` or `Sync` obligations from the bundled trait template.
     Marker(MarkerTraitKind, Vec<Property<'tcx>>),
-    /// An unsafe trait with methods: `ensures` contracts grouped by method name.
+
+    /// Unsafe trait `ensures` contracts grouped by method name.
     Unsafe(Vec<(String, FnContracts<'tcx>)>),
 }
 
@@ -253,11 +204,10 @@ pub(crate) enum MarkerTraitKind {
     Sync,
 }
 
-/// Trace a call-site argument operand back to the enclosing callee's parameter
-/// index (0-based), following direct `Copy`/`Move` assignment chains. Returns
-/// `None` for constants, field projections, call results, or values that do not
-/// trace to a parameter (those references cannot be restated on the enclosing
-/// callee).
+/// Trace a call operand through `Copy`/`Move` assignments to an outer parameter.
+///
+/// Returns its zero-based parameter index, or `None` if the initial operand
+/// is not a direct local or no parameter is found.
 fn call_arg_to_outer_param(
     op: &rustc_middle::mir::Operand<'_>,
     body: &rustc_middle::mir::Body<'_>,
@@ -303,15 +253,10 @@ fn call_arg_to_outer_param(
     None
 }
 
-/// Rewrite a contract's argument references (`PlaceBase::Arg(i)`) onto the
-/// enclosing callee's parameters using the call-site argument list. This rebinds
-/// a leaf callee's contract (e.g. `ptr::write`'s `ValidPtr(self, T, 1)`) to the
-/// wrapper callee's arguments (e.g. `maybe_init_slot`'s `ptr`).
+/// Rebind a callee contract to parameters of its enclosing function.
 ///
-/// Returns `false` when a referenced argument cannot be traced to a parameter
-/// (a constant, a field projection, a temporary, or a call result). Such a
-/// contract expresses an internal invariant of the leaf callee and cannot be
-/// restated as a precondition on this callee's parameters, so it is dropped.
+/// Returns `false` when an argument cannot be traced to a parameter. The
+/// caller drops that property because it cannot express it as a precondition.
 fn rebind_property_to_args<'tcx>(
     prop: &mut Property<'tcx>,
     args: &[rustc_middle::mir::Operand<'tcx>],
@@ -479,14 +424,13 @@ fn rebind_place<'tcx>(
     }
 }
 
-/// Follow an unsafe callee's call chain to find inherited safety contracts.
+/// Collect preconditions inherited through an unsafe callee's call chain.
 ///
-/// When an unsafe callee (e.g. B) lacks its own contracts, look into its MIR
-/// body for the unsafe callees it calls (e.g. C, D).  If one of those has
-/// contracts (e.g. D), inherit them.  The chain `A -> B -> C -> D` means A's
-/// checkpoint on B is verified using D's contracts.
+/// For an unannotated wrapper, inspect its unsafe calls and rebind their
+/// contracts to the wrapper's parameters. Continue recursively through
+/// unannotated callees.
 ///
-/// `visited` prevents infinite recursion on mutually-recursive functions.
+/// `visited` prevents recursion cycles.
 fn resolve_chain_contracts<'tcx>(
     tcx: TyCtxt<'tcx>,
     callee_def_id: DefId,
@@ -542,7 +486,6 @@ fn resolve_chain_contracts<'tcx>(
             // callee's parameters. Also resolve the leaf's type parameters
             // to the concrete type arguments passed at the call site.
             let arg_operands: Vec<_> = args.iter().map(|a| a.node.clone()).collect();
-            #[cfg(rapx_ge_99)]
             let callee_args = callee_args.skip_binder();
             reqs.retain_mut(|req| rebind_property_to_args(req, &arg_operands, &callee_args, body));
 
@@ -574,8 +517,7 @@ pub(crate) struct VerifyTargetCollector<'tcx> {
 }
 
 impl<'tcx> VerifyTargetCollector<'tcx> {
-    /// Collect all verification targets across the current crate and optionally
-    /// external crates (when `crate_filter` is set).
+    /// Collect verification targets from the crate currently being compiled.
     pub(crate) fn collect_all(
         tcx: TyCtxt<'tcx>,
         mode: VerifyMode,
@@ -587,13 +529,10 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
             tcx,
             mode,
             skip_invariant,
-            crate_filter.clone(),
+            crate_filter,
             module_filter,
         );
         tcx.hir_visit_all_item_likes_in_crate(&mut collector);
-        if crate_filter.is_some() {
-            collector.collect_extern_crate_targets();
-        }
         collector.check_module_filter_result();
         collector
     }
@@ -621,23 +560,15 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         }
     }
 
-    /// Returns (and caches) the contracts for an unsafe callee.
+    /// Resolve and cache preconditions for a callee.
     ///
-    /// Contracts are resolved with the following priority:
-    /// 1. Inline RAPx annotations attached to the callee.
-    /// 2. If the callee is a trait method impl without its own annotations,
-    ///    fall back to the trait method's `#[rapx::requires(...)]`.
-    /// 3. If no annotations are found and the callee belongs to the standard
-    ///    library, fall back to the bundled JSON contract database.
+    /// Resolution order: callee annotations, trait-method annotations, bundled
+    /// standard-library JSON, then inherited call-chain contracts when
+    /// `follow_chain` is enabled. If none applies, an `Unknown` property records
+    /// the missing contract unless an empty contract is explicitly allowed.
     ///
-    /// Results are memoized in `fn_contract_cache` to avoid recomputation.
-    ///
-    /// `follow_chain` controls whether an otherwise-unannotated callee's
-    /// contract is resolved by walking its call chain (e.g. an unsafe wrapper
-    /// that calls `ptr::write`). It must be `true` when resolving the contracts
-    /// a *caller* has to prove at a call site (`callee_requires`), and `false`
-    /// when resolving a function's own assumed preconditions (`caller_requires`)
-    /// — those must not inherit contracts from the function's internal calls.
+    /// Call-site obligations use `follow_chain = true`. A function's own entry
+    /// assumptions use `false` so its internal calls cannot add assumptions.
     fn get_fn_contracts(&mut self, callee_def_id: DefId, follow_chain: bool) -> FnContracts<'tcx> {
         let is_std = is_std_crate_def_id(self.tcx, callee_def_id);
 
@@ -743,7 +674,7 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                 let TerminatorKind::Call { func, .. } = &block.terminator().kind else {
                     continue;
                 };
-                let Some(callee) = crate::helpers::mir_utils::dep_callee_resolved_def_id(
+                let Some(callee) = crate::helpers::mir_utils::resolve_callee_def_id(
                     self.tcx, def_id, func,
                 ) else {
                     continue;
@@ -785,9 +716,26 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
                 callee_bodies.insert(callee, &*self.tcx.arena.alloc(instantiated));
             }
         }
-        let checkpoints = collect_unsafe_callsites(self.tcx, def_id);
+        let mut checkpoints = collect_unsafe_callsites(self.tcx, def_id);
+        for checkpoint in checkpoints
+            .iter_mut()
+            .filter(|checkpoint| checkpoint.kind == CheckpointKind::CopyNonOverlapping)
+        {
+            checkpoint.requires = checkpoint
+                .callee
+                .map(|callee| {
+                    super::contract::json::query_json_contracts_at_path(
+                        self.tcx,
+                        callee,
+                        "core::intrinsics::copy_nonoverlapping",
+                    )
+                })
+                .filter(|requires| !requires.is_empty())
+                .unwrap_or_else(|| vec![Property::new_atom(PropertyKind::Unknown, Vec::new())]);
+        }
         let unsafe_callees: HashSet<_> = checkpoints
             .iter()
+            .filter(|checkpoint| checkpoint.kind == CheckpointKind::UnsafeCall)
             .filter_map(|checkpoint| checkpoint.callee)
             .collect();
         let callee_requires = unsafe_callees
@@ -896,49 +844,6 @@ impl<'tcx> VerifyTargetCollector<'tcx> {
         }
     }
 
-    /// Process MIR keys from non-local crates that match the `--crate` filter.
-    ///
-    /// `hir_visit_all_item_likes_in_crate` only visits the *local* crate, but
-    /// in a workspace the target crate (e.g. `core`) may be compiled as a
-    /// dependency of another crate (e.g. `std`).  This method iterates all
-    /// crates' MIR bodies and collects targets from those matching the filter.
-    fn collect_extern_crate_targets(&mut self) {
-        let local_crate = rustc_hir::def_id::LOCAL_CRATE;
-
-        for def_id in self.tcx.mir_keys(()) {
-            let def_id = def_id.to_def_id();
-            if def_id.krate == local_crate {
-                continue; // already visited via the HIR visitor
-            }
-            if !self.crate_name_matches(def_id) {
-                continue;
-            }
-            let def_kind = self.tcx.def_kind(def_id);
-            if !matches!(
-                def_kind,
-                rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
-            ) {
-                continue;
-            }
-
-            if matches!(self.mode, VerifyMode::Targeted) {
-                continue;
-            }
-
-            self.crate_filter_matched = true;
-
-            if !self.module_path_matches(def_id) {
-                continue;
-            }
-            self.module_filter_matched = true;
-
-            let function_targets = self.build_function_targets(def_id);
-            for function_target in function_targets {
-                self.push_function_target(function_target);
-            }
-        }
-    }
-
     fn crate_name_matches(&self, def_id: DefId) -> bool {
         match self.crate_filter {
             None => true,
@@ -1014,12 +919,10 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         self.tcx
     }
 
-    /// Detect `impl unsafe Trait for Type` blocks and record them as
-    /// [`TraitEnsurance`] placeholders.
+    /// Collect obligations from `Send`, `Sync`, and other unsafe trait impls.
     ///
-    /// In `targeted` mode, only `impl` blocks annotated with `#[rapx::verify]`
-    /// are recorded.  In `scan` mode, all `unsafe trait` impls
-    /// are recorded.
+    /// Targeted mode requires `#[rapx::verify]` on the impl block. Scan mode
+    /// visits all matching impl blocks in the current crate.
     fn visit_item(&mut self, item: &'tcx rustc_hir::Item<'tcx>) {
         if let ItemKind::Impl(rustc_hir::Impl { of_trait, .. }) = &item.kind
             && of_trait.is_some()
@@ -1077,12 +980,11 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
         rustc_hir::intravisit::walk_item(self, item);
     }
 
-    /// Visits each function body and records verification targets.
+    /// Collect verification targets from a function body.
     ///
-    /// In `targeted` mode, only functions annotated with `#[rapx::verify]` are collected.
-    /// In `scan` mode, a HIR-level pre-filter (`contains_unsafe`
-    /// and `function_has_struct_invariant`) avoids expensive MIR scanning for functions
-    /// that have no unsafe content and no struct invariants.
+    /// Targeted mode requires `#[rapx::verify]`. Scan mode first checks HIR
+    /// for unsafe operations, struct invariants, or trait obligations before
+    /// building the MIR target.
     fn visit_fn(
         &mut self,
         _: FnKind<'tcx>,
@@ -1155,10 +1057,10 @@ impl<'tcx> Visitor<'tcx> for VerifyTargetCollector<'tcx> {
     }
 }
 
-/// Analysis pass that finds all verification targets.
+/// Analysis pass that lists the collected verification targets and contracts.
 ///
-/// In `targeted` mode, only functions annotated with `#[rapx::verify]` are listed.
-/// In `scan` mode, all functions with unsafe callees or struct invariants are listed.
+/// The collector applies the selected mode and filters; this pass prints the
+/// resulting functions, structs, trait impls, and their obligations.
 pub(crate) struct PrepareTargets<'tcx> {
     tcx: TyCtxt<'tcx>,
     mode: VerifyMode,
@@ -1481,9 +1383,10 @@ impl<'tcx> PrepareTargets<'tcx> {
     }
 }
 
-fn is_rapx_named_attr(attr: &Attribute, name: &str) -> bool {
+fn is_rapx_named_attr(tcx: TyCtxt<'_>, attr: &Attribute, name: &str) -> bool {
     let name = Symbol::intern(name);
-    attr.path_matches(&[Symbol::intern("rapx"), name]) || attr.path_matches(&[name])
+    crate::compat::attribute_path_matches(tcx, attr, &[Symbol::intern("rapx"), name])
+        || crate::compat::attribute_path_matches(tcx, attr, &[name])
 }
 
 /// Resolve whether an `unsafe impl` is implementing the `Send`/`Sync` marker trait.
@@ -1675,7 +1578,7 @@ fn collect_properties_from_named_attrs<'tcx>(
     let mut results = Vec::new();
 
     for attr in attrs {
-        if !is_rapx_named_attr(attr, attr_name) {
+        if !is_rapx_named_attr(tcx, attr, attr_name) {
             continue;
         }
 
@@ -1776,7 +1679,7 @@ pub(crate) fn owning_field_paths_from_annotation<'tcx>(
     }
     crate::compat::get_all_attrs(tcx, adt.did())
         .into_iter()
-        .filter(|attr| is_rapx_named_attr(attr, "invariant"))
+        .filter(|attr| is_rapx_named_attr(tcx, attr, "invariant"))
         .filter_map(|attr| {
             let text = crate::compat::attribute_to_string(tcx, attr);
             parse_rapx_attr(&text, "invariant").ok().flatten()
@@ -1981,9 +1884,11 @@ fn build_raw_ptr_deref_checks<'tcx>(
                     block: info.block,
                     args: vec![info.ptr_operand],
                     kind: crate::verify::checkpoint::CheckpointKind::RawPtrDeref,
+                    requires: Vec::new(),
                     destination: Some(info.destination),
                     is_mut_ref: info.is_mut_ref,
                     statement_index: info.statement_index,
+                    site_ordinal: 0,
                 },
                 properties,
             )
@@ -2032,9 +1937,11 @@ fn build_static_mut_checks<'tcx>(
                     block: info.block,
                     args: vec![info.ptr_operand],
                     kind: crate::verify::checkpoint::CheckpointKind::StaticMutAccess,
+                    requires: Vec::new(),
                     destination: None,
                     is_mut_ref: false,
-                    statement_index: 0,
+                    statement_index: info.statement_index,
+                    site_ordinal: info.site_ordinal,
                 },
                 properties,
             )

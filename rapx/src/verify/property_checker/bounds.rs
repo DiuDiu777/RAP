@@ -170,8 +170,8 @@ impl PropertyChecker {
         let size = vm_state.allocation_size(alloc_id).clone();
 
         let pointer_sub = checkpoint.callee.and_then(|callee| {
-            crate::verify::pointer_origin::pointer_offset_direction(vm_state.tcx, callee)
-        }) == Some(crate::verify::pointer_origin::PointerOffsetDirection::Backward);
+            crate::analysis::dataflow::pointer_offset::pointer_offset_direction(vm_state.tcx, callee)
+        }) == Some(crate::analysis::dataflow::pointer_offset::PointerOffsetDirection::Backward);
         let alloc = vm_state.alloc(alloc_id);
         // Element-level bounds fast-path: when the allocation materializes a
         // slice length and the pointer was derived by element-strided arithmetic
@@ -387,10 +387,19 @@ impl PropertyChecker {
         };
         if let Some(index_op) = index_arg_idx.and_then(|idx| checkpoint.args.get(idx)) {
             let index_val = vm_state.value_of_operand(index_op);
-            if vm_state.index_access_facts.iter().any(|(slice, index, _, _)| {
-                slice.to_string() == slice_val.z3_term.to_string()
-                    && index.to_string() == index_val.z3_term.to_string()
-            }) {
+            // The slice term is only an address, and a shorter view of the same
+            // slice has the same address. So a fact must also match the length.
+            let slice_len = vm_state.slice_len_from_value(&slice_val);
+            if slice_len.is_some()
+                && vm_state.index_access_facts.iter().any(|(slice, index, slice_local, _)| {
+                    slice.to_string() == slice_val.z3_term.to_string()
+                        && index.to_string() == index_val.z3_term.to_string()
+                        && vm_state
+                            .local_value(*slice_local)
+                            .and_then(|fact_slice| vm_state.slice_len_from_value(fact_slice))
+                            == slice_len
+                })
+            {
                 return CheckResult::ProvedByRule;
             }
         }

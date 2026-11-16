@@ -21,10 +21,7 @@ pub type GenericArgsRef<'tcx> = rustc_middle::ty::GenericArgs<'tcx>;
 
 /// `Spanned` was moved from `rustc_span::source_map` to `rustc_span` root
 /// in rustc 1.97.
-#[cfg(rapx_ge_99)]
 pub use rustc_span::Spanned;
-#[cfg(not(rapx_ge_99))]
-pub use rustc_span::source_map::Spanned;
 
 // ── predicates_of / clauses_of (rustc ≥ 1.100) ────────────────────────
 
@@ -51,14 +48,7 @@ pub fn predicates_of<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> GenericPredicate
 
 // ── GenericArgsRef::get (Binder wrapping in rustc ≥ 1.99) ─────────────
 
-#[cfg(not(rapx_ge_99))]
-pub fn args_get<'tcx>(
-    args: &rustc_middle::ty::GenericArgsRef<'tcx>,
-    index: usize,
-) -> Option<&'tcx rustc_middle::ty::GenericArg<'tcx>> {
-    args.get(index)
-}
-#[cfg(all(rapx_ge_99, not(rapx_generic_args_value)))]
+#[cfg(not(rapx_generic_args_value))]
 pub fn args_get<'tcx>(
     args: &rustc_middle::ty::Binder<'tcx, &'tcx rustc_middle::ty::GenericArgs<'tcx>>,
     index: usize,
@@ -74,20 +64,6 @@ pub fn args_get<'tcx>(
     args.skip_binder().get(index)
 }
 
-// ── skip_norm_wip (rustc_type_ir) ──────────────────────────────────────
-
-/// `TyKind::skip_norm_wip` was introduced to handle the `Wip` alias
-/// variant.  On older toolchains that do not have `AliasRelation::Wip`,
-/// the method is not needed and we provide an identity fallback.
-#[cfg(not(rapx_has_skip_norm_wip))]
-pub trait SkipNormWip: Sized {
-    fn skip_norm_wip(self) -> Self {
-        self
-    }
-}
-#[cfg(not(rapx_has_skip_norm_wip))]
-impl<T: Sized> SkipNormWip for T {}
-
 // ── get_all_attrs (deprecated but still the only way) ───────────────────
 
 #[cfg(rapx_has_attr_ir)]
@@ -101,13 +77,33 @@ pub fn get_all_attrs<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> &'tcx [Attribute
     tcx.get_all_attrs(def_id)
 }
 
-#[cfg(not(rapx_ge_99))]
-pub fn attribute_to_string<'tcx>(tcx: TyCtxt<'tcx>, attr: &Attribute) -> String {
-    rustc_hir_pretty::attribute_to_string(&tcx, attr)
-}
-#[cfg(rapx_ge_99)]
 pub fn attribute_to_string(_tcx: TyCtxt<'_>, attr: &Attribute) -> String {
     struct Ann;
     impl rustc_hir_pretty::PpAnn for Ann {}
     rustc_hir_pretty::attribute_to_string(&Ann, attr)
+}
+
+/// Match an attribute path through its pretty-printed syntax.  The rustc
+/// attribute representation changes across nightlies, while both versions
+/// expose `attribute_to_string`.
+pub fn attribute_path_matches(
+    tcx: TyCtxt<'_>,
+    attr: &Attribute,
+    path: &[rustc_span::Symbol],
+) -> bool {
+    use syn::parse::Parser;
+
+    let text = attribute_to_string(tcx, attr);
+    let Ok(attrs) = syn::Attribute::parse_outer.parse_str(&text) else {
+        return false;
+    };
+    let [attr] = attrs.as_slice() else {
+        return false;
+    };
+    let segments = &attr.path().segments;
+    segments.len() == path.len()
+        && segments.iter().zip(path).all(|(segment, symbol)| {
+            matches!(segment.arguments, syn::PathArguments::None)
+                && segment.ident == symbol.as_str()
+        })
 }

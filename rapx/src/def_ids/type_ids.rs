@@ -23,7 +23,6 @@ struct Types {
     ordering_types: Vec<DefId>,
     iter_types: Vec<DefId>,
     rc_types: Vec<DefId>,
-    arc_types: Vec<DefId>,
     sync_primitive_types: Vec<DefId>,
     index_range_types: Vec<DefId>,
     /// Negative auto-trait types (`Cell`/`UnsafeCell`/`RefCell`/`Ref`/`RefMut`/
@@ -47,7 +46,6 @@ fn init_types(tcx: TyCtxt) -> Types {
         ordering_types: Vec::new(),
         iter_types: Vec::new(),
         rc_types: Vec::new(),
-        arc_types: Vec::new(),
         sync_primitive_types: Vec::new(),
         index_range_types: Vec::new(),
         negative_types: IndexMap::new(),
@@ -78,49 +76,16 @@ fn init_types(tcx: TyCtxt) -> Types {
             .push(unsafe_cell);
     }
 
-    // `core::slice::Iter` is `#[rustc_diagnostic_item = "SliceIter"]` on older
-    // toolchains (the item was dropped once `adts()` became available, so only
-    // referenced when `adts()` is absent). `slice::IterMut` has no diagnostic
-    // item, so resolve it from the self type of its `fn_defs()`-emitted methods.
-    #[cfg(not(rapx_has_public_adts))]
-    {
-        types
-            .iter_types
-            .extend(tcx.get_diagnostic_item(sym::SliceIter));
-        types
-            .nonnull_types
-            .extend(tcx.get_diagnostic_item(sym::NonNull));
-
-    }
-
-    // Standard-library ADTs with neither a lang nor a diagnostic item: `NonNull`
-    // on newer toolchains (it became `#[lang = "non_null"]`, which has no
-    // `LangItem` variant) and `slice::Iter`/`IterMut` (no diagnostic item).
-    // Resolve by name-scanning the std crates' `adts()`.
-    #[cfg(rapx_has_public_adts)]
-    {
-        for krate in std::iter::once(rustc_public::local_crate())
-            .chain(rustc_public::external_crates())
-            .filter(|k| ["core", "std", "alloc"].iter().any(|n| *n == k.name))
-        {
-            for adt in krate.adts() {
-                let did = rustc_internal::internal(tcx, adt.def_id());
-                let path = type_path(tcx, did, &krate.name, krate.is_local);
-                collect_type_by_path(&mut types, &path, did);
-            }
-        }
-    }
-
+    // Resolve standard-library ADTs by path, including `NonNull` and
+    // `slice::Iter`/`IterMut`, which lack usable lang or diagnostic items.
     for krate in std::iter::once(rustc_public::local_crate())
         .chain(rustc_public::external_crates())
         .filter(|k| ["core", "std", "alloc"].iter().any(|n| *n == k.name))
     {
-        for fn_def in krate.fn_defs() {
-            let did = rustc_internal::internal(tcx, fn_def.def_id());
-            if let Some(adt_did) = assoc_self_adt_did(tcx, did) {
-                let path = type_path(tcx, adt_did, &krate.name, krate.is_local);
-                collect_type_by_path(&mut types, &path, adt_did);
-            }
+        for adt in krate.adts() {
+            let did = rustc_internal::internal(tcx, adt.def_id());
+            let path = type_path(tcx, did, &krate.name, krate.is_local);
+            collect_type_by_path(&mut types, &path, did);
         }
     }
 
@@ -149,7 +114,6 @@ fn collect_type_by_path(types: &mut Types, name: &str, did: DefId) {
         TypeGroup::IndexRange => &mut types.index_range_types,
         TypeGroup::AsciiChar => &mut types.ascii_char_types,
         TypeGroup::Rc => &mut types.rc_types,
-        TypeGroup::Arc => &mut types.arc_types,
         TypeGroup::SyncPrimitive => &mut types.sync_primitive_types,
         TypeGroup::Negative(name) => types.negative_types.entry(name.into()).or_default(),
     };
@@ -168,7 +132,6 @@ enum TypeGroup {
     IndexRange,
     AsciiChar,
     Rc,
-    Arc,
     SyncPrimitive,
     Negative(&'static str),
 }
@@ -188,7 +151,6 @@ fn classify_type_path(name: &str) -> Option<TypeGroup> {
         | "std::ops::IndexRange" => TypeGroup::IndexRange,
         "core::ascii::ascii_char::AsciiChar" | "std::ascii::AsciiChar" => TypeGroup::AsciiChar,
         "alloc::rc::Rc" | "alloc::rcs::rc::Rc" | "std::rc::Rc" => TypeGroup::Rc,
-        "alloc::sync::Arc" | "alloc::rcs::arc::Arc" | "std::sync::Arc" => TypeGroup::Arc,
         "core::cell::Cell" | "std::cell::Cell" => TypeGroup::Negative("Cell"),
         "core::cell::RefCell" | "std::cell::RefCell" => TypeGroup::Negative("RefCell"),
         "core::cell::Ref" | "std::cell::Ref" => TypeGroup::Negative("Ref"),
@@ -331,16 +293,5 @@ pub fn negative_type_defs(name: &str) -> &'static [DefId] {
             .and_then(|t| t.negative_types.get(name))
             .map(Vec::as_slice)
             .unwrap_or(&[]),
-    }
-}
-
-/// The ADT `DefId` that `def_id`'s associated function belongs to (the impl's
-/// `self` type), used to resolve an ADT that has no lang/diagnostic item from
-/// one of its emitted methods (e.g. `slice::IterMut`).
-fn assoc_self_adt_did(tcx: TyCtxt, def_id: DefId) -> Option<DefId> {
-    let ty = crate::helpers::name::get_struct_self_ty(tcx, def_id)?;
-    match ty.kind() {
-        rustc_middle::ty::TyKind::Adt(adt, _) => Some(adt.did()),
-        _ => None,
     }
 }

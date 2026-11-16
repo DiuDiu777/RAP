@@ -1,7 +1,10 @@
 //! MIR-level alias hazard analysis independent of VM state and Z3 terms.
 
+use crate::analysis::dataflow::{call_read, call_write, pointer_copy};
+use crate::analysis::dataflow::pointer_flow::{self, trace_source_arg};
 use crate::helpers::mir_utils;
-use crate::verify::pointer_origin::{self, trace_source_arg};
+use crate::verify::call_summary::VerifierCallSemantics;
+use crate::verify::call_summary::pointer_semantics;
 use crate::verify::contract::PropertyKind;
 use std::collections::{HashMap, HashSet};
 
@@ -39,7 +42,8 @@ pub(super) enum HazardKind {
 pub(super) enum AliasProducer {
     View(HazardKind, usize),
     OwnershipTransfer(usize),
-    ReadMemory,
+    ReadMemory(usize),
+    CopyMemory(usize),
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -72,8 +76,11 @@ pub(super) fn alias_producer(tcx: TyCtxt<'_>, callee: DefId) -> Option<AliasProd
     if let Some(source_arg) = share_transfer_source_arg(tcx, callee) {
         return Some(AliasProducer::OwnershipTransfer(source_arg));
     }
-    if crate::verify::api_classify::is_ptr_read(tcx, Some(callee)) {
-        return Some(AliasProducer::ReadMemory);
+    if let Some(flow) = pointer_copy::copy_flow(tcx, callee) {
+        return Some(AliasProducer::CopyMemory(flow.source_arg));
+    }
+    if let Some(source_arg) = call_read::read_source_arg(tcx, callee) {
+        return Some(AliasProducer::ReadMemory(source_arg));
     }
     raw_pointer_view_from_mir(tcx, callee)
         .map(|(kind, source_arg)| AliasProducer::View(kind, source_arg))
@@ -1375,14 +1382,12 @@ fn terminator_uses_any_local(terminator: &TerminatorKind<'_>, locals: &HashSet<L
         TerminatorKind::Call { args, .. } => args.iter().any(|arg| match &arg.node {
             Operand::Copy(place) | Operand::Move(place) => locals.contains(&place.local),
             Operand::Constant(_) => false,
-            #[cfg(rapx_ge_95)]
             Operand::RuntimeChecks(_) => false,
         }),
         TerminatorKind::SwitchInt { discr, .. } | TerminatorKind::Assert { cond: discr, .. } => {
             match discr {
                 Operand::Copy(place) | Operand::Move(place) => locals.contains(&place.local),
                 Operand::Constant(_) => false,
-                #[cfg(rapx_ge_95)]
                 Operand::RuntimeChecks(_) => false,
             }
         }
@@ -1528,7 +1533,7 @@ fn terminator_is_benign_origin_use<'tcx>(
     let TerminatorKind::Call { func, .. } = terminator else {
         return true;
     };
-    crate::verify::api_classify::is_benign_origin_use(tcx, mir_utils::dep_callee_def_id(
+    pointer_semantics::is_benign_origin_use(tcx, mir_utils::dep_callee_def_id(
         func,
     ))
 }
@@ -1543,7 +1548,7 @@ fn terminator_invalidates_vec_owner<'tcx>(
     let TerminatorKind::Call { func, args, .. } = terminator else {
         return false;
     };
-    let writes = crate::verify::call_summary::callsite_write_args(tcx, caller, func);
+    let writes = call_write::callsite_write_args(&VerifierCallSemantics, tcx, caller, func);
     args.iter().enumerate().any(|(index, arg)| {
         if !writes.as_ref().is_none_or(|writes| writes.contains(&index)) {
             return false;
@@ -1590,7 +1595,7 @@ fn find_as_ptr_receivers(
         else {
             continue;
         };
-        if !crate::verify::api_classify::is_as_ptr(tcx, mir_utils::dep_callee_def_id(func)) {
+        if !pointer_flow::return_traces_first_arg(tcx, mir_utils::dep_callee_def_id(func)) {
             continue;
         }
         let destination_key = PlaceKey {
@@ -1648,9 +1653,9 @@ fn is_ptr_add_offset_eq(
             }
             if mir_utils::dep_callee_def_id(func)
                 .and_then(|callee| {
-                    crate::verify::pointer_origin::pointer_offset_direction(tcx, callee)
+                    crate::analysis::dataflow::pointer_offset::pointer_offset_direction(tcx, callee)
                 })
-                == Some(crate::verify::pointer_origin::PointerOffsetDirection::Forward)
+                == Some(crate::analysis::dataflow::pointer_offset::PointerOffsetDirection::Forward)
                 && args.len() >= 2
                 && let Some(offset_place) = operand_place(&args[1].node) {
                     let offset_root = offset_place.local().map(|l| tree.resolve_local_to_root(l));
@@ -1674,9 +1679,9 @@ fn is_ptr_from_ptr_add(tcx: TyCtxt<'_>, caller: DefId, ptr_place: &PlaceKey) -> 
             }
             return mir_utils::dep_callee_def_id(func)
                 .and_then(|callee| {
-                    crate::verify::pointer_origin::pointer_offset_direction(tcx, callee)
+                    crate::analysis::dataflow::pointer_offset::pointer_offset_direction(tcx, callee)
                 })
-                == Some(crate::verify::pointer_origin::PointerOffsetDirection::Forward);
+                == Some(crate::analysis::dataflow::pointer_offset::PointerOffsetDirection::Forward);
         }
     }
     false
@@ -1824,7 +1829,7 @@ pub(super) fn ownership_transfer_violation(
                 };
                 place.projection.is_empty()
                     && owners.contains(&place.local)
-                    && callee.is_some_and(|did| pointer_origin::returns_undropped_arg(tcx, did, index))
+                    && callee.is_some_and(|did| pointer_semantics::returns_undropped_arg(tcx, did, index))
             });
             for arg in args {
                 if let Operand::Move(place) = &arg.node {
@@ -1925,7 +1930,7 @@ fn places_holding_transferred_pointer(
             let destination_key = PlaceKey::from_mir_place(call_destination);
             if !killed.contains(&call_destination.local)
                 && holders.iter().any(|h| destination_key.overlaps(h))
-                && crate::verify::api_classify::is_as_ptr(tcx, mir_utils::dep_callee_def_id(func))
+                && pointer_flow::return_traces_first_arg(tcx, mir_utils::dep_callee_def_id(func))
                 && let Some(arg) = args.first()
                     && let Operand::Copy(place) | Operand::Move(place) = &arg.node
                     && !killed.contains(&place.local)
@@ -2062,7 +2067,7 @@ fn pre_existing_view_on_origin(
         if let TerminatorKind::Call { func, args, .. } = &terminator.kind {
             let callee_name = mir_utils::call_name(tcx, func);
             if mir_utils::dep_callee_def_id(func)
-                .and_then(|callee| crate::verify::api_classify::nonnull_ref_return(tcx, callee))
+                .and_then(|callee| pointer_flow::nonnull_ref_return(tcx, callee))
                 .is_some()
                 && let Some(arg) = args.first()
                     && let Some(place) = operand_mir_place(&arg.node)

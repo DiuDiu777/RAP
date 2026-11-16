@@ -187,7 +187,8 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         // temps) *before* the caller's address map is saved away, so that
         // `exec_assign` can resolve `(*self).field = val` writes back to the
         // caller's referent while the callee executes.
-        let inline_arg_referents: Vec<Option<Local>> = arg_values
+        let caller_local_count = self.body().local_decls.len();
+        let resolved_arg_referents: Vec<Option<Local>> = arg_values
             .iter()
             .enumerate()
             .map(|(index, value)| {
@@ -219,6 +220,17 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     .then_some(local)
                 })
             })
+            .collect();
+        if resolved_arg_referents
+            .iter()
+            .flatten()
+            .any(|local| local.as_usize() >= caller_local_count)
+        {
+            self.diagnostics.mark_unsupported();
+        }
+        let inline_arg_referents: Vec<Option<Local>> = resolved_arg_referents
+            .into_iter()
+            .map(|local| local.filter(|local| local.as_usize() < caller_local_count))
             .collect();
         let caller_referents = inline_arg_referents.clone();
         // Whole-place reborrow referents, resolved from the *caller's* MIR
@@ -299,7 +311,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             let TerminatorKind::Call { func, .. } = &block.terminator().kind else {
                 return false;
             };
-            mir_utils::dep_callee_resolved_def_id(self.tcx, callee_def_id, func)
+            mir_utils::resolve_callee_def_id(self.tcx, callee_def_id, func)
                 == Some(callee_def_id)
         });
         let mut returns = self.inline_execute_body(&pre_uninit);
@@ -749,7 +761,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                     target: Some(target),
                     ..
                 } => {
-                    let callee = mir_utils::dep_callee_resolved_def_id(
+                    let callee = mir_utils::resolve_callee_def_id(
                         state.tcx,
                         state.current_frame.current_def_id,
                         func,

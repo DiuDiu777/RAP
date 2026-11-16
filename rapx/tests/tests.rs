@@ -96,10 +96,17 @@ fn run_with_args(dir: &str, args: &[&str]) -> String {
 /// regression (like a broken `#[rapx::invariant(...)]`) go unnoticed while the
 /// function still verifies as SOUND. Fail hard here instead.
 fn assert_no_parse_error(output: &str) {
-    assert!(
-        !output.contains("Failed to parse RAPx"),
-        "RAPx attribute parse error detected (a contract was silently dropped):\n{output}"
-    );
+    for pattern in [
+        "Failed to parse RAPx",
+        "contract expression not supported by grammar",
+        "contract predicate not supported by grammar",
+        "contract place not parseable",
+    ] {
+        assert!(
+            !output.contains(pattern),
+            "RAPx contract parse error detected ({pattern}):\n{output}"
+        );
+    }
 }
 
 fn cargo_rapx_command() -> Command {
@@ -173,12 +180,16 @@ fn assert_unproved(output: &str, function: &str, property: &str) {
 fn assert_property_failed(block: &str, property: &str, function: &str) {
     let matches_plain = block.contains(&format!("{property} | Failed"))
         || block.contains(&format!("{property} | Unknown"));
+    let matches_with_args = block.lines().any(|line| {
+        line.contains(&format!("{property}("))
+            && (line.contains(" | Failed") || line.contains(" | Unknown"))
+    });
     let matches_hazard = block.contains(&format!("[hazard] {property} | Failed"))
         || block.contains(&format!("[hazard] {property} | Unknown"));
     let matches_option = block.contains(&format!("[option] {property} | Failed"))
         || block.contains(&format!("[option] {property} | Unknown"));
     assert!(
-        matches_plain || matches_hazard || matches_option,
+        matches_plain || matches_with_args || matches_hazard || matches_option,
         "Expected {property} | Failed/Unknown for {function}\nBlock:\n{block}"
     );
 }

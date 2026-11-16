@@ -2,8 +2,9 @@ use super::super::target::CalleeBodies;
 use crate::analysis::path::{CallArg, CallBinding, PathTree};
 use crate::compat::{FxHashMap, FxHashSet};
 use crate::def_ids::lang_api::{self, LangItem};
-use crate::helpers::mir_utils;
+use crate::helpers::{mir_utils, name::get_adt_self_ty};
 use crate::limit::{HINTED_CALLEE_BLOCK_LIMIT, LOCAL_CALLEE_BLOCK_LIMIT};
+use crate::verify::constructor_policy;
 #[cfg(rapx_has_attr_ir)]
 use rustc_attr_ir::InlineAttr;
 #[cfg(not(rapx_has_attr_ir))]
@@ -199,18 +200,18 @@ impl<'tcx> CallSiteIndex<'tcx> {
                     continue;
                 }
                 let callee = if resolve_to_impl {
-                    mir_utils::dep_callee_resolved_def_id(self.tcx, caller, func)
+                    mir_utils::resolve_callee_def_id(self.tcx, caller, func)
                         .unwrap_or(base_callee)
                 } else {
                     base_callee
                 };
-                if !crate::verify::options::should_inline_constructor(self.tcx, callee) {
+                if !constructor_policy::allows_mir_expansion(self.tcx, callee) {
                     continue;
                 }
                 // An instantiated root can resolve Clone at this callsite.
                 // Leave the call in the path so the VM executes that exact MIR.
                 if self.bodies.contains_key(&0)
-                    && crate::def_ids::nomir_api::clone() == Some(base_callee)
+                    && crate::def_ids::lang_api::is_clone(self.tcx, base_callee)
                     && mir_utils::resolve_callee_instance(self.tcx, caller, func).is_some_and(
                         |instance| {
                             matches!(instance.def, InstanceKind::Item(_))
@@ -250,8 +251,8 @@ impl<'tcx> CallSiteIndex<'tcx> {
                 }
                 let generic_const_call = cross_crate
                     && mir_utils::has_generic_const_call_argument(self.tcx, callee);
-                let layout_constant =
-                    crate::verify::api_classify::is_mem_layout_constant(self.tcx, Some(callee));
+                let size_or_align_of =
+                    crate::def_ids::diagnostic_api::is_mem_size_or_align_of(self.tcx, callee);
                 let returns_adt = self.tcx.is_mir_available(callee)
                     && matches!(
                         self.tcx.optimized_mir(callee).return_ty().kind(),
@@ -298,7 +299,7 @@ impl<'tcx> CallSiteIndex<'tcx> {
                             && !instance.args.is_empty()
                             && instance.args.types().all(|ty| {
                                 !mir_utils::ty_has_type_param(ty)
-                                    || layout_constant
+                                    || size_or_align_of
                                     || (generic_trait_call && has_concrete_arg)
                                     || (cross_crate
                                         && returns_adt
@@ -318,14 +319,22 @@ impl<'tcx> CallSiteIndex<'tcx> {
                         && (callee == base_callee
                             || self.tcx.fn_sig(base_callee).skip_binder().safety()
                                 != rustc_hir::Safety::Unsafe);
+                let range_next = self.tcx.item_name(callee).as_str() == "next"
+                    && get_adt_self_ty(self.tcx, callee).is_some_and(|ty| {
+                        matches!(ty.kind(), TyKind::Adt(adt, _)
+                            if matches!(
+                                mir_utils::range_kind(self.tcx, adt.did()),
+                                mir_utils::RangeKind::Range | mir_utils::RangeKind::RangeInclusive
+                            ))
+                    });
                 if crate::def_ids::intrinsic_api::is_intrinsic(self.tcx, callee)
                     || !self.tcx.is_mir_available(callee)
                     || expanded.contains(&callee)
                     || (crate::verify::call_summary::effects::has_registered_effect(self.tcx, Some(callee))
-                        && !crate::verify::options::force_inline_constructor(self.tcx, callee))
+                        && !constructor_policy::forces_constructor_mir(self.tcx, callee))
                     || crate::verify::target::has_slice_offset_ensures(self.tcx, callee)
                     || crate::def_ids::other_api::is_ub_check(self.tcx, callee)
-                    || (crate::verify::api_classify::is_range_advancing_call(self.tcx, caller, func)
+                    || (range_next
                         && mir_utils::blocks_reachable_after_call(
                             self.tcx,
                             actual_caller,

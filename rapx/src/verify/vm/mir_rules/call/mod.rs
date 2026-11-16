@@ -16,9 +16,10 @@ use super::RuleFlow;
 use self::comparison::ComparisonPlan;
 use self::index::BuiltinIndexPlan;
 use crate::compat::Spanned;
+use crate::def_ids::diagnostic_api;
 use crate::helpers::mir_utils;
 use crate::verify::call_summary::CallEffect;
-use crate::verify::{api_classify, call_summary};
+use crate::verify::{api_classify, call_summary, constructor_policy};
 
 #[derive(Clone, Copy)]
 struct CallSite<'a, 'z3, 'tcx> {
@@ -93,7 +94,7 @@ pub(super) fn exec_call<'z3, 'tcx>(
         .iter()
         .map(|a| a.node.place().map(|p| p.local))
         .collect();
-    let callee = mir_utils::dep_callee_resolved_def_id(state.tcx, caller_def_id, func);
+    let callee = mir_utils::resolve_callee_def_id(state.tcx, caller_def_id, func);
     if let Some((source, owner)) = callee
         .and_then(|id| super::super::alias_hazard::reconstructed_owner(state.tcx, id))
         && let Some(value) = arg_values.get(source)
@@ -109,7 +110,7 @@ pub(super) fn exec_call<'z3, 'tcx>(
         destination,
         caller_def_id,
     };
-    let drop_call = if api_classify::is_std_drop(state.tcx, callee)
+    let drop_call = if callee.is_some_and(|id| diagnostic_api::is_drop(state.tcx, id))
         || callee.is_some_and(|id| state.tcx.def_path_str(id).contains("::ptr::drop_glue"))
     {
         Some(DropCall::Value)
@@ -229,11 +230,11 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
         if call_summary::effects::is_unmodeled_intrinsic(self.tcx, callee) {
             return CallModel::UnsupportedIntrinsic;
         }
-        let force_inline = callee.is_some_and(|id| {
-            crate::verify::options::force_inline_constructor(self.tcx, id)
+        let force_constructor_mir = callee.is_some_and(|id| {
+            constructor_policy::forces_constructor_mir(self.tcx, id)
                 && self.tcx.is_mir_available(id)
         });
-        if !force_inline {
+        if !force_constructor_mir {
             if let Some(plan) = self.prepare_builtin_index(callee, args, arg_locals, destination) {
                 return CallModel::BuiltinIndex(plan);
             }
@@ -245,7 +246,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             if args
                 .first()
                 .is_some_and(|value| !self.vec_reallocation_targets(value).is_empty())
-                && call_summary::callsite_replaces_pointer_field(self.tcx, func)
+                && call_summary::pointer_semantics::callsite_replaces_pointer_field(self.tcx, func)
             {
                 return CallModel::Summary(vec![CallEffect::ReallocateVec { arg: 0 }]);
             }
@@ -259,7 +260,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             }
         }
         if let Some(callee) = callee
-            && !crate::verify::options::should_inline_constructor(self.tcx, callee)
+            && !constructor_policy::allows_mir_expansion(self.tcx, callee)
         {
             CallModel::Constructor(callee)
         } else if let Some(callee) = callee
@@ -343,7 +344,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
             }
             CallModel::Constructor(callee) => {
                 let has_invariant =
-                    crate::verify::options::constructor_has_invariant(self.tcx, callee);
+                    constructor_policy::constructor_result_has_invariant(self.tcx, callee);
                 self.materialize_constructor_result(
                     destination,
                     arg_values,
@@ -362,7 +363,6 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
                         let TyKind::FnDef(def_id, args) = constant.const_.ty().kind() else {
                             return None;
                         };
-                        #[cfg(rapx_ge_99)]
                         let args = args.skip_binder();
                         (*def_id == callee && self.tcx.trait_of_assoc(callee).is_none()).then_some(
                             Instance {
@@ -433,7 +433,7 @@ impl<'z3, 'tcx> VmState<'z3, 'tcx> {
     ) {
         let callee = site.callee;
         if let Some(owner) = callee
-            .and_then(|id| crate::verify::pointer_origin::shared_raw_owner_type(self.tcx, id))
+            .and_then(|id| crate::verify::call_summary::shared_owner::shared_raw_owner_type(self.tcx, id))
         {
             self.begin_ownership_transfer(site.destination, owner);
         }

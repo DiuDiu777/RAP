@@ -3,27 +3,17 @@ use std::process::Command;
 fn main() {
     let (_major, minor, _patch) = detect_rustc_version();
 
-    emit_check_cfg("rapx_ge_95");
-    emit_check_cfg("rapx_ge_99");
     emit_check_cfg("rapx_ge_100");
     emit_check_cfg("rapx_generic_args_value");
     emit_check_cfg("rapx_const_ext");
     emit_check_cfg("rapx_box_deref_transmute");
-    emit_check_cfg("rapx_has_public_adts");
-    emit_check_cfg("rapx_has_attr_item_kind");
     emit_check_cfg("rapx_has_fielddef_extras");
-    emit_check_cfg("rapx_has_skip_norm_wip");
-    emit_check_cfg("rapx_rvalue_has_reborrow");
     emit_check_cfg("rapx_has_phantom_deref");
     emit_check_cfg("rapx_scalar_to_pointer_interp_result");
     emit_check_cfg("rapx_has_fnptr_asptr");
     emit_check_cfg("rapx_has_fnaddr_asptr");
     emit_check_cfg("rapx_has_attr_ir");
-    emit_check_cfg("rapx_attr_requires_ext");
-    emit_check_cfg("rapx_rvalue_has_nullary_op");
-    emit_check_cfg("rapx_constkind_alias");
     emit_check_cfg("rapx_alias_const_inherent_self");
-    emit_check_cfg("rapx_alias_ty_structured_kind");
     emit_check_cfg("rapx_has_deeply_resolve_ignoring_regions");
     emit_check_cfg("rapx_has_compiler_entrypoint");
     emit_check_cfg("rapx_defkind_const_struct");
@@ -31,8 +21,6 @@ fn main() {
     emit_check_cfg("rapx_layout_align_abi");
     emit_check_cfg("rapx_caller_bounds_accessor");
 
-    emit_cfg("rapx_ge_95", minor >= 95);
-    emit_cfg("rapx_ge_99", minor >= 99);
     emit_cfg("rapx_ge_100", minor >= 100);
     emit_cfg(
         "rapx_generic_args_value",
@@ -48,33 +36,14 @@ fn main() {
         rustc_src_contains_path("compiler/rustc_hir/src/def.rs", "is_type_const"),
     );
     emit_cfg(
-        "rapx_has_public_adts",
-        rustc_src_contains_path("compiler/rustc_public/src/lib.rs", "pub fn adts"),
-    );
-    emit_cfg(
-        "rapx_has_attr_item_kind",
-        rustc_src_contains("pub enum AttrItemKind"),
-    );
-    emit_cfg(
         "rapx_has_fielddef_extras",
         rustc_src_contains("pub struct FieldDefExtras"),
-    );
-    emit_cfg(
-        "rapx_has_skip_norm_wip",
-        rustc_src_contains_path(
-            "compiler/rustc_type_ir/src/unnormalized.rs",
-            "fn skip_norm_wip",
-        ),
     );
     // `CastKind::BoxDerefTransmute` is the compiler's dedicated marker for the
     // safe `*box` deref; present only on recent nightlies.
     emit_cfg(
         "rapx_box_deref_transmute",
         rustc_src_contains_path("compiler/rustc_middle/src/mir/syntax.rs", "BoxDerefTransmute"),
-    );
-    emit_cfg(
-        "rapx_rvalue_has_reborrow",
-        rustc_src_contains_path("compiler/rustc_middle/src/mir/syntax.rs", "Reborrow("),
     );
     emit_cfg(
         "rapx_has_phantom_deref",
@@ -104,32 +73,6 @@ fn main() {
         "rapx_has_attr_ir",
         rustc_src_contains_path("compiler/rustc_attr_ir/src/lang_items.rs", "pub enum LangItem"),
     );
-    emit_cfg(
-        "rapx_attr_requires_ext",
-        rustc_src_contains_path(
-            "compiler/rustc_attr_ir/src/attr.rs",
-            "impl AttributeExt for Attribute",
-        ) && !rustc_src_contains_path(
-            "compiler/rustc_attr_ir/src/attr.rs",
-            "pub fn path(&self)",
-        ),
-    );
-    emit_cfg(
-        "rapx_rvalue_has_nullary_op",
-        rustc_src_contains_path(
-            "compiler/rustc_middle/src/mir/syntax.rs",
-            "NullaryOp(NullOp)",
-        ),
-    );
-    // `ty::ConstKind` renamed its unevaluated-const variant from `Unevaluated`
-    // to `Alias` (with `IsRigid` + `AliasConst`) around 2026-07.
-    emit_cfg(
-        "rapx_constkind_alias",
-        rustc_src_contains_path(
-            "compiler/rustc_type_ir/src/const_kind.rs",
-            "Alias(ty::IsRigid",
-        ),
-    );
     // `AliasConstKind::Inherent` split into `InherentSelf` + `InherentImpl` and
     // `opt_def_id` was dropped (extract the def_id by matching) around 2026-09.
     emit_cfg(
@@ -152,15 +95,6 @@ fn main() {
         rustc_src_contains_path(
             "compiler/rustc_middle/src/ty/consts.rs",
             "pub trait ConstExt",
-        ),
-    );
-    // `AliasTyKind` variants gained named fields (`Projection { def_id }`) and
-    // `AliasTy::kind` changed from a method to a field around 2026-07.
-    emit_cfg(
-        "rapx_alias_ty_structured_kind",
-        rustc_src_contains_path(
-            "compiler/rustc_type_ir/src/ty_kind.rs",
-            "Projection { def_id",
         ),
     );
     // `rustc_driver::run_compiler` was renamed to `compiler_entrypoint` (with a

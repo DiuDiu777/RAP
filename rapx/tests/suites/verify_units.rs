@@ -46,6 +46,24 @@ fn pointer_slot_origin_cases() {
 }
 
 #[test]
+fn checkpoint_regression_01() {
+    let output = run_with_args("verify_units/checkpoint_regression_01", CMD_VERIFY_TARGETED);
+    assert_function_result(&output, "deref_before_reassign", "UNSOUND");
+    let statics = extract_block_after(&output, "function: two_static_mut_accesses");
+    assert_eq!(
+        statics.matches("unsafe checkpoint: bb0 -> static-mut-access").count(),
+        2,
+        "{statics}"
+    );
+    assert_contain(statics, "Align | Proved");
+    assert_contain(statics, "Align | Unknown");
+    let auto_trait = extract_block_after(&output, "unsafe impl Send for PlainWriteWithAtomicRead");
+    assert_contain(auto_trait, "verdict: UNSAFE");
+    let mixed_update = extract_block_after(&output, "unsafe impl Send for PlainWriteWithAtomicUpdate");
+    assert_contain(mixed_update, "verdict: UNSAFE");
+}
+
+#[test]
 fn property_checker_regression_01() {
     let output = run_with_args(
         "verify_units/property_checker_regression_01",
@@ -144,6 +162,15 @@ fn align_extended_unsound_cases() {
     assert_contain(&output, "Align | Failed");
 }
 
+#[test]
+fn align_projection_pointee_cases() {
+    let output = run_with_args("verify_units/align_unsound_19", CMD_VERIFY_TARGETED);
+    let unsound = extract_block_after(&output, "function: unsound_projection_pointee");
+    assert_contain(unsound, "Align | Failed");
+    assert_function_result(&output, "unsound_projection_pointee", "UNSOUND");
+    assert_function_result(&output, "sound_projection_pointee", "SOUND");
+}
+
 // Allocated
 sound_tests! {
     allocated_sound_01: "verify_units/allocated_sound_01" => "sound_stack_local_allocated",
@@ -219,6 +246,16 @@ unsound_tests! {
     validptr_unsound_03: "verify_units/validptr_unsound_03" => "unsound_stack_array_len_too_large" => "ValidPtr",
     validptr_unsound_04: "verify_units/validptr_unsound_04" => "unsound_scc_branch_uses_one_past" => "ValidPtr",
     validptr_unsound_05: "verify_units/validptr_unsound_05" => "unsound_signed_suffix_missing_lower_bound" => "ValidPtr",
+}
+
+#[test]
+fn validptr_unsound_01_constructor_summary() {
+    let output = run_with_args(
+        "verify_units/validptr_unsound_01",
+        &["verify", "--mode", "targeted", "--expand-ctor=false"],
+    );
+    assert_function_result(&output, "unsound_non_zst_dangling_not_allocated", "UNSOUND");
+    assert_contain(&output, "ValidPtr | Failed");
 }
 
 // Regression for #337: keep the intended result while the cast bug is open.
@@ -322,6 +359,13 @@ fn inbound_unsound_14() {
             "Expected the out-of-bounds offset to remain unproved\n{block}"
         );
     }
+}
+
+unsound_tests_multi! {
+    inbound_unsound_15: "verify_units/inbound_unsound_15" => [
+        "unsound_index_into_shorter_view" => "InBound",
+        "unsound_range_into_shorter_view" => "InBound",
+    ],
 }
 
 // Init
@@ -601,7 +645,8 @@ sound_tests_multi! {
 #[test]
 fn manually_drop_reinit_cases() {
     let output = run_with_args("verify_units/manually_drop_reinit", CMD_VERIFY_TARGETED);
-    assert_result_counts(&output, [2, 1, 0]);
+    assert_result_counts(&output, [2, 2, 0]);
+    assert_function_result(&output, "unsound_branch_drop_then_use", "UNSOUND");
 }
 
 #[test]
@@ -715,7 +760,8 @@ fn invariant_unknown_01() {
 #[test]
 fn unsupported_mir_01() {
     let output = run_with_args("verify_units/unsupported_mir_01", CMD_VERIFY_TARGETED);
-    assert_result_counts(&output, [0, 1, 5]);
+    assert_result_counts(&output, [0, 2, 4]);
+    assert_unproved(&output, "unsound_direct_intrinsic_copy", "NonOverlap");
     assert_contain(&output, "Unknown (unsupported MIR)");
     assert_contain(&output, "Unknown (unresolved unsafe call)");
     let block = extract_block_after(&output, "function: unknown_inline_asm_write");

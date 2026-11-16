@@ -1,7 +1,5 @@
 #![allow(warnings, unused)]
 use super::fuzzable;
-#[cfg(not(rapx_has_skip_norm_wip))]
-use crate::compat::SkipNormWip;
 use crate::compat::GenericArgsRef;
 
 use rustc_hir::def_id::DefId;
@@ -45,7 +43,6 @@ pub fn fn_sig_with_generic_args<'tcx>(
 ) -> FnSig<'tcx> {
     let early_fn_sig = tcx.fn_sig(fn_did);
     let binder_fn_sig = early_fn_sig.instantiate(tcx, args);
-    #[cfg(rapx_ge_99)]
     let binder_fn_sig = binder_fn_sig.skip_norm_wip();
     let result = tcx.liberate_late_bound_regions(fn_did, binder_fn_sig);
     result

@@ -1,11 +1,23 @@
 //! Property checks for the symbolic VM.
 
+use crate::analysis::dataflow::pointer_copy;
+use crate::def_ids::diagnostic_api;
 use crate::verify::checkpoint::Checkpoint;
 use crate::verify::vm::state::VmState;
 use crate::verify::{
     contract::{ContractExpr, PlaceBase, Property, PropertyArg, PropertyKind},
     report::{CheckResult, UnknownReason},
 };
+use rustc_hir::def_id::DefId;
+use rustc_middle::ty::TyCtxt;
+
+/// Copy/write operations that accept uninitialized destination bytes.
+fn is_mem_copy_or_write(tcx: TyCtxt<'_>, callee: Option<DefId>) -> bool {
+    callee.is_some_and(|did| {
+        pointer_copy::copy_flow(tcx, did).is_some()
+            || diagnostic_api::is_ptr_write_to_uninit(tcx, did)
+    })
+}
 
 mod alias;
 mod auto_trait;
@@ -418,15 +430,25 @@ impl PropertyChecker {
         checkpoint: &Checkpoint<'tcx>,
         property: &Property<'tcx>,
     ) -> CheckResult {
-        // OR semantics: proved if any disjunct is proved; failed only if every
-        // disjunct is definitely violated; otherwise unknown.  An empty
-        // disjunction is unsatisfiable, hence Failed.
-        let mut overall = CheckResult::Failed;
-        for disjunct in property.disjuncts() {
-            let result = self.check_inner(vm_state, checkpoint, disjunct);
-            overall = overall.or(result);
+        let results: Vec<_> = property
+            .disjuncts()
+            .iter()
+            .map(|disjunct| self.check_inner(vm_state, checkpoint, disjunct))
+            .collect();
+        if results.len() >= 2 && results.iter().all(|r| matches!(r, CheckResult::Failed)) {
+            if let Some(result) = self.check_valid_num_disjunction(vm_state, checkpoint, property) {
+                return result;
+            }
         }
-        overall
+        CheckResult::disjunction_with_guards(
+            property.disjuncts().iter().zip(results).map(|(disjunct, result)| {
+                let false_guard = matches!(
+                    disjunct.kind(),
+                    Some(PropertyKind::Size | PropertyKind::Null | PropertyKind::Trait)
+                );
+                (result, false_guard)
+            }),
+        )
     }
 
     fn check_and<'z3, 'tcx>(

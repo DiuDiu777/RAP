@@ -9,7 +9,7 @@ use crate::helpers::def_use::{PlaceBaseKey, PlaceKey, RelevantPlaces, operand_us
 use crate::helpers::mir_utils::callee_param_index_for_local;
 use crate::verify::checkpoint::Checkpoint;
 
-use super::contract::{
+use super::super::contract::{
     ContractExpr, ContractPlace, ContractProjection, NumericPredicate, PlaceBase, Property,
     PropertyArg, PropertyKind,
 };
@@ -237,7 +237,6 @@ fn bind_operand_place(operand: &Operand<'_>, fields: &[usize]) -> Option<PlaceKe
     let mut place = match operand {
         Operand::Copy(place) | Operand::Move(place) => PlaceKey::from_mir_place(place),
         Operand::Constant(_) => return None,
-        #[cfg(rapx_ge_95)]
         Operand::RuntimeChecks(_) => return None,
     };
     place.fields.extend(fields.iter().copied());
