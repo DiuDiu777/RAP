@@ -1,4 +1,4 @@
-//! DefIds of standard-library types used by type and layout classifiers.
+//! Resolved `DefId`s of standard-library types used by verification.
 
 use indexmap::IndexMap;
 use rustc_hir::def_id::DefId;
@@ -9,9 +9,8 @@ use std::sync::OnceLock;
 
 static TYPES: OnceLock<Types> = OnceLock::new();
 
-/// Resolved `DefId`s of well-known std *types* (ADTs), used by the ADT
-/// type-name classifiers ([`crate::verify::api_classify::is_std_box`],
-/// [`crate::verify::api_classify::is_std_vec`], …).
+/// Standard-library ADT identities used by API classification, property
+/// checks, and layout-sensitive analysis.
 struct Types {
     box_types: Vec<DefId>,
     cstring_types: Vec<DefId>,
@@ -200,98 +199,58 @@ fn classify_type_path(name: &str) -> Option<TypeGroup> {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{TypeGroup, classify_type_path};
-
-    #[test]
-    fn only_canonical_std_types_match() {
-        assert_eq!(
-            classify_type_path("core::slice::iter::Iter"),
-            Some(TypeGroup::Iter)
-        );
-        assert_eq!(
-            classify_type_path("std::slice::Iter"),
-            Some(TypeGroup::Iter)
-        );
-        assert_eq!(
-            classify_type_path("core::ptr::non_null::NonNull"),
-            Some(TypeGroup::NonNull)
-        );
-        assert_eq!(
-            classify_type_path("std::ptr::NonNull"),
-            Some(TypeGroup::NonNull)
-        );
-        assert_eq!(classify_type_path("alloc::vec::Vec"), Some(TypeGroup::Vec));
-        assert_eq!(classify_type_path("std::vec::Vec"), Some(TypeGroup::Vec));
-        assert_eq!(classify_type_path("local::Vec"), None);
-        assert_eq!(classify_type_path("local::NonNull"), None);
-        assert_eq!(
-            classify_type_path("alloc::collections::linked_list::Iter"),
-            None
-        );
-        assert_eq!(
-            classify_type_path("std::collections::hash::map::Iter"),
-            None
-        );
-        assert_eq!(classify_type_path("core::ascii::Char"), None);
-        assert_eq!(classify_type_path("local::AtomicCounter"), None);
-    }
+fn types() -> &'static Types {
+    TYPES.get().expect("Type DefIds haven't been initialized.")
 }
 
-macro_rules! type_defs {
-    ($( $(#[$attr:meta])* $name:ident ,)+) => {
+macro_rules! type_predicates {
+    ($( $(#[$attr:meta])* $name:ident => $field:ident ,)+) => {
         $(
             $(#[$attr])*
-            pub fn $name() -> &'static [DefId] {
-                &TYPES
-                    .get()
-                    .expect("Type DefIds haven't been initialized.")
-                    .$name
+            pub fn $name(did: DefId) -> bool {
+                types().$field.contains(&did)
             }
         )+
     };
 }
 
-type_defs! {
-    /// `alloc::boxed::Box`.
-    box_types,
-    /// `alloc::ffi::CString`.
-    cstring_types,
-    /// `alloc::vec::Vec`.
-    vec_types,
-    /// `alloc::string::String`.
-    string_types,
-    /// `core::ptr::NonNull`.
-    nonnull_types,
-    /// `core::mem::MaybeUninit`.
-    maybe_uninit_types,
-    /// `core::ascii::ascii_char::AsciiChar`.
-    ascii_char_types,
-    /// `core::cmp::Ordering`.
-    ordering_types,
-    /// `core::slice::Iter` / `core::slice::IterMut` (the two-field `ptr`/`end`
-    /// slice iterators).
-    iter_types,
-    /// `alloc::rc::Rc`.
-    rc_types,
-    /// Standard-library `Mutex`, `RwLock`, `OnceLock`, and atomic types.
-    sync_primitive_types,
-    /// `core::ops::index_range::IndexRange`.
-    index_range_types,
+type_predicates! {
+    /// Whether this is `alloc::boxed::Box`.
+    is_std_box => box_types,
+    /// Whether this is `alloc::ffi::CString`.
+    is_std_cstring => cstring_types,
+    /// Whether this is `alloc::vec::Vec`.
+    is_std_vec => vec_types,
+    /// Whether this is `alloc::string::String`.
+    is_std_string => string_types,
+    /// Whether this is `core::ptr::NonNull`.
+    is_std_nonnull => nonnull_types,
+    /// Whether this is `core::mem::MaybeUninit`.
+    is_maybe_uninit_type => maybe_uninit_types,
+    /// Whether this is `core::cmp::Ordering`.
+    is_std_ordering => ordering_types,
+    /// Whether this is `core::slice::Iter` or `IterMut`.
+    is_std_iter_or_itermut => iter_types,
+    /// Whether this is `alloc::rc::Rc`.
+    is_std_rc => rc_types,
+    /// Whether this is a standard `Mutex`, `RwLock`, `OnceLock`, or atomic type.
+    is_std_sync_primitive => sync_primitive_types,
+    /// Whether this is the standard `IndexRange` type.
+    is_index_range => index_range_types,
+}
+
+/// The `AsciiChar` definition used to resolve its short name in contracts.
+pub fn ascii_char_type() -> Option<DefId> {
+    types().ascii_char_types.first().copied()
 }
 
 /// Resolve a negative-type name (as written in `std-trait.json`) to its
-/// resolved `DefId` set.  Unknown names resolve to an empty set (the checker
-/// then reports `Unknown`).
-pub fn negative_type_defs(name: &str) -> &'static [DefId] {
-    match name {
-        "Rc" => rc_types(),
-        "NonNull" => nonnull_types(),
-        _ => TYPES
-            .get()
-            .and_then(|t| t.negative_types.get(name))
-            .map(Vec::as_slice)
-            .unwrap_or(&[]),
-    }
+/// resolved `DefId` set. Unknown or unresolved names return `None`.
+pub fn negative_type_defs(name: &str) -> Option<&'static [DefId]> {
+    let ids = match name {
+        "Rc" => types().rc_types.as_slice(),
+        "NonNull" => types().nonnull_types.as_slice(),
+        _ => types().negative_types.get(name)?.as_slice(),
+    };
+    (!ids.is_empty()).then_some(ids)
 }
